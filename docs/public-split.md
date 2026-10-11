@@ -68,7 +68,7 @@ The workflows are identical files. Every job's `runs-on` is
 | `validate --strict` | every tool installed in the job (sha256-pinned sops, gitleaks, promtool, vector) | same |
 | Rulesets | `main`: require a pull request + every CI check green, no force-push, no deletion; `v*` tags immutable | not available on the plan (checks are advisory) |
 | Secret scanning + push protection, CodeQL default setup, Dependabot alerts | on | not available on the plan |
-| `publish-images.yml` | publishes `ghcr.io/<owner>/kontroll-*` (the owner read from the repository, nothing hard-coded) on a `v*` tag or by `workflow_dispatch`. `docker/images.lock.yml` names the public owner's packages at `sha-97fb671`, pullable once the owner makes them public (a manual package setting, not part of the flip; until then a `read:packages` login — SECURITY.md R-IMG-1); the default local build is unaffected | the same file publishes the instance's own packages, if it ever needs them |
+| `publish-images.yml` | publishes `ghcr.io/<owner>/kontroll-*` (the owner read from the repository, nothing hard-coded) on a `v*` tag or by `workflow_dispatch`. `docker/images.lock.yml` names the public owner's packages (`v0.1.2`, by digest); they are public since 2026-10-11, so every pull is anonymous and no clone needs a registry credential (the package setting is manual and one-way, not part of the repository flip — SECURITY.md R-IMG-1, retired); the default local build is unaffected | the same file publishes the instance's own packages, if it ever needs them |
 | `KONTROLL_CODE_SCANNING` variable | `true` after the flip → the zizmor job also uploads SARIF to code scanning (free on a public repo) | unset (code scanning is a GHAS feature on a private plan; the upload would 403) |
 
 ## Day-to-day — the weekly sync
@@ -116,9 +116,9 @@ Also weekly:
   the private twin, receive it by sync.
 - **Tags**: the private repository's `v0.1.x` tags predate the split; the public line starts above them. Never
   push a public tag to the private remote (its `publish-images.yml` would re-publish under the private org).
-- **The image lock**: once the re-pin below has synced, the private box deploys the public owner's packages —
-  its `docker login ghcr.io` credential must be able to read that owner's packages while they are private
-  (SECURITY.md R-IMG-1), or the next `deploy-stack` with `use_published_images=true` fails at pull.
+- **The image lock**: the private box deploys the public owner's packages, which are public — the pull is
+  anonymous and the box needs no `ghcr.io` credential (SECURITY.md R-IMG-1, retired 2026-10-11). A `docker login
+  ghcr.io` left over from the private period is harmless and unused; `docker logout ghcr.io` removes it.
 - The PII guard runs on GitHub-hosted runners even on the private repository (a public-repo guard must never use
   the self-hosted ones), so it spends the private plan's hosted minutes; if that budget is exhausted the guard
   stops running on private PRs — loudly.
@@ -158,5 +158,6 @@ Also weekly:
    `KONTROLL_CODE_SCANNING=true` (the zizmor SARIF seat; dispatch `zizmor.yml` once to see the first upload).
 4. Re-run the full identifier sweep (`tests/_leak_guard.py --tree` with the private list) on the pushed tree —
    the same command, the same zero.
-5. Publish the images and make the three packages public, then merge the re-pin (the order above). Until then a
-   clone that deploys with `use_published_images=true` needs a `read:packages` login (SECURITY.md R-IMG-1).
+5. Publish the images and make the three packages public, then merge the re-pin (the order above). Done
+   2026-10-11: `v0.1.2` published and pinned, the three packages public, anonymous pulls verified against the
+   lock's digests (by tag and by digest).

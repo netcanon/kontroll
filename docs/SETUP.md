@@ -63,7 +63,7 @@ Continue at §3. The rest of this section is the **developer** path (a git-conne
 
 **Bundle-as-compose (C1, published images):** if the images are published to ghcr, build a **launch kit** instead —
 `bash scripts/make-launch-kit.sh` produces `dist/kontroll-launch-<version>.tar.gz` (the same instance-stripped tree
-**plus** digest pins + a `kontroll` launcher). On the node (`docker login ghcr.io` once while the packages are private, then) `tar xzf …`, `cd
+**plus** digest pins + a `kontroll` launcher). On the node (no registry login — the packages are public) `tar xzf …`, `cd
 kontroll-launch-<version>`, and use `./kontroll fresh-init … / check / init` — it pulls every image **by digest**, so
 there is no `docker build` on the node at all. See [docker/README.md](../docker/README.md) § Publishing images.
 

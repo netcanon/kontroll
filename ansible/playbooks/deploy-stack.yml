@@ -131,7 +131,7 @@
     # C0 (report 22): pull the kontroll-control (runner) + kontroll-vector images BY DIGEST from ghcr instead
     # of building them on the control node. Default OFF ⇒ the local docker_image_build path runs, byte-identical to
     # before. When ON, the two build tasks skip and docker/.env pins KONTROLL_{CONTROL,VECTOR}_IMAGE from
-    # docker/images.lock.yml (requires `docker login ghcr.io` + a recorded digest — `gen-image-digests.py --refresh`).
+    # docker/images.lock.yml (requires a recorded digest — `gen-image-digests.py --refresh`; the pull is anonymous).
     use_published_images: false
     # Phase B (bake-code): when true, the flipped services run code from the BAKED control image at /opt/kontroll
     # instead of the host /repo clone, and write the C10 propose tree via paths.write_root() at /propose. Default OFF
@@ -455,7 +455,7 @@
 
     # C0 (report 22): when use_published_images, pin KONTROLL_{CONTROL,VECTOR}_IMAGE to the ghcr @sha256 digests
     # from docker/images.lock.yml so the compose fragments pull-by-digest instead of using the locally-built image.
-    # gen-image-digests.py --env is OFFLINE (reads the committed lock); the control node must `docker login ghcr.io`.
+    # gen-image-digests.py --env is OFFLINE (reads the committed lock); the packages are public — no registry login.
     - name: Read the published image digests from docker/images.lock.yml (offline)
       ansible.builtin.command:
         cmd: python3 scripts/gen-image-digests.py --env
@@ -473,8 +473,8 @@
         that: _img_env.stdout | default('') | length > 0
         fail_msg: >-
           use_published_images=true but docker/images.lock.yml has no recorded digest. Publish a tag (the
-          publish-images workflow), then `docker login ghcr.io` + `python3 scripts/gen-image-digests.py --refresh
-          <tag>` and commit the lock — or deploy with use_published_images=false to build the images locally.
+          publish-images workflow), then `python3 scripts/gen-image-digests.py --refresh <tag>` and commit the
+          lock — or deploy with use_published_images=false to build the images locally.
       when: use_published_images
 
     - name: Pin the published image digests into docker/.env (compose then pulls by digest)

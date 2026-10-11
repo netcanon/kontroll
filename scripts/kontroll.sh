@@ -101,11 +101,12 @@ case "$verb" in
   *)          set -- "$verb" "$@" ;;
 esac
 
-# Pre-pull the published images on the HOST (where the operator is `docker login`-ed) so deploy-stack's in-container
-# `docker compose up` finds them already present (compose pulls only-if-missing) — the installer container runs as
-# root with NO ghcr creds, so an in-container pull would 401. The installer is always pulled (needed to RUN any verb);
-# init/check also pre-pull the runner/vector (they deploy the stack). Skips images already present (idempotent;
-# air-gap: `docker load`ed images are present, no registry reached). Docker verifies each @sha256: digest on pull (L2b).
+# Pre-pull the published images on the HOST so deploy-stack's in-container `docker compose up` finds them already
+# present (compose pulls only-if-missing). The packages are public, so the pull is anonymous — no `docker login` on
+# the host (one is needed only while a package is private, when the credential-less installer container could not
+# pull for itself). The installer is always pulled (needed to RUN any verb); init/check also pre-pull the
+# runner/vector (they deploy the stack). Skips images already present (idempotent; air-gap: `docker load`ed images
+# are present, no registry reached). Docker verifies each @sha256: digest on pull (L2b).
 _imgs="$KONTROLL_INSTALLER_IMAGE"
 case "$verb" in init|check) _imgs="$_imgs ${KONTROLL_CONTROL_IMAGE:-} ${KONTROLL_VECTOR_IMAGE:-}" ;; esac
 for _img in $_imgs; do
