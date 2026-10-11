@@ -10,11 +10,13 @@ name: publish-images
 # baking the all-modules SUPERSET — report 22 §2.3) + kontroll-vector. C1 adds kontroll-installer (the compose-native
 # installer glue — report 22 §2.1 Image C): so a fresh node pulls the installer by digest instead of building it.
 #
-# AFTER a publish: `python3 scripts/gen-image-digests.py --refresh <tag>` (needs `docker login ghcr.io`) records the
-# digests into docker/images.lock.yml; commit that, then deploy with `-e use_published_images=true` to pull by digest.
-# A package inherits the repo's visibility at its FIRST publish; a public repo's packages are made public once, by hand,
-# in each package's settings (there is no API for it — docs/public-split.md). Private packages need a read:packages
-# `docker login` on the control node (SECURITY.md R-IMG-1).
+# AFTER a publish: `python3 scripts/gen-image-digests.py --refresh <tag>` records the digests into
+# docker/images.lock.yml (anonymous for a public package; `docker login ghcr.io` only while one is private); commit
+# that, then deploy with `-e use_published_images=true` to pull by digest. A NEW package starts PRIVATE whatever the
+# repository's visibility (the first publish from this public repository, 2026-10-09, produced private packages); the
+# owner makes it public once, by hand, in the package's settings (no API — docs/public-split.md), and a public
+# container package cannot be made private again. The public tool's three packages are public since 2026-10-11:
+# every pull is anonymous and the control node holds no registry credential (SECURITY.md R-IMG-1, retired).
 
 on:
   push:

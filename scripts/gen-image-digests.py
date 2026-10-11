@@ -76,8 +76,8 @@ def emit_env(lock):
 
 
 def _resolve_digest(ref, tag):
-    """ref:tag -> the manifest(-list) sha256 via `docker buildx imagetools inspect` (NETWORK; needs `docker login`
-    for a private registry). Returns the digest or None."""
+    """ref:tag -> the manifest(-list) sha256 via `docker buildx imagetools inspect` (NETWORK; anonymous for a public
+    package — the kontroll packages are public; `docker login` only for a private one). Returns the digest or None."""
     try:
         cp = subprocess.run(["docker", "buildx", "imagetools", "inspect", "%s:%s" % (ref, tag)],
                             capture_output=True, text=True, check=True)

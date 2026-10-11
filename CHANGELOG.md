@@ -11,6 +11,19 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs(images): the published packages are public — R-IMG-1 retired (2026-10-11)
+
+`ghcr.io/netcanon/kontroll-{control,vector,installer}` were made public on 2026-10-11 (the one-way package setting,
+done by hand — there is no API). Verified from a credential-less registry token: `v0.1.2` resolves by tag and by
+digest to exactly what `docker/images.lock.yml` pins. The control node therefore holds no registry credential under
+either deploy path, and the accepted risk R-IMG-1 is closed in SECURITY.md (the strikethrough form the Vector socket
+row set). Every "`docker login ghcr.io` first" instruction now says the pull is anonymous and a login applies only
+to a private package: `docs/SETUP.md`, `docker/README.md`, `docs/public-split.md` (table, sync recipe, checklist
+step 5), the `publish-images.yml` header, the deploy play's comments and fail-closed message,
+`gen-image-digests.py`, the `scripts/kontroll.sh` pre-pull rationale. One correction on the way: a new package does
+NOT inherit the repository's visibility — the first publish from this public repository (2026-10-09) produced
+private packages; a package starts private until its owner flips it. No behaviour change.
+
 ### fix(gui): a boundary refusal answers with a per-field `code` the browser can act on (2026-10-10)
 
 The GUI relay's 422 for a request the C22 boundary refuses carried only the message; the browser renders

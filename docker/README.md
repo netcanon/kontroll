@@ -44,15 +44,18 @@ Re-run it to add services as later phases enable them.
 The Semaphore runner, Vector, and installer images can be **published once** to
 `ghcr.io/<owner>/kontroll-{control,vector,installer}` — the publishing repository's owner, never hard-coded — and
 pulled BY DIGEST instead of built on every control node (report 22). **Opt-in** — the local `docker build` path is
-the default and unchanged. A package inherits the repository's visibility at its first publish; the public tool's
-packages are made public once, by hand, in each package's settings (no API exists for it).
+the default and unchanged. A **new package starts private** whatever the repository's visibility (the first publish
+from this public repository, 2026-10-09, produced private packages); the owner makes it public once, by hand, in the
+package's settings (no API exists for it, and a public container package cannot be made private again). The public
+tool's three packages **are public since 2026-10-11** — every pull is anonymous.
 
 - **Publish** (a release tag, or `workflow_dispatch`) → [`.github/workflows/publish-images.yml`](../.github/workflows/publish-images.yml)
   builds + pushes with the built-in `GITHUB_TOKEN`. The runner bakes the **all-modules superset**
   (`gen-requirements.py --all-modules`) — a published image can't know a node's fleet.
-- **Pin the digests:** `docker login ghcr.io` (a `read:packages` PAT) then
-  `python3 scripts/gen-image-digests.py --refresh <tag>` writes `@sha256:` into [`images.lock.yml`](images.lock.yml);
-  commit it. Docker verifies the digest on every pull (the image-world L2b — [SECURITY.md](../SECURITY.md) R-IMG-1).
+- **Pin the digests:** `python3 scripts/gen-image-digests.py --refresh <tag>` writes `@sha256:` into
+  [`images.lock.yml`](images.lock.yml); commit it. No login — the packages are public (a `docker login ghcr.io`
+  with `read:packages` is needed only for a private package). Docker verifies the digest on every pull (the
+  image-world L2b — [SECURITY.md](../SECURITY.md) § Accepted risks, the retired R-IMG-1 row).
 - **Deploy with published images:** `… deploy-stack.yml -e use_published_images=true` — the two image-build tasks
   skip and `docker/.env` pins `KONTROLL_{CONTROL,VECTOR}_IMAGE` from the lock (fail-closed if no digest is recorded).
   The runner refs are `${KONTROLL_CONTROL_IMAGE:-kontroll/semaphore:latest}` (the `:-` default keeps local builds working).
