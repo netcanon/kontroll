@@ -196,7 +196,8 @@ def overlay_target(rel):
 # --- Request-boundary validators (2026-10-08 review, finding 1; CodeQL py/path-injection) --------------------------
 # Every request field that becomes a PATH COMPONENT (a device-class key, an actuation unit key, a secret domain, an
 # inventory group) or an INVENTORY KEY (a host name, an address) passes one of these at the service seam and again at
-# the join that uses it, and every repo-relative write target passes confined(). A closed charset, not a denylist: a
+# the join that uses it, and every DROP-IN write target passes confined() (the writers that do not are named in
+# SECURITY.md C22). A closed charset, not a denylist: a
 # value that passes cannot carry a separator, a `..`, a NUL, a newline or a YAML/shell metacharacter — and CodeQL's
 # "this path depends on a user-provided value" is answered once, here. Each raises RequestBoundaryError naming the
 # FIELD and the rule, never the value; the API and the GUI both answer 422, before any write.

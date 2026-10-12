@@ -64,7 +64,7 @@ stream **labels** it contributes (a CLOSED subset of the canonical non-secret se
 Fans enabled modules × their `logs:` entries × the inventory hosts → one Vector **source + shaping transform**
 fragment per `(method, key)` + one aggregate **Loki sink** under `docker/vector/generated/` (a config-dir
 **disjoint** from the hand-authored `config.d/` tree, with explicit component ids — so the implicit-namespacing
-ids never collide and `vector validate` is predictable). **Fail-closed:** an unknown method, a param outside the
+ids never collide and what Vector loads is what the file says). **Fail-closed:** an unknown method, a param outside the
 method's allow-list, or a label outside the canonical non-secret set exits non-zero — the C12 label-hygiene +
 config-injection guards. A `gen-logging --check` validate step keeps the committed tree honest
 (generated-never-hand-maintained).

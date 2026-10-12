@@ -1,12 +1,12 @@
 """The request boundary: every request field that becomes a path component or an inventory key is a closed charset,
-and every repository write is confined to write_root() (SECURITY.md C22; 2026-10-08 review, finding 1).
+and every drop-in write is confined to write_root() (SECURITY.md C22; 2026-10-08 review, finding 1).
 
 WHY: the onboard planner validated only that the collection was installed. `key`, `group`, `host`, `host_name` and
 `secrets` were bare strings that went straight into `modules/<key>/module.yml`, `onboarded-<key>.yml`,
 `ansible/secrets/<domain>.sops.yml` and the rendered inventory YAML — one `../` or `;` away from a write outside the
 repository or a YAML/argv injection, on the privileged API and the GUI alike. CodeQL's 45 `py/path-injection` alerts
 on the public tree are this single class of join. The fix is a closed charset at the seam AND at every join (so a new
-caller cannot forget), plus `confined()` as the last check before any write. These tests are the accept/reject
+caller cannot forget), plus `confined()` as the last check before a drop-in write. These tests are the accept/reject
 tables, the "refused before the probe is reached" property, and the write confinement against real paths.
 """
 import os
