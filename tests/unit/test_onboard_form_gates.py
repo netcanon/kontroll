@@ -36,10 +36,14 @@ def test_offsite_remote_exists_distinguishes_local_from_offsite(tmp_path, monkey
 
 def test_onboard_form_template_wires_both_gates():
     """The template embeds the server flag, gates the push checkbox on it, defines the collapse predicate +
-    disables the toggle while dirty, and guards the now-optional push box in the submit body."""
+    disables the toggle while dirty, and guards the now-optional push box in the submit body. The push box is part
+    of the form's LITERAL markup and is REMOVED when there is no offsite remote: it is no longer interpolated into
+    the markup, because only literals reach innerHTML (SECURITY.md C19). The gate — no offsite remote, no push box
+    — is what this pins; a box that stayed on a fresh node would offer a push that can only fail."""
     html = open(os.path.join(ROOT, "gui", "templates", "index.html"), encoding="utf-8").read()
     assert "const HAS_REMOTE = {{" in html                                  # server flag embedded into the page
-    assert "HAS_REMOTE ? '<label" in html and "field-push" in html          # push checkbox rendered only inside it
+    assert 'name="push" data-testid="field-push"' in html                   # the box is authored in the literal…
+    assert "if (!HAS_REMOTE) f.querySelector('[name=push]').closest('label').remove();" in html   # …and gated here
     assert "function onbPristine" in html                                   # collapse-gate predicate
     assert "btn.disabled = open && !onbPristine" in html                    # toggle disabled while the form is dirty
     assert "push:(g('push') ? g('push').checked : false)" in html           # submit guards the now-optional box

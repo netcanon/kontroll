@@ -37,6 +37,14 @@ the rendered UX: **search → result card → open the form → dry-run → the 
 hermetic auth/contract is covered by [test_gui_api.py](../integration/test_gui_api.py); this is
 the browser layer on top.
 
+`test_paint_rule.py` is the browser proof of SECURITY.md C19 for the Pending, Index, Settings,
+Homepage and Discovery panels and the capability, reconfigure, secret and keygen dialogs: it serves
+their JSON with `page.route`, puts a payload (`<img src=x onerror=…>`) in the fields they paint, and
+asserts the payload is visible as text, the page holds no `<img>`, and nothing ran; it also drives
+the link rule (`safeHref`) and the request-path encoding. The source gate
+([test_card_paint_gate.py](../unit/test_card_paint_gate.py)) proves the code shape; only a browser
+shows the consequence.
+
 ```bash
 pip install -r tests/requirements-dev.txt        # includes pytest-playwright
 python -m playwright install chromium             # one-time browser fetch

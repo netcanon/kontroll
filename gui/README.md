@@ -276,17 +276,25 @@ Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
 - **Audit log** (`GUI_AUDIT_LOG`): every onboard action + auth-denial — timestamp, client
   IP, what (collection/key/host/flags) — **never** credentials.
 - Actuation is explicit: the UI dry-runs unless **apply** is ticked.
-- **Foreign bytes render as TEXT, never markup** (SECURITY.md C19). The page has two DOM helpers: `E()` assigns
-  `innerHTML` and is for kontroll's own literal markup; `ET()` assigns `textContent` and is for **every** value we
-  did not author — device bytes (captures, lease rows), Galaxy-published bytes (a collection's description, name
-  and version), and API error strings. This is not advisory: `tests/unit/test_card_paint_gate.py` scans every
-  `E()` call site and fails the build if one carries a foreign value. It exists because until 2026-07-27 the
-  search card painted a collection's Galaxy description through `innerHTML` — a published
-  `<img src=x onerror=…>` ran in the operator's session on **search alone**. Add a new externally-sourced field to
-  the page ⇒ add it to that gate's `FORBIDDEN` list in the same commit.
+- **Foreign bytes render as TEXT, never markup** (SECURITY.md C19). The rule is an allow-list: only markup written
+  as a literal in `index.html` reaches `innerHTML`. `E()` assigns `innerHTML` and takes literals only; `ET()` assigns
+  `textContent` and `T()` makes a text node, and they paint **every** other value — device bytes, Galaxy-published
+  bytes, a staged proposal's ref name, subject and paths, repository values, API error strings. A link is built
+  only by `LINK()`, which sets an `href` when `safeHref()` — the browser's own URL parser — resolves the value to
+  http(s), and a dynamic request-path segment is `encodeURIComponent`-ed. This is not advisory:
+  `tests/unit/test_card_paint_gate.py` scans every `E()` markup argument and every `.innerHTML =`, refuses the
+  other spellings of the sink that a token scan can read (a computed property name is beyond it), holds every
+  request to a direct `fetch()` with an encoded path, and fails the build on the first non-literal, whatever the
+  value is called;
+  `tests/e2e/test_paint_rule.py` proves the result in a browser for the panels and dialogs that changed. It exists
+  because the rule was broken twice: until 2026-07-27 the search card painted a collection's Galaxy description
+  through `innerHTML`, and until 2026-10-12 the Pending panel painted a staged proposal's ref name, subject and
+  paths the same way. Add a value to the page ⇒ paint it with `ET()`/`T()`, or leave an empty element in the
+  literal and fill its `textContent`; add a link ⇒ `LINK(url, text)`.
 - **CSP**: `object-src`/`base-uri`/`frame-ancestors` are set on every response, plus `nosniff`. `script-src` is
-  *not* set — the page carries a large inline `<script>`; moving it out is a prerequisite, and CSP is the second
-  layer regardless. The paint rule above is the actual control.
+  *not* set — the page carries a large inline `<script>` and inline `onclick` attributes on its header buttons;
+  a per-response nonce with those handlers rebound is the prerequisite, and CSP is the second layer regardless.
+  The paint rule above is the actual control.
 - **Still: bind to the mgmt network only; never expose it publicly.**
 
 **Pre-beta remaining:** a real CA-signed cert (vs self-signed) and SSO (Authelia) if it's

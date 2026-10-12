@@ -8,6 +8,8 @@ the dialog. Create/stage is NOT driven here (it commits + needs an armed staging
 reuses the proven `renderCapPromote` (exercised via `page.evaluate`). Selectors are `data-testid` only
 (docs/testing-standards.md §3). opt-in via the `e2e` marker.
 """
+import json
+
 import pytest
 from playwright.sync_api import expect
 
@@ -61,3 +63,22 @@ def test_unit_result_renders_runid_and_staged_ref(page):
         " run_id:'deadbeef0001', paths:['instance/actuation/cisco-ios-ios-facts/unit.yml']})")
     assert "deadbeef0001" in staged and "STAGED proposal proposed/deadbeef0001" in staged
     assert "Semaphore promote-proposal" in staged
+
+
+def test_the_review_pane_defaults_the_blast_radius_to_lan(page):
+    """Picking a unit opens the review pane with the blast-radius select listing the five radii and `LAN` chosen.
+    The select is built option by option from the template's constant table (no markup string — SECURITY.md C19),
+    so the default is carried by `defaultSelected`; this guards that the choice the Review request sends when the
+    operator touches nothing is still `LAN`, not the first option."""
+    page.route("**/api/units/*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"units": [{"name": "swarm", "kind": "role"}]})))
+    page.goto("/")
+    page.get_by_test_id("search-input").fill("cisco ios")
+    page.get_by_test_id("search-btn").click()
+    page.get_by_test_id("card").first.get_by_test_id("unit-badge").click()
+    dlg = page.get_by_test_id("unit-dialog")
+    dlg.get_by_test_id("unit-pick").first.click()
+    expect(dlg.get_by_test_id("unit-blast")).to_have_value("LAN")
+    assert dlg.get_by_test_id("unit-blast").evaluate("s => [...s.options].map(o => o.value)") == [
+        "this-device", "VLAN", "LAN", "WAN", "all"]

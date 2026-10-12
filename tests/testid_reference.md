@@ -86,7 +86,8 @@ whose `data-cap` is a registered secondary capability (the badge then carries th
 | `cap-promote` | the Promote button (token-gated write) | `disabled` until a successful propose |
 | `cap-plan` | the `<pre>` plan/enact pane | contains the scoped paths + the enact commands |
 | `cap-result` | the `<pre>` promote-result pane (appended) | surfaces the `run_id` + the staged `proposed/<ref>` so the operator can drive Semaphore's promote-proposal survey (mirrors `renderOnboard`, #126); asserted in `tests/e2e/test_capability_flow.py` |
-| `cap-links` | the capability LINKS block (clickable anchors, appended) | rendered from the plan's generic `links: [{label, url}]`; telemetry emits Grafana deep-links (`Open Grafana` + `/d/<uid>` per curated dashboard, #122). Shown on propose (preview) + after promote; absent when the plan carries no links (e.g. no mgmt base resolvable) |
+| `cap-links` | the capability LINKS block (appended): one `cap-link` anchor per entry whose URL is a web link, plain text naming the URL otherwise (C19) | rendered from the plan's generic `links: [{label, url}]`; telemetry emits Grafana deep-links (`Open Grafana` + `/d/<uid>` per curated dashboard, #122). Shown on propose (preview) + after promote; absent when the plan carries no links (e.g. no mgmt base resolvable) |
+| `cap-link` | one link inside `cap-links` | built by `LINK()`: opens in a new tab; exists only when the browser resolves the plan's URL to http(s) — a `javascript:`/`data:` URL never becomes an `href` (C19) |
 
 ### Reconfigure testids (Phase 4a, #138 — changing an already-configured capability block)
 
@@ -212,7 +213,8 @@ reuses the SAME `openCapabilityDialog(cap, key)` the search cards use. The heade
 | `services-body` | the **services** section container (one `service-row` each) | #128; degrades independently of the fleet section |
 | `services-error` | services read failed (a malformed `config/services.yml`) | #128; shown instead of the service rows |
 | `services-empty` | the "no services declared" state | #128; shown when `list_services()` is empty |
-| `service-row` | a per-service row (link-only) | #128; `data-name` = service name; `.muted` when `enabled=false`; opens in a new tab |
+| `service-row` | a per-service row (link-only) | #128; `data-name` = service name; `.muted` when `enabled=false`; the name is text, the URL is a `service-link` when it is a web link and plain text followed by `(not a web link)` otherwise (C19) |
+| `service-link` | the service's URL as a link inside `service-row` | built by `LINK()`: opens in a new tab; absent when the URL is unresolvable or not http(s) |
 | `fleet-classes` | the **fleet** section container (one `fleet-class` each) | #128; a wrapper so the two sections degrade independently |
 | `fleet-error` | the error line (a malformed inventory/module) | shown instead of the fleet list |
 | `fleet-empty` | the "nothing onboarded yet" state | shown when `list_fleet()` is empty |
@@ -259,9 +261,11 @@ admin-authed Semaphore app (C10 two-key); there is deliberately no Promote/Appro
 | `pending-panel` | the panel root | |
 | `pending-close` | the × close control | removes `pending-overlay` |
 | `pending-body` | the panel body (one row per proposal) | |
-| `pending-error` | the error line (a git/read failure) | shown instead of the list |
+| `pending-error` | the error line (a git/read failure) | shown instead of the list; painted with `ET()` (C19) |
 | `pending-empty` | the "nothing pending" state | the informational `note` (unarmed deploy / no canonical) |
 | `pending-row` | a per-proposal row | `data-run-id` = the run_id |
+| `pending-head` | the row's `<h3>` — the run_id as text, with staged-at and sha as a child `<span class="meta">` | painted with `ET()`: the run_id is a git **ref name**, foreign and unpromoted (C19); `pending-stale` is appended here when stale |
+| `pending-subject` | the proposal's commit subject line (when present) | painted with `ET()` — whatever the proposal's author committed (C19) |
 
 ## Discovery panel (standalone modal — opened from the header "Discovery" button) — discovery-inbox Rung 1b
 
@@ -308,7 +312,7 @@ dialog** section below (opened from the Index *Automations* section; a zero-knob
 | `unit-config-fields` | the curated-knob GROUP container | filled by `renderKnobGroup` over the `unit` group (`source_kind: unit` → `renderKnob` per knob) — the configure form |
 | `knob-<key>` | one rendered knob row | **reused** (the existing per-knob testid); `[data-param]` widget inside, one per curated knob |
 | `pending-copy-runid` | the copy-run_id button inside a row | clipboard + a select-text fallback on plain-HTTP dev |
-| `pending-paths` | the changed-paths NAMES summary inside a row (when present) | names only — never file contents (no C8 weight) |
+| `pending-paths` | the changed-paths NAMES summary inside a row (when present) | names only — never file contents (no C8 weight); painted with `ET()` (C19) |
 | `pending-promote-hint` | the static Semaphore `promote-proposal` instruction inside a row | a signpost, **never** a run trigger (C10); rendered only when the proposal is a fast-forward (`promotable !== false`) |
 | `pending-stale` | a red "stale — re-propose" tag in the row `<h3>` | shown when `pending.promotable === false` (the proposal is non-FF: `main` advanced past it — the FF-race) |
 | `pending-stale-hint` | the re-propose guidance inside a stale row | replaces `pending-promote-hint` when stale (a promote would be refused non-fast-forward) |
