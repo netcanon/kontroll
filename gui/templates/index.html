@@ -93,11 +93,28 @@
 const HAS_REMOTE = {{ (has_remote | default(false)) | tojson }};   // server: an OFFSITE git remote exists; gates the "push origin" box
 // E(tag, class, html, testid) — testid (optional) sets data-testid so JS-built nodes are
 // test-addressable exactly like static elements (testing-standards.md §3, the data-testid SOP).
+// THE PAINT RULE (SECURITY.md C19): `html` is assigned to innerHTML, so it must be a LITERAL written in this file —
+// never a variable, a call, a ternary or an interpolation. Anything that is not a literal is TEXT: paint it with
+// ET()/T(), or put an empty element in the literal and fill its textContent. The same holds for every direct
+// `.innerHTML =`. tests/unit/test_card_paint_gate.py scans every such site and fails on the first non-literal.
 const E = (t, c, h, tid) => { const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; if(tid)e.dataset.testid=tid; return e; };
-// ET(tag, class, text, testid) — like E() but sets textContent (NEVER innerHTML). Use it for any DEVICE-controlled
-// byte (a capture filename/label, an ansible_host) so a `<…>` in store/inventory data can never execute in the
-// operator's authenticated session. The C14 backup viewer paints EVERY device byte (headers + line bodies) via ET.
+// ET(tag, class, text, testid) — like E() but sets textContent (NEVER innerHTML). It is the paint for EVERY value
+// that is not a literal in this file — a device byte, a repository byte, a staged proposal's ref name, subject or
+// paths, a third-party record, an API error string — so a `<…>` in any of them can never execute in the operator's
+// authenticated session.
 const ET = (t, c, text, tid) => { const e=E(t, c, null, tid); if(text!=null)e.textContent=text; return e; };
+// T(text) — a text node, for a value that sits NEXT TO authored markup: append it, never interpolate it.
+const T = (text) => document.createTextNode(text == null ? '' : String(text));
+// safeHref(url) — the url if the BROWSER'S OWN parser resolves it to http(s), else null. A `javascript:` or `data:`
+// URL in an href runs script on click however its label is painted; a relative or scheme-relative URL can only
+// resolve to http(s) from this page, so it stays a link. The parser that decides is the one that follows the link.
+const safeHref = (url) => { if (typeof url !== 'string' || !url.trim()) return null;
+  try { const p = new URL(url, document.baseURI).protocol; return (p === 'http:' || p === 'https:') ? url : null; }
+  catch (e) { return null; } };
+// LINK(url, text, testid) — a new-tab anchor, or null when the url is not a web link. THE ONE place an href is
+// assigned (the gate pins that), so every link on the page has passed safeHref() by construction.
+const LINK = (url, text, tid) => { const href = safeHref(url); if (!href) return null;
+  const a = ET('a', null, text, tid); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; return a; };
 const SYM = {actuate:'A', backup:'B', bespoke:'L', telemetry:'T'};
 // Secondary capabilities with a standalone post-onboard dialog (telemetry/backup/logging all live). Their badge
 // is clickable → openCapabilityDialog. A render hint (like SYM), extended by a one-line edit per new capability.
@@ -144,7 +161,7 @@ function card(rec) {
   Object.keys(rec.capabilities||{}).forEach(k => {
     const cap = rec.capabilities[k]; const st = cap.state;
     const m = st==='yes'?'✓':(st==='no'?'✗':'?');
-    const bd = E('span','badge '+st, (SYM[k]||k)+' '+m + (cap.confidence?' '+cap.confidence:''), 'capability-badge');
+    const bd = ET('span','badge '+st, (SYM[k]||k)+' '+m + (cap.confidence?' '+cap.confidence:''), 'capability-badge');
     bd.dataset.cap = k; bd.dataset.state = st;   // address a specific capability + its state, no class/text parsing
     if (CAP_DIALOGS.includes(k)) {               // a secondary capability: its badge opens the standalone dialog
       bd.classList.add('cap-open'); bd.title = 'configure '+k+' for this class';
@@ -198,7 +215,7 @@ function onbPristine(f) {
 function onboardForm(rec) {
   const f = E('form','onb',null,'onboard-form'); const key = rec.collection.replace(/[^a-z0-9]/gi,'_').toLowerCase();
   f.innerHTML = `
-    <div><label>device-class key</label><input name="key" data-testid="field-key" value="${key}"></div>
+    <div><label>device-class key</label><input name="key" data-testid="field-key"></div>
     <div><label>inventory group</label><input name="group" data-testid="field-group" placeholder="e.g. core_switch"></div>
     <div><label>host (mgmt IP/name)</label><input name="host" data-testid="field-host" placeholder="192.0.2.x"></div>
     <div><label>hostname (inventory name)</label><input name="host_name" data-testid="field-host-name" placeholder="optional — auto-named from the class if blank"></div>
@@ -207,7 +224,7 @@ function onboardForm(rec) {
       <div class="cred-grid" data-testid="cred-fields"></div></div>
     <div class="full row" data-testid="onboard-flags">
       <label class="row"><input type="checkbox" name="apply" data-testid="field-apply"> apply (write + encrypt + stage proposal)</label>
-      ${HAS_REMOTE ? '<label class="row"><input type="checkbox" name="push" data-testid="field-push"> also push origin (offsite backup)</label>' : ''}
+      <label class="row"><input type="checkbox" name="push" data-testid="field-push"> also push origin (offsite backup)</label>
       <label class="row"><input type="checkbox" name="bootstrap" data-testid="field-bootstrap"> install + verify (after promote)</label>
     </div>
     <div class="full"><button type="button" class="go" data-testid="run">Run</button>
@@ -215,6 +232,8 @@ function onboardForm(rec) {
     <pre class="out full" data-testid="output" style="display:none"></pre>
     <pre class="out full" data-testid="onboard-capability-gap" style="display:none"></pre>
     <pre class="out full" data-testid="onboard-provisioning" style="display:none"></pre>`;
+  f.querySelector('[name=key]').setAttribute('value', key);                 // the derived class key, as an attribute value
+  if (!HAS_REMOTE) f.querySelector('[name=push]').closest('label').remove();   // no offsite remote -> no push box
   f.querySelector('button.go').onclick = () => submit(f, rec.collection, rec.suggested_backend);
   // Discovery pre-fill: if the operator picked a host from the Discovery inbox, seed this form's host field with it
   // (the server-validated address — never a device byte that could inject). key/group/creds stay the human's (the
@@ -270,7 +289,7 @@ function renderCredFields(container, fields, source) {
       renderInto(container, cf);
     }
   });
-  container.appendChild(E('div', 'meta', source === 'fallback'
+  container.appendChild(ET('div', 'meta', source === 'fallback'
     ? 'fields: the generic union (no per-backend shape)'
     : 'fields derived for this device’s backend', 'cred-derivation-source'));
 }
@@ -286,10 +305,10 @@ async function loadCredFields(f, backend, secrets, collection) {
     // generic per-backend shape (F1 seam S1) — so the blind user sees the RIGHT grouped fields before any plan.
     // deep=true asks the server to SHARPEN to the EXACT argument_spec fields (F1 TIER-B); it is install-confined
     // server-side (a not-installed collection stays on the coarse shape at no cost), so we always request it.
-    const q = '/api/onboard/cred-fields?backend=' + encodeURIComponent(backend || '')
+    const credFieldsUrl = '/api/onboard/cred-fields?backend=' + encodeURIComponent(backend || '')
             + '&secrets=' + encodeURIComponent(secrets || 'network')
             + (collection ? '&collection=' + encodeURIComponent(collection) + '&deep=true' : '');
-    const r = await (await fetch(q)).json();
+    const r = await (await fetch(credFieldsUrl)).json();
     renderCredFields(box, r.cred_fields, r.cred_source);
   } catch (e) { box.textContent = 'could not derive credential fields (enter them after onboarding)'; }
 }
@@ -399,12 +418,12 @@ function renderOnboard(r){
 // Top-level + pure so a page.evaluate() e2e can assert the rendered widget set from a synthetic knob (no write).
 function renderKnob(knob) {                                    // one NON-secret knob -> a [data-param] widget
   const row = E('div', 'row knob', null, 'knob-' + knob.key);
-  row.appendChild(E('label', null, knob.label || knob.key));
+  row.appendChild(ET('label', null, knob.label || knob.key));
   let w;
   switch (knob.type || 'text') {
     case 'enum':
       w = E('select'); w.dataset.param = knob.key;
-      (knob.allowed || []).forEach(v => { const o = E('option', null, v); o.value = v;
+      (knob.allowed || []).forEach(v => { const o = ET('option', null, v); o.value = v;
         if (v === knob.default) o.selected = true; w.appendChild(o); });
       break;
     case 'bool':
@@ -422,7 +441,7 @@ function renderKnob(knob) {                                    // one NON-secret
       if (knob.pattern) w.pattern = knob.pattern; if (knob.default != null) w.value = knob.default; break;
   }
   row.appendChild(w);
-  if (knob.help) row.appendChild(E('div', 'meta', knob.help));
+  if (knob.help) row.appendChild(ET('div', 'meta', knob.help));
   return row;
 }
 // A SECRET-form knob (the `fields` source) — the existing secret widget EXTRACTED verbatim so the secrets dialog
@@ -430,9 +449,10 @@ function renderKnob(knob) {                                    // one NON-secret
 // /non-secret(text+default) input keyed by `data-field` (what secretApply reads), the `gen` button that CLEARS
 // the field so the SERVER mints it, and the NAMES-only `already_set` hint. A secret value is NEVER pre-filled.
 function renderSecretKnob(knob) {
-  const set = knob.already_set ? ' <span class="meta">(set — blank keeps it)</span>' : '';
   const row = E('div', 'row');
-  row.appendChild(E('label', null, knob.label + (knob.required ? ' *' : '') + set)).title = knob.help || '';
+  const lab = ET('label', null, knob.label + (knob.required ? ' *' : ''));
+  if (knob.already_set) { lab.appendChild(T(' ')); lab.appendChild(ET('span', 'meta', '(set — blank keeps it)')); }
+  row.appendChild(lab).title = knob.help || '';
   let field;
   if (knob.multiline) {                                       // a multi-line secret (e.g. a PEM key) — a single line can't hold it
     field = E('textarea', null, null, 'secret-field'); field.rows = 6; field.spellcheck = false;
@@ -456,7 +476,7 @@ function renderChip(knob) {                                   // a Stage-3 curat
   const row = E('div', 'row knob', null, 'knob-' + knob.key);
   const cb = E('input'); cb.type = 'checkbox'; cb.dataset.param = knob.key; cb.dataset.chip = '1';
   if (knob.default) cb.checked = true;
-  row.appendChild(cb); row.appendChild(E('label', null, knob.label || knob.key));
+  row.appendChild(cb); row.appendChild(ET('label', null, knob.label || knob.key));
   return row;
 }
 // The render-table dispatcher (closes the specced-but-unbuilt Stage-3 gap, testid_reference §Stage-3): one tier
@@ -519,8 +539,9 @@ function capCredPrereq(dlg, m) {
   const dom = m && m.secret_domain;
   if (!dom) { prereq.style.display = 'none'; prereq.innerHTML = ''; return; }
   prereq.style.display = 'block';
-  prereq.innerHTML = '⚠ needs the <b>'+dom+'</b> credential before it goes live (advisory, not enforced) — '+
+  prereq.innerHTML = '⚠ needs the <b></b> credential before it goes live (advisory, not enforced) — '+
     '<button class="link" data-testid="cap-cred-open">supply it in Secrets</button>';
+  prereq.querySelector('b').textContent = dom;
   prereq.querySelector('[data-testid=cap-cred-open]').onclick = () => openSecretDialog(dom);
 }
 function capSelection(dlg) { return knobSelection(dlg); }   // harvest by data-param (widened) — same {method, params} payload
@@ -529,18 +550,23 @@ function capSelection(dlg) { return knobSelection(dlg); }   // harvest by data-p
 function capRenderLinks(dlg, links) {
   dlg.querySelectorAll('[data-testid=cap-links]').forEach(n => n.remove());   // one block; refresh on each render
   if (!links || !links.length) return;
-  const box = E('div', 'caplinks', null, 'cap-links');
-  box.innerHTML = '🔗 ' + links.map(l =>
-    '<a href="'+l.url+'" target="_blank" rel="noopener noreferrer">'+l.label+' ↗</a>').join(' · ');
+  const box = ET('div', 'caplinks', '🔗 ', 'cap-links');
+  links.forEach((l, i) => {                        // label as text; a link only for a web URL (LINK)
+    if (i) box.appendChild(T(' · '));
+    box.appendChild(LINK(l.url, l.label + ' ↗', 'cap-link')
+      || ET('span', null, l.label + ' (' + (l.url == null ? 'no url' : l.url + ' — not a web link') + ')'));
+  });
   dlg.querySelector('.capbody').appendChild(box);
 }
 async function openCapabilityDialog(cap, key, opts) {
   document.querySelectorAll('[data-testid=cap-overlay]').forEach(n => n.remove());
   const ov = E('div', 'capov', null, 'cap-overlay');
   const dlg = E('div', 'capdlg', null, 'cap-dialog'); dlg.dataset.cap = cap; dlg.dataset.key = key;
-  dlg.innerHTML = '<div class="caphd"><span><b>'+cap+'</b> · '+key+'</span>'+
+  dlg.innerHTML = '<div class="caphd"><span><b></b></span>'+
     '<button class="capx" data-testid="cap-close">×</button></div>'+
     '<div class="capbody" data-testid="cap-body"><div class="spin">Detecting…</div></div>';
+  dlg.querySelector('.caphd b').textContent = cap;
+  dlg.querySelector('.caphd span').appendChild(T(' · '+key));
   ov.appendChild(dlg); document.body.appendChild(ov);
   dlg.querySelector('[data-testid=cap-close]').onclick = () => ov.remove();
   let view;
@@ -550,27 +576,35 @@ async function openCapabilityDialog(cap, key, opts) {
         '&id='+encodeURIComponent(key))).json(); }
   catch(e) { dlg.querySelector('.capbody').innerHTML = '<div class="warn">request failed</div>'; return; }
   const body = dlg.querySelector('.capbody');
-  if (view.error) { body.innerHTML = '<div class="warn" data-testid="cap-error">'+view.error+'</div>'; return; }
+  if (view.error) { body.innerHTML = ''; body.appendChild(ET('div', 'warn', view.error, 'cap-error')); return; }
   dlg._methods = view.methods || [];
   dlg._stage = view.resource_stage || null;
   const declared = (view.declared || []).flatMap(d => d.methods);
-  const moptions = dlg._methods.map(m =>   // declared methods are RECONFIGURE (pre-filled + diffed); the rest are ADD
-    '<option value="'+m.name+'">'+m.label+(m.declared ? ' · declared (reconfigure)' : '')+'</option>').join('');
+  // The body is BUILT, not interpolated: the note, the method names/labels and the Stage-3 label + testid all come
+  // from the server's projection, so each is a text node, an option's text/value or a dataset value — never markup.
+  body.innerHTML = '';
+  body.appendChild(ET('div', 'meta', (view.suggestion && view.suggestion.note) || ''));
+  if (declared.length) body.appendChild(ET('div', 'meta', 'already monitored via: '+declared.join(', ')));
+  const mrow = E('div', 'row', '<label>method</label>');
+  const msel = E('select', null, null, 'cap-method');
+  // declared methods are RECONFIGURE (pre-filled + diffed); the rest are ADD
+  dlg._methods.forEach(m => { const o = ET('option', null, m.label+(m.declared ? ' · declared (reconfigure)' : ''));
+    o.value = m.name; msel.appendChild(o); });
+  if (!dlg._methods.length) { const o = ET('option', null, '(none to add)'); o.value = ''; msel.appendChild(o); }
+  mrow.appendChild(msel); body.appendChild(mrow);
+  body.appendChild(E('div', null, null, 'cap-params'));
   // A Stage-3 container ONLY when the descriptor's source_kind renders (curated_list/policy_fields) — `none`
   // (backup/logging: all knobs ride Stage-1) renders no container, matching testid_reference §Stage-3.
-  const stageBox = (dlg._stage && dlg._stage.source_kind !== 'none' && dlg._stage.testid)
-    ? '<div class="section">'+(dlg._stage.label || 'resources')+'</div><div data-testid="'+dlg._stage.testid+'"></div>'
-    : '';
-  body.innerHTML =
-    '<div class="meta">'+((view.suggestion && view.suggestion.note) || '')+'</div>'+
-    (declared.length ? '<div class="meta">already monitored via: '+declared.join(', ')+'</div>' : '')+
-    '<div class="row"><label>method</label><select data-testid="cap-method">'+
-      (moptions || '<option value="">(none to add)</option>')+'</select></div>'+
-    '<div data-testid="cap-params"></div>'+ stageBox +
-    '<div class="warn" data-testid="cap-cred-prereq" style="display:none"></div>'+
-    '<div class="row"><button class="go" data-testid="cap-propose">Propose</button>'+
-      '<button data-testid="cap-promote" disabled>Promote</button></div>'+
-    '<pre class="out" data-testid="cap-plan" style="display:none"></pre>';
+  if (dlg._stage && dlg._stage.source_kind !== 'none' && dlg._stage.testid) {
+    body.appendChild(ET('div', 'section', dlg._stage.label || 'resources'));
+    body.appendChild(E('div', null, null, dlg._stage.testid));
+  }
+  const prereqBox = E('div', 'warn', null, 'cap-cred-prereq'); prereqBox.style.display = 'none'; body.appendChild(prereqBox);
+  const brow = E('div', 'row');
+  brow.appendChild(E('button', 'go', 'Propose', 'cap-propose'));
+  const pbtn = E('button', null, 'Promote', 'cap-promote'); pbtn.disabled = true; brow.appendChild(pbtn);
+  body.appendChild(brow);
+  const planPre = E('pre', 'out', null, 'cap-plan'); planPre.style.display = 'none'; body.appendChild(planPre);
   body.querySelector('[data-testid=cap-method]').onchange = () => capRenderKnobs(dlg);
   capRenderKnobs(dlg);
   body.querySelector('[data-testid=cap-propose]').onclick = () => capPropose(dlg);
@@ -579,7 +613,7 @@ async function openCapabilityDialog(cap, key, opts) {
 async function capPropose(dlg) {
   const out = dlg.querySelector('[data-testid=cap-plan]'); out.style.display = 'block'; out.textContent = 'Proposing…';
   let r;
-  try { r = await (await fetch('/api/capability/'+dlg.dataset.cap, {method:'POST',
+  try { r = await (await fetch('/api/capability/'+encodeURIComponent(dlg.dataset.cap), {method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({key: dlg.dataset.key, selection: capSelection(dlg)})})).json(); }
   catch(e) { out.textContent = 'request failed'; return; }
@@ -641,18 +675,18 @@ function reconfigGate(dlg, changes, promote, consequence){
   const row = E('div','row',null,'reconfig-confirm-row');
   if (s === 'identity'){                                       // type-to-confirm the new identity value (mirrors mgmt-IP)
     const want = String(top.after);
-    row.appendChild(E('label', null, '⚑ re-classify '+top.path+' — type the new value to confirm: '));
+    row.appendChild(ET('label', null, '⚑ re-classify '+top.path+' — type the new value to confirm: '));
     const inp = E('input', null, null, 'reconfig-identity-confirm'); inp.type = 'text'; inp.placeholder = want;
     inp.oninput = () => { promote.disabled = (inp.value !== want); };
     row.appendChild(inp);
-    row.appendChild(E('div','meta', (top.blast_radius ? top.blast_radius+' — ' : '')+'changing this re-homes/re-classifies the object ('+JSON.stringify(top.before)+' → '+JSON.stringify(top.after)+'). It only STAGES; promote in Semaphore + re-run the enact steps.'));
+    row.appendChild(ET('div','meta', (top.blast_radius ? top.blast_radius+' — ' : '')+'changing this re-homes/re-classifies the object ('+JSON.stringify(top.before)+' → '+JSON.stringify(top.after)+'). It only STAGES; promote in Semaphore + re-run the enact steps.'));
   } else {
     const tid = s === 'remove' ? 'reconfig-remove-confirm'
               : s === 'redeploy' ? 'reconfig-redeploy-confirm' : 'reconfig-overwrite-confirm';
     const label = s === 'remove' ? 'Confirm — drop '+gated.length+' value'+(gated.length>1?'s':'')
                 : s === 'redeploy' ? 'Acknowledge — takes effect only after promote + deploy-stack'
                 : 'Confirm — replace '+gated.length+' value'+(gated.length>1?'s':'');
-    const btn = E('button','go', label, tid);
+    const btn = ET('button','go', label, tid);
     btn.onclick = () => { promote.disabled = false; btn.disabled = true; btn.textContent = '✓ confirmed — Promote enabled'; };
     row.appendChild(btn);
   }
@@ -679,7 +713,7 @@ function renderCapPromote(r){
 async function capPromote(dlg) {
   const out = dlg.querySelector('[data-testid=cap-plan]'); out.textContent += '\n\nPromoting…';
   let r;
-  try { r = await (await fetch('/api/capability/'+dlg.dataset.cap, {method:'POST',
+  try { r = await (await fetch('/api/capability/'+encodeURIComponent(dlg.dataset.cap), {method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({key: dlg.dataset.key, apply:true, token: dlg._token, selection: capSelection(dlg)})})).json(); }
   catch(e) { out.textContent += '\nrequest failed'; return; }
@@ -743,8 +777,9 @@ function unitReviewPane(dlg, unit) {
   body.appendChild(ET('div','meta','unit: ' + unit.name + ' (' + unit.kind + ')  ·  collection ' + dlg._collection
     + '  ·  v' + (dlg._version || '?')));
   const brow = E('div', 'row', '<label>blast radius</label>');
-  brow.appendChild(E('select', null,
-    UNIT_BLAST.map(x => '<option' + (x === 'LAN' ? ' selected' : '') + '>' + x + '</option>').join(''), 'unit-blast'));
+  const bsel = E('select', null, null, 'unit-blast');
+  UNIT_BLAST.forEach(x => { const o = ET('option', null, x); if (x === 'LAN') o.defaultSelected = true; bsel.appendChild(o); });
+  brow.appendChild(bsel);
   body.appendChild(brow);
   const rbtn = E('button', 'go', 'Review', 'unit-review');
   rbtn.onclick = () => unitPropose(dlg);
@@ -906,23 +941,26 @@ async function openReconfigureDialog(kind, id, route, titleLabel){
   document.querySelectorAll('[data-testid=reconfig-overlay]').forEach(n => n.remove());
   const ov = E('div','capov',null,'reconfig-overlay');
   const dlg = E('div','capdlg',null,'reconfig-dialog'); dlg.dataset.route = route;
-  dlg.innerHTML = '<div class="caphd"><span><b>Reconfigure</b> · '+titleLabel+'</span>'+
+  dlg.innerHTML = '<div class="caphd"><span><b>Reconfigure</b></span>'+
     '<button class="capx" data-testid="reconfig-close">×</button></div>'+
     '<div class="capbody" data-testid="reconfig-body"><div class="spin">Loading…</div></div>';
+  dlg.querySelector('.caphd span').appendChild(T(' · '+titleLabel));
   ov.appendChild(dlg); document.body.appendChild(ov);
   dlg.querySelector('[data-testid=reconfig-close]').onclick = () => ov.remove();
   let view;
   try { view = await (await fetch('/api/configurable?kind='+encodeURIComponent(kind)+'&id='+encodeURIComponent(id))).json(); }
   catch(e){ dlg.querySelector('.capbody').innerHTML = '<div class="warn">request failed</div>'; return; }
   const body = dlg.querySelector('.capbody');
-  if (view.error){ body.innerHTML = '<div class="warn" data-testid="reconfig-error">'+view.error+'</div>'; return; }
-  let html = '<div class="meta">Change a value, <b>Propose</b> to review the diff, then <b>Promote</b> to stage '+
-    '(C10 — the GUI never promotes; do that in Semaphore).</div>';
-  (view.groups||[]).forEach(g => { if (g.testid) html += '<div data-testid="'+g.testid+'"></div>'; });
-  html += '<div class="row"><button class="go" data-testid="reconfig-propose">Propose</button>'+
-          '<button data-testid="reconfig-promote" disabled>Promote</button></div>'+
-          '<pre class="out" data-testid="reconfig-plan" style="display:none"></pre>';
-  body.innerHTML = html;
+  if (view.error){ body.innerHTML = ''; body.appendChild(ET('div', 'warn', view.error, 'reconfig-error')); return; }
+  body.innerHTML = '';
+  body.appendChild(E('div', 'meta', 'Change a value, <b>Propose</b> to review the diff, then <b>Promote</b> to stage '+
+    '(C10 — the GUI never promotes; do that in Semaphore).'));
+  (view.groups||[]).forEach(g => { if (g.testid) body.appendChild(E('div', null, null, g.testid)); });   // testid as data
+  const rrow = E('div', 'row');
+  rrow.appendChild(E('button', 'go', 'Propose', 'reconfig-propose'));
+  const rpromote = E('button', null, 'Promote', 'reconfig-promote'); rpromote.disabled = true; rrow.appendChild(rpromote);
+  body.appendChild(rrow);
+  const rplan = E('pre', 'out', null, 'reconfig-plan'); rplan.style.display = 'none'; body.appendChild(rplan);
   (view.groups||[]).forEach(g => renderKnobGroup(dlg, g));
   // a knob change invalidates any prior plan+token+diff — re-Propose required before it can stage.
   dlg.querySelectorAll('[data-param]').forEach(w => w.addEventListener('input', () => {
@@ -992,7 +1030,7 @@ async function openFleetPanel() {
   const sbox = E('div', null, null, 'services-body'); body.appendChild(sbox);
   try {
     const svcs = await (await fetch('/api/services')).json();
-    if (svcs.error)        sbox.innerHTML = '<div class="warn" data-testid="services-error">'+svcs.error+'</div>';
+    if (svcs.error)        sbox.appendChild(ET('div', 'warn', svcs.error, 'services-error'));
     else if (!svcs.length) sbox.appendChild(E('div', 'meta', 'no services declared', 'services-empty'));
     else                   svcs.forEach(s => sbox.appendChild(serviceRow(s)));
   } catch(e){ sbox.innerHTML = '<div class="warn" data-testid="services-error">request failed</div>'; }
@@ -1002,7 +1040,7 @@ async function openFleetPanel() {
   const fbox = E('div', null, null, 'fleet-classes'); body.appendChild(fbox);
   try {
     const fleet = await (await fetch('/api/fleet')).json();
-    if (fleet.error)        fbox.innerHTML = '<div class="warn" data-testid="fleet-error">'+fleet.error+'</div>';
+    if (fleet.error)        fbox.appendChild(ET('div', 'warn', fleet.error, 'fleet-error'));
     else if (!fleet.length) fbox.appendChild(E('div', 'meta', 'No devices onboarded yet — search a collection and onboard one.', 'fleet-empty'));
     else                    fleet.forEach(c => fbox.appendChild(fleetClassRow(c)));
   } catch(e){ fbox.innerHTML = '<div class="warn" data-testid="fleet-error">request failed</div>'; }
@@ -1015,7 +1053,7 @@ async function openFleetPanel() {
   try {
     const reg = await (await fetch('/api/actuation')).json();
     const units = (reg && reg.units) || [];
-    if (reg.error)        abox.innerHTML = '<div class="warn" data-testid="automations-error">'+reg.error+'</div>';
+    if (reg.error)        abox.appendChild(ET('div', 'warn', reg.error, 'automations-error'));
     else if (!units.length) abox.appendChild(E('div', 'meta', 'No automations yet — create one from a search result (⚙ Automations), then promote it.', 'automations-empty'));
     else                  units.forEach(u => abox.appendChild(automationRow(u)));
   } catch(e){ abox.innerHTML = '<div class="warn" data-testid="automations-error">request failed</div>'; }
@@ -1027,7 +1065,7 @@ async function openFleetPanel() {
   const provbox = E('div', null, null, 'provenance-classes'); body.appendChild(provbox);
   try {
     const prov = await (await fetch('/api/provenance')).json();
-    if (prov.error)           provbox.innerHTML = '<div class="warn" data-testid="provenance-error">'+prov.error+'</div>';
+    if (prov.error)           provbox.appendChild(ET('div', 'warn', prov.error, 'provenance-error'));
     else if (!prov.available) provbox.appendChild(E('div', 'meta', 'collection provenance not generated yet — run bootstrap / gen-requirements.', 'provenance-empty'));
     else {
       const s = prov.summary || {};
@@ -1044,7 +1082,7 @@ async function openFleetPanel() {
   const imgbox = E('div', null, null, 'image-provenance-classes'); body.appendChild(imgbox);
   try {
     const ip = await (await fetch('/api/image-provenance')).json();
-    if (ip.error)           imgbox.innerHTML = '<div class="warn" data-testid="image-provenance-error">'+ip.error+'</div>';
+    if (ip.error)           imgbox.appendChild(ET('div', 'warn', ip.error, 'image-provenance-error'));
     else if (!ip.available) imgbox.appendChild(E('div', 'meta', 'image digest-lock not present.', 'image-provenance-empty'));
     else {
       const s = ip.summary || {};
@@ -1102,10 +1140,13 @@ function automationRow(u) {
 function serviceRow(s) {
   const row = E('div', 'card', null, 'service-row'); row.dataset.name = s.name;
   if (!s.enabled) row.classList.add('muted');
-  const title = s.url
-    ? s.name + ' <span class="meta"><a href="'+s.url+'" target="_blank" rel="noopener noreferrer">'+s.url+' ↗</a></span>'
-    : s.name + ' <span class="meta">(url not resolvable on this deploy)</span>';
-  row.appendChild(E('h3', null, title, null));
+  const title = ET('h3', null, s.name + ' ');
+  const meta = E('span', 'meta');
+  const link = LINK(s.url, s.url + ' ↗', 'service-link');
+  if (link) meta.appendChild(link);
+  else meta.textContent = s.url ? s.url + ' (not a web link)' : '(url not resolvable on this deploy)';
+  title.appendChild(meta);
+  row.appendChild(title);
   if (s.description) row.appendChild(ET('div', 'meta', s.description, null));
   return row;
 }
@@ -1126,9 +1167,9 @@ async function openPendingPanel() {
   try { data = await (await fetch('/api/pending')).json(); }
   catch(e){ dlg.querySelector('.capbody').innerHTML = '<div class="warn">request failed</div>'; return; }
   const body = dlg.querySelector('.capbody'); body.innerHTML = '';
-  if (data.error){ body.innerHTML = '<div class="warn" data-testid="pending-error">'+data.error+'</div>'; return; }
+  if (data.error){ body.appendChild(ET('div', 'warn', data.error, 'pending-error')); return; }
   const props = data.proposals || [];
-  if (!props.length){ body.appendChild(E('div', 'meta', data.note || 'No proposals pending.', 'pending-empty')); return; }
+  if (!props.length){ body.appendChild(ET('div', 'meta', data.note || 'No proposals pending.', 'pending-empty')); return; }
   props.forEach(p => body.appendChild(pendingRow(p, data)));
 }
 function pendingRow(p, data) {
@@ -1137,12 +1178,15 @@ function pendingRow(p, data) {
   // (undefined/null = unknown ⇒ never scare the operator with a false 'stale').
   const stale = p.promotable === false;
   const row = E('div', 'card', null, 'pending-row'); row.dataset.runId = p.run_id;
-  const h = E('h3', null, p.run_id + ' <span class="meta">staged '+(p.staged_at||'?')+' · '+(p.sha||'')+'</span>');
+  // EVERY field of a staged proposal is foreign: the run id is a git ref name, the subject and the path names are
+  // whatever the proposal's author committed, and none of it has been promoted. All of it is text (C19).
+  const h = ET('h3', null, p.run_id + ' ', 'pending-head');
+  h.appendChild(ET('span', 'meta', 'staged '+(p.staged_at||'?')+' · '+(p.sha||'')));
   if (stale) h.appendChild(ET('span', 'badge no', ' stale — re-propose', 'pending-stale'));   // red tag, no promote
   row.appendChild(h);
-  if (p.subject) row.appendChild(E('div', 'meta', p.subject));                   // "what it changes" at a glance
+  if (p.subject) row.appendChild(ET('div', 'meta', p.subject, 'pending-subject'));                   // "what it changes" at a glance
   if (p.paths && p.paths.length)
-    row.appendChild(E('div', 'meta', 'changes: '+p.paths.join(', '), 'pending-paths'));   // NAMES only — no contents
+    row.appendChild(ET('div', 'meta', 'changes: '+p.paths.join(', '), 'pending-paths'));   // NAMES only — no contents
   const copy = E('button', 'mini', 'copy run_id', 'pending-copy-runid');         // the load-bearing affordance
   copy.onclick = () => copyRunId(copy, p.run_id);
   row.appendChild(copy);
@@ -1219,9 +1263,10 @@ function reproposeFromPending(hint) {
 // twice). NEVER a run trigger — the GUI cannot promote (C10 two-key). Plain text only (no deep-link — scope-2).
 function pendingPromoteHint(p, data) {
   const task = (data && data.promote_task) || 'promote-proposal';
-  const hint = E('div', 'meta', null, 'pending-promote-hint');
-  hint.innerHTML = 'To promote: open <b>Semaphore</b> → run the <b>'+task+'</b> task → paste this run_id into the '+
-    '<i>Proposal run_id</i> survey field. (The GUI cannot promote — C10 two-key safety.)';
+  const hint = E('div', 'meta', 'To promote: open <b>Semaphore</b> → run the <b data-slot="task"></b> task → paste '+
+    'this run_id into the <i>Proposal run_id</i> survey field. (The GUI cannot promote — C10 two-key safety.)',
+    'pending-promote-hint');
+  hint.querySelector('[data-slot=task]').textContent = task;      // the task name comes from the server -> text
   return hint;
 }
 // Copy a run_id to the clipboard with a transient "copied ✓"; fall back to selecting the text in a non-secure
@@ -1233,7 +1278,7 @@ function copyRunId(btn, runId) {
   } else { fallbackSelect(runId, btn); }
 }
 function fallbackSelect(runId, btn) {
-  const s = E('span', null, runId, null); s.style.userSelect = 'text';
+  const s = ET('span', null, runId, null); s.style.userSelect = 'text';
   btn.replaceWith(s);
   const r = document.createRange(); r.selectNodeContents(s);
   const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);     // pre-selected for Ctrl/⌘-C
@@ -1256,7 +1301,7 @@ async function openDiscoveryPanel() {
   try { data = await (await fetch('/api/discovery')).json(); }
   catch(e){ dlg.querySelector('.capbody').innerHTML = '<div class="warn">request failed</div>'; return; }
   const body = dlg.querySelector('.capbody'); body.innerHTML = '';
-  if (data.error){ body.innerHTML = '<div class="warn" data-testid="discovery-error">'+data.error+'</div>'; return; }
+  if (data.error){ body.appendChild(ET('div', 'warn', data.error, 'discovery-error')); return; }
   body.appendChild(discoverySwept(data));                              // read-only provenance signpost (C18)
   const cands = data.candidates || [];
   if (!cands.length){
@@ -1363,7 +1408,7 @@ async function loadRevisions(file, idx) {
   idx.innerHTML = '';
   if (data.error){ idx.appendChild(ET('div', 'warn', data.error, 'backup-error')); return; }
   const revs = data.revisions || [];
-  if (!revs.length){ idx.appendChild(E('div', 'meta', data.note || 'no history for this device yet', 'backup-empty')); return; }
+  if (!revs.length){ idx.appendChild(ET('div', 'meta', data.note || 'no history for this device yet', 'backup-empty')); return; }
   const base = E('select', null, null, 'backup-base'), comp = E('select', null, null, 'backup-compare');
   revs.forEach(r => {
     const label = r.short + ' · ' + (r.iso || '') + (r.subject ? ' · ' + r.subject : '');
@@ -1419,7 +1464,7 @@ function renderDiff(box, diff) {
   box.appendChild(ET('div', 'meta', diff.file + ' · ' + (diff.a_rev || '').slice(0, 7) + ' → ' +   // diff.file via textContent
     (diff.b_rev || '').slice(0, 7) + ' · +' + s.added + ' −' + s.removed, 'backup-diff-head'));
   if (diff.redacted) box.appendChild(E('div', 'meta', 'secrets masked (best-effort) — see SECURITY.md C14', 'backup-redacted-note'));
-  if (!diff.hunks || !diff.hunks.length){ box.appendChild(E('div', 'meta', diff.note || 'identical at these revisions', 'diff-empty')); return; }
+  if (!diff.hunks || !diff.hunks.length){ box.appendChild(ET('div', 'meta', diff.note || 'identical at these revisions', 'diff-empty')); return; }
   const pre = E('pre', 'diff', null, 'diff-view');
   diff.hunks.forEach(h => {
     const hd = E('div', 'dl hunk', null, 'diff-hunk'); hd.dataset.t = 'hunk'; hd.textContent = h.header;
@@ -1451,7 +1496,7 @@ async function openSettingsPanel() {
   try { v = await (await fetch('/api/settings')).json(); }
   catch(e){ dlg.querySelector('.capbody').innerHTML = '<div class="warn">request failed</div>'; return; }
   const body = dlg.querySelector('.capbody'); body.innerHTML = '';
-  if (v.error){ body.innerHTML = '<div class="warn" data-testid="settings-error">'+v.error+'</div>'; return; }
+  if (v.error){ body.appendChild(ET('div', 'warn', v.error, 'settings-error')); return; }
   body.appendChild(settingsGroup('identity', 'Instance identity', settingsIdentityRows, v.identity));
   body.appendChild(settingsGroup('backup', 'Offsite backup', settingsBackupRows, v.backup));
   body.appendChild(settingsGroup('fleet', 'Fleet enablement', settingsFleetRows, v.fleet));
@@ -1460,20 +1505,24 @@ async function openSettingsPanel() {
 // One area group: a card with a header + either a per-group error (independent degrade) or the rows the renderer emits.
 function settingsGroup(key, title, rowsFn, data) {
   const g = E('div', 'card', null, 'settings-group'); g.dataset.group = key;
-  g.appendChild(E('h3', null, title));
+  g.appendChild(ET('h3', null, title));
   if (!data || data.error) { g.appendChild(ET('div', 'warn', (data && data.error) || 'unavailable', 'settings-'+key+'-error')); return g; }
   rowsFn(g, data);
   return g;
 }
 function settingsRow(g, label, value) {
-  g.appendChild(E('div', 'meta', '<b>'+label+'</b>: '+(value == null || value === '' ? '—' : value)));
+  const d = E('div', 'meta'); d.appendChild(ET('b', null, label));
+  d.appendChild(T(': '+(value == null || value === '' ? '—' : value)));
+  g.appendChild(d);
 }
 // An editable settings knob row (Phase 5): the value + an `edit` control that opens the shared reconfigure dialog
 // against /api/settings/<knob>. `danger` adds a ⚠ (mgmt_ip/domain/tls_mode — the GUARD knobs whose gate is the
 // type-to-confirm / redeploy ack). The write STAGES proposed/<run_id> (C10); the GUI never promotes.
 function settingsKnobRow(g, knob, value, danger) {
   const row = E('div', 'row', null, 'settings-knob'); row.dataset.knob = knob;
-  row.appendChild(E('span', 'meta', '<b>'+knob+'</b>: '+(value == null || value === '' ? '—' : value)+(danger ? ' ⚠' : '')));
+  const sp = E('span', 'meta'); sp.appendChild(ET('b', null, knob));
+  sp.appendChild(T(': '+(value == null || value === '' ? '—' : value)+(danger ? ' ⚠' : '')));
+  row.appendChild(sp);
   const btn = E('button', 'mini', 'edit', 'settings-knob-edit'); btn.dataset.knob = knob;
   btn.onclick = () => openReconfigureDialog('settings-knob', knob,
                         '/api/settings/'+encodeURIComponent(knob), 'settings · '+knob);
@@ -1490,7 +1539,9 @@ function settingsIdentityRows(g, d) {
   const note = tm === 'solo'
     ? 'auto-promoter ships in a later release — proposals stay staged for manual promote (currently like separated)'
     : (tm === 'separated' ? 'a human promotes each staged proposal (prod)' : 'not set — choose at fresh-init (--trust-mode)');
-  g.appendChild(E('div', 'meta', '<b>trust_mode</b>: ' + (tm || '—') + '  (' + note + ')', 'settings-trust-mode'));
+  const tmRow = E('div', 'meta', '<b>trust_mode</b>: ', 'settings-trust-mode');
+  tmRow.appendChild(T((tm || '—') + '  (' + note + ')'));
+  g.appendChild(tmRow);
 }
 function settingsBackupRows(g, d) {
   settingsKnobRow(g, 'backup_remotes', (d.backup_remotes || []).join(', ') || '(none — self-sufficient)', false);
@@ -1498,7 +1549,7 @@ function settingsBackupRows(g, d) {
 function settingsFleetRows(g, d) {
   (d.enabled_modules || []).forEach(m => {                  // each module: a Disable control (GUARDED removal)
     const row = E('div', 'row', null, 'settings-fleet-row'); row.dataset.module = m;
-    row.appendChild(E('span', 'meta', m));
+    row.appendChild(ET('span', 'meta', m));
     const btn = E('button', 'mini', 'disable', 'settings-fleet-disable'); btn.dataset.module = m;
     btn.onclick = () => openReconfigureDialog('settings-fleet', m,
                           '/api/settings/fleet/'+encodeURIComponent(m), 'fleet · disable '+m);
@@ -1509,10 +1560,12 @@ function settingsFleetRows(g, d) {
 }
 function settingsStatusRows(g, d) {
   const arm = E('div', 'meta', '<b>privileged mutation</b>: ');
-  arm.appendChild(E('span', 'badge '+(d.armed ? 'yes' : 'no'), d.armed ? 'ARMED (staging enabled)' : 'disarmed (read-only)', 'settings-arming-badge'));
+  arm.appendChild(ET('span', 'badge '+(d.armed ? 'yes' : 'no'), d.armed ? 'ARMED (staging enabled)' : 'disarmed (read-only)', 'settings-arming-badge'));
   g.appendChild(arm);
-  g.appendChild(E('div', 'meta', '<b>services</b>: '+((d.services || []).map(s => s.name).join(' · ') || '(none)'), 'settings-services'));
-  g.appendChild(E('div', 'meta', '🔑 '+((d.secret_domains || []).map(s => s.domain+' '+(s.set ? '✓' : '—')).join(' · ') || '(none)'), 'settings-secrets-roster'));
+  const svc = E('div', 'meta', '<b>services</b>: ', 'settings-services');
+  svc.appendChild(T((d.services || []).map(s => s.name).join(' · ') || '(none)'));
+  g.appendChild(svc);
+  g.appendChild(ET('div', 'meta', '🔑 '+((d.secret_domains || []).map(s => s.domain+' '+(s.set ? '✓' : '—')).join(' · ') || '(none)'), 'settings-secrets-roster'));
   const jump = E('button', 'mini', 'manage in Secrets →', 'settings-secrets-jump');
   jump.onclick = () => { document.querySelectorAll('[data-testid=settings-overlay]').forEach(n => n.remove()); openSecretsPicker(); };
   g.appendChild(jump);
@@ -1534,7 +1587,8 @@ async function openHomepagePanel() {
   let board;
   try { board = await (await fetch('/api/homepage')).json(); }
   catch(e){ dlg.querySelector('.capbody').innerHTML = '<div class="warn">request failed</div>'; return; }
-  if (board.error){ dlg.querySelector('.capbody').innerHTML = '<div class="warn" data-testid="homepage-error">'+board.error+'</div>'; return; }
+  if (board.error){ const eb = dlg.querySelector('.capbody'); eb.innerHTML = '';
+    eb.appendChild(ET('div', 'warn', board.error, 'homepage-error')); return; }
   dlg._board = board;
   renderHomepageBoard(dlg);
 }
@@ -1554,7 +1608,8 @@ function renderHomepageBoard(dlg) {
 function homepageSectionCard(dlg, sec, si) {
   const card = E('div', 'card', null, 'homepage-section'); card.dataset.section = sec.name;
   const gen = !!sec.generated;
-  const hd = E('h3', null, (gen ? '🔒 ' : '') + sec.name + (gen ? ' <span class="meta">(generated — locked)</span>' : ''));
+  const hd = ET('h3', null, (gen ? '🔒 ' : '') + sec.name);
+  if (gen) { hd.appendChild(T(' ')); hd.appendChild(ET('span', 'meta', '(generated — locked)')); }
   const up = E('button', 'mini', '▲', 'homepage-section-up'); up.onclick = () => { hpMove(dlg._board.sections, si, -1); renderHomepageBoard(dlg); };
   const dn = E('button', 'mini', '▼', 'homepage-section-down'); dn.onclick = () => { hpMove(dlg._board.sections, si, 1); renderHomepageBoard(dlg); };
   hd.appendChild(up); hd.appendChild(dn); card.appendChild(hd);
@@ -1611,12 +1666,13 @@ function renderHomepageResult(r) {
 }
 function fleetClassRow(c) {
   const row = E('div', 'card', null, 'fleet-class'); row.dataset.key = c.key;
-  row.appendChild(E('h3', null, c.key + ' <span class="meta">'+(c.collection||'')+
-    ' · group '+(c.group||'?')+' · '+(c.status||'?')+'</span>'));
+  const fh = ET('h3', null, c.key + ' ');
+  fh.appendChild(ET('span', 'meta', (c.collection||'')+' · group '+(c.group||'?')+' · '+(c.status||'?')));
+  row.appendChild(fh);
   const caps = E('div', 'badges', null, null);
   ['telemetry','backup','logging'].forEach(cap => {        // all three clickable — declared OR addable (the dialog detects)
     const on = !!(c.capabilities && c.capabilities[cap]);
-    const bd = E('span', 'badge '+(on?'yes':'no')+' cap-open', cap+' '+(on?'✓':'+'), 'fleet-class-cap');
+    const bd = ET('span', 'badge '+(on?'yes':'no')+' cap-open', cap+' '+(on?'✓':'+'), 'fleet-class-cap');
     bd.dataset.cap = cap; bd.dataset.key = c.key; bd.dataset.state = on?'yes':'no';
     bd.title = (on?'configure':'add')+' '+cap+' for '+c.key;
     bd.onclick = () => openCapabilityDialog(cap, c.key, {});
@@ -1690,9 +1746,10 @@ async function openSecretDialog(domain) {
   document.querySelectorAll('[data-testid=secret-overlay]').forEach(n => n.remove());
   const ov = E('div','capov',null,'secret-overlay');
   const dlg = E('div','capdlg',null,'secret-dialog'); dlg.dataset.domain = domain;
-  dlg.innerHTML = '<div class="caphd"><span><b>secrets</b> · '+domain+'</span>'+
+  dlg.innerHTML = '<div class="caphd"><span><b>secrets</b></span>'+
     '<button class="capx" data-testid="secret-close">×</button></div>'+
     '<div class="capbody" data-testid="secret-body"><div class="spin">Loading…</div></div>';
+  dlg.querySelector('.caphd span').appendChild(T(' · '+domain));
   ov.appendChild(dlg); document.body.appendChild(ov);
   dlg.querySelector('[data-testid=secret-close]').onclick = () => ov.remove();
   let info;
@@ -1701,8 +1758,10 @@ async function openSecretDialog(domain) {
   try { info = await (await fetch('/api/configurable?kind=secret-domain&id='+encodeURIComponent(domain))).json(); }
   catch(e){ dlg.querySelector('.capbody').innerHTML='<div class="warn">request failed</div>'; return; }
   const body = dlg.querySelector('.capbody');
-  if (info.error){ body.innerHTML='<div class="warn" data-testid="secret-error">'+info.error+'</div>'; return; }
-  body.innerHTML = '<div class="meta">'+(info.description||'')+'</div><div data-testid="secret-fields"></div>';
+  body.innerHTML = '';
+  if (info.error){ body.appendChild(ET('div', 'warn', info.error, 'secret-error')); return; }
+  body.appendChild(ET('div', 'meta', info.description || ''));
+  body.appendChild(E('div', null, null, 'secret-fields'));
   renderKnobGroup(dlg, (info.groups || [])[0]);    // the `fields` source → renderSecretKnob per field (gen bound inline)
   body.appendChild(E('div','row','<button class="go" data-testid="secret-apply">Save + stage</button>'));
   const res = E('pre','out',null,'secret-result'); res.style.display='none'; body.appendChild(res);
@@ -1716,7 +1775,7 @@ async function secretApply(dlg, overwrite) {
     else if (i.dataset.regen === '1') regenerate.push(i.dataset.field);   // explicit 'gen' on a blank field (#141)
   });
   let r;
-  try { r = await (await fetch('/api/secrets/'+dlg.dataset.domain, {method:'POST',
+  try { r = await (await fetch('/api/secrets/'+encodeURIComponent(dlg.dataset.domain), {method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({values, regenerate, apply:true, overwrite: !!overwrite})})).json(); }
   catch(e){ out.textContent='request failed'; return; }
@@ -1738,7 +1797,7 @@ function secretOverwriteGate(dlg, names, out){
   out.textContent = '⚠ overwrite confirm — this REPLACES the live value of: '+names.join(', ') +
     '\n(a blank auto-generated field listed here is RE-MINTED on save — clear only what you mean to rotate)';
   const row = E('div','row',null,'secret-overwrite-confirm');
-  const btn = E('button','go','Confirm — replace '+names.length+' live secret'+(names.length>1?'s':''), 'secret-overwrite-go');
+  const btn = ET('button','go','Confirm — replace '+names.length+' live secret'+(names.length>1?'s':''), 'secret-overwrite-go');
   btn.onclick = () => { row.remove(); secretApply(dlg, true); };
   row.appendChild(btn); dlg.querySelector('.capbody').appendChild(row);
 }
@@ -1785,21 +1844,26 @@ async function openKeygenDialog(role) {
   document.querySelectorAll('[data-testid=keygen-overlay]').forEach(n => n.remove());
   const ov = E('div','capov',null,'keygen-overlay');
   const dlg = E('div','capdlg',null,'keygen-dialog'); dlg.dataset.role = role;
-  dlg.innerHTML = '<div class="caphd"><span><b>keygen</b> · '+role+'</span>'+
+  dlg.innerHTML = '<div class="caphd"><span><b>keygen</b></span>'+
     '<button class="capx" data-testid="keygen-close">×</button></div>'+
     '<div class="capbody" data-testid="keygen-body"><div class="spin">Loading…</div></div>';
+  dlg.querySelector('.caphd span').appendChild(T(' · '+role));
   ov.appendChild(dlg); document.body.appendChild(ov);
   dlg.querySelector('[data-testid=keygen-close]').onclick = () => ov.remove();
   let plan;
-  try { plan = await (await fetch('/api/keygen/'+role)).json(); }
+  try { plan = await (await fetch('/api/keygen/'+encodeURIComponent(role))).json(); }
   catch(e){ dlg.querySelector('.capbody').innerHTML='<div class="warn">request failed</div>'; return; }
   const body = dlg.querySelector('.capbody');
-  if (plan.error){ body.innerHTML='<div class="warn" data-testid="keygen-error">'+plan.error+'</div>'; return; }
-  body.innerHTML = '<div class="meta">'+(plan.description||'')+'</div>'+
-    '<div class="row meta">Becomes a recipient of: <b>'+(plan.recipient_domains.join(', ')||'(configured groups)')+'</b></div>'+
-    '<div class="row meta">Private key: <b>'+(plan.placement==='offline'?'store OFFLINE (not saved here)':'save to '+plan.private_key_path)+'</b></div>'+
-    '<div class="warn" data-testid="keygen-warning">'+(plan.warning||'')+'</div>'+
-    '<div class="row"><button class="go" data-testid="keygen-generate">Generate + stage recipient</button></div>';
+  body.innerHTML = '';
+  if (plan.error){ body.appendChild(ET('div', 'warn', plan.error, 'keygen-error')); return; }
+  body.appendChild(ET('div', 'meta', plan.description || ''));
+  const kr1 = E('div', 'row meta', 'Becomes a recipient of: ');
+  kr1.appendChild(ET('b', null, plan.recipient_domains.join(', ') || '(configured groups)')); body.appendChild(kr1);
+  const kr2 = E('div', 'row meta', 'Private key: ');
+  kr2.appendChild(ET('b', null, plan.placement==='offline' ? 'store OFFLINE (not saved here)' : 'save to '+plan.private_key_path));
+  body.appendChild(kr2);
+  body.appendChild(ET('div', 'warn', plan.warning || '', 'keygen-warning'));
+  body.appendChild(E('div', 'row', '<button class="go" data-testid="keygen-generate">Generate + stage recipient</button>'));
   const res = E('pre','out',null,'keygen-result'); res.style.display='none'; body.appendChild(res);
   body.querySelector('[data-testid=keygen-generate]').onclick = () => keygenApply(dlg);
 }
@@ -1807,17 +1871,17 @@ async function keygenApply(dlg) {
   const out = dlg.querySelector('[data-testid=keygen-result]'); out.style.display='block'; out.textContent='Generating…';
   const btn = dlg.querySelector('[data-testid=keygen-generate]'); if (btn) btn.disabled = true;  // mint once
   let r;
-  try { r = await (await fetch('/api/keygen/'+dlg.dataset.role, {method:'POST',
+  try { r = await (await fetch('/api/keygen/'+encodeURIComponent(dlg.dataset.role), {method:'POST',
         headers:{'Content-Type':'application/json'}, body:JSON.stringify({apply:true})})).json(); }
   catch(e){ out.textContent='request failed'; if (btn) btn.disabled=false; return; }
   if (r.error){ out.textContent='ERROR: '+r.error+(r.private_key?'\n\nSAVE THIS PRIVATE KEY NOW (commit failed but the key was minted):\n'+r.private_key:''); return; }
   // The ONE render of the private key — make it unmissable. It never comes back again.
   out.innerHTML = '';
   out.appendChild(E('div','warn','⚠ SAVE THE PRIVATE KEY NOW — it is shown only once and is not stored:'));
-  out.appendChild(E('pre','keyval', r.private_key, 'keygen-private'));
-  out.appendChild(E('div','meta', 'public recipient: '+r.public_key, 'keygen-public'));
+  out.appendChild(ET('pre','keyval', r.private_key, 'keygen-private'));
+  out.appendChild(ET('div','meta', 'public recipient: '+r.public_key, 'keygen-public'));
   const steps = (r.next_steps||[]).map((s,i)=>(i+1)+'. '+s).join('\n');
-  out.appendChild(E('pre','out', (r.changed ? ('STAGED '+(r.target_ref||'')+' (run_id '+r.run_id+')\n') : (r.note+'\n'))+steps, 'keygen-steps'));
+  out.appendChild(ET('pre','out', (r.changed ? ('STAGED '+(r.target_ref||'')+' (run_id '+r.run_id+')\n') : (r.note+'\n'))+steps, 'keygen-steps'));
 }
 document.getElementById('q').addEventListener('keydown', e => { if(e.key==='Enter') search(); });
 </script>

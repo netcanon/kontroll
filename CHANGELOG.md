@@ -11,6 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(gui): only literal markup reaches `innerHTML` — the paint rule becomes an allow-list (C19) (2026-10-12)
+
+The Pending panel painted a staged proposal's run id, commit subject and changed path names through `innerHTML`.
+Those bytes are whatever the proposal's author committed, a run id is a git ref name (which may hold `<`, `>` and
+`=`) that nothing validates before it is listed, and none of it has been promoted — so markup there ran in the
+operator's authenticated session on opening the list. It was one of fifty-nine sinks that painted a non-literal
+value: the error line of every panel not yet converted (a direct `.innerHTML =`), the dialog titles, the fleet,
+service, settings and homepage rows, the capability dialog's whole body (method names in `<option value>`, a
+server-supplied `data-testid`), the keygen plan — and the freshly minted private key itself. The C19 gate saw none of
+them: it was a denylist of seven substrings over `E()` arguments and never read a direct assignment. Every one of
+those sites now builds child elements or fills an empty element's `textContent`, and the gate is an allow-list (an
+`E()` markup argument and every `.innerHTML` right-hand side must be literal-only, and the other spellings of the
+sink that a token scan can read are refused), so the next value is covered whatever it is called. Closed with it,
+because text-painting does not cover them: a link's `href` is assigned in one helper, `LINK()`, and only when the
+browser's own URL parser resolves the value to http(s) (`safeHref()`); and the request paths that carried an
+unencoded segment
+(`/api/secrets/<domain>`, `/api/keygen/<role>`, `/api/capability/<cap>`) are `encodeURIComponent`-ed — unencoded, a
+secret domain of `../keygen/control` made the secret dialog's Save reach the route that mints a key. Two visible
+changes, both corrections: a legitimate value containing `<` is shown in full (the keygen next-step hint shows its
+`<run_id>` placeholder, which the browser used to swallow as an unknown tag), and a link target that is not a web
+link is shown as text instead of being linked. Proofs: `tests/unit/test_card_paint_gate.py` (the allow-list, each
+bypass shape its reviews found planted into the real template, the link, attribute, tag-name and request-path
+rules) and `tests/e2e/test_paint_rule.py` (a browser, panel by panel: the payload is text, no element, nothing
+runs — each test was run against the previous template and failed). New testids `pending-head`,
+`pending-subject`, `service-link`, `cap-link`. SECURITY.md C19.
+
 ### docs(images): the published packages are public — R-IMG-1 retired (2026-10-11)
 
 `ghcr.io/netcanon/kontroll-{control,vector,installer}` were made public on 2026-10-11 (the one-way package setting,

@@ -118,6 +118,7 @@ tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
 tests/e2e/           # GUI in a headless browser over the REAL booted Flask app (opt-in: e2e marker)
   conftest.py                # boots gui/app.py in a thread, service seams mocked, http_credentials
   test_onboard_flow.py       # search → result card → fill form → dry-run → plan renders (Playwright)
+  test_paint_rule.py         # C19 in a browser: the panels and dialogs that paint foreign values show a hostile one as text
 ```
 
 ```bash

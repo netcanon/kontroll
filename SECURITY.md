@@ -1223,38 +1223,64 @@ flood cap bounds rows; hostile fields are dropped/normalized; `read_inbox` is `a
 executes, the "Onboard this" pre-fill lands the discovered host in `field-host` with `apply` unchecked).
 Design-of-record: `docs/reviews/2026-07-03-discovery-inbox-scope/99-synthesis.md`. Accepted-risk row **R-DISC-1**.
 
-### C19 — The GUI renders foreign bytes as TEXT, never markup  ✓ implemented (source-gated)
+### C19 — The GUI renders foreign bytes as TEXT, never markup  ✓ implemented (source-gated, allow-list)
 
 The GUI paints values it did not author: **device** bytes (capture filenames and line bodies — C14; lease/ARP rows
-— C18) and, less obviously, **third-party publisher** bytes. `scripts/kontroll/probe.py` copies a collection's
-`description` verbatim out of the public Ansible Galaxy API (`shallow_from_galaxy`), and `service_search` returns
-it to the browser; the same is true of the collection name, version and origin on every galaxy-origin card.
+— C18), **third-party publisher** bytes (`scripts/kontroll/probe.py` copies a collection's `description` verbatim
+out of the public Ansible Galaxy API and `service_search` returns it to the browser), the bytes of a **staged,
+unpromoted proposal** (the Pending panel lists a `proposed/*` ref's name, its commit subject and its changed path
+names), **repository** bytes that a promote put on `main` (inventory, fleet, descriptors, settings), and every
+route's **error string**, which can quote request input, a repository value or a remote response.
 
-The rule is now mechanical, not case-by-case: **no value kontroll did not author reaches `innerHTML`.**
-`index.html` has two DOM helpers — `E()` assigns `innerHTML` (for kontroll's own literal markup) and `ET()` assigns
-`textContent`. Every record field, every API error string, and every refusal reason is painted with `ET()`; where a
-value used to be interpolated into a markup literal, the markup became child elements instead.
+**The rule is an allow-list: only literal markup written in `index.html` reaches `innerHTML`.** The template's DOM
+helpers are `E()` (assigns `innerHTML`), `ET()` (assigns `textContent`), `T()` (a text node) and `LINK()` (an
+anchor). `E()`'s markup argument and every direct `.innerHTML =` is a concatenation of string literals; anything
+that is not a literal is painted with `ET()`/`T()`, or an empty element is left in the literal and its `textContent`
+filled. There is no escaping helper and no judgement about which values are trustworthy: a value's source does not
+enter into it. Two neighbours that text-painting does not cover are closed the same way. A link's `href` is assigned
+in exactly one place, `LINK()`, and only when `safeHref()` — which asks the browser's own URL parser — resolves the
+value to http(s): a `javascript:` URL in an `href` runs on click however its label is painted, so a value that is
+not a web link is shown as text. And a dynamic segment of a same-origin request path goes through
+`encodeURIComponent`: unencoded, a secret domain of `../keygen/control` made the secret dialog's Save reach the
+route that mints a key.
 
-This closes a live hole. Until 2026-07-27 the search card painted the Galaxy-authored `description`, `collection`,
-`version` and `origin` through `E()`. Publishing a collection whose `galaxy.yml` description is
-`<img src=x onerror=…>`, tagged to match a plausible device search, gave script execution in the operator's
-authenticated session **the moment they searched** — no click, no onboard — with that session able to reach every
-`POST` route the GUI exposes. Eleven further sinks (the backup-viewer error/unavailable paths, the settings error
-line, the secret-domain and keygen-role pickers, the services description) were found by the covering gate and
-closed in the same commit. The doctrine had existed since C14 and had simply never been applied to non-device
-foreign bytes.
+History, because the rule was reached twice. Until 2026-07-27 the search card painted the Galaxy-authored
+`description`, `collection`, `version` and `origin` through `E()`: publishing a collection whose `galaxy.yml`
+description is `<img src=x onerror=…>` gave script execution in the operator's authenticated session **the moment
+they searched**, with that session able to reach every `POST` route the GUI exposes. That fix shipped with a gate
+that was a **denylist** — it searched `E()` arguments for seven substrings (`rec.`, `data.error`, …) — and the
+denylist was the next hole. A review on 2026-10-11 found the Pending panel painting `p.run_id`, `p.subject` and
+`p.paths` as markup: names the list did not contain, carrying bytes that exist **before any human has promoted
+anything** (a ref name may contain `<`, `>` and `=`, and nothing validates a run id before it is listed). The same
+census found fifty-nine sinks painting a non-literal, none of which the gate could see — among them the error line
+of every panel not yet converted, written with a direct `.innerHTML =` the gate never read, and two `href`s built
+from server strings. All were rewritten on 2026-10-12, and the gate became the allow-list above.
 
 Defence in depth: an `after_request` hook sets `Content-Security-Policy: object-src 'none'; base-uri 'none';
 frame-ancestors 'none'` plus `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. **`script-src`
-is deliberately absent** — `index.html` carries one large inline `<script>`, so `script-src 'self'` would break the
-page; relocating that script is a named follow-up and is *not* a substitute for the paint. The paint is the
-control; CSP is the second layer.
+is deliberately absent** — `index.html` carries one large inline `<script>` and inline `onclick` attributes on its
+header buttons, so a `script-src` policy needs a per-response nonce and those handlers rebound first; that is a
+named follow-up and is *not* a substitute for the paint. The paint is the control; CSP is the second layer.
 
-Covering check: [tests/unit/test_card_paint_gate.py](../tests/unit/test_card_paint_gate.py) — a quote- and
-comment-aware source scan that extracts the `innerHTML` argument of **every** `E()` call site and fails if it
-carries a `rec.*` field, an API error, or a refusal/dependency string; it proves it can fail (a planted sink is
-caught), pins the four record-painting testids to `ET(`, and pins the CSP directives. Extend its `FORBIDDEN` list
-when a new externally-authored field reaches the page.
+Covering checks: [tests/unit/test_card_paint_gate.py](../tests/unit/test_card_paint_gate.py) — a source scan of the
+template that understands string literals, comments and regular-expression literals. It fails on an `E()` markup
+argument or an `.innerHTML` right-hand side that is not literal-only; on the sink under another spelling (an alias
+of the helper, a literal bracket key, an interpolated template literal, another HTML-parsing or string-executing
+API); on an `href` outside `LINK()`; on an executing attribute or a navigating property set from script, and on an
+attribute or property whose name is not spelled in the source; on an element created from anything but one inert
+literal tag name; on a request that is not a direct `fetch()`, and on a request path that carries anything
+unencoded except the few names pinned to the one place their value comes from; and on code the script scan does not
+read (a second script element, a handler attribute that is not a bare call, a template expression in the static
+markup or one in the script that is not `| tojson`, a hidden line-break or display-reordering character). It proves
+it can fail by planting each shape a review found into the real template, and it pins the helpers by their exact
+definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not
+close is refused; a span it misreads as a string or a regex, and a property reached through a computed name
+(`x[k] = v`), are beyond it. Those are shapes written on purpose — the gate stops the sink coming back through an
+ordinary edit, and the paint and the browser proof are what answer the rest.
+[tests/e2e/test_paint_rule.py](../tests/e2e/test_paint_rule.py) is the browser proof for the Pending, Index,
+Settings, Homepage and Discovery panels and the capability, reconfigure, secret and keygen dialogs: each is served
+a payload in the fields it paints and must show it as text, create no element and run nothing. There is no list to
+extend — a new value on the page is either a literal or painted as text.
 
 
 ### C21 — The shippable tree carries no identifier of a real deployment  ✔ implemented (2026-10-08, the public split)

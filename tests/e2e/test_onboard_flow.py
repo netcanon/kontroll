@@ -4,6 +4,8 @@ API contract are covered hermetically by tests/integration/test_gui_api.py; this
 UX: search → result card → open the form → dry-run → the plan renders. Selectors are data-testid only
 (never CSS/text), per the data-testid SOP (docs/testing-standards.md §3). opt-in via the `e2e` marker.
 """
+import re
+
 import pytest
 from playwright.sync_api import expect
 
@@ -215,3 +217,29 @@ def test_onboard_surfaces_provisioning_prerequisite(page):
     card.get_by_test_id("run").click()
     expect(card.get_by_test_id("onboard-provisioning")).to_contain_text("PVEAuditor")   # prerequisite surfaced
     expect(card.get_by_test_id("run")).to_be_enabled()             # advisory — never gates onboarding
+
+
+@pytest.mark.parametrize("has_remote", [True, False])
+def test_the_push_box_follows_the_offsite_remote(page, has_remote):
+    """The onboard form shows the "also push origin" box only when the server says an offsite remote exists. The
+    box is part of the form's literal markup and is REMOVED when the flag is false (it is no longer interpolated —
+    SECURITY.md C19), so this drives both values of the flag in a real page: present and unticked with a remote,
+    absent without one, and the two neighbouring boxes untouched either way. Guards a fresh node offering a push
+    that can only fail — and a removal that takes the wrong label with it."""
+    def flagged(route):                                         # the page as served, with the one flag forced
+        response = route.fetch()
+        body = re.sub(r"const HAS_REMOTE = (true|false);",
+                      "const HAS_REMOTE = %s;" % ("true" if has_remote else "false"), response.text())
+        route.fulfill(response=response, body=body)
+    page.route(re.compile(r"^https?://[^/]+/$"), flagged)
+    page.goto("/")
+    assert page.evaluate("HAS_REMOTE") is has_remote
+    page.get_by_test_id("search-input").fill("cisco")
+    page.get_by_test_id("search-btn").click()
+    card = page.get_by_test_id("card").first
+    card.get_by_test_id("onboard-toggle").click()
+    expect(card.get_by_test_id("field-apply")).to_be_visible()
+    expect(card.get_by_test_id("field-bootstrap")).to_be_visible()
+    expect(card.get_by_test_id("field-push")).to_have_count(1 if has_remote else 0)
+    if has_remote:
+        expect(card.get_by_test_id("field-push")).not_to_be_checked()

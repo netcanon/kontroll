@@ -7,6 +7,8 @@
 # product, not of your lab (only the mgmt-IP/domain differ per instance, and those come from env).
 # Run a service you don't want listed here? Delete its entry. Add one = add a list item
 # (config-as-data — no code change). Ports match docs/SETUP.md §6's control-plane URL table.
+# Write each url_template ABSOLUTE, scheme included: the GUI makes it a link only when the
+# browser resolves it to http(s), and shows anything else as plain text (SECURITY.md C19).
 services:
   - name: Onboarding GUI
     url_template: https://${MGMT_IP}:8443
