@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from api.audit import read_audit
 from api.main import create_app
 from api.settings import Settings
-from kontroll import catalog, gitio, probe
+from kontroll import catalog, gitio, paths, probe
 
 pytestmark = pytest.mark.integration
 
@@ -218,3 +218,30 @@ def test_a_field_with_a_carriage_return_does_not_cut_its_audit_row_short(cap):
     promote = next(row for row in rows if row["action"] == "capability-promote")
     assert "FORGED-RUN" in promote["detail"] and "push=False" in promote["detail"], \
         "the row is whole: nothing after the carriage return was cut off"
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["propose", "promote"])
+def test_a_write_target_that_does_not_confine_is_a_409_on_the_capability_route(cap, monkeypatch, apply):
+    """When the confinement refuses the module target a capability plan is built for — as a `modules/` that
+    resolves outside the write root would — the propose and the promote both answer 409 `repository_data`, the
+    module file is unchanged, nothing is committed, and the audit log holds `repository-refuse what=path` with the
+    route's template. Driven with the telemetry capability: the route is one for every capability, and each
+    builder asks for its write target by the same call.
+
+    Guards the next route-local `except` around a plan builder: the type is mapped once for the app, and a
+    handler written for a refused field or for a failed read must not be able to relabel it (422, 500)."""
+    body = {"key": "demo_sw", "selection": {"method": "snmp", "params": {"module": "if_mib"}}}
+    if apply:
+        proposed = cap.client.post("/capability/telemetry", headers=AUTH, json=body)
+        assert proposed.status_code == 200, proposed.text
+        body = dict(body, apply=True, token=proposed.json()["token"])
+    before, committed = _module_text(cap), len(cap.calls)
+
+    def refuse(rel_path):
+        raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
+    monkeypatch.setattr(paths, "confined", refuse)
+    r = cap.client.post("/capability/telemetry", headers=AUTH, json=body)
+    assert r.status_code == 409 and r.json()["code"] == "repository_data", r.text
+    assert _module_text(cap) == before and len(cap.calls) == committed
+    rows = read_audit(cap.audit_log, action="repository-refuse")
+    assert rows and "what=path" in rows[-1]["detail"] and "route=/capability/" in rows[-1]["detail"]

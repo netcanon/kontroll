@@ -58,6 +58,25 @@ def _boundary_refused(request: Request, exc: paths.RequestBoundaryError) -> JSON
     return JSONResponse(status_code=422, content={"detail": str(exc), "code": exc.code})
 
 
+def _repository_refused(request: Request, exc: paths.RepositoryDataError) -> JSONResponse:
+    """The repository's own data or layout stopped a request (SECURITY.md C22) — a module file whose adopted name
+    is not one, a credential field declared badly, a backend with no role and a name none can be built from (or
+    a registry role that is not a name), a write target outside the write root: answer **409** with a sentence
+    that says where to look and `repository_data`, never 422 with a `code` naming a field the caller did not
+    send, and never the 500 an uncaught exception would be. Mapped ONCE for the app. A privileged request leaves
+    an audit line of its own ACTION (`repository-refuse what=<kind> route=<template>`), so a query for refused
+    REQUESTS stays what it says; an open route (no principal) leaves none, as with a field refusal."""
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        route = request.scope.get("route")
+        try:
+            write_audit(request.app.state.settings.audit_log, principal.user, principal.ip, "repository-refuse",
+                        principal.run_id, "what=%s route=%s" % (exc.what, getattr(route, "path", "-")))
+        except OSError:
+            pass                       # the refusal stands whether or not it could be recorded
+    return JSONResponse(status_code=exc.status, content={"detail": str(exc), "code": exc.code})
+
+
 def create_app(settings=None) -> FastAPI:
     """Build the FastAPI app. `settings` (defaults from the environment) carries the privileged-route
     Bearer token + audit-log path + the rate-limit policy; the read-only routes ignore the token. Route
@@ -75,6 +94,7 @@ def create_app(settings=None) -> FastAPI:
     app.state.settings = settings or from_env()
     app.add_middleware(RateLimitMiddleware, settings=app.state.settings)
     app.add_exception_handler(paths.RequestBoundaryError, _boundary_refused)
+    app.add_exception_handler(paths.RepositoryDataError, _repository_refused)
     for module in (health, search, probe, units, classify, refresh, exceptions, onboard, capability, secrets,
                    actuation, audit_routes):
         app.include_router(module.router)

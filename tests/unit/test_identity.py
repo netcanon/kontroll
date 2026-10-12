@@ -191,3 +191,75 @@ def test_the_enact_hint_stages_only_generator_output():
 def io_open(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+@pytest.mark.parametrize("stored", ["all", "lab-switches", "a" * 80])
+def test_a_value_read_back_unchanged_is_not_judged(tmp_repo, stored):
+    """A class whose module file holds a group the knob would not accept as a NEW value — a name Ansible reserves,
+    a hyphen the onboard field allows, a name longer than the bound — can still have ANOTHER identity key edited:
+    the dialog submits every knob pre-filled, and the unchanged group is read back, not chosen. The same word
+    chosen for a class that does not hold it is a `bad_value`.
+
+    Guards the tightened knob making an existing class un-editable (every edit refused over a field the operator
+    did not touch), without loosening what the knob will store."""
+    _write_module(tmp_repo, "demo_sw", _MODULE.replace("inventory_group: core_switch", "inventory_group: %s" % stored))
+    plan = identity.build_plan("demo_sw", {"values": dict(_CURRENT, inventory_group=stored, role="backend_other")})
+    assert plan["error"] is None and [c["path"] for c in plan["changes"]] == ["role"]
+    _write_module(tmp_repo, "other_sw", _MODULE.replace("demo_sw", "other_sw"))
+    chosen = identity.build_plan("other_sw", _sel(inventory_group=stored))
+    assert chosen["error"] == "bad_value" and chosen["field"] == "inventory_group"
+
+
+@pytest.mark.parametrize("stored,text", [(123, "123"), ({"a": 1}, "{a: 1}")], ids=["a-number", "a-mapping"])
+def test_a_stored_value_that_is_not_a_string_is_still_judged(tmp_repo, stored, text):
+    """A module file that holds a number, or a mapping, for an identity key, and a submission of that same value,
+    is a `bad_value` for that key: only a STRING the file already holds is read back unjudged.
+
+    Guards the read-back rule widening into "whatever equals the file passes": a value that is not a string is a
+    damaged file, the validator must still be what answers it — with the field named — and a client that echoes
+    it must not get a plan for it."""
+    _write_module(tmp_repo, "demo_sw", _MODULE.replace("inventory_group: core_switch", "inventory_group: %s" % text))
+    plan = identity.build_plan("demo_sw", {"values": {"inventory_group": stored}})
+    assert plan["error"] == "bad_value" and plan.get("field") == "inventory_group"
+
+
+@pytest.mark.parametrize("text", ["- key: demo_sw\n", "just a word\n"])
+def test_a_module_file_that_is_not_a_mapping_is_repository_data(tmp_repo, text):
+    """An identity plan for a class whose module file parses to a list or a bare word stops with
+    `paths.RepositoryDataError` naming the class and the file — the onboard's answer for the same file.
+
+    Guards the 500 it was (an AttributeError out of the first `.get`): the second reader of a module file must
+    not answer the same damaged file differently from the first."""
+    from kontroll import paths
+    _write_module(tmp_repo, "demo_sw", text)
+    with pytest.raises(paths.RepositoryDataError) as stop:
+        identity.build_plan("demo_sw", _sel(role="backend_other"))
+    assert stop.value.what == "module file" and "modules/demo_sw/module.yml" in str(stop.value)
+
+
+@pytest.mark.parametrize("text", ["[]\n", "false\n", "0\n", "''\n"])
+def test_a_module_file_that_is_an_empty_non_mapping_is_repository_data_too(tmp_repo, text):
+    """A module file that parses to an empty list, `false`, zero or an empty string is not a mapping either: the
+    identity plan stops with `RepositoryDataError`, as the onboard does for the same file.
+
+    Guards `or {}` turning a document that is not a mapping into an empty class: the writer then appended a key
+    to text that is not a mapping, and the plan ended in a parser error (a 500)."""
+    from kontroll import paths
+    from kontroll.service import onboard
+    _write_module(tmp_repo, "demo_sw", text)
+    with pytest.raises(paths.RepositoryDataError) as stop:
+        identity.build_plan("demo_sw", _sel(role="backend_other"))
+    assert stop.value.what == "module file"
+    with pytest.raises(paths.RepositoryDataError):
+        onboard._existing_module("demo_sw")
+
+
+def test_an_empty_module_file_is_still_an_empty_class(tmp_repo):
+    """An empty module file, or one that holds only comments, is a class with no keys yet: the plan ADDS every key
+    the dialog submits, and none of them is a refusal.
+    Guards the non-mapping refusal swallowing the one falsy document that IS "no keys yet"."""
+    _write_module(tmp_repo, "demo_sw", "# nothing yet\n")
+    plan = identity.build_plan("demo_sw", _sel(role="backend_other"))
+    assert plan["error"] is None
+    assert {c["kind"] for c in plan["changes"]} == {"add"}
+    assert {c["path"]: c["after"] for c in plan["changes"]} == dict(_CURRENT, role="backend_other")

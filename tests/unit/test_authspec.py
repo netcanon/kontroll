@@ -348,3 +348,43 @@ def test_auth_candidate_modules_ignores_non_string_module_entries():
     so it must honour the never-raise contract itself. Guards a latent INVARIANT-D* trip-wire blocking onboarding."""
     facts = {"modules": ["proxmox_kvm", None, 123, {"x": 1}, "proxmox_node"]}
     assert authspec.auth_candidate_modules(facts) == ["proxmox_kvm", "proxmox_node"]
+
+
+def test_tier_b_does_not_offer_an_option_whose_name_is_not_an_identifier():
+    """An OPTIONAL option of an installed module whose name is not an identifier (`api-key`, a name with a space,
+    a brace, sixty-five letters) is not offered as a credential field; the well-formed options beside it are. Two
+    of them (`old-api_host`, a locator beside a secret; `x-y_password`, a secret by its name) are options the
+    classifier takes when their name is an identifier, so it is the name filter that keeps them out. When such an
+    option is REQUIRED or marked `no_log`, the module is a miss as a whole and TIER-B returns nothing, so the
+    TIER-A shape stands.
+
+    Guards a third party's spelling refusing an onboard: the planner formats a field's name into a lookup
+    expression and refuses one that is not an identifier, so a derived field with such a name turned `deep: true`
+    into a 409 that the same request without `deep` did not get. And guards the other fault: a set labelled
+    exact that silently lacks a required secret, with the all-or-none check satisfied by the rest."""
+    good = {"api_host": {"type": "str", "required": True},
+            "api_password": {"type": "str", "no_log": True, "required": True}}
+    odd = {"api-key": {"type": "str"}, "api token": {"type": "str"}, "pw }} {{ x": {"type": "str"},
+           "x" * 65: {"type": "str"},
+           "old-api_host": {"type": "str"}, "x-y_password": {"type": "str"}}   # ones the classifier WOULD take
+    ad = _fake_ad({"login": dict(good, **odd)})
+    fields = authspec.auth_fields_from_argspec("acme.things", ["login"], ad=ad, installed={"acme.things"})
+    assert {cf["field"] for cf in fields} == {"api_host", "api_password"}
+    for spec in ({"type": "str", "no_log": True}, {"type": "str", "required": True}):
+        ad = _fake_ad({"login": dict(good, **{"api-key": spec})})
+        assert authspec.auth_fields_from_argspec("acme.things", ["login"], ad=ad, installed={"acme.things"}) is None
+
+
+def test_a_declared_auth_entry_whose_field_or_kind_is_not_a_string_is_skipped():
+    """An `auth:` entry whose `field` is a mapping or a number, or whose `kind` is a list, is skipped like any
+    other malformed entry, and the well-formed entry beside it is kept; an entry whose `auth_set`, `group` or
+    `help` is not a string is kept WITHOUT that key.
+
+    Guards the 500 a module file with such an entry was on both apps (a TypeError where the planner collects the
+    declared field names, or the names of the credential sets, into a set)."""
+    out = authspec.auth_fields_for_backend({"auth": [
+        {"field": {"a": 1}, "kind": "host"}, {"field": "x", "kind": ["host"]}, {"field": 7, "kind": "host"},
+        {"field": "api_host", "kind": "host", "maps_to": "ansible_host", "auth_set": ["s"], "group": {"g": 1},
+         "help": 5}]})
+    assert [cf["field"] for cf in out] == ["api_host"]
+    assert not {"auth_set", "group", "help"} & set(out[0])

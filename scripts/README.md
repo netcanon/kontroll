@@ -189,6 +189,9 @@ python3 scripts/galaxy.py probe cisco.ios [--json]   # deep-probe one collection
 python3 scripts/galaxy.py classify cisco.ios         # which execution backend fits
 python3 scripts/galaxy.py scaffold arista.eos --key arista_eos --group core_switch [--dry-run]
                                                      # generate modules/<key>/module.yml (staged)
+#   --key, --group, --secrets and --backend follow the onboard's rules for a name (and --group is not `all`,
+#   `ungrouped` or `localhost`); the file is written under the write root, like every other module write, and
+#   never beside a class the tool ships under the same key
 python3 scripts/galaxy.py onboard arista.eos --key arista_sw --group core_switch --host 192.0.2.250
                                                      # dry-run plan: module + drop-in inventory host + fleet
 python3 scripts/galaxy.py onboard arista.eos --key arista_sw --group core_switch --host 192.0.2.250 \
@@ -196,6 +199,8 @@ python3 scripts/galaxy.py onboard arista.eos --key arista_sw --group core_switch
         --apply --commit --push --bootstrap          # files + creds→SOPS + commit + push + install + verify
 python3 scripts/galaxy.py openapi https://host/api/v3/openapi.json --name radarr --emit
                                                      # derive an api-backend recipe from an OpenAPI spec
+#   --name is one path component (lower-case letters, digits, `_`, `-`); without it the name is derived from the
+#   specification's title
 python3 scripts/galaxy.py refresh                    # cache the derived matrix (gitignored)
 python3 scripts/galaxy.py audit                      # enabled-module collections vs installed
 python3 scripts/galaxy.py capture-exception add --subject fortigate --match 'FortiGate_*' \

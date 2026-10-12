@@ -183,12 +183,15 @@ def cmd_scaffold(args):
     if res["error"] == "no_backend":
         sys.exit("no backend auto-matched — pass --backend (e.g. raw_ssh) or add a backend.")
     rel, text = res["path"], res["text"]
-    abspath = os.path.join(paths.ROOT, rel)
-    if args.dry_run:
+    abspath = paths.module_write_path(args.key)   # under write_root(), confined — where every other module write goes
+    existing = paths.module_file(args.key)        # the READER's view: the clone's copy, else the shipped one —
+    if args.dry_run:                              # a stub written beside a shipped class would shadow it (#124)
         print("\n# --- would write %s ---\n" % rel + text)
+        if os.path.exists(existing):
+            print("# (a real run refuses: the %s device class already exists)" % args.key)
     else:
-        if os.path.exists(abspath):
-            sys.exit("refusing to overwrite %s" % abspath)
+        if os.path.exists(existing):
+            sys.exit("refusing to overwrite %s" % existing)
         os.makedirs(os.path.dirname(abspath), exist_ok=True)
         with open(abspath, "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -228,7 +231,7 @@ def cmd_onboard(args):
     print("[3] Enable the class -> instance/fleet.yml enabled_modules += %s\n" % args.key)
     if creds_to_set:
         print("[4] Credentials -> encrypted into instance/secrets/%s.sops.yml as %s" % (
-            args.secrets, ", ".join(sorted(creds_to_set))))
+            plan["secrets"], ", ".join(sorted(creds_to_set))))   # the plan's domain: a reuse ADOPTS the class's
         print("    (host carries inline SOPS lookups — self-contained, no group_vars needed)\n")
     else:
         print("[4] Credentials: none passed. The host has connection vars but no login —")
@@ -248,7 +251,7 @@ def cmd_onboard(args):
         crc = gitio._run(["git", "commit"] + gitio.commit_message_args([   # + the one configurable trailer
             "feat(onboard): %s -> %s via %s backend" % (args.collection, args.key, backend),
             "Machine-onboarded by scripts/galaxy.py onboard. Host %s in group %s; "
-            "device class staged (verify live before status: active)." % (host_name, args.group)]))
+            "device class staged (verify live before status: active)." % (host_name, plan["group"])]))
         if crc != 0:                                # never push a stale HEAD on a failed commit
             sys.exit("  ! commit failed (rc=%d) — not pushing; nothing took effect." % crc)
         # Update the LOCAL CANONICAL (the instance source of truth) so Semaphore sees
@@ -441,8 +444,10 @@ def main():
     args = ap.parse_args()
     try:
         args.func(args)
-    except (gitio.WriteConflict, paths.RequestBoundaryError) as e:
-        sys.exit(str(e))   # one clean line: a write conflict (the GUI/API's 409) or a refused argument (their 422)
+    except (gitio.WriteConflict, paths.RequestBoundaryError, paths.RepositoryDataError) as e:
+        # one clean line: a write conflict or a file of the repository's own that stopped the command (the GUI/API's
+        # 409), or a refused argument (their 422)
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

@@ -72,7 +72,7 @@ def _normalize(entry):
           "secret": bool(entry.get("secret", kind in _SECRET_KINDS)),
           "required": bool(entry.get("required", False))}
     for opt in ("group", "auth_set", "help"):
-        if entry.get(opt):
+        if isinstance(entry.get(opt), str) and entry[opt]:      # a list or a mapping here: the key is left out
             cf[opt] = entry[opt]
     if entry.get("inline"):
         cf["inline"] = True
@@ -89,14 +89,15 @@ def auth_fields_for_backend(bdef):
     """TIER A: the `[CredField]` shape an `auth:` block declares, or None if it declares none (→ the caller falls
     back to the generic union). Pure: reads only `bdef`'s `auth:` block — works for a backend.yml OR a module.yml
     (the same CredField-template shape; a curated class's module declares its own exact set, consumed by derive_auth
-    on the reuse path). Skips malformed entries (no `field` / unknown `kind`) defensively so one bad drop-in can't
-    break the whole form."""
+    on the reuse path). Skips malformed entries (no `field`, a `field` or `kind` that is not a string, an unknown
+    `kind`) defensively so one bad drop-in can't break the whole form."""
     block = (bdef or {}).get("auth")
     if not isinstance(block, list) or not block:
         return None
     out = []
     for e in block:
-        if isinstance(e, dict) and e.get("field") and e.get("kind", "password") in KINDS:
+        if (isinstance(e, dict) and isinstance(e.get("field"), str) and e["field"]
+                and isinstance(e.get("kind", "password"), str) and e.get("kind", "password") in KINDS):
             out.append(_normalize(e))
     return out or None
 
@@ -126,6 +127,13 @@ _SECRET_CLASS_KINDS = frozenset({"password", "token", "ssh_key"})
 # `info`/`user`, which never carry the CONNECTION credential (a `*_user` module manages a DEVICE ACCOUNT, and letting
 # it in is what let TIER-B replace a switch's SSH-login shape — review-30 F-1). The structural gate is the backend
 # connection class (`_is_module_param_backend`); this regex is the secondary bound.
+# An option NAME out of an installed module's documentation becomes a credential field's name, and the onboard
+# planner formats that name into a lookup expression (its own `_STEM_RE`, the same rule, written twice so neither
+# module imports the other). An option whose name is not an identifier is therefore not a field TIER-B offers:
+# a third party's spelling must never be able to refuse an onboard ("never a blocked onboard", below). When the
+# option it cannot name is REQUIRED or marked `no_log`, the module's set would no longer be exact, so the module
+# is a miss as a whole and the TIER-A shape stands.
+_OPTION_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 _AUTH_SIGNAL_MODULE_RE = re.compile(r"(^|_)(api|kvm|node|cluster|login|auth|token|session)s?$")
 _MAX_CANDIDATE_MODULES = 4
 
@@ -232,8 +240,12 @@ def auth_fields_from_argspec(coll, modules, *, ad=probe._ad, installed=None):
         if not opts:
             continue
         has_secret = any(isinstance(s, dict) and s.get("no_log") for s in opts.values())
+        if any(not (isinstance(n, str) and _OPTION_NAME_RE.fullmatch(n))
+               for n, s in opts.items() if isinstance(s, dict) and (s.get("required") or s.get("no_log"))):
+            continue        # a required or `no_log` option this tool cannot name: not an EXACT set — TIER-A stands
         fields = [cf for cf in (_classify_param(n, s, has_secret) for n, s in opts.items()
-                                if isinstance(s, dict)) if cf is not None]
+                                if isinstance(n, str) and _OPTION_NAME_RE.fullmatch(n) and isinstance(s, dict))
+                  if cf is not None]
         if not any(cf["secret"] for cf in fields):          # no secret → not an auth-bearing module (conn-magic gear)
             continue
         auth_set = "%s_api" % coll.split(".")[-1]

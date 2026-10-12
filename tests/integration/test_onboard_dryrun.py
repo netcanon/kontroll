@@ -151,3 +151,17 @@ def test_apply_refuses_to_clobber_divergent_file(tmp_repo, mock_probe, capsys):
     inv.write_text("# hand-edited\nall: {}\n", encoding="utf-8")
     with pytest.raises(gitio.WriteConflict):
         galaxy.cmd_onboard(_args(apply=True))
+
+
+def test_a_reuse_onboard_reports_the_group_it_adopted(tmp_repo, mock_probe, capsys):
+    """A reuse-onboard whose request names another group than the class's own returns the ADOPTED group in the
+    plan — the value both routes and the command line write into the commit body.
+
+    Pins what their fix relies on, not the fix: the plan has always carried the adopted group (this passes on
+    the tree before the change too). The fault was in the callers, which formatted the REQUEST's group into
+    "Host … in group …"; the route tests and the command line's test hold that."""
+    _seed_class(tmp_repo)
+    plan = build_onboard_plan("acme.edgeos", "edgeos", "some_other_group", "192.0.2.50")
+    assert plan["module_reuse"] is True
+    adopted = next(iter(plan["host_block"]))
+    assert plan["group"] == adopted and adopted != "some_other_group"

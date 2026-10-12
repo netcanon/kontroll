@@ -76,7 +76,15 @@ def build_plan(key, selection):
         return {"error": "not_onboarded", "key": key}
     with open(mod_path, encoding="utf-8") as fh:             # read ONCE — the diff, text_before, and the no-drop
         text_before = fh.read()                              # full-struct all derive from these bytes (review NIT 3)
-    module = yaml.safe_load(text_before) or {}
+    module = yaml.safe_load(text_before)
+    if module is None:
+        module = {}                                          # an empty file is a class with no keys yet
+    if not isinstance(module, dict):
+        # a file that parses to a list or a bare word is neither absent nor a class: answered as the file it is
+        # (the onboard's reader does the same), not as the AttributeError its first `.get` would be
+        raise paths.RepositoryDataError(
+            "module file", "the %s device class's module file is not a mapping — correct modules/%s/module.yml"
+            % (key, key))
     knobs = {k["key"]: k for k in _knobs() if k.get("key")}
     declared = [k["key"] for k in _knobs() if k.get("key")]
     submitted = (selection or {}).get("values") or {}
@@ -85,9 +93,21 @@ def build_plan(key, selection):
         knob = knobs.get(field)
         if knob is None:
             return {"error": "unknown_field", "key": key, "field": field}
+        if isinstance(value, str) and module.get(field) == value:
+            # READ BACK, not chosen: the dialog submits every knob pre-filled with what the file holds, nothing is
+            # written for a value that did not change, and so it is not judged. Without this a class whose file
+            # holds a name the knob would not accept today (a hyphen from the onboard field, a name longer than
+            # the bound, a reserved group) could have none of its OTHER keys edited.
+            proposed[field] = value
+            continue
         bad = validate_value(dict(knob, key=field), value)   # the P0a config-injection guard, server-side
         if bad:
             return {"error": "bad_value", "key": key, "field": field, "detail": bad}
+        if field == "inventory_group" and value in paths.RESERVED_NAMES:
+            # the same deny-list the onboard field gets (paths.inventory_group): this knob re-homes a class, and
+            # a class on `all` addresses every host wherever its group is a play's pattern
+            return {"error": "bad_value", "key": key, "field": field,
+                    "detail": "inventory_group is a name Ansible reserves (all, ungrouped, localhost)"}
         proposed[field] = value
 
     # The renderer submits the full declared set; restrict the editable `current` to the submitted keys so an

@@ -139,9 +139,22 @@ def _boundary_refused(e):
     """A request field failed its closed-charset check somewhere below a route (SECURITY.md C22): answer 422 with
     the field's message and code — never the value — and leave an audit line naming the route and the FIELD. Mapped
     ONCE for the app, so a route with no `try`, or a new one, cannot turn a refusal into a bare 500 or an exception
-    string. The routes that hand a request value to a service inside a broad `except` re-raise this error first."""
+    string. The routes that hand a request value to a service inside a broad `except` re-raise this error, and the
+    repository's (below), first."""
     _audit("request-refuse", "reason=request-boundary field=%s route=%s" % (e.field, request.endpoint or "-"))
     return jsonify({"error": str(e), "code": e.code}), 422
+
+
+@app.errorhandler(paths.RepositoryDataError)
+def _repository_refused(e):
+    """The repository's own data or layout stopped a request (SECURITY.md C22) — a module file whose adopted name
+    is not one, a credential field declared badly, a backend with no role and a name none can be built from (or
+    a registry role that is not a name), a write target outside the write root: 409 with a sentence that says
+    where to look and `repository_data`, and an audit line of its own ACTION (every GUI route is authenticated,
+    so every such refusal leaves one) — never a refused field, never a bare 500. Mapped ONCE for the app, like
+    the field refusal above."""
+    _audit("repository-refuse", "what=%s route=%s" % (e.what, request.endpoint or "-"))
+    return jsonify({"error": str(e), "code": e.code}), e.status
 
 
 def require_auth(fn):
@@ -451,8 +464,8 @@ def api_classify():
     _, _, backends = _catalog_triple()
     try:
         result = service_classify(coll, backends=backends)
-    except paths.RequestBoundaryError:
-        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
+    except (paths.RequestBoundaryError, paths.RepositoryDataError):
+        raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:
         return jsonify({"error": "classify failed: %s" % e}), 500
     if result is None:
@@ -493,6 +506,7 @@ def api_onboard_cred_fields():
     secrets = request.args.get("secrets") or "network"
     collection = request.args.get("collection") or None
     deep = (request.args.get("deep") or "").lower() in ("1", "true", "yes", "on")
+    paths.component(secrets, "secrets domain")     # it is written into every descriptor this answers with
     _vectors, _overrides, backends = _catalog_triple()
     bdef = next((b for b in backends if b.get("name") == backend), {})
     module = _catalog.module_for_collection(collection) if collection else None
@@ -574,7 +588,7 @@ def api_onboard():
         applied["paths"],
         ["feat(onboard): %s -> %s via %s backend" % (d["collection"], d["key"], plan["backend"]),
          "Onboarded via the kontroll onboarding GUI (run_id %s). Host %s in group %s; staged — verify live." % (
-             run_id, plan["host_name"], d["group"])],
+             run_id, plan["host_name"], plan["group"])],   # the plan's group: a reuse ADOPTS the class's
         push_origin=bool(d.get("push")), run_id=run_id)   # staging GUI ⇒ proposed/<run_id> (C10)
     _audit("onboard-result", "key=%s committed=%s staged=%s run_id=%s" % (
         d["key"], git["committed"], git["staged"], run_id))
@@ -601,8 +615,8 @@ def api_configurable():
     obj_id = request.args.get("id") or ""
     try:
         view = configurable.configurable_view(kind, obj_id)
-    except paths.RequestBoundaryError:
-        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
+    except (paths.RequestBoundaryError, paths.RepositoryDataError):
+        raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:               # a probe/registry failure → a clean 500, not a worker crash
         return jsonify({"error": "configurable read failed: %s" % e}), 500
     if view.get("error") in ("no_kind", "no_capability", "no_form", "not_onboarded", "no_knob", "not_enabled",
@@ -621,8 +635,8 @@ def api_capability_suggest(cap):
     vectors, _, _ = _catalog_triple()
     try:
         view = capability.suggest_view(cap, key, vectors=vectors)
-    except paths.RequestBoundaryError:
-        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
+    except (paths.RequestBoundaryError, paths.RepositoryDataError):
+        raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:               # a probe/registry failure → a clean 500, not a crash
         return jsonify({"error": "suggest failed: %s" % e}), 500
     if view.get("error") == "no_capability":
@@ -736,8 +750,8 @@ def api_units(collection):
     from kontroll.service.units import service_units  # local import — read-only, no per-request catalog
     try:
         result = service_units(collection)
-    except paths.RequestBoundaryError:
-        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
+    except (paths.RequestBoundaryError, paths.RepositoryDataError):
+        raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:               # a probe failure → a clean 500, not a worker crash
         return jsonify({"error": "units read failed: %s" % e}), 500
     if result is None:

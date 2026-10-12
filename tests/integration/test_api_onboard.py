@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from api.audit import read_audit
 from api.main import create_app
 from api.settings import Settings
-from kontroll import catalog, gitio, probe
+from kontroll import catalog, gitio, paths, probe
 
 pytestmark = pytest.mark.integration
 
@@ -211,3 +211,89 @@ def test_onboard_refuses_a_path_shaped_field_before_any_write(onb, field, value)
     audit = open(onb.audit_log, encoding="utf-8").read()
     assert "onboard-refuse" in audit and "reason=request-boundary" in audit, "a refusal must leave an audit trace"
     assert value not in audit, "the audit line names the FIELD, never the refused value"
+
+
+def _damage_a_class(repo, **identity_keys):
+    """Seed an onboarded class (`edgeos`, acme.edgeos) whose module file holds the given identity keys."""
+    import yaml
+    module = {"key": "edgeos", "collections": [{"name": "acme.edgeos", "version": ">=1.0.0"}],
+              "role": "backend_netcommon_cli", "backend": "netcommon_cli",
+              "inventory_group": "edge_router", "secrets_domain": "network"}
+    module.update(identity_keys)
+    (repo / "modules" / "edgeos").mkdir(parents=True)
+    (repo / "modules" / "edgeos" / "module.yml").write_text(yaml.safe_dump(module), encoding="utf-8")
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_onboard_onto_a_damaged_class_is_a_409_before_any_write(onb, monkeypatch, apply):
+    """A second device of a class whose module file holds a secrets domain that is not a name answers **409**
+    `repository_data` — on the dry-run as on the apply — with the file named and the value not; nothing is
+    written or committed, and the audit log holds `repository-refuse what=module file`, no refused REQUEST.
+
+    Guards the answer this used to get: 422 `invalid_secret_domain`, a field the caller never sent, raised at
+    apply after the inventory drop-in had been written (and the fleet line, where the class was not enabled yet)."""
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"acme.edgeos": "1.0.0"})
+    _damage_a_class(onb.repo, secrets_domain="a" * 80)
+    def files():                                          # the tree, without this test's own audit log
+        return sorted(str(p.relative_to(onb.repo)) for p in onb.repo.rglob("*")
+                      if p.is_file() and p.relative_to(onb.repo).parts[0] != "audit")
+    before = files()
+    r = onb.client.post("/onboard", headers=AUTH, json=_body(apply=apply, password="pw"))
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "repository_data" and "modules/edgeos/module.yml" in r.json()["detail"]
+    assert "a" * 80 not in r.text
+    assert files() == before
+    assert onb.calls == []
+    audit = open(onb.audit_log, encoding="utf-8").read()
+    assert "repository-refuse" in audit and "what=module file" in audit
+    assert "request-refuse" not in audit and "reason=request-boundary" not in audit
+
+
+def test_a_write_target_that_does_not_confine_is_a_409_and_is_audited(onb, monkeypatch):
+    """When the confinement refuses a target the server built — here every target, as a symlinked overlay that
+    resolves outside the write root would — an onboard apply answers 409 `repository_data`, writes nothing, and
+    leaves `repository-refuse what=path` in the audit log.
+
+    Guards the answer of the app-wide handler for the type, and its audit line. (That the question comes before
+    the first write is held by the unit test of `apply_onboard_plan`: here every target is refused, so the first
+    writer would refuse as well.)"""
+    def refuse(rel_path):
+        raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
+    monkeypatch.setattr(paths, "confined", refuse)
+    r = onb.client.post("/onboard", headers=AUTH, json=_body(apply=True))
+    assert r.status_code == 409 and r.json()["code"] == "repository_data"
+    assert not (onb.repo / "modules" / "edgeos").exists() and onb.calls == []
+    audit = open(onb.audit_log, encoding="utf-8").read()
+    assert "repository-refuse" in audit and "what=path" in audit and "route=/onboard" in audit
+
+
+def test_the_cred_fields_route_checks_the_domain_it_answers_with(onb):
+    """`GET /onboard/cred-fields` refuses a secrets domain that is not a name (422, the field's code) and answers
+    a plain one. Guards a value that is written into every descriptor of a 200 answer being taken unread."""
+    r = onb.client.get("/onboard/cred-fields", headers=AUTH, params={"backend": "netcommon_cli", "secrets": "../x"})
+    assert r.status_code == 422 and r.json()["code"] == "invalid_secrets_domain"
+    ok = onb.client.get("/onboard/cred-fields", headers=AUTH, params={"backend": "netcommon_cli", "secrets": "lab"})
+    assert ok.status_code == 200 and ok.json()["secrets"] == "lab"
+
+
+def test_the_commit_body_names_the_group_the_plan_adopted(onb, monkeypatch):
+    """A reuse-onboard that names another group than the class's own commits with the ADOPTED group in its body.
+    Guards a commit message that says a host is in a group it is not in."""
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"acme.edgeos": "1.0.0"})
+    _damage_a_class(onb.repo)                                  # a healthy class: nothing is damaged here
+    r = onb.client.post("/onboard", headers=AUTH, json=_body(apply=True, group="some_other_group"))
+    assert r.status_code == 200, r.text
+    commit = next(c for c in onb.calls if c[:2] == ["git", "commit"])
+    assert any("in group edge_router" in word for word in commit)
+    assert not any("some_other_group" in word for word in commit)
+
+
+@pytest.mark.parametrize("word", ["localhost", "all", "ungrouped", "127.0.0.1", "::1"])
+def test_onboard_refuses_a_reserved_host_name_before_any_write(onb, word):
+    """`POST /onboard` with `host_name` set to a name Ansible reserves — `localhost`, either loopback address,
+    `all`, `ungrouped` — answers 422 `invalid_host_name` on the dry-run, writes nothing and commits nothing.
+    Guards one request naming a device `localhost` (or `127.0.0.1`): an inventory host of that name replaces the
+    implicit control node for every play written for it."""
+    r = onb.client.post("/onboard", headers=AUTH, json=_body(host_name=word))
+    assert r.status_code == 422 and r.json()["code"] == "invalid_host_name", r.text
+    assert not (onb.repo / "modules" / "edgeos").exists() and onb.calls == []

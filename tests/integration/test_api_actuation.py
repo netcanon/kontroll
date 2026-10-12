@@ -161,3 +161,22 @@ def test_stage_targets_proposed_ref_when_staging(act, monkeypatch):
     assert body["staged"] is True and body["target_ref"] == "proposed/%s" % body["run_id"]
     push = next(c for c in act.calls if "push" in c)
     assert any("proposed/%s" % body["run_id"] in p for p in push)   # the ref, never refs/heads/main
+
+
+def test_stage_onto_a_target_that_does_not_confine_is_a_409(act, monkeypatch):
+    """A stage whose values target the confinement refuses answers 409 `repository_data`: no vars file, no commit,
+    and `repository-refuse what=path` in the audit log.
+
+    Guards the app-wide handler being the one answer for this caller of `confined()` too — never a 500, never a
+    refused field."""
+    proposed = act.client.post("/actuation/backup-ios", headers=AUTH, json={"values": {"mode": "safe"}}).json()
+
+    def refuse(rel_path):
+        raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
+    monkeypatch.setattr(paths, "confined", refuse)
+    r = act.client.post("/actuation/backup-ios", headers=AUTH,
+                        json={"values": {"mode": "safe"}, "apply": True, "token": proposed["token"]})
+    assert r.status_code == 409 and r.json()["code"] == "repository_data", r.text
+    assert not _vars_file(act).exists() and not any("commit" in c for c in act.calls)
+    rows = read_audit(act.audit_log, action="repository-refuse")
+    assert rows and "what=path" in rows[-1]["detail"] and "route=/actuation/" in rows[-1]["detail"]
