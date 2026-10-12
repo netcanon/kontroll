@@ -22,8 +22,11 @@ now carries the collection (same floor as the class, which keeps its own declara
 `gen-requirements.py --core` resolves that file alone without reading any fleet, and the installer image uses it.
 **On an existing node:** the generated lockfile and trust sidecar change (one more entry, or the same entries in a
 different order), so `gen-requirements.py --check` reports them STALE until the next `bootstrap` or local-build
-`deploy-stack` regenerates them — a true report that heals itself. Nothing is fetched where the collection is
-already installed, and no image needs republishing: the published images already contain it.
+`deploy-stack` regenerates them — a true report that heals itself. Where the collection is already installed the
+control-node bootstrap fetches nothing. A box that builds its runner image locally rebuilds that image's collection
+layer once on its next `deploy-stack` (the lockfile the image copies in is byte-different, so the layer cache
+misses) — that build needs Galaxy and PyPI, as a fleet change does. No image needs republishing: the published
+images already contain the collection.
 
 ### chore(tests): the Molecule scaffold is removed — it could not fail (2026-10-12)
 

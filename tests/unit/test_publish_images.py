@@ -61,10 +61,13 @@ def test_all_modules_superset_covers_every_module_and_the_alternatives():
 
 
 def test_core_mode_resolves_exactly_the_core_file_and_reads_no_fleet(monkeypatch, tmp_path, capsys):
-    """`gen-requirements.py --core` writes a lockfile holding exactly the collections of modules/_core.yml, in that
-    file's order, and never asks for a fleet. Guards the installer's base quietly reading a fleet: on a tree with no
-    `instance/` (an image build context, a public checkout) the resolver falls through to the shipped example
-    fleet, whose device classes would then be baked into the installer."""
+    """`gen-requirements.py --core` writes a lockfile AND a trust sidecar holding exactly the collections of
+    modules/_core.yml, in that file's order, and never asks for a fleet — called with an explicit out-path and, as
+    the installer Dockerfile calls it, with `--core` alone and the default destination. Guards the installer's base
+    quietly reading a fleet: on a tree with no `instance/` (an image build context, a public checkout) the resolver
+    falls through to the shipped example fleet, whose device classes would then be baked into the installer. Also
+    pins that `--core` refuses to be combined with `--all-modules` (two different sets) or with `--conflict-check`
+    (it resolves no actuation unit, so that gate could never refuse)."""
     g = _load_script("scripts/gen-requirements.py", "genreq_core")
     core = [c["name"] for c in yaml.safe_load(_read("modules/_core.yml"))["collections"]]
     real_resolve = g.paths.resolve
@@ -78,9 +81,18 @@ def test_core_mode_resolves_exactly_the_core_file_and_reads_no_fleet(monkeypatch
     monkeypatch.setattr(g.sys, "argv", ["gen-requirements.py", str(out), "--core"])
     g.main()
     assert [c["name"] for c in yaml.safe_load(out.read_text(encoding="utf-8"))["collections"]] == core
-    monkeypatch.setattr(g.sys, "argv", ["gen-requirements.py", "--core", "--all-modules"])
-    with pytest.raises(SystemExit):
-        g.main()
+    # the Dockerfile's own shape: `--core` first, the default destination
+    default = tmp_path / "default.yml"
+    monkeypatch.setattr(g, "LOCKFILE_DEST", str(default))
+    monkeypatch.setattr(g.sys, "argv", ["gen-requirements.py", "--core"])
+    g.main()
+    assert [c["name"] for c in yaml.safe_load(default.read_text(encoding="utf-8"))["collections"]] == core
+    sidecar = yaml.safe_load((tmp_path / "trust.yml").read_text(encoding="utf-8"))
+    assert [c["name"] for c in sidecar["collections"]] == core
+    for clash in ("--all-modules", "--conflict-check"):
+        monkeypatch.setattr(g.sys, "argv", ["gen-requirements.py", "--core", clash])
+        with pytest.raises(SystemExit):
+            g.main()
 
 
 def test_core_collections_lead_every_generated_lockfile():

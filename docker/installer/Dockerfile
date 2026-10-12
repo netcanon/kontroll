@@ -67,8 +67,8 @@ WORKDIR /repo
 COPY . /repo
 
 # Bake the CONTROL-PLANE collection base via the SAME never-brick wrapper bootstrap uses (G-4 no-drift). The
-# install playbooks (bootstrap/local-canonical/deploy-stack) import exactly the collections of modules/_core.yml
-# (community.sops, community.general, community.docker) — NOT the device-fleet collections (cisco.ios,
+# install playbooks (bootstrap/local-canonical/deploy-stack) import only collections listed in modules/_core.yml
+# (tests/unit/test_installer_phase1.py holds that direction) — NOT the device-fleet collections (cisco.ios,
 # fortinet.fortios, … bake into the Semaphore RUNNER image at deploy time, from the full lockfile bootstrap
 # generates). The base is DERIVED from that file by the same generator (`--core`) — never a hardcoded list
 # (CLAUDE.md hard rule) and no fleet: none exists on a FRESH node at image build, and none is fabricated.

@@ -1,6 +1,8 @@
 # Core collections — always installed, independent of which device modules are
-# enabled. Not tied to any device class: these are what the INSTALL playbooks
-# themselves (bootstrap, local-canonical, deploy-stack) import, whatever the fleet.
+# enabled. Not tied to any device class. Every collection the INSTALL playbooks
+# themselves (bootstrap, local-canonical, deploy-stack) import must be listed here —
+# that is what lets them run on any fleet (tests/unit/test_installer_phase1.py holds
+# it) — beside the general utility base.
 # The bootstrap merges these with the collections of every enabled module
 # (instance/fleet.yml) to produce the final install set; the installer image bakes
 # exactly this file (`gen-requirements.py --core`). See modules/README.md.

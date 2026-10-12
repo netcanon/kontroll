@@ -10,6 +10,7 @@ rule — see CLAUDE.md). Output path defaults to the generated lockfile bootstra
 Usage:  python3 scripts/gen-requirements.py [<out-path>]
         python3 scripts/gen-requirements.py --all-modules                    # every module's set: the published runner
         python3 scripts/gen-requirements.py --core                           # modules/_core.yml alone: the installer
+        python3 scripts/gen-requirements.py --check                          # is THIS node's lockfile fresh (fleet mode)
         python3 scripts/gen-requirements.py --conflict-check --root <tree>   # FIX-M9: judge ANOTHER tree's data
 """
 import os
@@ -194,6 +195,9 @@ def main():
     core_only = "--core" in args                              # the INSTALLER's base: modules/_core.yml alone
     if all_modules and core_only:
         raise SystemExit("--all-modules and --core are two different sets — pass one")
+    if core_only and conflict_check:
+        raise SystemExit("--core resolves no actuation unit, so --conflict-check could never refuse — the promote "
+                         "gate runs without --core")
     if core_only:
         # The installer image carries what the INSTALL playbooks import and nothing of any device fleet, and it is
         # built before an instance exists. So: no fleet read at all. (With no flag and no instance/, paths.resolve
