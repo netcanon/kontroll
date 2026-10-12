@@ -49,9 +49,9 @@ cd kontroll
 python3 scripts/kontroll-init.py --fresh --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated
 ```
 
-`--trust-mode` is **required** with `--fresh` (kontroll never silently picks your promote posture): `separated`
-(a human promotes each staged proposal — recommended/prod) or `solo` (homelab auto-promote; the auto-promoter ships
-in a later release — until then it behaves like `separated`). See [trust-mode.md](trust-mode.md).
+`--trust-mode separated` puts a human review gate on every staged proposal (the recommended posture). What `solo`
+does, and what `--fresh` does when the flag is left out, depends on the edition you are installing — read
+[trust-mode.md](trust-mode.md) before choosing anything else.
 `kontroll-init --fresh` scaffolds your private `instance/` overlay from the shipped
 `instance.example/` skeleton (your keys only — it never inherits the bundle author's
 recipients), mints your control age key, seeds `instance/.sops.yaml` with that key, fills
@@ -160,20 +160,29 @@ ansible-playbook playbooks/deploy-stack.yml        # brings the composed stack U
 python3 ../scripts/configure-semaphore.py          # wire Semaphore — RUN AFTER deploy (it talks to a RUNNING Semaphore on :3001)
 ```
 
-The stack binds every privileged port to your `mgmt_ip` only (never 0.0.0.0). Once up:
+The stack binds the GUI, the API, Grafana, Prometheus, Loki, the syslog ingress (`:5514`) and, under `acme`,
+Caddy (`:80`/`:443`) to your `mgmt_ip` only. The
+exceptions are **Homepage (`:3000`, unauthenticated by design) and Semaphore (`:3001`, behind its own login)**,
+which are published on all interfaces because they are meant to sit behind your reverse proxy — on a host with an
+interface outside the management network, firewall those ports (SECURITY.md C3; `tests/check-mgmt-port-binding.py`
+pins exactly this split). The GUI and the API serve HTTPS under the default `frontend.tls_mode: self_signed`.
+Under `byo_proxy` both serve plain HTTP for your reverse proxy to front. Under `acme` both also serve plain HTTP:
+the bundled Caddy ingress fronts the API by hostname, **but not the GUI, which stays plain HTTP on `:8443`** (see
+[frontend-exposure.md](frontend-exposure.md); that mode is scaffolded, not live-verified). Semaphore, Grafana and
+Prometheus serve HTTP on these ports in every mode. Once up:
 
 | Surface | URL |
 |---|---|
 | Onboarding GUI (onboard-gui) | `https://${KONTROLL_MGMT_IP}:8443` — log in as `admin` / the `GUI_PASSWORD` kontroll-init showed |
 | Semaphore | `http://${KONTROLL_MGMT_IP}:3001` |
-| Grafana | `https://${KONTROLL_MGMT_IP}:3002` — `admin` / the Grafana password kontroll-init showed |
+| Grafana | `http://${KONTROLL_MGMT_IP}:3002` — `admin` / the Grafana password kontroll-init showed |
 | API | `https://${KONTROLL_MGMT_IP}:8444` (read-only until armed — see privileged-mutation-enablement.md) |
 
-> **onboard-gui prerequisite:** deploy-stack provisions the GUI's repo clone and TLS
-> *directory* but does NOT mint its TLS cert or scoped age key (security boundary — a service that can create its
-> own decryption key is not a trust boundary). Before `onboard-gui` will start, host-provision a self-signed cert
-> at `${KONTROLL_STORAGE_ROOT}/onboard-gui/tls/{gui.crt,gui.key}` and the scoped age key at
-> `${KONTROLL_STORAGE_ROOT}/onboard-gui/age.key` (see docs/frontend-exposure.md). deploy-stack **fails
+> **onboard-gui prerequisite:** deploy-stack provisions the GUI's repo clone and, in `self_signed` mode, mints its
+> TLS certificate if none is there (the modes: [frontend-exposure.md](frontend-exposure.md)). It never mints the
+> GUI's scoped **age key** (security boundary — a service that can create its own decryption key is not a trust
+> boundary). Before `onboard-gui` will start, provision that key at
+> `${KONTROLL_STORAGE_ROOT}/onboard-gui/age.key`. deploy-stack **fails
 > closed** if that age key is absent rather than letting `up` auto-create a `root:root` directory in its place —
 > and equally if it is present but the runtime uid cannot read it, which otherwise surfaces one deploy later as an
 > opaque SOPS decrypt error. The simplest correct answer is a copy of the control key:

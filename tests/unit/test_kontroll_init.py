@@ -179,7 +179,8 @@ def test_fresh_personalizes_homepage_tiles(fresh_repo, monkeypatch):
     Prometheus :9090, API :8444, NPM control.<domain>) are present. The check is scoped to the head ABOVE the
     generated `# >>> kontroll fleet` markers: the generated Fleet block (#130) reflects the still-example inventory
     placeholders (192.0.2.x) until the operator edits inventory + redeploys — that's gen-homepage's domain, not
-    kontroll-init's sentinel substitution."""
+    kontroll-init's sentinel substitution. The Grafana tile carries the scheme Grafana SERVES (plain HTTP on
+    :3002): the template said `https://` for it, so every fresh portal's Grafana tile was dead on first boot."""
     _mock_fresh_seams(monkeypatch)
     assert ki.main(["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
     hp = os.path.join(fresh_repo, "instance", "dashboards", "homepage", "services.yaml")
@@ -187,7 +188,7 @@ def test_fresh_personalizes_homepage_tiles(fresh_repo, monkeypatch):
     head = text.split("# >>> kontroll fleet")[0]                     # the kontroll-init-personalized control-plane region
     for stale in ("__MGMT_IP__", "__DOMAIN__", "192.0.2", "example.com"):
         assert stale not in head                                     # no sentinel/placeholder left in the personalized head
-    for tile in ("https://198.51.100.7:8443", "http://198.51.100.7:3001", "https://198.51.100.7:3002",
+    for tile in ("https://198.51.100.7:8443", "http://198.51.100.7:3001", "http://198.51.100.7:3002",
                  "http://198.51.100.7:9090", "https://198.51.100.7:8444", "https://control.lab.test"):
         assert tile in text                                         # the real control-plane board is rendered
 

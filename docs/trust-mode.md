@@ -15,6 +15,9 @@ trust_mode: separated   # or: solo
 
 ## The two postures
 
+The table describes the two postures **as designed**. The `solo` column is what an edition that ships the
+auto-promoter does; the Status box below says what this edition does.
+
 | | `separated` (recommended / prod) | `solo` (homelab) |
 |---|---|---|
 | Who promotes a staged proposal | **A human** runs the `promote-proposal` Semaphore task | A separate **`kontroll-autopromoter`** runs the *same* promote automatically |
@@ -22,25 +25,31 @@ trust_mode: separated   # or: solo
 | Feels like | propose → review → promote | one-click (onboard → live in seconds) |
 | The GUI/API trust boundary | propose-only, AST read-only-pinned | **identical** — propose-only, AST read-only-pinned |
 
-The **only** thing `trust_mode` controls is whether the auto-promoter is deployed. It changes **no line** of the
+On an edition that ships it, the **only** thing `trust_mode` controls is whether the auto-promoter is deployed;
+on this edition it controls nothing but the Settings row. It changes **no line** of the
 GUI/API trust boundary: in **both** modes the network service can only stage a proposal, is read-only-by-
 construction (`tests/unit/_readonly_pins.py`), and the canonical stays `:ro` to it. `solo` adds a tiny, separate,
 token-less automaton on the **trusted** side of the wall that runs the **already-shipped** FF-only + never-brick
 (FIX-M9) promote — it drops the human keystroke, nothing else.
 
-> **Status:** this release ships the **flag** (Rung A) — the posture is chosen at init, auditable in Settings, and
-> validated at deploy. `separated` works exactly as today. The **auto-promoter** that gives `solo` its effect ships
-> in a later, gated rung; until then choosing `solo` *declares intent* but behaves like `separated` (proposals stay
-> staged for a manual `promote-proposal`). Choosing `solo` now is forward-compatible and harmless.
+> **Status:** every edition ships the **flag** — the posture is chosen at init, shown in Settings and validated at
+> deploy. **This edition has no auto-promoter:** `kontroll-init --fresh` refuses to run without `--trust-mode`, and
+> choosing `solo` records the intent and behaves like `separated` (proposals stay staged for a manual
+> `promote-proposal`). The auto-promoter that gives `solo` its effect belongs to the permissive (homelab) edition,
+> which lives on a branch of the private instance repository and is never merged here.
 
 ## The honest `solo` residual (read before choosing `solo`)
+
+This section describes `solo` **on an edition that runs the auto-promoter**. This edition has none, so the attack
+path below does not exist here: a staged proposal waits for a human in both modes. It is kept because the same
+`instance.yml` value means this on the permissive edition.
 
 `solo` removes the human review gate, which creates an attack path that does **not** exist in `separated`:
 
 > a GUI/API RCE stages a malicious proposal → the auto-promoter promotes it unattended → the next enact actuates it.
 
 It is bounded — even in `solo` — by the inherited spine (FF-only history; never-brick/FIX-M9; the `:ro` RCE backstop
-on the *service* side; enact is still a separate hand-off) and, when the auto-promoter ships, by its guards
+on the *service* side; enact is still a separate hand-off) and, on an edition that runs the auto-promoter, by its guards
 (a high-blast-tier refusal that keeps the **edge firewall + core switch human-gated even in solo**, a rate limit,
 and a diff-size ceiling — a refusal never deletes the staged ref, so it degrades exactly to `separated` for that
 proposal). But the irreducible cost is real: a small, in-tier, in-budget malicious change **is** auto-promoted in
@@ -72,7 +81,7 @@ A trust posture is the one setting kontroll refuses to guess (unlike `tls_mode`,
 
 ## See also
 
-- [SECURITY.md](../SECURITY.md) — C10 (privileged-mutation enablement / propose-then-promote) and C16 (the solo
-  auto-promote residual, when the auto-promoter lands).
+- [SECURITY.md](../SECURITY.md) — C10 (privileged-mutation enablement / propose-then-promote). The auto-promote
+  residual is C17, a control of the permissive edition; this edition has no such surface.
 - [docs/privileged-mutation-enablement.md](privileged-mutation-enablement.md) — the C10 two-key spine.
 - The design-of-record: [docs/reviews/2026-06-29-north-star-onboard/30-trust-mode-fork.md](reviews/2026-06-29-north-star-onboard/30-trust-mode-fork.md).

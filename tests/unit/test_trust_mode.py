@@ -1,6 +1,6 @@
 """F3 (trust_mode, Rung A): the OPTIONAL two-tine trust fork's FLAG slice — chosen at fresh-init, validated at
-deploy, surfaced read-only in Settings. NO auto-promoter yet (that is a later, gated rung; the GUI/API trust
-boundary is UNTOUCHED in both modes).
+deploy, surfaced read-only in Settings. This edition ships NO auto-promoter (the GUI/API trust boundary is
+UNTOUCHED in both modes).
 
 WHY (the failures these guard): a trust posture is the one setting kontroll must never silently default (unlike
 tls_mode, which fail-SAFEs to self_signed) — guessing "human-reviewed vs auto promote" is never safe. These pin the
@@ -60,9 +60,9 @@ def test_settings_surfaces_unset_trust_mode_as_none(tmp_repo):
 
 
 def test_settings_panel_renders_trust_mode_readonly_no_edit_knob():
-    """The Settings panel renders a `settings-trust-mode` READ-ONLY row (no `edit` knob — the auto-promoter that
-    would give 'solo' an effect is a later, gated rung). Guards the flag silently gaining a write control before
-    its security review (the row must stay read-only in Rung A)."""
+    """The Settings panel renders a `settings-trust-mode` READ-ONLY row (no `edit` knob — this edition ships no
+    auto-promoter, so the value changes nothing a control could set). Guards the flag silently gaining a write
+    control before its security review (the row must stay read-only)."""
     html = open(os.path.join(ROOT, "gui", "templates", "index.html"), encoding="utf-8").read()
     assert "settings-trust-mode" in html                                     # the read-only surfacing row
     # it is a plain meta row, NOT a settingsKnobRow (which would add an /api/settings/<knob> edit control)
@@ -70,8 +70,8 @@ def test_settings_panel_renders_trust_mode_readonly_no_edit_knob():
 
 
 def test_no_auto_promoter_introduced_in_rung_a():
-    """Rung A introduces the FLAG only — NO auto-promoter (zero new security residual). Guards scope creep: the
-    kontroll-autopromoter script/container is a separate, gated rung (its residual needs the blast/rate/diff guards
-    + a fresh adversary pass), so it must NOT have slipped in with the flag."""
+    """This edition ships the FLAG only — NO auto-promoter (zero new security residual). The documents say so in
+    the present tense ("this edition has no auto-promoter"), and this test is what makes that sentence machine-held:
+    the permissive edition's script and service fragment must not arrive here by a merge."""
     assert not os.path.exists(os.path.join(ROOT, "scripts", "kontroll-autopromoter.py"))
     assert not os.path.exists(os.path.join(ROOT, "docker", "services", "autopromoter.yaml"))

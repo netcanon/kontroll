@@ -19,7 +19,7 @@
         href: http://__MGMT_IP__:3001
         description: Ansible automation
     - Grafana:
-        href: https://__MGMT_IP__:3002
+        href: http://__MGMT_IP__:3002
         description: Metrics dashboards
     - Prometheus:
         href: http://__MGMT_IP__:9090

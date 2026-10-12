@@ -458,7 +458,7 @@ have **no** edit control (FORBID — the status group surfaces arming read-only)
 | `data-testid` | Element | Notes |
 |---|---|---|
 | `settings-knob` | an editable knob row | `data-knob="mgmt_ip\|domain\|tls_mode\|backup_remotes"`; a ⚠ marks a danger (GUARD) knob; `source_of_truth` stays a read-only `settingsRow` (no `settings-knob`) |
-| `settings-trust-mode` | the F3 `trust_mode` row in the identity group | **READ-ONLY** (a plain meta row, NOT a `settings-knob` — no edit control in Rung 0c; the auto-promoter that gives `solo` an effect is a later, gated rung). Shows the chosen promote posture (`separated`/`solo`/`—` if unset) + a note; `solo` notes it currently behaves like `separated` |
+| `settings-trust-mode` | the F3 `trust_mode` row in the identity group | **READ-ONLY** (a plain meta row, NOT a `settings-knob` — no edit control; this edition has no auto-promoter). Shows the chosen promote posture (`separated`/`solo`/`—` if unset) + a note; `solo` notes that it behaves like `separated` on this edition |
 | `settings-knob-edit` | the per-knob `edit` control | opens the reconfigure dialog (`kind=settings-knob`) for `data-knob` |
 | `settings-fleet-row` | a per-module fleet row | `data-module=<name>`; carries the Disable control |
 | `settings-fleet-disable` | the per-module `disable` control | opens the reconfigure dialog (`kind=settings-fleet`, no knobs — Propose computes the `remove`); GUARDED by `reconfig-remove-confirm` |

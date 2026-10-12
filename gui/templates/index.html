@@ -1533,11 +1533,11 @@ function settingsIdentityRows(g, d) {
   settingsKnobRow(g, 'domain', d.domain, true);             // GUARD: redeploy (re-render URLs/SANs)
   settingsKnobRow(g, 'tls_mode', d.tls_mode, true);         // GUARD-danger: redeploy + per-mode consequence
   settingsRow(g, 'source_of_truth', d.source_of_truth);    // SURFACE — read-only (only `local` is supported)
-  // trust_mode (F3) — READ-ONLY surface: the chosen promote posture (no edit knob yet; the auto-promoter that
-  // gives 'solo' its effect is a later, gated rung). 'solo' notes it currently behaves like 'separated'.
+  // trust_mode (F3) — READ-ONLY surface: the chosen promote posture (no edit knob; this edition has no
+  // auto-promoter, so 'solo' notes that it behaves like 'separated').
   const tm = d.trust_mode;
   const note = tm === 'solo'
-    ? 'auto-promoter ships in a later release — proposals stay staged for manual promote (currently like separated)'
+    ? 'no auto-promoter in this edition — proposals stay staged for a manual promote (behaves like separated)'
     : (tm === 'separated' ? 'a human promotes each staged proposal (prod)' : 'not set — choose at fresh-init (--trust-mode)');
   const tmRow = E('div', 'meta', '<b>trust_mode</b>: ', 'settings-trust-mode');
   tmRow.appendChild(T((tm || '—') + '  (' + note + ')'));

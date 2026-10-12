@@ -202,7 +202,8 @@ def main(argv):
     ap.add_argument("--trust-mode", dest="trust_mode", choices=["solo", "separated"],
                     help="(with --fresh, REQUIRED) how this instance promotes staged proposals: 'separated' (a "
                          "human runs the promote-proposal Semaphore task — prod) or 'solo' (declares intent to "
-                         "auto-promote; the auto-promoter ships later). NEVER defaulted — choose. See docs/trust-mode.md.")
+                         "auto-promote; this edition has no auto-promoter, so it behaves like 'separated'). NEVER "
+                         "defaulted — choose. See docs/trust-mode.md.")
     args = ap.parse_args(argv)
 
     # 0. --fresh: scaffold a BRAND-NEW overlay (YOUR key only) before the keygen steps -------------------
@@ -214,7 +215,8 @@ def main(argv):
         if not args.trust_mode:
             print("ERROR: --fresh requires --trust-mode {separated|solo} — kontroll never silently picks your trust "
                   "posture (how staged proposals are promoted). 'separated' = a human reviews+promotes each (prod); "
-                  "'solo' = auto-promote (homelab; the auto-promoter ships in a later release). See docs/trust-mode.md.",
+                  "'solo' = declares intent to auto-promote (this edition has no auto-promoter, so it behaves like "
+                  "'separated'). See docs/trust-mode.md.",
                   file=sys.stderr)
             return 1
         guard = _fresh_guard()

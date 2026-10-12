@@ -75,7 +75,8 @@ pattern). **Logging:** mutating service fns log what changed + run_id, never cre
 ## 2. Workstream — a typed API over the service layer  🟡 (scaffold + read-only routes done)
 
 **Status: 🟡 (2026-06-13).** The FastAPI scaffold + read-only routes are ✅: `api/` (`create_app()` +
-a lifespan that loads the catalog once; drop-in routers under `api/routes/`) exposes `GET /search`,
+a lifespan that loads the catalog once; one router module per domain under `api/routes/`, registered in
+`api/main.py`) exposes `GET /search`,
 `/probe/{collection}`, `/units/{collection}`, `/classify/{collection}`, `/health`, each calling a `service_*` fn directly.
 Pydantic models give an auto `/openapi.json` + `/docs`; `tests/integration/test_api.py` (FastAPI
 TestClient, service seams mocked) pins the routes + the dogfood (galaxy ingests the API's own spec);
@@ -113,14 +114,15 @@ API-mutating the host is a privilege jump we don't take in v1.
 
 ---
 
-## 4. Workstream — auth / authz / audit  🟡 (built + verified 2026-06-13; not yet deployed)
+## 4. Workstream — auth / authz / audit  🟡 (built + verified 2026-06-13)
 
 **Status: 🟡 (2026-06-13).** Built + tested: `api/auth.py` (Bearer token, constant-time, fail-closed —
 no `KONTROLL_API_TOKEN` ⇒ privileged routes 503), `api/audit.py` (append-only rotated TSV
 `ts,user,ip,action,run_id,detail`, never creds, **fail-closed** — an un-auditable mutation is refused),
 a per-request `kontroll_run_id`, and `GET /audit/log`. Applied to the low-blast-radius routes
-(`/refresh`, `/capture-exceptions`); SECURITY.md **C9** lands with it. Deferred: deployment,
-rate-limiting/SSO, and the onboard `--apply` route. The original design follows.
+(`/refresh`, `/capture-exceptions`); SECURITY.md **C9** lands with it. (Written when deployment, rate-limiting
+and the onboard `--apply` route were still deferred; all three have since been built — see `api/README.md` for
+the routes as they are.) The original design follows.
 
 **What:** the GUI already has **fail-closed HTTP Basic + TLS + a rotating audit log** (SECURITY.md C8);
 netcanon's API has **none**. Extend ours to the API: **token (Bearer) auth**, constant-time validated,
@@ -227,8 +229,9 @@ Semaphore (SECURITY.md C3). Dissemination/exposure follows the same beta gate as
 **Deployed read-only (2026-06-13):** `docker/services/api.yaml` serves at `${KONTROLL_MGMT_IP}:8444` with the
 repo RO + no token (privileged routes 503). The frontend TLS posture is **per-instance** (`instance/instance.yml`
 `frontend.tls_mode` — `byo_proxy` / `self_signed` / `acme`, resolver `scripts/kontroll/frontend.py`; this
-instance fronts with Nginx Proxy Manager → the API serves HTTP). The token + writable-canonical enablement
-for the privileged mutations is a deliberate later step.
+instance fronts with Nginx Proxy Manager → the API serves HTTP). The token + writable-clone enablement for the
+privileged mutations is the gated `api_privileged` deploy
+([privileged-mutation-enablement.md](privileged-mutation-enablement.md)).
 
 ## 10. Shallow search (fast discovery; deep classification on demand)  ✅ (2026-06-13)
 
