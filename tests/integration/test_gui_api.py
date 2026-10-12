@@ -232,7 +232,7 @@ def test_onboard_apply_writes_commits_and_audits_no_creds(client, onboard_env, t
 def test_onboard_apply_stages_when_armed(client, onboard_env, monkeypatch):
     """With KONTROLL_STAGE_PUSHES set (the privileged deploy's propose-then-promote, C10), an apply STAGES
     `proposed/<run_id>` — never main. The GUI threads run_id through commit_and_push exactly like the API
-    route, so the uniform-staging invariant holds: an abused GUI can only park a rejectable proposal."""
+    route, so the uniform-staging invariant holds: an abused GUI login can only stage a proposal."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     r = client.post("/api/onboard",
                     json={"collection": "acme.edgeos", "key": "edgeos",
@@ -1145,7 +1145,7 @@ def test_unit_create_stale_token_409(client, unit_env):
 
 def test_unit_create_stages_proposed_ref_when_armed(client, unit_env, monkeypatch):
     """With KONTROLL_STAGE_PUSHES set (the deployed staging posture), the create stages proposed/<run_id> — never
-    main (C10). Guards the load-bearing two-key property: an abused GUI can only park a rejectable create proposal,
+    main (C10). Guards the load-bearing two-key property: an abused GUI login can only stage a create proposal,
     never land a unit on main."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     proposed = client.post("/api/actuation/create", headers=_auth(), json=_UNIT_BODY).get_json()
@@ -1270,7 +1270,7 @@ def test_actuation_stage_stale_token_409(client, unit_config_env):
 
 def test_actuation_stage_stages_proposed_ref_when_armed(client, unit_config_env, monkeypatch):
     """With KONTROLL_STAGE_PUSHES set (the deployed staging posture), the configure stage targets proposed/<run_id>
-    — never main (C10). Guards the load-bearing two-key property: an abused GUI can only park a rejectable configure
+    — never main (C10). Guards the load-bearing two-key property: an abused GUI login can only stage a configure
     proposal, never land values on main."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     proposed = client.post("/api/actuation/" + _CFG_KEY, headers=_auth(),

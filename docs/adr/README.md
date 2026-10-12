@@ -52,10 +52,10 @@ The blackboard runner returns this stub pre-filled for the run it just finished 
 
 | ADR | Decision | Status | Date | Rests on |
 |---|---|---|---|---|
-| 0001 | Reconcile status is shown on the object it belongs to, not in a separate "Installed" index | ACCEPTED | 2026-07-25 | recorded in the homelab edition (`docs/adr/0001-…` there), whose install-on-onboard flow it concerns |
+| 0001 | Reconcile status is shown on the object it belongs to, not in a separate "Installed" index | ACCEPTED | 2026-07-25 | recorded in the homelab edition's tree, where `docs/adr/0001-…` is (it concerns that edition's install-on-onboard flow) |
 | 0002 | The composed-plane boundary: what kontroll builds itself, and what it leaves to the tools it composes | not yet written | — | awaits the maintainer's decision |
 | 0003 | How far the generic onboarding path goes: a service root, a module SDK, the kinds of actuation unit | not yet written | — | awaits the maintainer's decision, after the next full re-onboard of a real fleet |
-| 0004 | The default promotion posture of the homelab edition | not yet written | — | awaits the maintainer's decision; its subject is homelab-edition code, so the record will live there |
+| 0004 | The default promotion posture of the homelab edition | not yet written | — | awaits the maintainer's decision; its subject is homelab-edition code, so the record will live in that edition's tree |
 | 0005 | The upgrade story: an in-place update, or rebuild only | not yet written | — | awaits the maintainer's decision |
 
 Numbers 0002 to 0005 are reserved for those subjects. They are the open decisions the 2026-10 project review

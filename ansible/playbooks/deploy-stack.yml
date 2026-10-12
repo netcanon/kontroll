@@ -141,8 +141,9 @@
     bake_code: false
     # Live phases. Phase 5 adds prometheus/grafana. Override with -e to deploy a subset.
     stack_services: ["semaphore", "homepage"]
-    # C10 privileged-mutation enablement for the network-service tier — the API AND onboard-gui (default OFF;
-    # the read-only deploy is untouched). true ⇒ render the API token + KONTROLL_STAGE_PUSHES into .env and make
+    # C10 privileged-mutation enablement for the network-service tier — the API AND onboard-gui. The default is
+    # the `api_privileged:` value that closes this comment block; when it is false the read-only deploy is
+    # untouched. true ⇒ render the API token + KONTROLL_STAGE_PUSHES into .env and make
     # each enabled surface's content clone writable by uid-1001 + add a `local` remote, so the network service
     # can only PROPOSE (push proposed/<run_id>), never main. NO age key for the API (the no-key posture);
     # onboard-gui keeps its host-provisioned age key for device-cred encryption. Requires `kontroll_api_token`
@@ -927,7 +928,7 @@
           block:
             - name: Own the API content clone as the runtime uid so the container can commit (C10)
               # In read-only mode this is SKIPPED, so the clone stays root-owned and uid-1001 cannot write it —
-              # the read-only deploy is provably untouched by the enablement (the flag default is false).
+              # the read-only deploy is provably untouched by the enablement (this block needs api_privileged).
               ansible.builtin.file:
                 path: "{{ kontroll_api_dir }}/repo"
                 state: directory
@@ -972,8 +973,8 @@
 
     - name: Provision the onboard-gui host artifacts (RO content clone; the age key stays host-provisioned)
       # Mirrors the API block: onboard-gui (Flask) is the SAME network-service trust tier — it serves the
-      # capability dialog + device onboarding. Read-only by default (the clone is root-owned ⇒ uid-1001 reads but
-      # cannot write/push); the gated privileged block makes it writable + adds a `local` remote so a
+      # capability dialog + device onboarding. Read-only unless api_privileged (the clone is root-owned ⇒ uid-1001
+      # reads but cannot write/push); the gated privileged block makes it writable + adds a `local` remote so a
       # capability-promote can only PROPOSE (push proposed/<run_id>). This block never mints the age key — that
       # stays host/GUI-provisioned (security boundary: never an agent, never committed). The TLS certificate is
       # generated further down, in self_signed mode, when none is there. C10.
@@ -1079,7 +1080,7 @@
           block:
             - name: Own the onboard-gui content clone as the runtime uid so the container can commit (C10)
               # In read-only mode this is SKIPPED, so the clone stays root-owned and uid-1001 cannot write it —
-              # the read-only deploy is provably untouched by the enablement (the flag default is false).
+              # the read-only deploy is provably untouched by the enablement (this block needs api_privileged).
               ansible.builtin.file:
                 path: "{{ kontroll_gui_dir }}/repo"
                 state: directory

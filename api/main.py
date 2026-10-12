@@ -10,7 +10,7 @@ defines a router and is not registered).
 Scope: read-only inquiry (search / probe / classify / units / health) and the privileged routes
 (refresh, capture-exceptions, onboard, capability, secrets, actuation, audit log) behind Bearer-token
 auth and a fail-closed, run_id-correlated audit. Privileged routes are fail-closed: no
-KONTROLL_API_TOKEN ⇒ 503. Deployed read-only by default; under the gated `api_privileged` deploy a
+KONTROLL_API_TOKEN ⇒ 503. Read-only unless the deploy sets `api_privileged`; under that gated deploy a
 privileged write to the repository can only stage `proposed/<run_id>`, never `main` (SECURITY.md C9/C10) —
 `POST /refresh` rebuilds a git-ignored cache and stages nothing. Management network only, never WAN.
 Run locally for dev with: `uvicorn api.main:app --reload`.

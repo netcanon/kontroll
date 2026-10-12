@@ -255,8 +255,8 @@ def _push_target(run_id=None):
     """The branch `commit_and_push` pushes the canonical to. A network service deployed with
     `KONTROLL_STAGE_PUSHES=1` (the propose-then-promote posture, SECURITY.md C10) pushes a per-request STAGING
     ref `proposed/<run_id>` — never `main` — that the trusted `promote_ref` step fast-forwards into `main`; so a
-    leaked token can only PARK rejectable proposals, never rewrite the canonical. Unset env (the operator CLI /
-    a non-staging deploy) ⇒ direct to `main`.
+    leaked token can only STAGE a proposal: the token never pushes `main` and cannot promote — only a trusted
+    promoter can. Unset env (the operator CLI / a non-staging deploy) ⇒ direct to `main`.
 
     FAIL-CLOSED: when staging is on but no `run_id` is supplied, this RAISES — it never silently falls back to a
     direct `main` push. The whole job of this primitive is to be fail-closed; an unnamed proposal from a staging

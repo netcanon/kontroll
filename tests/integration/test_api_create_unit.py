@@ -126,7 +126,7 @@ def test_create_with_stale_token_is_409(cre):
 
 def test_create_targets_proposed_ref_when_staging(cre):
     """With KONTROLL_STAGE_PUSHES set (the deployed staging posture), the push targets proposed/<run_id> — never
-    main (C10). Guards the load-bearing two-key property: a leaked token can only PARK a rejectable create
+    main (C10). Guards the load-bearing two-key property: a leaked token can only STAGE a create
     proposal, never land a unit on main."""
     cre.monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     proposed = cre.client.post("/actuation/create", headers=AUTH, json=BODY).json()

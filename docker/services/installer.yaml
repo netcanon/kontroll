@@ -68,7 +68,7 @@ services:
       # The host docker daemon — deploy-stack shells `docker compose` + builds the runner/vector images through it.
       - /var/run/docker.sock:/var/run/docker.sock
       # The C10 local canonical — :rw because local-canonical INITS + seeds it (the installer is the privileged
-      # seeder; the network services keep the :ro-default backstop). Same host path the stack services bind.
+      # seeder; the network services mount it :ro unless api_privileged). Same host path the stack services bind.
       - /srv/kontroll.git:/srv/kontroll.git
       # The host storage root — SAME absolute path in-container as on the host, so the dirs deploy-stack provisions
       # here (onboard-gui/age.key, tls, backups, logs, api-audit) resolve identically when the host daemon binds

@@ -60,7 +60,7 @@ services:
       # no remote git. Operator-owned, seeded by local-canonical.yml. See
       # docs/local-source-of-truth.md.
       #
-      # Mount mode is gated: READ-ONLY by default, READ-WRITE only when the propose-then-promote
+      # Mount mode is gated: READ-ONLY (the variable's own default), READ-WRITE only when the propose-then-promote
       # system is armed (deploy-stack renders KONTROLL_CANONICAL_MODE=rw into docker/.env under
       # api_privileged). The :rw mount is what lets the `promote-proposal` Semaphore task fast-forward
       # main into a staged proposal as gid 1001 (no host root) — the C10 "approve" GUI action. A

@@ -82,7 +82,7 @@ Pydantic models give an auto `/openapi.json` + `/docs`; `tests/integration/test_
 TestClient, service seams mocked) pins the routes + the dogfood (galaxy ingests the API's own spec);
 booted under uvicorn over real HTTP. **Since shipped (ws3/ws4 + A2):** the mutation routes, the full
 `run_galaxy` retirement (the GUI onboard is now in-process too — `gui/app.py` no longer shells out at all),
-and a live deployment (read-only by default, C10-gated privileged). The original design follows.
+and a live deployment (read-only unless `api_privileged`, C10-gated privileged). The original design follows.
 
 **What:** stand up **FastAPI** (auto-OpenAPI, Pydantic validation, dependency injection — the netcanon
 pattern) calling the service functions **directly**, replacing `gui/app.py`'s `run_galaxy` subprocess
@@ -226,8 +226,9 @@ The API is a **privileged surface**, so it is wired into the Layer 0 foundations
 Gate: the API is **never WAN-exposed**; it lives on the mgmt VLAN behind the same boundary as the GUI +
 Semaphore (SECURITY.md C3). Dissemination/exposure follows the same beta gate as the GUI.
 
-**Deployed read-only (2026-06-13):** `docker/services/api.yaml` serves at `${KONTROLL_MGMT_IP}:8444` with the
-repo RO + no token (privileged routes 503). The frontend TLS posture is **per-instance** (`instance/instance.yml`
+**The read-only deploy (first shipped 2026-06-13; what a deploy without `api_privileged` still is):**
+`docker/services/api.yaml` serves at `${KONTROLL_MGMT_IP}:8444` with a root-owned content clone, the canonical
+`:ro` + no token (privileged routes 503). The frontend TLS posture is **per-instance** (`instance/instance.yml`
 `frontend.tls_mode` — `byo_proxy` / `self_signed` / `acme`, resolver `scripts/kontroll/frontend.py`; this
 instance fronts with Nginx Proxy Manager → the API serves HTTP). The token + writable-clone enablement for the
 privileged mutations is the gated `api_privileged` deploy

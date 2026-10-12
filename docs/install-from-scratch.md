@@ -35,8 +35,8 @@
 > scripts/kontroll-installer.sh configure-semaphore                      # wire Semaphore (§6)
 > ```
 > That is Semaphore and Homepage, with the local canonical behind them. **The onboarding GUI is a separate,
-> deliberate step — §7:** its age key is yours to provision, and §7's deploy also arms the staging API. Until
-> then nothing listens on `:8443`.
+> deliberate step — §7:** its age key is yours to provision, and §7's deploy brings it up together with the
+> staging API (`api_privileged`). Until then nothing listens on `:8443`.
 >
 > **Running a play later.** On this path a control-plane play — `ansible-playbook playbooks/<x>.yml <args>` for
 > `bootstrap.yml`, `local-canonical.yml` or `reload-observability.yml` in this repository's documents — is run as
@@ -251,9 +251,10 @@ for the full recipe; the itinerary:
    (found live: omitting `semaphore` leaves it mounting the canonical `:ro`). `local-canonical.yml` (§3) set
    `core.sharedRepository=group`, so a promote writes as **gid 1001**, no host root.
 
-**Promote = a SEPARATE Semaphore web app (the two-key safety).** A proposal is landed on `main` from a **different
-app, with a different login**, than the GUI that created it — so a leaked API token can only park rejectable
-proposals, never rewrite the canonical (SECURITY.md C10). To promote a `run_id`:
+**Promote = a SEPARATE Semaphore web app (the two-key safety).** Under `trust_mode: separated` a proposal is
+landed on `main` from a **different app, with a different login**, than the GUI that created it — so a leaked API
+token can only park rejectable proposals, never rewrite the canonical (SECURITY.md C10;
+[trust-mode.md](trust-mode.md) says what `solo` changes). To promote a `run_id`:
 
 1. Open Semaphore at **`http://${KONTROLL_MGMT_IP}:3001`** and log in **`admin` / `semaphore_admin_password`**
    — the §2 value, **not** the GUI's `gui_admin_password` (a deliberately separate credential).
@@ -276,8 +277,9 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
 2. **(optional) Add a secondary capability.** Click a **telemetry / backup / logging** badge → pick a method →
    **Propose** (a pure plan + an anti-drift token) → **Promote** (also staged as `proposed/<run_id>`).
 3. **Promote** each `run_id` in the **Semaphore web app** — the §7 *Promote* walkthrough (`promote-proposal`
-   template, the `run_id` survey field). This fast-forwards the proposal onto `main`; for a plain device onboard,
-   the device is now in the inventory + fleet.
+   template, the `run_id` survey field). (An edition that runs an auto-promoter does this step itself under
+   `solo`, for what its scope allows — [trust-mode.md](trust-mode.md).) This fast-forwards the proposal onto
+   `main`; for a plain device onboard, the device is now in the inventory + fleet.
 4. **Enact** ("make it live") splits by privilege (item F): **Tier-1** steps — the Prometheus reload
    (`reload-observability`), a host-agent install (`install-node-exporter`) — are **one-click Semaphore tasks**
    (no host root); **Tier-2** `deploy-stack` (bring up an exporter container / fetch dashboards / rebuild the

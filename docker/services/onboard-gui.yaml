@@ -12,7 +12,7 @@
 # C10 (network-service tier): when the gated deploy enables privileged mutation
 # (`-e api_privileged=true`), the clone gets a `local` remote + KONTROLL_STAGE_PUSHES=1, so a
 # capability-promote can only PROPOSE (push proposed/<run_id>) — a trusted promote lands it on main.
-# Read-only by default: the clone stays root-owned ⇒ uid-1001 reads but cannot write/push.
+# Read-only without it: the clone stays root-owned ⇒ uid-1001 reads but cannot write/push.
 services:
   onboard-gui:
     image: ${KONTROLL_CONTROL_IMAGE:-kontroll/semaphore:latest}   # ghcr digest if published; else local build

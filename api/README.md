@@ -1,4 +1,4 @@
-# `api/` — the kontroll onboarding API (typed; read-only as deployed by default)
+# `api/` — the kontroll onboarding API (typed; inquiry is open, every repository write is token-gated and staged)
 
 A **thin typed FastAPI** over the [`scripts/kontroll/`](../scripts/README.md) service package. It
 carries no logic of its own: every route calls a `service_*` function that returns structured data,
@@ -35,9 +35,10 @@ for a row whose route is gone.
 | `GET /audit/log?action=&user=&run_id=&since=` | token | query the audit log |
 | `GET /openapi.json`, `/docs`, `/redoc` | — | the typed schema + Swagger/ReDoc UIs |
 
-**Deployed read-only** ([api-architecture.md](../docs/api-architecture.md) §9): `docker/services/api.yaml`
-serves at `${KONTROLL_MGMT_IP}:8444`, the repo mounted **read-only**, with **no token** — the inquiry routes
-serve and the privileged routes are fail-closed (503). Per [SECURITY.md](../SECURITY.md) C3/C9 it is
+**Read-only without `api_privileged`** ([api-architecture.md](../docs/api-architecture.md) §9):
+`docker/services/api.yaml` serves at `${KONTROLL_MGMT_IP}:8444` with a root-owned content clone, the canonical
+mounted **read-only** and **no token** — the inquiry routes serve and the privileged routes are fail-closed
+(503). Per [SECURITY.md](../SECURITY.md) C3/C9 it is
 **mgmt-VLAN-only, never WAN**. Enabling the privileged mutations is the gated `api_privileged` deploy (token +
 a writable content clone + a `local` remote; no age key) — a privileged write then stages `proposed/<run_id>`,
 never `main`: [docs/privileged-mutation-enablement.md](../docs/privileged-mutation-enablement.md).

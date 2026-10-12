@@ -10,13 +10,15 @@
 ## 0. The one-paragraph version
 
 The deployed API/GUI is a **network service** — a program that runs all the time, listens on the mgmt IP (`<mgmt-ip>`),
-and acts on any request bearing a valid token, with no human at the keyboard. Today it is deployed **read-only**
-(no token ⇒ every privileged route 503s; repo mounted `:ro`; no age key) — it physically cannot mutate. Turning
+and acts on any request bearing a valid token, with no human at the keyboard. Without `api_privileged` it is
+deployed **read-only** (no token ⇒ every privileged route 503s; the content clone root-owned and the canonical
+mounted `:ro`; no age key in the API) — it physically cannot mutate. Turning
 it on means handing an always-on, reachable **deputy** the power to change the source of truth. We do that under
 one uniform rule: **the network service may only PROPOSE a change (it pushes a staging ref); a trusted step
 (you, or a Semaphore approval task) PROMOTES it to `main`.** And **no decrypting age key** is mounted into the
-service. A leaked token can then only *park proposals you can reject* — never rewrite the lab, never read a
-secret.
+service. A leaked token can then only *stage proposals*, and the API holds no key to read a secret with. Under
+`separated` you reject or promote each proposal, so the token alone never rewrites the lab
+([trust-mode.md](trust-mode.md) says what `solo` changes).
 
 ## 1. The three layers (only the first is gated)
 
@@ -54,8 +56,11 @@ mgmt-VLAN + single-operator only," strictly weaker. We are not taking it.
 
 ## 3. The mechanics (what gets built)
 
-Four pieces. All **flag-gated** (`api_privileged: false` default) so the read-only deploy stays the default and
-nothing changes until the operator opts in.
+Four pieces. What switches them on is **`api_privileged`**. Its default is the `api_privileged:` line of
+`ansible/playbooks/deploy-stack.yml` — `false` in the public tree; another edition may ship another — and a
+deploy without it is the read-only one: no token, root-owned content clones, the canonical mounted `:ro`. Two
+things below do not wait for it: the canonical's own hardening in piece 3 (`receive.deny*` and the `update`
+hook, set by `local-canonical.yml` on every install) and the operator's CLI promote in piece 4.
 
 1. **Token** — `kontroll_api_token` lives in the `dashboards` SOPS domain (service-secrets; control + break-glass
    recipients only — **not** the Semaphore key, so a Semaphore breach can't read it). `deploy-stack` renders it
@@ -110,7 +115,7 @@ trusted runner with the scoped key encrypts the staged cred *names* into the dom
    AND the onboard-gui clone, so the GUI capability dialog stages too), `ansible/playbooks/local-canonical.yml`
    (uid-1001 write grant via shared-group+setgid + the **unconditional** `receive.denyNonFastForwards`/`denyDeletes`
    hardening), `docker/semaphore-runner/Dockerfile` (baked git identity). Everything new is gated
-   `when: api_privileged` (default off) so the **read-only deploy is provably untouched** (and each clone stays
+   `when: api_privileged` so the **read-only deploy is provably untouched** (and each clone stays
    root-owned ⇒ uid-1001 can't write it). CI lints; the operator applies + live-verifies on first gated deploy.
 4. ✅ **The covering checks** — the privileged routes 503-without-token / 401-200-with are already pinned
    (`tests/integration/test_api_auth.py`); the staged push targets `proposed/*` not `main`

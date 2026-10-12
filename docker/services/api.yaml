@@ -2,8 +2,9 @@
 # runner image (ansible + sops + age + baked collections + fastapi/uvicorn) so it has the exact
 # toolchain probe/classify need.
 #
-# DEPLOYED READ-ONLY (docs/api-architecture.md §9, SECURITY.md C9): no KONTROLL_API_TOKEN is set, so
-# the privileged routes are fail-closed (503) — only the inquiry routes (search/probe/classify/health)
+# READ-ONLY UNLESS `api_privileged` (docs/api-architecture.md §9, SECURITY.md C9): without it no
+# KONTROLL_API_TOKEN is set, so the privileged routes are fail-closed (503) — only the inquiry routes
+# (search/probe/classify/health)
 # serve. The content clone is provisioned ROOT-OWNED, so uid-1001 reads it but cannot write — that
 # filesystem-ownership is the read-only lock (independent of the mount flag). To enable live mutation, the
 # GATED privileged deploy (`-e api_privileged=true`; SECURITY.md C10 + docs/privileged-mutation-enablement.md)
@@ -42,7 +43,7 @@ services:
       # clone, byte-identical to before. MF-4: this var is rendered into the config-time .env (deploy-stack) — it must
       # NOT live in a per-service env_file (compose interpolates it in the `volumes:` mount target at config time).
       KONTROLL_WRITE_ROOT: ${KONTROLL_WRITE_ROOT:-/repo}
-      # PRIVILEGED-CAPABLE, gated by deploy-stack `api_privileged` (default off ⇒ empty ⇒ fail-closed 503).
+      # PRIVILEGED-CAPABLE, gated by deploy-stack `api_privileged` (without it ⇒ empty ⇒ fail-closed 503).
       # The app is fail-closed in code (api/auth.py); soft-default (`:-`) so the read-only deploy (empty token)
       # can't break compose for other services in the include.
       KONTROLL_API_TOKEN: ${KONTROLL_API_TOKEN:-}

@@ -11,7 +11,7 @@ include:
   - services/homepage.yaml      # portal — built first (Phase 4)
   - services/semaphore.yaml     # Ansible UI (Phase 3)
   - services/onboard-gui.yaml   # capability search + onboard GUI (alpha; staged)
-  - services/api.yaml           # typed onboarding API (deployed read-only; privileged routes need a token)
+  - services/api.yaml           # typed onboarding API (read-only unless api_privileged; privileged routes need a token)
   - services/caddy.yaml         # optional HTTPS ingress (frontend.tls_mode=acme; Let's Encrypt DNS-01)
   - services/prometheus.yaml    # metrics TSDB (Phase 5)
   - services/grafana.yaml       # metrics UI (Phase 5) — also the logs pane (Loki datasource)
