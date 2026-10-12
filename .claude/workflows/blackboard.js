@@ -7,7 +7,8 @@
 // pointer/summary; the MAIN THREAD seeds 00-blackboard.md and (after the run) synthesizes +
 // builds + commits. Parameterized entirely by `args` (see .claude/workflows/README.md).
 //
-// Invoke:  Workflow({ name: "blackboard", args: { dir, slug, mission, phases:[...] } })
+// Invoke:  Workflow({ scriptPath: "<repo>/.claude/workflows/blackboard.js", args: { dir, slug, mission, phases:[...] } })
+//   (by scriptPath -- the `name:` registry is reserved for built-in and plugin workflows)
 //   - The MAIN THREAD writes <dir>/00-blackboard.md (the seed: mission + constraints + roster)
 //     BEFORE invoking, and reads the <dir>/NN-*.md reports + writes 99-synthesis.md AFTER.
 //
@@ -15,11 +16,19 @@
 //   dir:     ABSOLUTE path of the run folder, e.g. "<repo>/docs/reviews/<UTC-date>-<slug>"  (REQUIRED)
 //   slug:    short topic label (for the progress narrator)                                   (optional)
 //   mission: one-line mission (logged at start)                                              (optional)
+//   boundary: which security boundary this run is about -- a FULL run is for a boundary change -- or,
+//             for an audit or a planning round, its scope (docs/agent-workflow.md, "Which loop a
+//             change gets"); logged, never enforced                                          (optional)
+//   adr:     the next free decision-record number, e.g. "0006" (the caller lists docs/adr/);
+//             pre-fills the returned stub (digits are padded to four), default "NNNN"         (optional)
+//   oversize_reason: why this run needs more agents than the guideline; logged               (optional)
 //   phases: [ {                                                                              (REQUIRED, >=1)
 //     title:      "Research" | "Design" | "Review" | ...  (progress group + the phase tag)
 //     readsPrior: true  -> every agent in this phase is told to read ALL earlier-phase reports
 //     review:     true  -> agents use the REVIEW_SUMMARY schema (verdict + must_fixes)
 //     model:      override model for the whole phase (default per-agent / 'opus')
+//     effort:     reasoning effort for the whole phase ('low'|'medium'|'high'|'xhigh'|'max');
+//                 omit to inherit the session effort. Use 'max' for adversarial/security passes.
 //     agents: [ {
 //       id:    report filename stem, numeric-prefixed + unique, e.g. "10-research-metrics"
 //              (-> <dir>/10-research-metrics.md ; this is the agent's ONLY write)
@@ -27,11 +36,14 @@
 //       label: progress label (default = id)
 //       reads: explicit [id,...] peer reports to read (overrides phase.readsPrior)
 //       model: per-agent model override
+//       effort: per-agent reasoning-effort override (wins over phase.effort)
 //     }, ... ]
 //   }, ... ]
 // }
 //
-// Returns: { dir, files:{id->path}, phases:[{title, results:[{id,file,summary}]}], review }
+// Returns: { dir, files:{id->path}, phases:[{title, results:[{id,file,summary}]}], review, bookends }
+//   bookends = the text of the three things the MAIN THREAD writes after a run (the runner cannot write a file):
+//     { synthesis:{file, header}, adr_stub:{path, text}, index_row:{file, text} }
 
 export const meta = {
   name: 'blackboard',
@@ -99,6 +111,21 @@ const seed = pathFor("00-blackboard");
 
 if (A.mission) log("blackboard [" + (A.slug || "run") + "]: " + A.mission);
 
+// ---- two nudges, asked at the moment a run is launched. They are LOGGED; the runner never refuses. ----
+// A run of several agents is the full loop, and the full loop is for a security-boundary change. A single
+// reader (the light loop's one independent read of a diff) is asked nothing.
+const AGENT_GUIDELINE = 4;
+const agentCount = phases.reduce((n, ph) => n + ph.agents.length, 0);
+if (agentCount > 1 && !A.boundary) {
+  log("blackboard: no args.boundary given -- a run of several agents is for a security-boundary change, an "
+    + "audit or a planning round (docs/agent-workflow.md, 'Which loop a change gets'). Name the boundary or "
+    + "the scope in args.boundary, or use the light loop.");
+}
+if (agentCount > AGENT_GUIDELINE && !A.oversize_reason) {
+  log("blackboard: " + agentCount + " agents and no args.oversize_reason -- keep a run to about "
+    + AGENT_GUIDELINE + " agents unless the seed argues for more.");
+}
+
 const prior = [];                                        // accumulated report paths for peer-reads
 const out = { dir: dir, files: {}, phases: [], review: null };
 
@@ -118,12 +145,15 @@ for (const ph of phases) {
       + (reads.length ? "\n\nFIRST read these peer reports for context: " + reads.join(" , ") : "")
       + "\n\nTASK:\n" + a.task
       + "\n\nDELIVERABLE: the full long-form report written to your report file above; THEN return the summary.";
-    return agent(prompt, {
+    const opts = {
       label: a.label || a.id,
       phase: ph.title,
       model: a.model || ph.model || 'opus',
       schema: ph.review ? REVIEW_SUMMARY : SUMMARY,
-    }).then((summary) => ({ id: a.id, file: file, summary: summary }));
+    };
+    const effort = a.effort || ph.effort;                  // omitted -> inherit the session effort
+    if (effort) opts.effort = effort;
+    return agent(prompt, opts).then((summary) => ({ id: a.id, file: file, summary: summary }));
   });
   const results = await parallel(thunks);
   out.phases.push({ title: ph.title, results: results });
@@ -133,5 +163,61 @@ for (const ph of phases) {
     if (got.length) out.review = got.length === 1 ? got[0] : got;
   }
 }
+
+// ---- the bookends the MAIN THREAD writes (the runner has no filesystem access: it returns their TEXT) ----
+// The date is parsed from the run folder's name (<UTC-date>-<slug>): a workflow script has no clock -- a call to
+// one would break resume -- which is why the caller stamps the date into `dir`. What the runner cannot know is
+// the decision itself, and the next free decision-record number (args.adr; a placeholder when absent).
+const base = dir.split(/[\\/]/).filter(Boolean).pop() || "";
+const dm = /^(\d{4}-\d{2}-\d{2})(?:-(.+))?$/.exec(base);
+if (!dm) log("blackboard: run folder '" + base + "' is not <UTC-date>-<slug> -- the index row needs the date");
+const runDate = dm ? dm[1] : "<UTC-date>";
+const runSlug = String((dm && dm[2]) || A.slug || "run").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "run";
+const adrRaw = String(A.adr || "NNNN");
+const adrNo = /^\d+$/.test(adrRaw) ? adrRaw.padStart(4, "0") : adrRaw;     // 6 -> 0006: a record is NNNN-<slug>.md
+const hadReview = phases.some((ph) => ph.review);
+const verdicts = [].concat(out.review || []).map((r) => r && r.verdict).filter(Boolean).join(" / ")
+  || (hadReview ? "no verdict returned" : "no review phase");
+const adrPath = "docs/adr/" + adrNo + "-" + runSlug + ".md";
+// One agent is the light loop's single reader (or a one-agent note); several are a full run.
+const loop = agentCount > 1 ? "full" : "light";
+const opening = agentCount > 1 ? "99-synthesis.md" : "00-note.md";
+out.bookends = {
+  synthesis: {
+    file: pathFor("99-synthesis"),
+    header: [
+      "# Synthesis -- " + (A.mission || runSlug) + " (" + runDate + ")",
+      "",
+      "**Decision:** <one sentence, or 'none -- findings only'>",
+      "**Status:** <decided / awaiting the maintainer / superseded by ...>",
+      "**ADR:** " + adrPath + "  <or 'none' when no decision was made>",
+      "**Review verdict:** " + verdicts,
+    ].join("\n"),
+  },
+  adr_stub: {
+    path: adrPath,
+    text: [
+      "# ADR-" + adrNo + " -- <the decision, as a sentence>",
+      "",
+      "**Status:** PROPOSED (" + runDate + ")",
+      "**Decided by:** <the maintainer / the main thread>",
+      "**Supersedes:** <ADR-NNNN, or nothing>",
+      "**Evidence:** docs/reviews/" + base + "/" + opening + " (review verdict: " + verdicts + ")  <or a pull request, a live run>",
+      "",
+      "## The question",
+      "",
+      "## Decision",
+      "",
+      "## Why",
+      "",
+      "## What would change this decision",
+      "",
+    ].join("\n"),
+  },
+  index_row: {
+    file: "docs/reviews/README.md (a published dossier) or docs/reviews/INDEX.md (an instance repository)",
+    text: "| " + runDate + " | [" + base + "](" + base + "/" + opening + ") | " + loop + " | <the decision, one line> | <ADR-" + adrNo + ", or none> |",
+  },
+};
 
 return out;

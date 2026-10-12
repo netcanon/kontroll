@@ -54,8 +54,11 @@ docs/reviews/<UTC-date>-<slug>/
 - **Numeric prefixes encode phase order** (10s research → 20s design → 30s review); the prefix is the agent's
   `id` *and* its report filename. Phases run as `parallel()` barriers; later phases read earlier reports for comms.
 - **The runner has NO filesystem access** — it only orchestrates agents. So the **main thread owns the
-  bookends**: write `00-blackboard.md` (the seed) before invoking, `99-synthesis.md` after, and then build /
-  validate / commit — the sole actuator. Agents write only their one `NN-*.md`.
+  bookends**: write `00-blackboard.md` (the seed) and the run's **index row**
+  ([reviews/README.md](reviews/README.md)) before invoking; after the run write `99-synthesis.md` and — when the
+  run ended in a decision someone could later reverse — a **decision record** ([adr/README.md](adr/README.md));
+  then build / validate / commit — the sole actuator. The runner returns the text to start each from
+  (`bookends`). Agents write only their one `NN-*.md`.
 - **Agents return only a pointer/summary**; the long-form analysis lives in the file (keeps the main thread
   light). Reviewers return a verdict + severity-tagged must-fixes.
 - **Opus for every agent** (the runner's default) — long-context retention + design/audit quality (CLAUDE.md:
@@ -86,6 +89,20 @@ zero-spine-edit; INVARIANT-D; C8/C12 at-rest; fail-closed knobs>
 
 ## Decisions already locked (context)
 <prior decisions the agents should treat as fixed>
+```
+
+### The `99-synthesis.md` opening (the main thread writes this after the run)
+
+The runner returns these lines pre-filled (`bookends.synthesis.header`). A light-loop note that records a
+decision opens with the same four.
+
+```markdown
+# Synthesis — <mission> (<UTC-date>)
+
+**Decision:** <one sentence, or "none — findings only">
+**Status:** <decided / awaiting the maintainer / superseded by …>
+**ADR:** <docs/adr/NNNN-<slug>.md, or "none" when no decision was made>
+**Review verdict:** <GO / GO-WITH-FIXES / NO-GO, or "no review phase">
 ```
 
 ## Directory structure (the evidence trail)
@@ -149,12 +166,72 @@ searches find prior investigations under the same name. Each agent owns a
   their report file and return only a short summary + the path, so the main
   thread's context stays light (this is the whole point of off-thread research).
 
-## When to invoke vs. inline
+## Which loop a change gets
 
-- **Invoke the full process** on a *wave*: a scaffolding/doc audit, a pre-release
-  gate, a post-large-change sweep, or a periodic cadence.
-- **For a one-off** finding or small doc fix, just fix it inline — don't spin up
-  the process.
+A change gets one of two loops. Decide before you start, and say which in the pull request.
+
+**The full loop — a security-boundary change.** A change is one if **any** of these is true:
+
+1. it adds a network route; a request field that reaches a path, an inventory key, a command or a commit; an
+   outbound client or a transport; a container privilege (a socket, a host bind, a root user, a published port);
+   a secret domain or a recipient rule;
+2. it changes what reaches `main` without a human;
+3. to stay true, `SECURITY.md` would need a control's claim or a row of the accepted-risks table changed — or
+   the change rewrites the validator, the allow-list or the gate that a control names as its mechanism. (An
+   added proof, or a stronger description of a claim that was already true, is not this test; a sentence that
+   would otherwise be false is.)
+
+When in doubt it is a boundary change.
+
+An audit, a pre-release gate or a planning round is not a change: it is a run of the same runner, and it names
+its scope where a change names its boundary.
+
+The table below is a **prompt**, not one more test. These are the files where a boundary lives, so a change to
+one of them says, in one line of the pull request, why none of the tests above applies — or takes the full loop.
+Most changes to these files fix a write target, add a generator flag or move a declaration, and are the light
+loop; a rule that decided by path alone would send them all through the full one.
+
+<!-- boundary-paths:begin -->
+| Boundary | Paths |
+|---|---|
+| Propose → promote, and the canonical | `scripts/kontroll-promote.py`, `scripts/kontroll/service/promote.py`, `scripts/kontroll/service/discard.py`, `scripts/kontroll/service/pending.py`, `scripts/kontroll/gitio.py`, `ansible/playbooks/promote.yml`, `ansible/playbooks/local-canonical.yml`, `ansible/playbooks/files/canonical-update-hook.sh`, `tests/unit/_readonly_pins.py` |
+| The request boundary | `api/auth.py`, `api/deps.py`, `api/ratelimit.py`, `api/routes/`, `gui/app.py`, `gui/templates/index.html`, `scripts/kontroll/paths.py`, `scripts/kontroll/probe.py`, `scripts/kontroll/service/onboard.py`, `scripts/kontroll/service/_validate.py`, `scripts/kontroll/service/_blockwrite.py`, `scripts/kontroll/envguard.py` |
+| Secrets and keys | `scripts/kontroll/service/secrets.py`, `scripts/kontroll/service/keygen.py`, `scripts/gen-secret-env.py`, `secret-forms/`, `key-roles/`, `instance.example/.sops.yaml`, and any task that handles a decrypted value |
+| The supply chain | `scripts/gen-requirements.py`, `scripts/install-collections.py`, `scripts/gen-image-digests.py`, `scripts/gen-code-manifest.py`, `docker/images.lock.yml`, `docker/code-manifest.lock.yml`, `instance.example/trust/`, `docker/installer/Dockerfile`, `docker/semaphore-runner/Dockerfile`, `.github/workflows/`, `.github/dependabot.yml` |
+| Posture, privilege and exposure | `scripts/kontroll-init.py`, `ansible/playbooks/deploy-stack.yml`, `docker/compose.yaml`, `docker/services/`, `tests/check-mgmt-port-binding.py`, `tests/check-storage-chown.py` |
+| What may leave the instance | `tests/_leak_guard.py`, `.gitignore`, `instance.example/.gitignore`, `.gitleaks.toml`, `.dockerignore`, `scripts/make-bundle.sh`, `scripts/make-launch-kit.sh` |
+| Clients that reach a device or the internet | `scripts/gen-validate-live.py`, `scripts/kontroll-discover.py`, `scripts/kontroll/catalog.py` |
+| The audit trail | `scripts/kontroll/service/audit.py`, `api/audit.py` |
+| The review process itself | `.claude/workflows/blackboard.js` (the read-only contract it prepends to every agent) |
+<!-- boundary-paths:end -->
+
+An edition that adds an automaton on the trusted side of the wall — the homelab edition's auto-promoter — lists
+its own paths in that edition's own repository.
+
+**The full loop** is: the blackboard runner (seed → read-only research and design → an adversarial review → the
+main thread's synthesis), **then build, then run it** — a `--check --diff`, a fresh-node deploy, the browser
+suite — **before any further review**. An as-built review is written after the run, in two cases: the run found
+a fault at the boundary, or the build added a rule of its own — an accept-or-refuse decision (a validator, an
+allow-list, a pattern, a gate) that the design the review read did not contain. A fix round is a build: the
+rules it adds are unreviewed until somebody reads them. Keep a run small — the runner logs a line above its
+guideline. The synthesis opens with its `Decision / Status / ADR` lines, the run gets its index row, and a
+decision gets a record ([adr/README.md](adr/README.md)).
+
+**The light loop — everything else** (a correctness fix, a drop-in, a generator, a test, a document):
+
+1. **One note, not a dossier.** The pull request's description is the note: what, why, and what could go wrong.
+   If it needs more than a screen, one file `docs/reviews/<UTC-date>-<slug>/00-note.md`, written by the main
+   thread or by one read-only agent.
+2. **Build it with its tests** — the test, its docstring and the doc sync in the same commit, as always.
+3. **Run it first.** If the behaviour only shows when it runs (templating, variable scoping, YAML folding, volume
+   ownership, an image build), run it before anyone reviews it further. That class of fault is what reaches a
+   live box, and reading does not find it.
+4. **One independent read of the diff** — one reviewer agent, or the code-review command — when the change
+   touches a file of the table above. It is a read of a diff, not a review of a design.
+5. **A decision record only if a decision was made that someone could later reverse.**
+
+The read-only rule does not change with the loop: a research or review agent writes its one file and nothing
+else, and the main thread is the only actor that edits, commits or touches the lab.
 
 ## Stage 2 (actuation)
 
@@ -164,6 +241,8 @@ commit**, with rationale-first commit messages (see commit conventions in
 each theme. Stage-2 agents are spawned only for genuinely multi-file fixes.
 
 ## See also
+- [adr/README.md](adr/README.md) — decision records: the template, the rules, the index of decisions
+- [reviews/README.md](reviews/README.md) — where a run's dossier lives, and the index of runs
 - [../CLAUDE.md](../CLAUDE.md) — hard rules + the Documentation Sync Checklist
 - [engineering-standards.md](engineering-standards.md) — testing/docs/logging doctrine
 - [../PLAN.md](../PLAN.md) §2.5 — the modularity doctrine the audits enforce

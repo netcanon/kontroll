@@ -23,11 +23,20 @@ bakes in the load-bearing contract:
 ### The main thread owns the bookends (NOT the runner — it has no filesystem access)
 
 1. **Before invoking:** write `<dir>/00-blackboard.md` — the seed: mission, hard constraints, file roster. Use
-   the template in [docs/agent-workflow.md](../../docs/agent-workflow.md) (§ Ultracode runs).
+   the template in [docs/agent-workflow.md](../../docs/agent-workflow.md) (§ Ultracode runs). Add the run's
+   **index row** in the same step — in `docs/reviews/README.md` for a published dossier, in
+   `docs/reviews/INDEX.md` in an instance repository — so the folder is findable from the moment it exists (a
+   dated run folder without a row fails the suite).
 2. **Invoke** the runner (see below).
-3. **After it returns:** read the `NN-*.md` report files, write `<dir>/99-synthesis.md` (reconciled decisions +
-   the buildable-now contract, applying the review's must-fixes), then build/validate/commit. Agents NEVER
-   actuate — this is the netcanon rule.
+3. **After it returns:** read the `NN-*.md` report files, then write the following — the runner returns the text
+   to start each from, in `bookends`:
+   - `<dir>/99-synthesis.md` (reconciled decisions + the buildable-now contract, applying the review's
+     must-fixes), opening with the `Decision / Status / ADR / Review verdict` lines of `bookends.synthesis.header`;
+   - the run's **index row**, completed: its decision and its record (`bookends.index_row` is the row in full);
+   - a **decision record** from `bookends.adr_stub`, when the run ended in a decision someone could later
+     reverse ([docs/adr/README.md](../../docs/adr/README.md)) — and only then.
+
+   Then build/validate/commit. Agents NEVER actuate — this is the netcanon rule.
 
 ### Invocation
 
@@ -57,23 +66,44 @@ Workflow({ scriptPath: "<repo>/.claude/workflows/blackboard.js", args: {
 | key | required | meaning |
 |---|---|---|
 | `dir` | yes | ABSOLUTE run-folder path (`<repo>/docs/reviews/<UTC-date>-<slug>`). The runner has no FS access, so the caller computes it (matches the caller's path separator automatically). |
-| `slug` | no | short topic label for the progress narrator. |
+| `slug` | no | short topic label for the progress narrator. Also the slug of the decision-record path in `bookends` when the run folder's name carries none. |
 | `mission` | no | one-line mission, `log()`-ed at start. |
+| `boundary` | no | which security boundary the run is about — or, for an audit or a planning round, its scope. A run of several agents is the full loop ([docs/agent-workflow.md](../../docs/agent-workflow.md), "Which loop a change gets"); when absent on such a run, one line is `log()`-ed. Never enforced; a single-reader run is asked nothing. |
+| `adr` | no | the next free decision-record number (the caller lists `docs/adr/`), e.g. `"0006"`; digits are padded to four. Pre-fills `bookends`; default the placeholder `NNNN` — a stub written with the placeholder still in its name fails `tests/unit/test_review_loop.py`. |
+| `oversize_reason` | no | why the run needs more agents than the runner's guideline (`AGENT_GUIDELINE` in the script). When absent on a larger run, one line is `log()`-ed. |
 | `phases[]` | yes | ordered phases; each runs as a `parallel()` barrier. |
 | `phases[].title` | yes | progress group + the phase tag. |
 | `phases[].readsPrior` | no | `true` → every agent reads ALL earlier-phase report files. |
 | `phases[].review` | no | `true` → agents use the `REVIEW_SUMMARY` schema (verdict + must_fixes). |
 | `phases[].model` | no | model for the whole phase (default `opus`). |
+| `phases[].effort` | no | reasoning effort for the whole phase (`low`/`medium`/`high`/`xhigh`/`max`). Omit to inherit the session effort; use `max` for adversarial/security passes. |
+| `phases[].agents` | yes | the phase's agents (at least one). |
 | `agents[].id` | yes | report filename stem; numeric-prefixed + **unique** (it IS the agent's only write target). |
 | `agents[].task` | yes | the run-specific prompt body (the read-only contract is prepended for you). |
 | `agents[].label` | no | progress label (default = `id`). |
 | `agents[].reads` | no | explicit `[id,…]` peer reports to read (overrides `readsPrior`). |
 | `agents[].model` | no | per-agent model override. |
+| `agents[].effort` | no | per-agent reasoning-effort override (wins over `phases[].effort`). |
 
-Returns `{ dir, files:{id→path}, phases:[{title, results:[{id,file,summary}]}], review }`.
+Returns `{ dir, files:{id→path}, phases:[{title, results:[{id,file,summary}]}], review, bookends }`.
+
+`bookends` is `{ synthesis:{file, header}, adr_stub:{path, text}, index_row:{file, text} }` — the texts the
+main thread writes after a run, pre-filled with what the runner knows: the date and slug (parsed from the run
+folder's name), the mission, and the review phase's verdict. They describe **the run that returned them**: a
+single reader sent into an existing run folder gets a row that says `light` and a verdict that is that reader's,
+not the folder's. The index row's loop cell is `full` for a run of several agents and `light` for one, and its
+link points at the synthesis or, for a one-agent note, at `00-note.md`. It is **advisory**: nothing forces the
+main thread to use it. What is checked is the result — a dated run folder with no index row, and a decision
+record with no row, a reused number or a name that is not `NNNN-<slug>.md`, fail
+`tests/unit/test_review_loop.py`.
 
 ### Iterate / resume
 
 Edit `blackboard.js` (or the per-run caller) and re-invoke with `scriptPath` + `resumeFromRunId` — unchanged
 agents return cached results. Note: `Date.now()`/`new Date()` are unavailable in workflow scripts (they break
-resume), which is why the caller stamps the date into `dir`.
+resume), which is why the caller stamps the date into `dir` — and why the runner reads the date for `bookends`
+back out of the folder's name.
+
+A workflow script cannot be executed by the test gate (its `args`, `agent`, `parallel`, `phase` and `log` are
+globals of the harness), so the tests pin its text. The first run after an edit is its real test: make that run
+a small one.
