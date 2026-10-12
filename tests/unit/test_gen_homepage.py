@@ -95,10 +95,12 @@ def test_committed_example_fleet_span_is_fresh_and_testnet_only():
 
 
 def test_committed_example_fleet_span_is_secret_free():
-    """The committed fleet span is href:+description: only — NO `widget:` block, no `{{HOMEPAGE_VAR_*}}` token, no
-    `password`. Guards a secret being generated into the unauthenticated board (C11 / SECURITY.md)."""
+    """The committed fleet span is href:+description: only — NO `widget:` block, no `{{HOMEPAGE_…}}` substitution
+    marker of either kind, no `password`, `token:` or `key:` line. Guards a secret being generated into the
+    unauthenticated board (C11 / SECURITY.md). (This reads the SHIPPED example, whose names are ours: that it holds
+    no such word is a fact about the example, not a rule the generator applies to an operator's names.)"""
     span = _fleet_span(open(EXAMPLE_SERVICES, encoding="utf-8").read())
-    for marker in ("widget:", "{{HOMEPAGE_VAR_", "password", "token:", "key:"):
+    for marker in ("widget:", "{{HOMEPAGE_", "password", "token:", "key:"):
         assert marker not in span, "the generated fleet span carries a secret/widget marker: %r" % marker
 
 
@@ -177,6 +179,78 @@ def test_a_newline_in_a_tile_value_is_refused():
     bad_inv = {"all": {"children": {"core_switch": {"hosts": {"sw1": {"ansible_host": "192.0.2.2\nevil: true"}}}}}}
     with pytest.raises(SystemExit):
         gen.services_after("", {"enabled_modules": ["cisco_ios"]}, bad_inv)
+
+
+_SECRET_WORDS = ["password", "PASSWORD", "Password1", "passwords.example.test", "password-vault-1", "passwordstore",
+                 "token", "secret", "key", "credentials"]
+
+
+def _row(**fields):
+    """One generated tile row, as fleet_rows builds it, with the given fields replaced."""
+    row = {"group": "core_switch", "key": "cisco_ios", "host": "sw1", "addr": "192.0.2.2",
+           "name": "core_switch · sw1", "href": "https://192.0.2.2", "description": "cisco_ios", "icon": None}
+    row.update(fields)
+    return row
+
+
+def test_a_host_or_class_named_like_a_secret_word_does_not_stop_the_deploy():
+    """A host called `password-vault-1`, an address under `passwords.example.test`, a class key `passwordstore` —
+    and the same words in any case, in every tile field — pass the guard, and a fleet with such a host and address
+    renders a board that parses, with the tile under its real name. Guards a deploy-time refusal of a NAME: the
+    guard used to exit on the substring `password`, each of these passes the request boundary on purpose, and one
+    onboard request with such a name stopped every later deploy of the instance at the Homepage step."""
+    import yaml
+    for word in _SECRET_WORDS:
+        gen._assert_safe([_row(name="core_switch · %s" % word, href="https://%s:8443" % word, description=word,
+                               icon=word)])
+    inv = {"all": {"children": {"core_switch": {"hosts": {
+        "password-vault-1": {"ansible_host": "passwords.example.test"}}}}}}
+    text, _ = gen.services_after(_PREAMBLE, {"enabled_modules": ["cisco_ios"]}, inv)
+    fleet = next(g["Fleet"] for g in yaml.safe_load(text) if isinstance(g, dict) and "Fleet" in g)
+    assert fleet[0]["core_switch · password-vault-1"]["href"] == "https://passwords.example.test"
+
+
+def test_no_name_a_request_can_store_is_refused_by_the_tile_guard():
+    """EXHAUSTIVE: every string of one to three characters over the alphabet of a host name or address
+    (`paths.hostname`: letters, digits, `-`, `.`, `:`) and of a class key or group (`paths.component`: lower-case
+    letters, digits, `_`, `-`), in all four tile fields at once, passes the guard — and so does every such string
+    wrapped around each secret-like word. Guards the doctrine sentence of SECURITY.md C22 ("no NAME is refused at
+    deploy time … no value a request can store meets a deploy-time refusal") for this generator: it is a claim
+    about a set of strings, and this is the set."""
+    alphabet = sorted(set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.:_"))
+    assert all(paths.is_component(c) or c in "-._:" or c.isupper() for c in alphabet)
+    short = list(alphabet)
+    short += [a + b for a in alphabet for b in alphabet]
+    short += [a + b + c for a in alphabet for b in alphabet for c in alphabet]
+    wrapped = [a + word + b for word in _SECRET_WORDS for a in ("", "x", "-", ".") for b in ("", "9", "-", ".", ":")]
+    for value in short + wrapped:
+        gen._assert_safe([_row(name=value, href=value, description=value, icon=value)])      # raises SystemExit if refused
+
+
+@pytest.mark.parametrize("marker", ["{{HOMEPAGE_VAR_X}}", "{{HOMEPAGE_FILE_X}}", "x {{HOMEPAGE_VAR_GRAFANA_PASSWORD}} y"])
+@pytest.mark.parametrize("field", ["name", "href", "description", "icon"])
+def test_a_homepage_substitution_marker_is_refused_in_every_field(capsys, field, marker):
+    """A tile field holding `{{HOMEPAGE_VAR_…}}` OR `{{HOMEPAGE_FILE_…}}` stops the generator, and the message names
+    the field, the rule and the class — never the value, the host name or the address. Guards the unauthenticated
+    board painting a secret: Homepage replaces the first marker with an environment variable's value and the
+    second with the CONTENTS of the file a variable names, in the raw text, before any YAML parser — so no quoting
+    helps. The `FILE_` form used to pass. And guards a refusal that prints the value it refuses."""
+    with pytest.raises(SystemExit) as stop:
+        gen._assert_safe([_row(host="sneaky-host", addr="198.51.100.77", **{field: marker})])
+    said = str(stop.value)
+    assert "substitution marker" in said and ("tile's %s " % field) in said and "(class cisco_ios)" in said
+    assert "HOMEPAGE_VAR_X" not in said and "HOMEPAGE_FILE_X" not in said and "GRAFANA" not in said
+    assert "sneaky-host" not in said and "198.51.100.77" not in said
+
+
+def test_a_refusal_does_not_print_a_class_key_that_is_not_a_plain_name():
+    """When the tile's class key is itself not a plain name (a raw fleet line the generator read back), a refusal
+    names the field only. Guards the one value the message does print being used to carry text into a deploy log:
+    it is printed only when it is inside the closed charset of a class key."""
+    with pytest.raises(SystemExit) as stop:
+        gen._assert_safe([_row(key="x\ny: {{HOMEPAGE_VAR_Z}}", href="https://192.0.2.2\nevil: true")])
+    said = str(stop.value)
+    assert "line break" in said and "class" not in said and "HOMEPAGE_VAR_Z" not in said and "evil" not in said
 
 
 def test_a_malformed_address_renders_valid_yaml_not_a_broken_board():

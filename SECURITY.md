@@ -635,8 +635,13 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   new C10 *rider*, not a new trust boundary. The read-only Settings status panel (#135) stages nothing.
 - **The generated Homepage Fleet tiles are secret-free by construction (#130).** `scripts/gen-homepage.py` fills
   the `# >>> kontroll fleet` span with `href:`+`description:` tiles only (one per onboarded host, derived from the
-  inventory) — it never emits a `widget:`/`{{HOMEPAGE_VAR_*}}`/credential, and fails closed if a tile value carries
-  a secret marker or a newline (C11, the no-leak property the unauthenticated `:3000` board requires). The editor
+  inventory) — it never emits a `widget:`/`{{HOMEPAGE_VAR_*}}`/credential, and fails closed if a tile value holds a
+  line break or a Homepage substitution marker (`{{HOMEPAGE_VAR_…}}` or `{{HOMEPAGE_FILE_…}}`: Homepage replaces
+  those in the RAW text, before any YAML parser, with a variable's value or with the contents of the file it
+  names — so no quoting helps). It does not judge a name by what it spells: a host, an address or a class key
+  that merely contains a word such as `password` is a name (it used to stop the deploy). A refusal names the
+  field and the rule, never the value (C11, the no-leak property the unauthenticated `:3000` board requires;
+  `tests/unit/test_gen_homepage.py`). The editor
   treats that generated span as read-only (it refuses to edit its tiles), so neither the producer nor the consumer
   can introduce a secret into the board. The committed example span derives from `instance.example/` (TEST-NET),
   so the shipped bundle carries no real topology (F3 doctrine; the live span lives under the stripped `instance/`).
@@ -1422,8 +1427,12 @@ is serialized, and a generator that renders a name it merely read back — a gro
 targets, a group or a class key into the backup schedules, a unit's group and collection into the play preview,
 the instance keyring into the trust sidecar — writes it through `yamlscalar.word()`, bare when it is a plain
 word and double-quoted when it is not. No NAME is refused at deploy time — a generator quotes what it cannot
-write bare — and no shipped generated file changes by a byte. (`gen-requirements.py` does fail closed at deploy
-time, on a collection entry or a trust statement it could not render as itself: below.) The check ANSWERS every
+write bare — and no shipped generated file changes by a byte. (Two generators do fail closed at deploy time, on
+values no request can store: `gen-requirements.py` on a collection entry or a trust statement it could not render
+as itself — below — and `gen-homepage.py` on a tile field that holds a line break or a Homepage substitution
+marker, which Homepage replaces in the raw text before any parser runs. The second one also refused any name
+containing the word `password`, which a request CAN store; it no longer does, and an exhaustive test over the
+request charsets holds that.) The check ANSWERS every
 string: a word PyYAML resolves to a type and then cannot build — a date that does not exist, a hex number with no
 digits — is "not plain", never an exception, because the same check runs inside those generators and inside the
 validator that the discovery inbox applies to names a DHCP client chose. (A YAML 1.2 reader differs from PyYAML

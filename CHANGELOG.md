@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(homepage): a host or class whose name contains "password" no longer stops every deploy (C11, C22) (2026-10-12)
+
+`scripts/gen-homepage.py` refused to write the Homepage fleet tiles when any tile field contained the substring
+`password`, in any case — and a tile's fields are the host's name, its address and its class key. A host called
+`password-vault-1`, an address under `passwords.example.test` and a class key `passwordstore` are ordinary names;
+each passes the request boundary on purpose. So **one onboard request with such a name stopped every later
+`deploy-stack` of that instance at the Homepage step**, until the host was renamed — and an honest operator with
+a host really called that met the same. The test existed to keep a credential off the unauthenticated board, and
+a name is not one. The guard now refuses what no quoting can make safe, and nothing else: a tile field that
+holds a line break, and one that holds a Homepage substitution marker. That second rule is also **wider where
+it should be**: Homepage replaces `{{HOMEPAGE_FILE_…}}` with the contents of a file exactly as it replaces
+`{{HOMEPAGE_VAR_…}}` with a variable's value, in the raw text before any parser, and only the `VAR_` form was
+refused. A refusal names the field, the rule and the class, never the value (the old message printed the tile's
+name). No request can store either refused shape, and a test holds that over every short string of the two
+request charsets. Proofs: `tests/unit/test_gen_homepage.py`. SECURITY.md C11, C22. Design:
+`docs/reviews/2026-10-12-request-boundary-gaps/` (kept in the private repository).
+
 ### fix(service): a staged write lands whole, or not at all — the baked reconfigure path, app-store units, a refused `git add` (2026-10-12)
 
 Ways a change staged from the GUI or the API could fail to reach its proposal — none of them visible to a suite

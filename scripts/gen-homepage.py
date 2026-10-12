@@ -33,8 +33,9 @@ The committed PUBLIC reference (`instance.example/dashboards/homepage/services.y
 strips only `instance/`) is regenerated from `instance.example/` (TEST-NET `192.0.2.x` only) by `--example`, and
 `--check` validates it (the F3 example-driven gate). The BARE write (deploy-stack, live) splices into the private
 `instance/` overlay from the live inventory — a running node regenerates its REAL fleet tiles locally, stripped
-from the bundle, never committed to origin. Fail-closed: a tile value carrying a newline or a secret marker exits
-non-zero (never interpolated into the unauthenticated board).
+from the bundle, never committed to origin. Fail-closed on the two things no quoting can make safe: a tile value
+holding a line break, or a Homepage substitution marker (`{{HOMEPAGE_…}}`, which Homepage replaces in the raw text
+with a secret), exits non-zero. A NAME is never refused for what it spells.
 
 Usage:  python3 scripts/gen-homepage.py [--check | --example]   # bare = splice live instance/ overlay; --example
         # = (re)write the committed PUBLIC example span from instance.example/; --check = validate it (F3)
@@ -106,30 +107,51 @@ def fleet_rows(fleet, inv):
     return rows
 
 
+# Homepage replaces `{{HOMEPAGE_VAR_X}}` with the value of that environment variable and `{{HOMEPAGE_FILE_X}}` with
+# the CONTENTS of the file it names — in the RAW text of services.yaml, before any YAML parser runs. No escape
+# exists there, so a tile field holding either marker is the one thing about a NAME this generator has to refuse.
+_SUBSTITUTED = "{{HOMEPAGE_"
+
+
+def _of_class(row):
+    """Which tile a refusal is about: its class key, when that is a plain name (a closed charset — safe to print).
+    Never the host name or the address: those are the values under suspicion, and a refusal does not repeat one."""
+    key = row.get("key")
+    return " (class %s)" % key if paths.is_component(key) else ""
+
+
 def _assert_safe(rows):
-    """Fail-closed config-injection guard (the gen-observability allow-list analogue): no tile field may carry a
-    newline (would smuggle extra YAML lines into the unauthenticated board) or a secret/widget marker (C11). A
-    crafted inventory `ansible_host` can't break out of its tile."""
+    """Fail-closed guard for what no quoting can make safe on the unauthenticated board (C11): a tile field that is
+    not a string, that holds a line break (it would add lines to services.yaml), or that holds a Homepage
+    substitution marker (see `_SUBSTITUTED`: Homepage would paint a secret, or a file's contents, in its place).
+
+    NOTHING ELSE is refused. In particular not a value that merely CONTAINS a word such as `password`: a host
+    called `password-vault-1`, an address under `passwords.example.test` and a class key `passwordstore` are
+    names, every one of them passes the request boundary on purpose, and this guard used to stop every later
+    deploy of an instance that had one. A refusal names the field and the rule, never the value."""
     for r in rows:
         for field in ("name", "href", "description", "icon"):
             val = r.get(field)
             if val is None:
                 continue
             if not isinstance(val, str):
-                sys.exit("gen-homepage: tile %r field %s is not a string (%r)" % (r["name"], field, val))
+                sys.exit("gen-homepage: a fleet tile's %s is not a string%s — refused" % (field, _of_class(r)))
             if "\n" in val or "\r" in val:
-                sys.exit("gen-homepage: tile %r field %s contains a newline (injection?) — refused" % (r["name"], field))
-            if "{{HOMEPAGE_VAR_" in val or "password" in val.lower():
-                sys.exit("gen-homepage: tile %r field %s carries a secret marker — the fleet block is href+"
-                         "description only (C11)" % (r["name"], field))
+                sys.exit("gen-homepage: a fleet tile's %s holds a line break%s — refused: it would add lines to "
+                         "the unauthenticated board's file" % (field, _of_class(r)))
+            if _SUBSTITUTED in val:
+                sys.exit("gen-homepage: a fleet tile's %s holds a Homepage substitution marker%s — refused: "
+                         "Homepage replaces `{{HOMEPAGE_…}}` with a secret before it reads the file, and the fleet "
+                         "block is href + description only (C11). Look for the marker in the inventory and the "
+                         "module files" % (field, _of_class(r)))
 
 
 def _q(s):
     """A YAML double-quoted scalar (escapes `\\` and `"`). Emitting EVERY operator-data field quoted means a typo'd
     inventory `ansible_host` carrying a `: ` or ` #` (a YAML mapping/comment metacharacter) renders as a structurally
     valid scalar — a dead tile, never a corrupted services.yaml / blank :3000 board (adversarial review #55 finding
-    #3; mirrors gen-observability quoting its scrape targets). A newline/secret is still refused upstream by
-    `_assert_safe` — quoting is the structural guard, `_assert_safe` the semantic one."""
+    #3; mirrors gen-observability quoting its scrape targets). A line break and a Homepage substitution marker are
+    still refused upstream by `_assert_safe` — quoting is the structural guard; that one covers what no quote can."""
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
