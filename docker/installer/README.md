@@ -16,35 +16,31 @@ stack. Design-of-record: [docs/reviews/2026-06-29-compose-native-install/99-synt
 
 ## The flow (host floor = Docker + git)
 
-```
-sudo bash scripts/install-prereqs.sh                                  # Docker + compose + git
-sudo groupadd -g 1001 kontroll && sudo usermod -aG kontroll "$USER"   # the C10 canonical group (one-time)
-scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain>   # scaffold instance/ + mint the control age key
-$EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
-scripts/kontroll-installer.sh check          # deploy-stack --check --diff (the mandated dry-run)
-scripts/kontroll-installer.sh                # bootstrap → deploy-stack (the stack comes up)
-scripts/kontroll-installer.sh configure-semaphore
-# then wire remaining secrets in the GUI Keys/Secrets dialogs (https://<ip>:8443)
-```
+The sequence is written once: the quickstart at the top of
+[docs/install-from-scratch.md](../../docs/install-from-scratch.md) — the prerequisites, `fresh-init` with its
+`--trust-mode`, the three overlay files, `check`, the bare launcher, `configure-semaphore`. This file is the
+reference for what runs it: the verbs, the security model, and why the fragment is standalone. (The C10 canonical
+group, gid 1001, is provisioned by `install-prereqs.sh` and re-ensured by the launchers; there is no manual step.)
 
 The image is built locally on every `kontroll-installer.sh` run (`docker compose run --build` — near-noop when
 nothing changed, but a bundle update that changes the Dockerfile is always reflected). A fleet change does **not**
 require an installer rebuild — the device collections bake into the Semaphore runner image at deploy time; the
 installer carries only the fleet-independent control-plane base (sops/general/docker).
 
-> **Published path (C1):** the installer image is also published to private ghcr and pinned by `@sha256:` digest in
+> **Published path (C1):** the installer image is also published to ghcr (public packages) and pinned by `@sha256:` digest in
 > [`../images.lock.yml`](../images.lock.yml). A fresh node can install from a **launch kit** (`scripts/make-launch-kit.sh`)
 > with no clone and no build: [`scripts/kontroll`](../../scripts/kontroll.sh) (the published sibling of
-> `kontroll-installer.sh`) reads `${KONTROLL_INSTALLER_IMAGE}` from the kit's `images.env`, `docker compose … pull init`
-> + `run --no-build` against the digest, and forces `use_published_images=true` so the runner/vector pull by digest too.
+> `kontroll-installer.sh`) reads `${KONTROLL_INSTALLER_IMAGE}` from the kit's `images.env`, pulls each image by
+> digest (`docker pull`) and then runs the installer with a plain `run` — the image is present, so nothing is built —
+> and forces `use_published_images=true` so the runner/vector pull by digest too.
 > Same verbs, same playbooks — only build→pull differs. See [docker/README.md](../README.md) § Publishing images.
 
-> **`check` on a truly fresh node:** run `init` before `check`. `--check` skips local-canonical's git-init
-> *command*, so on a node with no `/srv/kontroll.git` yet the dry-run can't preview the very first install (a
-> downstream `git ls-remote` of the not-yet-created canonical fails). After the first `init`, `check` is the
-> `--check --diff` dry-run for every subsequent change. The onboard-gui age key is a host gesture the operator
-> provisions once (the G9 guard fails the deploy closed until it exists — `cp` the control key to
-> `${KONTROLL_STORAGE_ROOT}/onboard-gui/age.key`, owned `1001:1001 0600`).
+> **`check` on a brand-new node** is a partial preview, and says so: `--check` does not create the canonical or
+> the certificates, so the steps that depend on them are skipped. Everything else is previewed, and it still fails
+> on a real precondition you have not met — which is the point of running it before `init`. The onboard-gui age key
+> is such a precondition once you name that service: a host gesture the operator makes once (the G9 guard fails the
+> deploy closed until the key exists — the control key copied to `${KONTROLL_STORAGE_ROOT}/onboard-gui/age.key`,
+> owned `1001:1001`, mode `0600`; docs/SETUP.md §6 has the command).
 
 ## Security model (the floor that must hold — synthesis §5)
 

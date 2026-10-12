@@ -28,5 +28,5 @@ tar czf "$ARCHIVE" -C "$tmp" .
 
 echo "Wrote $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"
 echo "Bundle = the TOOL + instance.example/ stub; NO instance/ overlay, NO secrets, NO recipients,"
-echo "         NO inventory/IPs, NO review snapshots, NO git history. Fresh node: kontroll-init --fresh."
-echo "Install on a fresh node (after bootstrap.sh): scripts/install.sh $ARCHIVE"
+echo "         NO inventory/IPs, NO review snapshots, NO git history. A fresh node scaffolds its own overlay."
+echo "Install on a fresh node: docs/install-from-scratch.md, the quickstart's first step (\"a release bundle\")."

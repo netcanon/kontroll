@@ -22,8 +22,8 @@ services:
       dockerfile: docker/installer/Dockerfile
     # Local-build path (scripts/kontroll-installer.sh `run --build`) tags this `kontroll/installer:latest`. C1
     # PUBLISHED path (scripts/kontroll, the bundle-as-compose launcher): KONTROLL_INSTALLER_IMAGE is set to the
-    # ghcr `@sha256:` digest (from docker/images.lock.yml) and the launcher does `pull init` + `run --no-build`, so
-    # the SAME fragment pulls the published image by digest instead of building — no separate compose file needed.
+    # ghcr `@sha256:` digest (from docker/images.lock.yml) and the launcher pulls it (`docker pull`) and does a plain
+    # `run`, so the SAME fragment uses the published image by digest instead of building — no separate compose file.
     image: ${KONTROLL_INSTALLER_IMAGE:-kontroll/installer:latest}
     container_name: kontroll-installer
     network_mode: host                      # localhost:3001 (configure-semaphore) + the host docker daemon

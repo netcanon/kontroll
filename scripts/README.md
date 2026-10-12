@@ -34,8 +34,9 @@ from ghcr. `bash scripts/make-launch-kit.sh` (run AFTER a tagged publish + `gen-
 <tag>` + commit) assembles `dist/kontroll-launch-<ver>.tar.gz` — the same instance-stripped tree as `make-bundle.sh`
 **plus** `images.env` (the rendered `@sha256:` digest pins) and the `kontroll` launcher (`--allow-unpinned` builds an
 unrunnable skeleton for assembly testing). On a fresh node (host floor = **Docker + git only**), `./kontroll <verb>` is
-the published-path sibling of `kontroll-installer.sh`: it sources the digest pins, `docker compose … pull init` + `run
---no-build` (so the published image is used, never rebuilt), and forces `use_published_images=true` for init/check so
+the published-path sibling of `kontroll-installer.sh`: it sources the digest pins, pulls each image by digest
+(`docker pull`) and then does a plain `run` (the image is present, so the published one is used and nothing is
+rebuilt), and forces `use_published_images=true` for init/check so
 deploy-stack pulls the runner/vector by digest too. It lives at `scripts/kontroll.sh` (not `scripts/kontroll`) because
 `scripts/kontroll/` is the Python service package; `make-launch-kit.sh` copies it to the kit root as `kontroll`. See
 [docker/README.md](../docker/README.md) § Publishing images.
@@ -139,17 +140,17 @@ Declaratively configures the deployed Semaphore so it can run the kontroll
 playbooks. Get-or-create by name, so it's safe to re-run.
 
 Creates, in project **kontroll**:
-- **Key Store** — `github-deploy` (read-only repo clone), `ansible-ssh` (device
-  SSH), `none`.
-- **Repository** — `git@github.com:netcanon/kontroll.git` @ `main`, via the deploy key.
+- **Key Store** — `ansible-ssh` (device SSH), `none`, and `github-deploy` when
+  `~/.ssh/kontroll_deploy` exists (an offsite remote; skipped otherwise).
+- **Repository** — the local canonical, `file:///srv/kontroll.git` @ `main` (no remote needed).
 - **Environment** — runtime env (`ANSIBLE_HOST_KEY_CHECKING`, `ANSIBLE_ROLES_PATH=ansible/roles`,
   `ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections`) + the scoped
   **`SOPS_AGE_KEY`** injected as an encrypted secret (lets the runner decrypt the
   `network`/`proxmox` SOPS domains — and only those, see `.sops.yaml`).
 - **Inventory** — `instance/inventory` (directory; drop-in `onboarded-*.yml` host
   files are picked up additively), device SSH key attached.
-- **Templates** — `ping-fleet`, `backup-configs`.
-- **Schedule** — `nightly-backup` (daily 02:00, GUI-editable).
+- **Templates** — one per file under `config/semaphore/templates/`.
+- **Schedules** — generated per class into `config/semaphore/schedules.generated.yml` by `gen-backup.py`.
 
 Why env overrides (not the repo `ansible.cfg`): Semaphore runs from the repo
 **root**, but `ansible/ansible.cfg` uses paths relative to `ansible/`. The few
@@ -158,15 +159,14 @@ collections live at the image's baked system path.
 
 ### Run (on the control node)
 
-```bash
-cd ~/kontroll
-export SEMAPHORE_ADMIN_PASSWORD="$(SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt \
-  sops -d instance/secrets/semaphore.sops.yml | python3 -c 'import sys,yaml;print(yaml.safe_load(sys.stdin)["semaphore_admin_password"])')"
-python3 scripts/configure-semaphore.py
-```
+`scripts/kontroll-installer.sh configure-semaphore` (compose-native), or `python3 scripts/configure-semaphore.py` on
+a host with the legacy toolchain — after the deploy, because it talks to the running Semaphore. The admin password
+is read from the `semaphore` SOPS domain with the control node's age key; no export is needed
+(`SEMAPHORE_ADMIN_PASSWORD` in the environment overrides it).
 
-Reads key material from `~/.ssh/kontroll_deploy`, `~/.ssh/ansible_ed25519`, and
-`~/.config/semaphore/age.key` on the control node.
+Reads key material from `~/.ssh/ansible_ed25519` and, when they exist, `~/.ssh/kontroll_deploy` and
+`~/.config/semaphore/age.key` (the scoped key is minted after the deploy, in the GUI's Keys dialog — run this
+again then).
 
 ## `galaxy.py` — capability-aware onboarding search
 

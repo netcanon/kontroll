@@ -78,7 +78,8 @@ C1 publishes the **installer** image too, so a fresh node installs from publishe
 - The installer joins the publish matrix; `docker/services/installer.yaml`'s ref becomes
   `${KONTROLL_INSTALLER_IMAGE:-kontroll/installer:latest}`. The same fragment serves both paths —
   [`scripts/kontroll-installer.sh`](../scripts/kontroll-installer.sh) does `run --build` (local build);
-  [`scripts/kontroll.sh`](../scripts/kontroll.sh) does `pull init` + `run --no-build` (published digest).
+  [`scripts/kontroll.sh`](../scripts/kontroll.sh) pulls each image by its published digest (`docker pull`) and
+  then does a plain `run` — the image is present, so nothing is built.
 - **Build a launch kit:** after a publish + `gen-image-digests.py --refresh <tag>` + commit,
   [`scripts/make-launch-kit.sh`](../scripts/make-launch-kit.sh) assembles `kontroll-launch-<ver>.tar.gz` — the
   instance-stripped tree + `images.env` (the digest pins) + the `kontroll` launcher (no `instance/`, no secrets).

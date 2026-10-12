@@ -200,7 +200,7 @@ kontroll/
 ├─ CHANGELOG.md                 ← behaviour-affecting changes, [Unreleased] on top
 ├─ .sops.yaml                   ← SOPS creation rules (which keys encrypt what)
 ├─ .yamllint / .ansible-lint    ← L1 lint configs
-├─ bootstrap.sh                 ← Stage 0: install ansible+git on a fresh node
+├─ bootstrap.sh                 ← Stage 0 shim: scripts/install-prereqs.sh (Docker + git)
 ├─ modules/                     ← device-class registry (the fleet catalog)
 │  ├─ _core.yml                 ← always-installed collections
 │  ├─ <key>/module.yml          ← one self-describing module per device class

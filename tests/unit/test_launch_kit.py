@@ -2,9 +2,10 @@
 
 WHY — C1 lets a fresh control node install from PUBLISHED, digest-pinned images with NO git clone and NO `docker build`:
 `scripts/make-launch-kit.sh` assembles the tiny launch kit (instance-stripped tree + digest pins + the launcher), and
-`scripts/kontroll.sh` (shipped as the kit's `kontroll`) pulls the installer by digest and runs it `--no-build`. Three
+`scripts/kontroll.sh` (shipped as the kit's `kontroll`) pulls the installer by digest and then runs it with a plain
+`run` (the image is present, so nothing is built). Three
 properties must hold or the distribution either leaks the lab's topology or silently rebuilds: (1) the launcher uses the
-PUBLISHED seam (pull + --no-build, reads images.env, forces use_published_images for init/check); (2) the builder STRIPS
+PUBLISHED seam (a host `docker pull`, then `run`; reads images.env, forces use_published_images for init/check); (2) the builder STRIPS
 the private instance/ overlay + review snapshots (the make-bundle.sh discipline, image-world #72 §7.2); (3) a real
 assembly produces the launcher + images.env + the public catalog and ZERO instance/ leak. Each test names its failure.
 """

@@ -74,11 +74,14 @@ def test_launchers_source_helper_and_ensure_or_warn(path, name):
     assert "KONTROLL_OPERATOR_USER" in src, "%s must pass the invoking operator's identity to the gesture" % name
 
 
-@pytest.mark.parametrize("path,name", [(PREREQS, "install-prereqs.sh"), (INSTALL, "install.sh")])
+@pytest.mark.parametrize("path,name", [(PREREQS, "install-prereqs.sh"), (INSTALL, "install.sh"),
+                                       (os.path.join(ROOT, "docker", "installer", "README.md"),
+                                        "the installer README")])
 def test_manual_groupadd_step_is_no_longer_printed_as_a_required_action(path, name):
     """The old PRINTED 'sudo groupadd -g 1001 kontroll && sudo usermod …' manual step must be GONE from the install
-    prose — it is now automated. Guards a doc-rot regression where the step is re-demoted to manual (the original
-    F-CANON footgun: an instruction the operator can skip → first promote fails)."""
+    prose — the two scripts' closing messages and the installer README, which kept it in a copy of the sequence
+    after the scripts had lost it — because it is now automated. Guards a doc-rot regression where the step is
+    re-demoted to manual (the original F-CANON footgun: an instruction the operator can skip → first promote fails)."""
     src = _read(path)
     assert not re.search(r"groupadd\s+-g\s+1001\s+kontroll\s*&&\s*sudo\s+usermod", src), \
         "%s still prints the manual groupadd+usermod step — it is automated now (remove the printed instruction)" % name

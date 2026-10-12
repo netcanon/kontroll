@@ -26,15 +26,8 @@ clone, declaring your fleet, installing the right collections, the age key,
 secrets, and proving connectivity — is **automated and documented in
 [SETUP.md](SETUP.md)**.
 
-Do **not** follow per-package steps here (they drift). The flow is:
-
-```bash
-sudo bash scripts/install-prereqs.sh             # Stage 0: ansible, docker, sops/age (./bootstrap.sh shims it)
-# ... get the code: clone (SETUP.md §2) or a release bundle ...
-python3 scripts/kontroll-init.py --fresh --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ overlay (your keys only)
-$EDITOR instance/fleet.yml                        # declare your hardware (+ instance/inventory/hosts.yml, instance/instance.yml)
-cd ansible && ansible-playbook playbooks/bootstrap.yml   # Stage 1: everything else
-```
+Do **not** follow per-package steps here (they drift). Once the VM exists, the commands are the quickstart at the
+top of [install-from-scratch.md](install-from-scratch.md) — the one written install sequence.
 
 ## 7. Publish behind NPM (when ready)
 

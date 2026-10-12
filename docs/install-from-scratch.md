@@ -3,8 +3,8 @@
 > **Goal (operator directive):** every dependency + every step below is either **(A) AUTOMATED** by a
 > script/playbook, or **(B) a SECURITY-BOUNDARY step** completable through **guided / GUI onboarding** (secret
 > minting, key generation) — *never* by an agent, *never* committed in plaintext. Joe should reach a working
-> instance by running a bootstrap + completing a guided onboarding, with **no hand-editing and no deep ops
-> knowledge**. **Live-verified end-to-end 2026-06-15:** a blind install on a clean Debian 13 VM from the release
+> instance by running a bootstrap + completing a guided onboarding, with **no hand-written commands beyond editing
+> three overlay files, and no deep ops knowledge**. **Live-verified end-to-end 2026-06-15:** a blind install on a clean Debian 13 VM from the release
 > bundle stands up the full core+GUI stack following only this doc (14 fresh-node blockers were found + fixed in
 > the process — see CHANGELOG). The **[GAP]** tags mark steps that could be further automated/GUI'd.
 
@@ -12,9 +12,18 @@
 > The install glue now runs in an **ephemeral installer container**, so the host needs only Docker + git — no host
 > ansible-core / collections / sops / age (the version skew of which was this doc's fix(install) bug class). The
 > rest of this page (§0–§8) is the **legacy host-ansible** path, still valid after `install-prereqs.sh
-> --with-host-ansible`. The compose-native flow:
+> --with-host-ansible`. **The block below is the one written install sequence:** every script's closing message
+> and every other document points here instead of repeating it. From a launch kit, write `./kontroll` wherever it
+> writes `scripts/kontroll-installer.sh`.
 > ```
+> # Get the tree and stand in it — one of:
+> #   a clone:           git clone <repo> kontroll && cd kontroll
+> #   a launch kit:      tar xzf kontroll-launch-<version>.tar.gz && cd kontroll-launch-<version>
+> #   a release bundle:  mkdir src && tar xzf kontroll-<version>.tar.gz -C src     # the scripts are inside the bundle
+> #                      sudo bash src/scripts/install-prereqs.sh                  # the next line needs git
+> #                      bash src/scripts/install.sh kontroll-<version>.tar.gz && cd kontroll   # a local git tree, no remote
 > sudo bash scripts/install-prereqs.sh                                  # Docker + compose + git + the C10 gid-1001 group
+> #   If it says it added you to the docker group, log out and back in before the next line.
 > scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ + mint control key (§1–§2)
 > $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
 > scripts/kontroll-installer.sh check          # deploy-stack --check --diff (the mandated dry-run)
@@ -24,14 +33,26 @@
 > #   (e.g. the onboard-gui age key) — which is the point of running it before the apply.
 > scripts/kontroll-installer.sh                # bootstrap → deploy-stack: local canonical + the stack (§3–§5)
 > scripts/kontroll-installer.sh configure-semaphore                      # wire Semaphore (§6)
-> # then the guided GUI Keys/Secrets onboarding (§2 [B], §8) at https://<ip>:8443
 > ```
+> That is Semaphore and Homepage, with the local canonical behind them. **The onboarding GUI is a separate,
+> deliberate step — §7:** its age key is yours to provision, and §7's deploy also arms the staging API. Until
+> then nothing listens on `:8443`.
+>
+> **Running a play later.** On this path a control-plane play — `ansible-playbook playbooks/<x>.yml <args>` for
+> `bootstrap.yml`, `local-canonical.yml` or `reload-observability.yml` in this repository's documents — is run as
+> `scripts/kontroll-installer.sh playbooks/<x>.yml <args>` (the path is relative to `ansible/`); a
+> `deploy-stack.yml <args>` is `scripts/kontroll-installer.sh init <args>`; and
+> `python3 scripts/configure-semaphore.py` is `scripts/kontroll-installer.sh configure-semaphore`. A play against
+> fleet devices (`ping.yml`, `backup-configs.yml`, …) is run as its Semaphore task: the device collections are in
+> the runner image, not in the installer's.
+>
 > Full reference + the security model: [docker/installer/README.md](../docker/installer/README.md). Each §N below
 > maps to a `kontroll-installer.sh` verb, so the security boundaries (the **[B]** GUI-onboarding steps) are unchanged.
 
 ## 0. System dependencies — **[A]** `scripts/install-prereqs.sh` (idempotent; `./bootstrap.sh` shims it)
 
-`sudo bash scripts/install-prereqs.sh` installs all of the below in one idempotent pass. It is
+`sudo bash scripts/install-prereqs.sh` installs the host floor in one idempotent pass — Docker, compose and git;
+`--with-host-ansible` adds the rest of the table (the legacy host toolchain). It is
 **nixflavor-agnostic**: it auto-detects your package manager (apt/dnf/zypper/pacman) and installs the host
 floor accordingly — on apt it uses Docker's deb822 repo (matching the image + deploy-stack), elsewhere it uses
 Docker's official cross-distro installer (`get.docker.com`). Everything beyond the floor runs in the installer
@@ -42,8 +63,8 @@ container, so only the host *floor* is distro-specific. A fresh control node nee
 | `git`, `curl`, `openssl` | clone, health checks, token/cert generation | base |
 | `docker-ce` + `docker-compose-plugin` | the whole stack runs in compose | from Docker's apt repo |
 | `python3`, `python3-pip`, `python3-venv` | the service layer + generators + galaxy CLI | 3.11–3.14 supported |
-| `ansible-core` **(>=2.16 — via pip, NOT apt)** + collections `community.sops`, `community.docker`, `community.general` | the playbooks (deploy-stack, local-canonical, bootstrap) | `install-prereqs.sh` **pip**-installs ansible-core; Debian's apt `ansible` is core **2.14** — too old for `deb822_repository` (needs >=2.15) AND its bundled dist-packages collections shadow the lockfile pins. Collections via `ansible-galaxy` (generated `requirements`). |
-| **`sops`** + **`age`** | secrets at rest (SOPS+age) | `install-prereqs.sh` installs both — `age` via apt, `sops` from its pinned GitHub release |
+| `ansible-core` **(>=2.16)** + collections `community.sops`, `community.docker`, `community.general` | the playbooks (deploy-stack, local-canonical, bootstrap) | **NOT on the host by default** — these live in the installer image, which is the whole point: no host toolchain means no version skew, and the PR #87 fresh-Debian-12 bug class is gone structurally. `install-prereqs.sh --with-host-ansible` (legacy rollback) installs them on the host, pip-installing ansible-core because Debian's apt `ansible` is core **2.14** — too old for `deb822_repository` (needs >=2.15) AND its bundled dist-packages collections shadow the lockfile pins. |
+| **`sops`** + **`age`** | secrets at rest (SOPS+age) | **NOT on the host by default** — also in the installer image. `--with-host-ansible` installs them (`age` via apt, `sops` from its pinned GitHub release). Run sops through the installer (`scripts/kontroll-installer.sh shell`) rather than expecting a host binary. |
 | **`acl`** | ansible `become_user`'s unprivileged-become path needs `setfacl` | **HIT LIVE** — without it, `become_user: 1001` fails `chmod: invalid mode 'A+user:...'`. deploy-stack now AVOIDS `become_user` (root + `safe.directory`), so `acl` is optional — but install it to be safe. |
 | `yamllint`, `ansible-lint` | `tests/validate` (the lint gate) | dev only; ansible-lint needs POSIX (won't run on Windows — no `grp`) |
 | `gitleaks` | secret-scan (validate + CI) | dev/CI only |
@@ -51,9 +72,8 @@ container, so only the host *floor* is distro-specific. A fresh control node nee
 
 ## 1. Get the code + scaffold YOUR overlay — **[A]**
 
-Clone (`git clone <repo> ~/kontroll`) or install from a release bundle
-(`bash scripts/install.sh kontroll-<version>.tar.gz`), then `cd ~/kontroll` and scaffold a
-private `instance/` overlay with your own keys — never the tool author's:
+Get the tree as the quickstart's first lines do — a clone, a launch kit or a release bundle — stand in it,
+and scaffold a private `instance/` overlay with your own keys, never the tool author's:
 
 > **Choosing the two values:** `--mgmt-ip` is the **static** IP of this node's management interface — the address
 > you'll browse the GUI on (`https://<ip>:8443`), so assign it statically first. `--domain` is **cosmetic** under
@@ -89,8 +109,9 @@ Then declare your hardware in the overlay **under `instance/`** (not `config/` o
 
 > **During install you do almost nothing here — `kontroll-init --fresh` (§1) already minted your control key and
 > bootstrap logins.** The break-glass key, the scoped-Semaphore key, and all device/service secrets are entered
-> **later, through the GUI** (§8). The ONE thing to do now is generate the fleet SSH key (the bullet below). The
-> rest of this section explains *why* the boundary exists — skim it and continue to §3.
+> **later, through the GUI** (§8). On the compose-native path there is nothing to do now — `init` generates the
+> fleet SSH key as well; on the legacy host path generate it (the bullet below). The rest of this section explains
+> *why* the boundary exists — skim it and continue to §3.
 
 These are the steps an agent must NEVER do and that must NOT be committed in plaintext. They are the prime
 candidates for a **guided key-gen + secret-entry wizard** (generate-on-box, encrypt-on-box, show-once for the
@@ -113,9 +134,9 @@ offline break-glass backup):
   (Grafana admin pw, GUI pw, **`kontroll_api_token`** for C10), `semaphore` (DB/admin pw, access-key
   encryption), `snmp_observability` (the SNMPv3 v3 read user). A new domain gets `base_recipients`
   (control+break-glass) via the `.sops.yaml` catch-all.
-- **SSH keys** (the fleet/device SSH key, the GitHub deploy key) — generated on the box. **Generate the fleet key
-  now** — it is the one prerequisite `kontroll-init` does *not* create, and `configure-semaphore` (§6) **hard-fails
-  without it**:
+- **SSH keys** (the fleet/device SSH key, the GitHub deploy key) — generated on the box. On the compose-native path
+  `init` generates the fleet key for you (`bootstrap.yml`); on the legacy host path **generate it now** —
+  `configure-semaphore` (§6) reads it, and stops without it:
   ```bash
   ssh-keygen -t ed25519 -f ~/.ssh/ansible_ed25519 -N "" -C "kontroll-fleet"
   ```
@@ -210,7 +231,7 @@ for the full recipe; the itinerary:
    renders it from there. *(To **rotate** it later, use the GUI "Secrets" form — the `dashboards` domain's
    `kontroll_api_token` field, blank submit re-`generate: hex32`; the value never crosses argv or a temp file.
    Avoid `sops --set` / `openssl rand` in a shell — SECURITY.md C11.)*
-2. **[A]** The recursive canonical write-grant (§3 [GAP]) + `acl` (§0, if `become_user` is ever reintroduced).
+2. **[A]** The recursive canonical write-grant (§3, resolved) + `acl` (§0, if `become_user` is ever reintroduced).
 3. **Provision the onboard-gui age key** — its trust grant (the GUI encrypts onboarded device creds with it; the
    deploy never does this for you, the security boundary):
    ```bash

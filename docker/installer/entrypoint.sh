@@ -2,12 +2,14 @@
 # entrypoint.sh — the kontroll installer's THIN verb dispatcher. NO provisioning logic lives here: every verb
 # shells the EXISTING playbook / script UNCHANGED (synthesis §4.2 — docs/reviews/2026-06-29-compose-native-install/).
 # The image + this dispatcher are the entire Phase-1 install glue; the provisioning IS
-# ansible/playbooks/{bootstrap,local-canonical,deploy-stack}.yml + scripts/. Run via docker/services/installer.yaml:
+# ansible/playbooks/{bootstrap,local-canonical,deploy-stack}.yml + scripts/. Run THROUGH A LAUNCHER —
+# scripts/kontroll-installer.sh, or ./kontroll in a launch kit — which passes the repository path and the
+# operator's identity that docker/services/installer.yaml requires. These are the verbs it forwards:
 #
-#   docker compose run --rm init fresh-init --mgmt-ip <ip> --domain <domain>   # scaffold instance/ + mint control key
-#   docker compose run --rm init check                                         # the mandated --check --diff dry-run
-#   docker compose run --rm init                                               # bootstrap → deploy-stack (verb 'init')
-#   docker compose run --rm init configure-semaphore                           # wire a running Semaphore (:3001)
+#   fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ + mint control key
+#   check                                                                # the mandated --check --diff dry-run
+#   init   (the default when no verb is given)                           # bootstrap → deploy-stack
+#   configure-semaphore                                                  # wire a running Semaphore (:3001)
 #
 set -euo pipefail
 # The repo is bound at the SAME path as on the host (installer.yaml working_dir + the repo bind), so the

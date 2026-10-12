@@ -11,6 +11,40 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs: one written install sequence — every other copy points at it, and every scaffold command names its trust mode (2026-10-12)
+
+The first-install sequence stood in many places — the quickstart, the README, `docs/SETUP.md`, the VM recipe, the
+installer's README, the scripts' closing messages and their usage headers — and the copies had drifted. After the
+scaffold gained its required `--trust-mode` flag, every copy but the quickstart showed a command that is
+**refused at step one** (on the permissive edition the same line is not refused: it silently arms the box). The
+quickstart at the top of `docs/install-from-scratch.md` is now the one written sequence. It says how the tree
+gets onto the node (a clone, a launch kit, or a release bundle — whose scripts are inside it), that a first run
+of `install-prereqs.sh` may need a re-login, and it ends where the default install ends: Semaphore and Homepage.
+The onboarding GUI stays a separate, deliberate step in §7 — its key grant and the arming deploy are not part of
+the default block. Everything else points there instead of repeating it: the README, `docs/SETUP.md` §1, §2, §4
+and §6, `docs/bootstrap-control-vm.md`, `docker/installer/README.md`. **What a script prints changes:**
+`install-prereqs.sh`, `install.sh`, `make-launch-kit.sh`, `make-bundle-airgap.sh`, `make-bundle.sh` and
+`kontroll-init` each end with ONE next command and that pointer, and every usage header and comment that shows a
+scaffold command carries `--trust-mode separated`. The quickstart also states, once, how a control-plane play is
+run later on the compose-native path (`scripts/kontroll-installer.sh playbooks/<x>.yml <args>`; a deploy is
+`init <args>`) — and that a play against fleet devices is run as its Semaphore task, because the device
+collections are in the runner image and not in the installer's.
+
+Corrected beside it, each re-found in the code: the host floor is Docker and git — Ansible, sops and age are in
+the installer image, as the dependency table now says, and `./bootstrap.sh` is described as the shim it is;
+`init` generates the fleet SSH key on the compose-native path; `check` on a brand-new node is a partial preview
+to run BEFORE `init`, not after it; the launch-kit launcher pulls each image by digest and then does a plain
+`run` (there is no `--no-build`); the installer image is published as a public package;
+`configure-semaphore` registers the local canonical (`file:///srv/kontroll.git`), one template per file under
+`config/semaphore/templates/` and the generated schedules, and needs no exported password; the manual
+`groupadd` step is gone from the installer README; and `install.sh` no longer says an update is "install a newer
+bundle the same way" — it refuses an existing directory. **Not changed:** the sentences that describe an
+in-place upgrade (`scripts/update.sh`, `scripts/update-from-bundle.sh`, their section of `scripts/README.md`,
+`docs/local-source-of-truth.md`, `docs/public-split.md`) — whether that path is repaired or replaced is an open
+decision, and they wait for it. Proofs: `tests/unit/test_install_commands.py` (no scaffold command without a
+trust mode anywhere in the tracked tree, a backslash-continued command read as one line; a closing message names
+the document and does not restate the sequence), `tests/unit/test_canonical_group_provisioning.py`.
+
 ### fix(homepage): a host or class whose name contains "password" no longer stops every deploy (C11, C22) (2026-10-12)
 
 `scripts/gen-homepage.py` refused to write the Homepage fleet tiles when any tile field contained the substring
