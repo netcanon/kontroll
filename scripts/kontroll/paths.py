@@ -314,6 +314,13 @@ def collection_fqcn(value, what="collection"):
     return value
 
 
+def is_collection_fqcn(value):
+    """True when `value` would pass collection_fqcn(). For a VALIDATOR of data the tool reads back — a unit
+    descriptor's `unit.collection` — which answers with a message of its own: a descriptor is not a request field,
+    and a request-boundary refusal for it would name a field nobody sent."""
+    return isinstance(value, str) and _FQCN_RE.fullmatch(value) is not None
+
+
 def hostname(value, what="host"):
     """A device address or inventory host name: an IPv4/IPv6 literal WITHOUT a zone id, or an RFC-1123 hostname
     (labels of letters, digits and hyphens joined by single dots, at most 253 chars). Content rather than a path, but

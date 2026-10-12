@@ -68,6 +68,72 @@ def test_rendered_descriptor_passes_the_generator_schema():
     assert schema.validate_unit(doc, p["key"], EN) == []
 
 
+@pytest.mark.parametrize("name", ["swarm", "a", "0", "_", "a" * 47, "a" * 48, "a" * 64, "_" * 64, "x__y",
+                                  "docker_swarm_v2"])
+@pytest.mark.parametrize("collection", ["community.docker", "a.b", "a_.b_", "a" * 64 + "." + "b" * 64])
+def test_everything_create_accepts_the_schema_accepts(collection, name):
+    """For every collection and unit name the create planner takes, the descriptor it renders has no error from
+    the schema — and a pair whose derived key is longer than one path component is answered by the planner
+    (`invalid`, naming the key) before a descriptor or a path exists. The rows stand on both sides of the bound
+    (`community.docker` with forty-seven letters is a key of sixty-four, with forty-eight one of sixty-five) and
+    include names whose underscores the key collapses, so what is expected is the planner's own answer held
+    against the rule, never a sum of the inputs' lengths.
+
+    Guards the two rules drifting apart again (the route kept a pattern of its own: a create the schema then
+    refuses is answered with a `descriptor` error, which tells the operator nothing about the field they typed),
+    and the planner RAISING for a long pair: the path builder refused the derived key as a request field named
+    `unit key`, which no request carries."""
+    p = _plan(collection=collection, name=name)
+    key = actuation._derive_key(collection, name)
+    if p["error"] is None:
+        doc = yaml.safe_load(p["unit_content"])
+        assert doc["unit"]["collection"] == collection and doc["unit"]["name"] == name
+        assert schema.validate_unit(doc, p["key"], EN) == []
+        assert p["key"] == key and paths.is_component(key)
+    else:
+        assert p["error"] == "invalid" and set(p["errors"]) == {"key"}, p
+        assert len(key) > 64 and not paths.is_component(key)
+    assert (p["error"] is None) == (len(key) <= 64)
+
+
+@pytest.mark.parametrize("name", ["a" * 65, "Swarm", "docker-swarm", "docker.swarm", "docker swarm", "swarm\n",
+                                  "", None, 5])
+def test_create_refuses_a_unit_name_outside_the_schemas_rule(name):
+    """A unit name of sixty-five characters, with a capital, a hyphen, a dot, a space or a trailing line break,
+    empty, absent or a number is refused at the create route's own input check, as the `name` field, with a
+    message that does not carry it.
+
+    Guards the length bound arriving as a `descriptor` error after the plan was built, and a dot — the one
+    character that makes the rendered reference address something else — passing the route."""
+    p = _plan(name=name)
+    assert p["error"] == "invalid" and set(p["errors"]) == {"name"}
+    assert not isinstance(name, str) or not name or name not in p["errors"]["name"]
+
+
+def test_the_create_route_reads_the_schemas_own_pattern(monkeypatch):
+    """The create route's `name` check consults `_actuation_schema.UNIT_NAME_RE` itself: with the schema's pattern
+    swapped for one that takes a single word, the route refuses every other name on `name` and takes that word.
+
+    Guards a second pattern in the route, under any name — a copy that is equal today and drifts tomorrow, or a
+    looser one, which answers a create with a `descriptor` error the operator cannot act on. (That no attribute
+    is called `_NAME_RE` would hold that one name and nothing else.)"""
+    import re
+    monkeypatch.setattr(schema, "UNIT_NAME_RE", re.compile(r"only_this_word\Z"))
+    assert set(_plan(name="swarm")["errors"]) == {"name"}
+    assert _plan(name="only_this_word")["error"] is None
+
+
+def test_a_key_too_long_is_answered_before_the_class_is_looked_up():
+    """A pair whose derived key is longer than one path component is `invalid` on the key whatever the class turns
+    out to be — on a guarded group, not enabled, or declared by no module.
+
+    Guards the order of the planner's answers: what was sent is judged before the fleet is read, so one request
+    does not get a 403, a 409 or a 422 depending on the instance it meets."""
+    for module, enabled in ((MODULE_HIGH, EN), (MODULE_LOW, []), ({}, EN)):
+        p = build_create_unit_plan(dict(GOOD, name="a" * 60), module=module, enabled_modules=enabled)
+        assert p["error"] == "invalid" and set(p["errors"]) == {"key"}, p
+
+
 def test_tier_cap_refuses_high_blast_class():
     """A collection whose device-class targets core_switch/edge_firewall is REFUSED at create (tier_cap) — an
     unsigned public-Galaxy install may not reach the highest-blast tier (never-brick + blast-radius). Guards a

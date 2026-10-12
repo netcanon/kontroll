@@ -11,6 +11,45 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(actuation): a unit descriptor's collection and name are checked where the descriptor is validated (C22) (2026-10-12)
+
+`validate_unit` asked of `unit.collection` and `unit.name` only that they be there. The create route checked its
+own two inputs, so nothing a request could author was affected — but a hand-written `unit.yml` passes no route, and
+the schema called valid a collection with a line break in it, a name that was a mapping. Every reader of a
+descriptor (the would-run preview, the registry's list behind the Automations section, and the generated template
+and role wrapper that are not emitted yet) was left to defend itself against fields the validator had passed.
+
+- **`unit.collection` is a collection name** (`namespace.name`, lowercase — `paths.is_collection_fqcn`, the boolean
+  twin of the request validator) **and `unit.name` is one word** (lowercase letters, digits and `_`, at most
+  sixty-four characters — `_actuation_schema.UNIT_NAME_RE`), for the kinds that install something. A `standalone`
+  unit needs neither and is not asked — also not when it carries one anyway. The messages name the field and the
+  rule, never the value.
+- **One rule, two consumers.** The create route's `name` check uses the schema's pattern instead of one of its own,
+  so what the route accepts as a name is what the schema accepts. That brings **one new refusal at the route: a
+  unit name longer than sixty-four characters** is answered 422 on `name`.
+- **A collection and a name that are each valid but too long together** made the create planner *raise*, once the
+  collection's class had been found, enabled and off the guarded groups: the derived key is a directory name, and
+  the path builder refused it as a request field called `unit key`, which no request carries — a 422 with the code
+  `invalid_unit_key` and a `request-refuse` row in the audit log. The planner now answers it itself — `invalid`, on
+  the key, before the class is looked up and before a path is built: a 422 without that code and, like the
+  planner's other field errors on a dry run, without an audit row; and it is the answer whatever the fleet holds,
+  where a class that was not enabled or sat on a guarded group used to be named first. (Measured on the tree
+  before this change: `community.docker` with a sixty-four-letter name raised.)
+- **The example in `actuation/README.md` was not a valid unit**: it aimed an `adaptive` signature at the core
+  switch, which the Tier-cap refuses and always has. The example is now the unit the create flow itself writes — a
+  class on a group the cap does not guard, `adaptive` — and a test runs the page's example through the validator.
+
+No shipped unit exists, and the fixtures the suite builds all pass. A hand-written descriptor is refused by
+`gen-actuation.py --check` (and so by `tests/validate`) where it validated before when its name carries a hyphen,
+a capital, a dot or a space, is longer than sixty-four characters or is not a string (an unquoted `123` or `yes`),
+or when its collection is not exactly `namespace.name` in Galaxy's lowercase form. Two shapes Ansible itself can
+address are among them and cannot be a unit: a collection playbook whose file name has a capital, and one in a
+subdirectory of the collection's `playbooks/`. The validator runs there and as the create route's last check, and
+nowhere else: bootstrap, deploy and promote do not read these two fields, and the API and the GUI load a
+descriptor without it, as they always did — the preview keeps quoting what it reads (C22 lists the limit). Still
+open and listed in C22: a unit may target `all`, `ungrouped`, `localhost` or no group at all — that change to the
+Tier-cap waits for a decision.
+
 ### docs: name the condition, not the default — the privileged tier's sentences say `api_privileged`, and one about the canonical's mount is corrected (2026-10-12)
 
 No behaviour changes: documents, comments and docstrings.

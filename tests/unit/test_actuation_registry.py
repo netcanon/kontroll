@@ -155,6 +155,61 @@ def test_validate_unit_rejects_malformed(mutate, needle):
     assert any(needle in e for e in errs), errs
 
 
+LINE_SEPARATOR = chr(0x2028)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("collection", "evil.one\n- hosts: all"), ("collection", "cisco.ios\n"), ("collection", "a.b.c"),
+    ("collection", "Cisco.IOS"), ("collection", "cisco"), ("collection", ["cisco.ios"]), ("collection", None),
+    ("collection", ""), ("collection", "cisco.ios" + LINE_SEPARATOR),
+    ("name", "x\n  tasks: []"), ("name", "ios_facts\n"), ("name", "ios facts"), ("name", "ios-facts"),
+    ("name", "Ios_Facts"), ("name", "a" * 65), ("name", {"a": 1}), ("name", None), ("name", ""), ("name", 7),
+    ("name", "ios.facts"), ("name", True), ("collection", "1st.coll"),
+])
+def test_a_unit_names_a_collection_and_a_unit_or_is_refused(field, value):
+    """An installable unit whose `unit.collection` is not `namespace.name` in lowercase, or whose `unit.name` is not
+    one word of lowercase letters, digits and `_` of at most sixty-four characters — a line break, a space, a
+    hyphen, a dot, a capital, a third dotted part, a list, a mapping, a number, a word YAML read as a boolean,
+    nothing at all — is refused by the
+    descriptor's validator, with a message that names the field and never the value.
+
+    Guards a descriptor the schema calls valid and every renderer must then defend against: the two names were
+    checked only for being truthy, so a hand-written unit.yml (which passes no route) carried anything."""
+    doc = copy.deepcopy(GOOD)
+    if value is None:
+        del doc["unit"][field]
+    else:
+        doc["unit"][field] = value
+    errs = genact.validate_unit(doc, "good", ["cisco_ios"])
+    assert [e for e in errs if e.startswith("unit.%s must be " % field)], errs
+    assert len(errs) == 1, errs                              # the OTHER field of the same descriptor is not blamed
+    if isinstance(value, str) and value.strip():
+        assert not any(value in e or repr(value) in e for e in errs), errs
+
+
+@pytest.mark.parametrize("name", ["ios_facts", "a", "0", "_", "a" * 64, "v2_backup"])
+def test_a_unit_name_inside_the_rule_is_accepted(name):
+    """A unit name that is one word of the rule — one character, a leading digit or underscore, sixty-four
+    characters — validates clean. Guards the new rule refusing a name the create route has always produced."""
+    doc = copy.deepcopy(GOOD)
+    doc["unit"]["name"] = name
+    assert genact.validate_unit(doc, "good", ["cisco_ios"]) == []
+
+
+def test_the_documented_example_unit_is_valid():
+    """The example descriptor in actuation/README.md ("Schema") parses and passes the validator, with its own
+    key as the directory name and its own device class enabled.
+
+    Guards the page teaching a shape the tool refuses: the example once aimed an `adaptive` signature at the core
+    switch, which the Tier-cap has always refused — nobody had run the example through the rule it documents."""
+    import re
+    text = open(os.path.join(ROOT, "actuation", "README.md"), encoding="utf-8").read()
+    block = re.search(r"```yaml\n(.*?)```", text.split("## Schema", 1)[1], re.S).group(1)
+    doc = yaml.safe_load(block)
+    assert doc["unit"]["kind"] in genact.INSTALLABLE and doc["knobs"]          # the full shape, not a stub
+    assert genact.validate_unit(doc, doc["key"], [doc["target"]["device_class"]]) == []
+
+
 def test_validate_unit_rejects_non_enabled_target():
     """A unit targeting a non-enabled module fails closed (no install for a class the fleet doesn't run)."""
     errs = genact.validate_unit(copy.deepcopy(GOOD), "good", ["proxmox"])

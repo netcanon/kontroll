@@ -11,12 +11,14 @@ descriptor contract has TWO consumers without duplicating the rules (the no-besp
     searched collection and MUST validate it through the SAME rules BEFORE it stages (validate-before-stage), so a
     GUI-authored unit is held to exactly the bar a hand-authored one is.
 
-PURE + light-deps (re + service/_validate only — no yaml/paths/network), so it loads in the hermetic
-`tests/validate` and CI without ansible, exactly as gen-actuation did. Read-only: it inspects already-parsed docs;
-it opens nothing, stages nothing. Schema reference + field semantics: actuation/README.md.
+PURE + light-deps: re, kontroll.paths (standard library only) and service/_validate, which brings
+kontroll.yamlscalar and with it PyYAML — no ansible, no network — so it loads in the hermetic `tests/validate` and
+CI exactly as gen-actuation did. Read-only: it inspects already-parsed docs; it opens nothing, stages nothing.
+Schema reference + field semantics: actuation/README.md.
 """
 import re
 
+from kontroll import paths
 from kontroll.service import _validate
 
 SCHEMA = 1
@@ -28,6 +30,13 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 HIGH_BLAST_GROUPS = ("edge_firewall", "core_switch")   # the Tier-cap: unverified provenance may not reach these
 BLAST = ("this-device", "VLAN", "LAN", "WAN", "all")
 KEY_RE = re.compile(r"^[a-z][a-z0-9-]*\Z")
+# What a unit RUNS, by name: a playbook stem or a role name of its collection. One rule with two consumers — this
+# validator, and the create route's check of its own `name` input (service/actuation) — so the descriptor a
+# renderer is handed and the request that can author one are held to the same word.
+# Sixty-four is borrowed from the bound of a path component (paths.component). The name is never one itself: it is
+# a part of the key the create route derives, which is — so that route's own bound on a name is shorter by the
+# collection and a dash, and it answers for the key, not for the name.
+UNIT_NAME_RE = re.compile(r"[a-z0-9_]{1,64}\Z")
 # The version of an exact `==` pin: one plain version word. It ends up inside double quotes in the generated
 # collection lockfile (scripts/gen-requirements.py renders that file by hand), so the charset is closed here.
 PIN_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}\Z")
@@ -119,8 +128,15 @@ def validate_unit(doc, dirkey, enabled_modules):
         errs.append("unit.kind %r must be one of %s" % (kind, list(KINDS)))
 
     if kind in INSTALLABLE:
-        if not unit.get("collection") or not unit.get("name"):
-            errs.append("unit.collection + unit.name are required for kind %r" % (kind,))
+        # The two names every renderer of this descriptor formats into a play. They are held HERE, where the
+        # descriptor is validated — a hand-written unit.yml passes no route — and the messages name the field and
+        # the rule, never the value.
+        if not paths.is_collection_fqcn(unit.get("collection")):
+            errs.append("unit.collection must be a collection name (namespace.name, lowercase) for kind %r" % (kind,))
+        name = unit.get("name")
+        if not (isinstance(name, str) and UNIT_NAME_RE.fullmatch(name)):
+            errs.append("unit.name must be a playbook or role name — a string of lowercase letters, digits and `_`, at "
+                        "most 64 characters (quote a word YAML reads as a number or a boolean) — for kind %r" % (kind,))
         install = doc.get("install") or {}
         colls = install.get("collections") or []
         if not colls:
