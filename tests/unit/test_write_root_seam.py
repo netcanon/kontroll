@@ -99,3 +99,62 @@ def test_mutator_write_identity_when_write_root_unset(tmp_path, monkeypatch):
     gitio._write_new(os.path.join("instance", "inventory", "onboarded-x.yml"), "k: v\n", "# banner\n")
 
     assert (tmp_path / "instance" / "inventory" / "onboarded-x.yml").exists()     # write_root()==ROOT==tmp_path
+
+
+def test_refresh_writes_its_cache_under_the_write_root(tmp_path, monkeypatch):
+    """With KONTROLL_WRITE_ROOT set, `service_refresh` writes the capability-matrix cache into the write root and
+    returns that path; the image tree gains no file. With it unset the cache is written under ROOT, where it
+    always was. Guards `POST /refresh` on a baked install: the cache path was a constant bound to ROOT, which
+    that install mounts read-only, so the lowest-risk privileged route failed with a PermissionError."""
+    from kontroll import catalog
+    from kontroll.service import refresh
+
+    baked, clone = tmp_path / "opt" / "kontroll", tmp_path / "propose"
+    baked.mkdir(parents=True)
+    clone.mkdir()
+    monkeypatch.setattr(catalog, "local_installed", lambda: {})
+    monkeypatch.setattr(paths, "ROOT", str(baked))
+    monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(clone))
+    out = refresh.service_refresh(vectors=[], overrides=[], backends=[])
+    assert out["count"] == 0 and out["path"] == os.path.join(str(clone), "capability-matrix.generated.json")
+    assert os.path.isfile(out["path"]) and os.listdir(str(baked)) == []
+
+    monkeypatch.delenv("KONTROLL_WRITE_ROOT", raising=False)
+    assert refresh.service_refresh(vectors=[], overrides=[], backends=[])["path"] == os.path.join(
+        str(baked), "capability-matrix.generated.json")
+
+
+def test_the_module_write_target_is_in_the_write_root_and_its_key_is_one_name(tmp_path, monkeypatch):
+    """`paths.module_write_path(key)` names `modules/<key>/module.yml` under the WRITE root, with the code root
+    elsewhere, and raises for a key that is not one path component. Guards the function checking its own
+    argument: every caller today validates the key first, so a later caller that does not would otherwise be
+    handed a write target outside `modules/`."""
+    baked, clone = tmp_path / "opt" / "kontroll", tmp_path / "propose"
+    baked.mkdir(parents=True)
+    clone.mkdir()
+    monkeypatch.setattr(paths, "ROOT", str(baked))
+    monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(clone))
+    assert paths.module_write_path("demo_sw") == os.path.join(os.path.realpath(str(clone)), "modules", "demo_sw",
+                                                               "module.yml")
+    for key in ("../x", "a/b", "", ".."):
+        with pytest.raises(paths.RequestBoundaryError):
+            paths.module_write_path(key)
+
+
+def test_a_confined_file_is_a_regular_file_inside_the_write_root(tmp_path, monkeypatch):
+    """`paths.confined_file(rel)` is True for a regular file under the write root and False — never an exception —
+    for a directory, a path that is not there, a path that climbs out (also to a file that exists there), an
+    absolute path, an empty name and a NUL. Guards the staging clean-up, which asks this for every path of a
+    refused request before handing it to `git clean`: a directory there would be removed recursively, and an
+    exception there would replace the route's answer with a traceback."""
+    root = tmp_path / "propose"
+    (root / "instance" / "actuation" / "demo").mkdir(parents=True)
+    (root / "instance" / "actuation" / "demo" / "unit.yml").write_bytes(b"key: demo\n")
+    (tmp_path / "outside.yml").write_bytes(b"not the service's\n")
+    monkeypatch.setattr(paths, "ROOT", str(tmp_path / "opt"))
+    monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(root))
+    assert paths.confined_file("instance/actuation/demo/unit.yml") is True
+    for rel in ("instance/actuation/demo", "instance/actuation/demo/absent.yml", "../outside.yml",
+                str(tmp_path / "outside.yml"), str(root / "instance" / "actuation" / "demo" / "unit.yml"), "",
+                "instance/\x00unit.yml", None):
+        assert paths.confined_file(rel) is False, rel

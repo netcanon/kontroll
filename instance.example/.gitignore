@@ -14,3 +14,12 @@
 !/secrets/
 !/dashboards/
 !/trust/
+# actuation/<key>/unit.yml + vars.yml: the app-store units the GUI and the API stage. While the directory was
+# ignored, `git add` refused the file and no unit could reach a proposal.
+!/actuation/
+# certs/: PUBLIC material only — a pinned device CA (instance.yml device_trust.<key>.tls_ca_file) and
+# known_hosts files, which the deploy reads from this tree. A private key put here by mistake is ignored by its
+# name when that is *.key, id_rsa, id_ed25519 or id_ecdsa, and refused by its content at the control node's
+# blanket commits when it is PEM or OpenSSH (scripts/lib/plaintext-guard.sh). A binary key store (.p12, .pfx,
+# a DER key) or a PuTTY .ppk is caught by neither: do not put one here.
+!/certs/

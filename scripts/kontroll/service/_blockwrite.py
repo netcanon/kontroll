@@ -8,6 +8,7 @@ observe's public API; test_blockwrite.py pins it directly. The per-VALUE checks 
 guard widens (int/text/bool/ipv4/hostname, P0a) without re-diverging — the server-side twin of Phase-3's client
 type→widget table.
 """
+import os
 import re
 
 import yaml
@@ -32,6 +33,43 @@ def _reads_back(value):
         except Exception:          # noqa: BLE001 — the reader's refusal is whatever it raises (see kontroll.yamlscalar)
             return False
     return False
+
+
+def write_module(plan):
+    """Write a reconfigure plan's module text to its WRITE target and say whether anything was written. The one
+    place the module reconfigures (telemetry, logging, backup, identity) write `modules/<key>/module.yml`.
+
+    A plan reads the class through paths.module_file() — the clone's copy, or the baked one when the clone has
+    none — and names its write target with paths.module_write_path(), which is always in the write root. The two
+    are the same file except on a baked install for a shipped class the clone does not hold. Hence the first test:
+    a plan that changes nothing writes nothing. Comparing against the write target alone would copy a shipped
+    file into the clone on a no-op, and a second apply would stop reporting "no change". Nothing is written
+    either when the target already holds the text; and the class directory is created when it exists only in the
+    code root."""
+    if plan["text_after"] == plan["text_before"]:
+        return False
+    target = plan["mod_path"]
+    try:
+        with open(target, encoding="utf-8") as fh:
+            if fh.read() == plan["text_after"]:
+                return False
+    except FileNotFoundError:
+        pass
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w", encoding="utf-8", newline="\n") as out:
+        out.write(plan["text_after"])
+    return True
+
+
+def staged_paths(plan, regen):
+    """The repo-relative paths a module reconfigure hands to the scoped commit: the regenerated files, and the
+    module itself WHEN it is in the write root. An apply lists its paths whether or not it wrote the module, and a
+    regenerator returns its files whether or not they changed — so a plan that changes nothing can still reach
+    the commit. For a class only the image tree holds, the module is then a path that is not in the clone, and
+    `git add` fails the whole stage for it. Leaving it out does not make that stage succeed — the commit then has
+    nothing to commit — it only keeps a path that is not there out of the add."""
+    module = [plan["mod_rel"]] if os.path.exists(plan["mod_path"]) else []
+    return sorted(set(module + list(regen)))
 
 
 def validate_params(method, params):

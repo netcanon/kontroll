@@ -584,7 +584,16 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   `config/semaphore/templates/promote-proposal.yml` → `ansible/playbooks/promote.yml`) — a `run_id` survey var,
   FF-only, **reachable only by a Semaphore admin on the mgmt VLAN, never the API token** (the promote lives
   outside the token's reach, so a leaked token can never self-promote). A leaked token can only **park proposals
-  you can reject**, never rewrite the lab. **This propose-only guarantee held for the `local` staging push but was
+  you can reject**, never rewrite the lab. **A proposal is all of its paths or none:** `git add` exits
+  non-zero for a path a `.gitignore` rule ignores (having staged the others) and for one that is not there
+  (having staged nothing); `commit_and_push` stops there, commits nothing, and the staging service rolls its
+  clone back and removes the refused files — it used to commit the rest and report the proposal as staged. A
+  caller that is not the staging service gets the request's paths taken back out of its index, so the part git
+  did stage cannot reach `main` inside a later commit (`tests/unit/test_staged_write_lands.py`, real git). Every
+  route answers a stage that did not commit with an error — the GUI's capability route answered 200 for one —
+  and a test reads each function that calls the seam for it
+  (`test_every_route_that_stages_reads_whether_the_stage_committed`; the route itself in
+  `tests/integration/test_gui_api.py`). **This propose-only guarantee held for the `local` staging push but was
   breached by `commit_and_push`'s optional `origin` push (dogfood VM 144, 2026-07-05):** the content clone's
   `origin` **is** the canonical (a `file://` clone), so a client `push:true` ran `git push origin HEAD`,
   fast-forwarding canonical `main` from the network service unreviewed. **Closed structurally by `and not staging`**
@@ -1360,7 +1369,9 @@ tracks nothing under `instance/` and ignores its entries (`/instance/*` in the r
 INSTANCE tree tracks its overlay and every tracked path is re-included by `instance/.gitignore`
 (scaffolded from `instance.example/.gitignore`), so a `git add -f`, a lost rule or a missing re-include
 file fails with the paths — checked with `check-ignore --no-index`, since a tracked path is never
-reported as ignored otherwise. `kontroll.paths.resolve()` reads
+reported as ignored otherwise. The converse — an overlay entry the tool WRITES that the scaffolded file
+does not re-include, so that `git add` refuses it — is held by `tests/unit/test_staged_write_lands.py`,
+which reads the entries out of `paths._OVERLAY_MAP` and out of the example instance. `kontroll.paths.resolve()` reads
 the shipped `instance.example/` on a checkout with no `instance/`, so the public tree passes its own
 gates with no overlay present; writers (`keygen`, `enable_in_fleet`, `kontroll-init`) pass
 `write=True` and can never target the example.

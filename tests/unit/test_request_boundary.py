@@ -302,7 +302,7 @@ def test_refresh_skips_an_installed_entry_that_is_not_a_collection_name(monkeypa
         return ""
     monkeypatch.setattr(probe, "_ad", fake_ad)
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "5.0.0", "--version": "1"})
-    monkeypatch.setattr(paths, "MATRIX_CACHE", str(tmp_path / "matrix.json"))
+    monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(tmp_path))     # the cache is written under the write root
     out = refresh.service_refresh(vectors=[], overrides=[], backends=[])
     assert out["count"] == 1 and out["records"][0]["collection"] == "cisco.ios"
     assert probed and not any("--version" in args for args in probed)

@@ -40,6 +40,7 @@ def test_detection_flags_every_write_primitive_and_no_read():
         "git_add_binop":     "def f(p):\n    _run(['git', 'add'] + list(p))",
         "git_update_ref":    "def f(ref):\n    subprocess.run(['git', 'update-ref', 'refs/heads/main', ref])",
         "git_reset":         "def f():\n    _run(['git', 'reset', '--hard', 'local/main'])",
+        "git_clean_binop":   "def f(p):\n    _run(['git', '--literal-pathspecs', 'clean', '-f', '-x', '--'] + p)",
         "sops_set_argv":     "def f(path):\n    subprocess.run(['sops', '--set', '[\"k\"] 1', path])",
         "sops_encrypt_argv": "def f(path):\n    subprocess.run(['sops', '--encrypt', path])",
         "sops_rotate_argv":  "def f(path):\n    subprocess.run(['sops', '--rotate', '--in-place', path])",
@@ -82,6 +83,20 @@ def test_detection_attributes_a_write_to_the_nested_scope_not_the_parent():
     inner = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "inner")
     assert _readonly_pins._is_direct_mutator(outer) is False   # outer only DEFINES inner — not a direct mutator
     assert _readonly_pins._is_direct_mutator(inner) is True    # inner is the writer
+
+
+def test_a_git_clean_in_a_read_only_git_module_is_a_write(monkeypatch, tmp_path):
+    """`assert_no_git_write` refuses a module whose `subprocess.run(["git", "clean", …])` literal names `clean`.
+    Guards the verb that DELETES untracked and ignored files being absent from the list a read-only git module is
+    checked against — it was absent until the tree gained its first `git clean`, and nothing else would notice it
+    going missing again."""
+    (tmp_path / "view.py").write_text(
+        "import subprocess\n\n\ndef _git(cap, argv):\n    return argv\n\n\n"
+        "def view(cap):\n    subprocess.run(['git', 'clean', '-f'])\n    return _git(cap, ['log'])\n",
+        encoding="utf-8")
+    monkeypatch.setattr(_readonly_pins, "ROOT", str(tmp_path))
+    with pytest.raises(AssertionError, match="clean"):
+        _readonly_pins.assert_no_git_write("view.py")
 
 
 def test_write_verbs_complete_on_the_real_tree():

@@ -11,6 +11,56 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(service): a staged write lands whole, or not at all — the baked reconfigure path, app-store units, a refused `git add` (2026-10-12)
+
+Ways a change staged from the GUI or the API could fail to reach its proposal — none of them visible to a suite
+that mocks git. **On a baked install** (the launch kit; `bake_code=true`) the services run from a
+read-only image tree and write the propose clone, and a device class is read through an overlay — the clone's
+copy when there is one, the image's otherwise. The telemetry, logging and backup reconfigures each spelled the
+path themselves, against the image tree, and identity wrote to whatever path it had read. So a class the
+operator had onboarded opened its dialog and was then "not onboarded"; a shipped class was planned from the
+image's bytes while its current values came from the clone, so an earlier reconfigure silently vanished from the
+text about to be written (the no-drop gate compares two structures that both came from the clone, and could not
+see it); the write went to the read-only tree; and had it succeeded, the commit staged a path in the clone where
+nothing had changed. They all read through `paths.module_file` now and write to `paths.module_write_path` —
+always the write root — through one shared writer; a plan that changes nothing writes nothing in either tree,
+and a module the clone does not hold is not among the paths handed to the commit. `POST /refresh` failed there
+the same way: its cache path was a constant under the image tree, and is under the write root now. **An
+app-store unit could not be staged on an instance built from the public tree:**
+`instance/actuation/` was not re-included by the `instance/.gitignore` an instance is scaffolded with, so the
+path was ignored and `git add` refused it. `instance/certs/` — where the example `instance.yml` tells you to
+commit a pinned CA certificate — was not re-included either. Both are now. **And the commit seam did not read
+`git add`'s status.** git exits non-zero for a path it refuses — having staged the others. With one path the
+commit then had nothing to commit and the stage failed — but the refused file stayed in the clone (the
+roll-back does not remove an ignored file), where the registry listed a unit that existed nowhere else. With
+several paths the commit went through without the refused one: a proposal missing a file, reported as staged.
+`commit_and_push` now stops on a refused add, commits nothing, and — when it is the staging service — rolls
+the clone back and removes the refused files it was given. Its result carries `add_rc` in that case. A caller
+that is not the staging service (the GUI run from a checkout) keeps its working tree, and the request's paths
+are taken back out of its index — after a failed commit as well — so a part of one request cannot reach `main`
+inside the next one's commit. **And the GUI's capability route did not read the seam's result:** for a stage
+that had not committed it answered 200 and the page printed "committed to main". It answers 500 with the error,
+like every other route. **One thing you will see because of it:** promoting a capability whose values you did
+not change, which that route used to answer as "committed to main", now answers the same error ("commit failed;
+nothing staged"). Nothing was committed in either case; the regenerators report their files whether or not those
+changed, so the route cannot yet tell "nothing changed" from a commit that failed — that is theirs to say, and an
+item of its own.
+**For an existing instance:** add the lines `!/actuation/` and `!/certs/` to your `instance/.gitignore` (the
+scaffold never overwrites an existing file). Until you do, creating or configuring a unit fails with "commit
+failed", and a unit created from now on is no longer left in the dialog's list. A unit left in a service's clone
+by an earlier attempt is still listed, and cannot be created again while it is there. On the control node, for
+each of `<storage root>/api/repo` and `<storage root>/onboard-gui/repo` (the storage root is `/var/lib/kontroll`
+unless `KONTROLL_STORAGE_ROOT` says otherwise), run, as root,
+`git -C <clone> status --short --ignored -uall -- instance/actuation`: every file it lists is a leftover (a
+promoted unit is tracked, and is not listed). Remove each one
+(`git -C <clone> clean -f -x -- instance/actuation/<key>/unit.yml`, and the `vars.yml` beside it) before creating
+the unit again. Everything you keep in `instance/certs/` shows up as untracked after the edit — look before you
+commit: a certificate and a `known_hosts` file belong there, a private key does not. Proofs:
+`tests/unit/test_baked_capability_promote.py`, `tests/unit/test_staged_write_lands.py` (both run the real git),
+`tests/unit/test_write_root_seam.py`, `tests/unit/test_leak_guard.py`, and a route test on each surface for a
+stage that does not commit (`tests/integration/test_gui_api.py`, `tests/integration/test_api_capability.py`).
+SECURITY.md C10.
+
 ### test(docs): every relative Markdown link resolves — SECURITY.md's own references left the repository (2026-10-12)
 
 The root `SECURITY.md` wrote each of its relative links as if it sat one directory down (`](../docs/…)`). From

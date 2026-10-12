@@ -15,7 +15,7 @@ from api import ratelimit
 from api.audit import read_audit
 from api.main import create_app
 from api.settings import Settings
-from kontroll import catalog, gitio, paths, probe
+from kontroll import catalog, gitio, probe
 
 pytestmark = pytest.mark.integration
 
@@ -45,7 +45,6 @@ def priv_rl(tmp_repo, tmp_path, monkeypatch):
     seams on throwaway paths. For the token-keyed throttle + breach-audit assertions."""
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: 0)
     monkeypatch.setattr(catalog, "local_installed", lambda: {})
-    monkeypatch.setattr(paths, "MATRIX_CACHE", str(tmp_path / "matrix.json"))
     audit_log = str(tmp_path / "audit" / "api-audit.log")
     s = Settings(api_token=TOKEN, audit_log=audit_log, ratelimit=TIGHT)
     with TestClient(create_app(s)) as c:

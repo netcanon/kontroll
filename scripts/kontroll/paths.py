@@ -36,7 +36,6 @@ SETTINGS_DIR = os.path.join(ROOT, "settings")           # settings/<area>.yml �
 BACKENDS_DIR = os.path.join(ROOT, "ansible", "backends")
 RECIPES_DIR = os.path.join(BACKENDS_DIR, "api", "recipes")
 OVERRIDES_DIR = os.path.join(ROOT, "overrides")
-MATRIX_CACHE = os.path.join(ROOT, "capability-matrix.generated.json")
 GALAXY = "https://galaxy.ansible.com/api/v3/plugin/ansible"
 PLUGIN_TYPES = ["cliconf", "httpapi", "netconf", "connection"]
 TICK, CROSS, QMARK = "✓", "✗", "?"
@@ -53,6 +52,15 @@ def write_root():
     mutators must NEVER write, and write_root() is the thin propose clone that carries the operator-mutable
     `instance/` overlay + the C10 git remote. Design-of-record: docs/reviews/2026-06-29-phase-b-baked-code/."""
     return os.environ.get("KONTROLL_WRITE_ROOT") or ROOT
+
+
+def matrix_cache():
+    """Where `refresh` writes the derived capability-matrix cache: under write_root(), never the code root (which
+    a baked deploy mounts read-only — a constant bound to ROOT made `POST /refresh` fail there). The file is
+    never part of a proposal (the stage is path-scoped, and the root `.gitignore` ignores the file), and the
+    staging clone's roll-back (`git reset --hard`) leaves an ignored file where it is. With write_root()==ROOT
+    this is the path it always was."""
+    return os.path.join(write_root(), "capability-matrix.generated.json")
 
 
 # --- Instance-overlay resolution (genericization arc, Decision A: a dedicated `instance/` dir) ----------------
@@ -289,6 +297,22 @@ def confined(rel_path):
     return full
 
 
+def confined_file(rel_path):
+    """True when repo-relative `rel_path` names a regular FILE inside write_root(). The rule is confined()'s — an
+    absolute path, a `..` that climbs out, a NUL or a symlink that points out is "no", never an exception — with
+    the path normalised and checked HERE, where the filesystem is asked: a static analyser does not credit a check
+    made inside another function (_overlay_file_present is the same idea for the overlay probe)."""
+    try:
+        confined(rel_path)
+    except ValueError:
+        return False
+    root = os.path.realpath(write_root())
+    full = os.path.realpath(os.path.join(root, rel_path))
+    if not full.startswith(root.rstrip(os.sep) + os.sep):
+        return False
+    return os.path.isfile(full)
+
+
 # --- The modules registry overlay (Phase-B Fork B, synthesis §2) -------------------------------------------------
 # `modules/` is the ONE registry that grows with operator action (onboarding a new device-class) and is EDITED in
 # place (reconfigure of a shipped class's identity/telemetry/logging/backup blocks). So unlike the other read-only
@@ -311,6 +335,20 @@ def module_file(key):
     if os.path.exists(clone):
         return clone
     return os.path.join(ROOT, "modules", key, "module.yml")
+
+
+def module_write_path(key):
+    """The absolute WRITE target for `modules/<key>/module.yml`: always under write_root(), never the code root.
+    The write-side twin of module_file(). A READER has two places to look — the clone's copy when there is one,
+    the baked one otherwise; a WRITER has one. So a reconfigure of a SHIPPED class the clone does not hold yet is
+    read from ROOT and written into the clone, which shadows the baked copy from then on. With write_root()==ROOT
+    this names the same file module_file() does.
+
+    Why it has a name: each reconfigure used to spell the join itself, three of them against ROOT — so on a baked
+    install the plan was computed from the image's bytes, the write went to the read-only image tree, and the
+    scoped commit staged a path in the clone where nothing had changed."""
+    component(key, "device-class key")
+    return confined("modules/%s/module.yml" % key)
 
 
 def module_keys():

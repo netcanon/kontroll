@@ -85,6 +85,12 @@ WRITE_VERBS = frozenset({
     # view that ever calls it trips assert_read_only, and so the fail-closed completeness gate (which detects the
     # `update-ref` argv) is satisfied. C10-safe: un-stage != promote (it removes Key-1's own output, never advances main).
     "discard_proposal",
+    # A staged write that cannot land (2026-10-12). `write_module` is the ONE place the module reconfigures write
+    # `modules/<key>/module.yml` (each used to carry its own open:w inside an apply_* verb); `_drop_refused`
+    # removes what an apply wrote and `git add` would not take (a `git clean` of files at the request's own paths,
+    # after the staging roll-back); `_unstage` takes a request's paths back out of the index of a caller that is
+    # not the staging service (a path-scoped `git reset`). Each registered in the same commit as the verb (P0b/#134).
+    "write_module", "_drop_refused", "_unstage",
 })
 
 
@@ -328,7 +334,7 @@ GIT_WRITE_VERBS = frozenset({
     "commit", "commit-tree", "add", "rm", "mv", "push", "fetch", "pull", "clone", "init", "update-ref",
     "symbolic-ref", "update-index", "write-tree", "reset", "checkout", "switch", "restore", "stash", "branch",
     "tag", "merge", "rebase", "cherry-pick", "apply", "am", "gc", "prune", "reflog", "filter-branch", "replace",
-    "fast-import", "repack", "worktree", "notes", "config", "remote",
+    "fast-import", "repack", "worktree", "notes", "config", "remote", "clean",
 })
 GIT_READONLY_VERBS = frozenset({
     "log", "show", "diff", "ls-files", "ls-tree", "rev-parse", "rev-list", "cat-file", "for-each-ref",
@@ -392,7 +398,7 @@ def assert_no_git_write(module_rel, chokepoint="_git", readonly=GIT_READONLY_VER
 GIT_MUTATING_VERBS = frozenset({
     "commit", "commit-tree", "add", "rm", "mv", "push", "fetch", "pull", "clone", "init", "update-ref",
     "update-index", "write-tree", "reset", "checkout", "switch", "restore", "merge", "rebase", "cherry-pick",
-    "apply", "am", "gc", "filter-branch", "replace", "fast-import", "repack",
+    "apply", "am", "gc", "filter-branch", "replace", "fast-import", "repack", "clean",
 })
 _SOPS_WRITE_FLAGS = frozenset({"--set", "--encrypt", "-e", "--rotate", "-r"})   # `--decrypt` is a READ; these mutate
 _SOPS_WRITE_CALLS = frozenset({"sops_set", "sops_write_domain"})                # the named sops-write chokepoints

@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from api.audit import read_audit
 from api.main import create_app
 from api.settings import Settings
-from kontroll import catalog, gitio, paths
+from kontroll import catalog, gitio
 
 pytestmark = pytest.mark.integration
 
@@ -33,7 +33,6 @@ def priv(tmp_repo, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
     monkeypatch.setattr(catalog, "local_installed", lambda: {})
-    monkeypatch.setattr(paths, "MATRIX_CACHE", str(tmp_path / "matrix.json"))
     audit_log = str(tmp_path / "audit" / "api-audit.log")
     app = create_app(Settings(api_token=TOKEN, audit_log=audit_log))
     with TestClient(app) as c:
