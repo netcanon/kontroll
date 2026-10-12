@@ -23,10 +23,14 @@ a public clone. The four generators now do what the other four already did: `--c
 still reads that node's overlay (`gen-exporters` reads the example's `device_trust` under `--check` too, instead of
 a hard-coded `instance/instance.yml`). For the suite, the resolver's two overlay probes became functions and
 `tests/conftest.py` wraps them at import time so that, at the real checkout only, they answer "absent"
-(`tests/_hermetic.py`); a tmp root is untouched, and there is no production switch. **On a deployed node** whose
+(`tests/_hermetic.py`); a tmp root is untouched, and there is no production switch. The file probe also confines
+its own join now: the path is normalised and one that climbs out of the write root with `..` is "absent" (a
+symlinked `instance/` is still followed), where it used to ask the filesystem about wherever the joined string
+pointed. **On a deployed node** whose
 fleet differs from the example, `tests/validate.sh` now reports these four files stale after a deploy rewrote
 them — as it already did for the other four; that is the node's own state, not a fault. Proofs:
-`tests/unit/test_suite_is_overlay_hermetic.py`, `tests/unit/test_generators_check_reads_the_example.py`.
+`tests/unit/test_suite_is_overlay_hermetic.py`, `tests/unit/test_generators_check_reads_the_example.py`,
+`tests/unit/test_paths_overlay.py`.
 
 ### fix(collections): `community.docker` is a core collection — `deploy-stack` no longer depends on a device class (2026-10-12)
 

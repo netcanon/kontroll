@@ -96,8 +96,18 @@ def _overlay_of(rel):
 
 
 def _overlay_file_present(overlay):
-    """True when the instance-overlay FILE `overlay` (a write_root()-relative `instance/…` path) exists."""
-    return os.path.exists(os.path.join(write_root(), overlay))
+    """True when the instance-overlay FILE `overlay` (a write_root()-relative `instance/…` path) exists.
+
+    The joined path is normalised and must still lie under the write root BEFORE the filesystem is asked: a mapped
+    path that climbs out with `..` is "absent", so overlay_rel() never names a location outside the tree. Request
+    names are validated at the seam (SECURITY.md C22); this is the same rule at the join itself, in the form a
+    static analyser can follow. `abspath`, not `realpath`, on purpose: an operator's `instance/` may be a symlink
+    to a directory kept elsewhere, and that overlay must keep being found."""
+    root = os.path.abspath(write_root())
+    full = os.path.abspath(os.path.join(root, overlay))
+    if not full.startswith(root.rstrip(os.sep) + os.sep):
+        return False
+    return os.path.exists(full)
 
 
 def _overlay_dir_present():

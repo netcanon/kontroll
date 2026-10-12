@@ -16,7 +16,7 @@ files:
   scripts/kontroll/frontend.py: "236c96471a8598043a31c4d8f4b1df87bc819c949ee48f9ae5c1d54cce625243"
   scripts/kontroll/gitio.py: "b8a066144d273e057ff26c53c9cd1a5805b6445d8fc452a2e18870de86bf47ab"
   scripts/kontroll/inventory.py: "712627cd52f62d4083ed722bfa28fb9715d6181fa377b16f80888acd2cf11906"
-  scripts/kontroll/paths.py: "9305c9ba0127f8928f98e1c8f32c0bda34869af20b3ffa54fdb6d454b397f139"
+  scripts/kontroll/paths.py: "a359f1fb5bf350edf5d1e1c86c20f7664cb9ac8cbbbf4cb9def577b3942e95d6"
   scripts/kontroll/predicate.py: "80f7c3f83ab87322c344652dbcbce68a9c7f1939a46af45e0dd901c5d2f601e3"
   scripts/kontroll/probe.py: "499485500d07556a5e7c44cf9726b860c70db3cac2fba25cb92c89dcd3bab3c4"
   scripts/kontroll/record.py: "f8ba062376ff27c22d0c2510ea5c5b2203c58bc9f7d406b32ddb9fe897ad9b0b"

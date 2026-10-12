@@ -1332,7 +1332,9 @@ read, probed or written) AND at every join (`paths.module_file`, the inventory d
 path, the unit path, the probe's `ansible_collections/<ns>/<name>` walk), so a value that passed the seam is
 re-checked where it is used and a new caller cannot forget. Every repository write goes through
 `paths.confined()`, which resolves the target under `write_root()` and refuses an absolute path, a `..` that
-climbs out, a NUL or a symlink that points out. The API maps the `ValueError` to **422**, the GUI to **400**,
+climbs out, a NUL or a symlink that points out. The instance-overlay existence probe confines its own join the
+same way for a READ (`paths._overlay_file_present`: a mapped path that climbs out is "absent"; a symlinked
+`instance/` is followed, on purpose). The API maps the `ValueError` to **422**, the GUI to **400**,
 both before any write and without echoing the value, and both **audit the refusal by field name**
 (`onboard-refuse reason=request-boundary field=<name>`) — never the refused value, which can itself be the
 payload. The Fleet index paints host names and addresses with `ET()` (text), the C19 rule applied to inventory
@@ -1340,7 +1342,8 @@ bytes.
 **Proves:** `tests/unit/test_request_boundary.py` (every validator's accept/reject table including `..`,
 separators, NUL, newline, a 65th char and a 254-char hostname; `confined()` against `../`, absolute and
 climbing paths; the planner refusing before the probe is reached), the API parametrised 422 pin in
-`tests/integration/test_api_onboard.py` (git never touched), the paint gate's `h.name`/`.ansible_host` tokens.
+`tests/integration/test_api_onboard.py` (git never touched), the paint gate's `h.name`/`.ansible_host` tokens,
+`tests/unit/test_paths_overlay.py` (the overlay probe: a climbing path is absent, a symlinked overlay is found).
 
 ---
 ## Accepted risks / known limitations

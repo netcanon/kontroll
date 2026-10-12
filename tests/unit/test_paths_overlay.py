@@ -20,6 +20,8 @@ What these verify and why:
 """
 import os
 
+import pytest
+
 from kontroll import paths
 
 
@@ -160,3 +162,39 @@ def test_example_tier_prefers_a_legacy_stub_and_ignores_unmapped_paths(tmp_path,
     _touch(str(tmp_path), "config/fleet.yml")
     assert paths.resolve("config/fleet.yml") == os.path.join(str(tmp_path), "config/fleet.yml")
     assert paths.resolve("modules/_core.yml") == os.path.join(str(tmp_path), "modules/_core.yml")
+
+
+def test_the_overlay_probe_answers_absent_for_a_path_that_leaves_the_write_root(tmp_path, monkeypatch):
+    """A mapped instance path that climbs out of the write root with `..` is "absent" to the overlay probe even
+    when a file really exists where it points, so overlay_rel() does not hand back an overlay location outside the
+    tree; an ordinary overlay file, and one reached through a `..` that stays inside, are still found. Guards the
+    join inside the probe: names are validated at the request seam (SECURITY.md C22), and this is the same rule
+    where the path is built — it used to ask the filesystem about wherever the joined string pointed."""
+    root = tmp_path / "tree"
+    _touch(str(root), "instance/secrets/network.sops.yml")
+    _touch(str(tmp_path), "outside.yml")
+    monkeypatch.setattr(paths, "ROOT", str(root))
+    monkeypatch.delenv("KONTROLL_WRITE_ROOT", raising=False)
+    climbing = "ansible/secrets/../../../outside.yml"
+    assert os.path.exists(os.path.join(str(root), "instance/secrets/../../../outside.yml"))    # the file IS there
+    assert paths.overlay_rel(climbing) == climbing                  # ...and the probe does not answer "present"
+    assert paths.overlay_rel("ansible/secrets/network.sops.yml") == "instance/secrets/network.sops.yml"
+    assert paths.overlay_rel("ansible/secrets/../secrets/network.sops.yml") == \
+        "instance/secrets/../secrets/network.sops.yml"
+
+
+def test_the_overlay_probe_follows_a_symlinked_instance_directory(tmp_path, monkeypatch):
+    """An `instance/` that is a symlink to a directory OUTSIDE the tree is still read as the overlay. Guards the
+    confinement above being written with realpath(): that would resolve the link, find the target outside the
+    write root, and silently make an operator's relocated overlay "absent" — every reader falling back to the
+    legacy stubs on a configured node."""
+    root, elsewhere = tmp_path / "tree", tmp_path / "kept-elsewhere"
+    root.mkdir()
+    _touch(str(elsewhere), "fleet.yml")
+    try:
+        os.symlink(str(elsewhere), str(root / "instance"), target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform or account cannot create a directory symlink")
+    monkeypatch.setattr(paths, "ROOT", str(root))
+    monkeypatch.delenv("KONTROLL_WRITE_ROOT", raising=False)
+    assert paths.overlay_rel("config/fleet.yml") == "instance/fleet.yml"
