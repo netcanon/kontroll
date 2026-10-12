@@ -414,7 +414,7 @@ def test_no_boundary_pattern_accepts_a_trailing_newline_even_with_match():
         (paths._IP_LITERAL_RE, "192.0.2.10"), (onboard._INLINE_RE, "host.example"), (onboard._STEM_RE, "api_token"),
         (settings._REMOTE_NAME, "offsite"), (_validate._HOSTNAME_LABEL, "sw1"), (schema.KEY_RE, "my-unit"),
         (schema.KNOB_KEY_RE, "port"), (schema.PIN_VERSION_RE, "8.0.4"), (schema.SHA256_RE, "a" * 64),
-        (actuation._KEY_RE, "my-unit"), (actuation._NAME_RE, "ios_facts"), (genreq._LOCK_NAME_RE, "cisco.ios"),
+        (actuation._KEY_RE, "my-unit"), (schema.UNIT_NAME_RE, "ios_facts"), (genreq._LOCK_NAME_RE, "cisco.ios"),
         (genreq._LOCK_VERSION_RE, ">=8.0.0"), (genreq._LOCK_DIGEST_RE, "a" * 64),
     ]
     for pattern, valid in samples:

@@ -24,8 +24,9 @@ The descriptor SCHEMA + the per-unit validator (`validate_unit` / `validate_knob
 live in `kontroll.service._actuation_schema` — the ONE contract this CLI and the app-store CREATE seam
 (`service/actuation.build_create_unit_plan`, which renders a fresh descriptor from a searched collection and must
 validate it BEFORE staging) both consume. This module re-exports them and adds the file-walking `validate_all` +
-`_enabled_modules` + `main`. Standalone — kontroll imports are os/re only (`paths` + the pure schema module, which
-pulls only `service/_validate`) — so CI + tests/validate run it without ansible. Schema: actuation/README.md.
+`_enabled_modules` + `main`. Standalone — its kontroll imports are `paths` and the schema module, which pulls
+`paths`, `service/_validate` and through it `yamlscalar` (PyYAML, which this script needs anyway) — so CI +
+tests/validate run it without ansible. Schema: actuation/README.md.
 
 Usage:  python3 scripts/gen-actuation.py [--check]
 """

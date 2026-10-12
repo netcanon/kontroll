@@ -227,9 +227,9 @@ def stage_plan(key, values, token):
 # rendered descriptor carries no `knobs:` block (the worked-extraction mandate blesses "a unit may ship with zero
 # knobs"); knob curation is a later additive surface. Design of record: docs/reviews/2026-06-25-create-unit-stage/.
 
-# A bare collection name (`namespace.name`, lowercase) and a runnable-unit name (`[a-z0-9_]+`, an ansible
-# playbook/role stem). Shape-checked so a crafted value can never corrupt the rendered YAML / the derived key.
-_NAME_RE = re.compile(r"^[a-z0-9_]+\Z")
+# A bare collection name (`namespace.name`, lowercase — paths.collection_fqcn) and a runnable-unit name (an ansible
+# playbook/role stem — _schema.UNIT_NAME_RE, the descriptor's own rule: what this route accepts is exactly what the
+# schema accepts). Shape-checked so a crafted value can never corrupt the rendered YAML / the derived key.
 # "create" is reserved: the WRITE route is POST /actuation/create (a static path declared before /{key}), so a
 # unit may not be keyed "create" or the stage route's {key} could never address it. create-derivation never mints
 # it (a key is collection+name slug, which always carries a dash), but the guard closes the loop.
@@ -324,8 +324,8 @@ def build_create_unit_plan(inputs, module=None, enabled_modules=None):
         errs["collection"] = "collection must be a 'namespace.name' galaxy collection"
     if kind not in _schema.INSTALLABLE:
         errs["kind"] = "kind must be one of %s (a runnable collection unit)" % list(_schema.INSTALLABLE)
-    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):     # fullmatch: `$` also matches before a final \n
-        errs["name"] = "name must be a runnable-unit name (^[a-z0-9_]+$)"
+    if not isinstance(name, str) or not _schema.UNIT_NAME_RE.fullmatch(name):
+        errs["name"] = "name must be a runnable-unit name (lowercase letters, digits and `_`; at most 64 characters)"
     if blast not in _schema.BLAST:
         errs["blast_radius"] = "blast_radius must be one of %s" % list(_schema.BLAST)
     pin, perr = _normalize_pin(inputs.get("version"))
@@ -335,9 +335,14 @@ def build_create_unit_plan(inputs, module=None, enabled_modules=None):
         return {"error": "invalid", "errors": errs}
 
     # 2. derive + guard the key BEFORE any path is built (SEC-3 analog; the key IS the on-disk dir name).
+    # The key is also ONE PATH COMPONENT (paths.component: at most 64 characters) — a collection and a name that
+    # are each valid can be too long together, and the path builder below would raise for it as a field nobody sent.
     key = _derive_key(collection, name)
-    if not _schema.KEY_RE.fullmatch(key) or key in _RESERVED_KEYS:
-        return {"error": "invalid", "errors": {"key": "could not derive a valid registry key from the inputs"}}
+    if not _schema.KEY_RE.fullmatch(key) or not paths.is_component(key) or key in _RESERVED_KEYS:
+        return {"error": "invalid", "errors": {"key": "could not derive a valid registry key from the inputs (the "
+                                               "key built from the collection and the name is one path "
+                                               "component: at most 64 characters — a unit with a longer pair "
+                                               "is written by hand, under a key of its own)"}}
 
     # 3. resolve the target device-class from the module that DECLARES the collection (the one dispatch seam).
     module = module if module is not None else catalog.module_for_collection(collection)

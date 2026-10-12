@@ -1463,7 +1463,12 @@ name is re-checked where it becomes a file name: the uid read in `observe._dashb
 with a positive-integer `gnet` and a one-component `name` (other keys, such as `derived`, are allowed there), on
 one name declared with two board ids, and — before anything is fetched — on a target file that is not the board
 being fetched; a board it writes says which board it is. A unit's install pin is `==` plus one plain version
-word (`_actuation_schema.PIN_VERSION_RE`) and its digest sixty-four hex digits; and `scripts/gen-requirements.py`
+word (`_actuation_schema.PIN_VERSION_RE`) and its digest sixty-four hex digits; for the kinds that install
+something, the collection it runs is a collection name and what it runs there is one word of at most sixty-four
+characters (`validate_unit`: `paths.is_collection_fqcn`, `UNIT_NAME_RE` — the rules the create route applies to its
+own inputs, now the descriptor's, so a hand-written `unit.yml` is held to them wherever the validator runs: in
+`gen-actuation.py`, which the validate gate calls, and as the create route's last check; the limits below say
+where it does not); and `scripts/gen-requirements.py`
 refuses, offline — also at the promote-time gate, which resolves without rendering — a collection entry whose
 name is not `namespace.name` with each half starting with a letter or whose version holds anything but version
 characters, and a unit's trust statement whose signature policy is outside the closed set or whose digest is
@@ -1563,15 +1568,21 @@ are still applied with `match()`; the deploy-time generators — some of which a
 after a capability change — and `bootstrap.yml` still join a raw `enabled_modules` entry into a path, and the
 Settings view lists the fleet as it is — it shows some malformed lines and cannot remove one that is not a string; a
 tree that ALREADY gives one board two names is fetched under the first only (a request can no longer create that);
-`validate_unit` does not look at a unit's collection or name, which are bounded where they are rendered rather than
-where the descriptor is validated; and a UNIT may still target `all`, `ungrouped` or `localhost` (the class seams
-above refuse the names; the unit's validator does not look), or no group at all, which its play renders as `all`.
+and a UNIT may still target `all`, `ungrouped` or `localhost` (the class seams above refuse the names; the unit's
+validator does not look), or no group at all, which its play renders as `all`.
 **Limits written down here, not closed by this control's follow-up:** a lookup that finds nothing still quotes the
 unvalidated value it was asked for back to its sender (it belongs with the work on error bodies, which rewrites
 those answers). The Tier-cap compares group NAMES: a parent group an instance defines over `edge_firewall` or
 `core_switch` is neither name, and the play of a unit attached to it addresses them (C15-a, where the limit is
 written down with what would close it). In a hand-written descriptor a unit's `collection` need not be one that its
 `install.collections` pins, and a standalone unit's playbook path has no charset (both are C15-a's to close).
+Nor is the descriptor's validator on the path a descriptor is READ by: the readers of the unit registry
+(`catalog.load_actuation_units`) take any file that parses and has a key, so a unit nobody ran `gen-actuation.py`
+over reaches the preview and the registry's list as it stands — the preview therefore still writes every field it
+reads through `yamlscalar.word()`, and the API's preview route answers 500 for a name that is not a string. A
+`standalone` unit is not asked about a `collection` or a `name`, which it does not need: one that carries them
+anyway is valid, and the preview's header names them as what runs. And a unit's key is bounded in length only
+where the create route derives it; a directory made by hand with a longer name is a unit like any other.
 `kontroll-init --fresh` writes `--mgmt-ip` and `--domain` as given into the instance file and into the Homepage
 board's `services.yaml` — at a shell, by the operator, into their own files — and `scripts/kontroll-promote.py`,
 when it is run by hand (as root, or as a member of the canonical's group), takes its `run_id` with no grammar at all
@@ -1616,8 +1627,11 @@ existing file that is not the board, a damaged module file, and the fetch never 
 board it fetches), `tests/unit/test_gen_observability.py`, `tests/unit/test_gen_backup.py` and
 `tests/unit/test_actuation_service.py` (a group, host or key that is not a plain word is quoted and reads back as
 itself), `tests/unit/test_create_unit_service.py` and `tests/unit/test_actuation_registry.py` (the pin's charset and
-the digest; the rendered lockfile and sidecar reading back as what was resolved; a trust statement that cannot be
-rendered as itself, also at the promote gate; the keyring), `tests/unit/test_fleet.py` and
+the digest; a unit's collection and name against the hostile table, at the validator and at the create route, which
+reads the validator's own pattern; a derived key too long for one path component answered before the class is
+looked up; the page's example unit passing the validator; the rendered lockfile and sidecar reading back as what
+was resolved; a trust statement that cannot be rendered as itself, also at the promote gate; the keyring),
+`tests/unit/test_fleet.py` and
 `tests/unit/test_discovery.py` (the readers of a fleet file with a line that is not a key),
 `tests/unit/test_onboard_ssh_key.py` (the lookup expression, the inline literal at the planner's call site, the
 stem), the API pins in `tests/integration/test_api_onboard.py` (git never touched; the code in the body),

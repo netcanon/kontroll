@@ -40,32 +40,33 @@ one is).
 
 ```yaml
 schema: 1                         # descriptor schema version (gen-actuation fails closed on an unknown version)
-key: backup-cisco-via-ntc         # == the directory name; the template/wrapper stem. [a-z][a-z0-9-]*
+key: community-docker-prune       # == the directory name; the template/wrapper stem. [a-z][a-z0-9-]*
 status: active                    # active | disabled — disabled keeps the file (audit) but emits/unions nothing
 
 unit:
-  kind: collection_playbook       # collection_playbook | role | standalone   (CLOSED enum)
-  collection: cisco.ios           # ns.name — REQUIRED for collection_playbook/role
-  name: ios_facts                 # playbook stem (collection_playbook) | role name (role)
+  kind: role                      # collection_playbook | role | standalone   (CLOSED enum)
+  collection: community.docker    # namespace.name, lowercase — REQUIRED for collection_playbook/role
+  name: prune                     # playbook stem (collection_playbook) | role name (role): [a-z0-9_], at most 64
   # kind: standalone -> drop collection/name; instead:  repo_playbook: ansible/playbooks/<x>.yml  (no install)
 
 install:                          # ABSENT for kind: standalone (nothing to install)
   collections:                    # SAME {name, version} shape modules emit -> unions into requirements
-    - name: cisco.ios
-      version: "==8.0.4"          # EXACT '==' pin (NOT a floor) — an app-store install pins a REVIEWED version
+    - name: community.docker
+      version: "==3.10.4"         # EXACT '==' pin (NOT a floor) — an app-store install pins a REVIEWED version
   provenance:                     # metadata the never-brick install step consumes — NEVER the lockfile (C15-a)
     source: galaxy                # galaxy | git   (MVP: galaxy only; git is rejected)
     signature: adaptive           # required | adaptive | none  — ABSENT ⇒ adaptive (verify-if-served, pass-if-
                                   #   absent, fail-on-invalid; the brick-proof default). 'required' = fail-on-absence
-                                  #   (Tier-cap REQUIRES it for edge_firewall/core_switch). 'none' = drop L3.
+                                  #   (Tier-cap REQUIRES it for edge_firewall/core_switch — which is why this
+                                  #   example targets a group that is neither). 'none' = drop L3.
     keyring: null                 # OPTIONAL host path; null ⇒ the auto-provisioned default keyring (absence ≠ error)
     sha256: null                  # OPTIONAL 64-hex L2b digest; null ⇒ the wrapper records it at first install
     captured_at: "2026-06-24T00:00:00Z"
     captured_by_run: "a1b2c3d4e5f6"   # the kontroll_run_id that staged this unit (audit correlation)
 
 target:
-  device_class: cisco_ios         # modules/<key> — MUST be an ENABLED module (instance/fleet.yml) or fail closed
-  inventory_group: core_switch    # == module.yml inventory_group; the wrapper play's hosts: (the one dispatch seam)
+  device_class: docker_host       # modules/<key> — MUST be an ENABLED module (instance/fleet.yml) or fail closed
+  inventory_group: docker_hosts   # == module.yml inventory_group; the wrapper play's hosts: (the one dispatch seam)
   blast_radius: LAN               # this-device | VLAN | LAN | WAN | all  (the access-chain SEVERITY, not a group)
 
 knobs:                            # OPTIONAL (R3) — the CURATED configure form (operator-declared, NOT argspec)
