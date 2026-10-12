@@ -149,8 +149,8 @@ protection is one mis-click from a merge). A public repository has no such branc
   can run installed in the job (sha256-pinned sops, gitleaks, promtool, vector; pinned yamllint /
   ansible-core / ansible-lint), so a missing tool is a failure, never a silent skip. Covers yamllint,
   ansible-lint, `--syntax-check`, `docker compose config`, promtool, vector validate, the sops /
-  secret-grep / gitleaks gates, every `gen-*.py --check`, the test-docstring and port-binding
-  guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`).
+  secret-grep / gitleaks gates, every `gen-*.py --check`, the test-docstring, document-link and
+  port-binding guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`).
 - **tests** (matrix Python 3.11–3.14): `pytest -m "not e2e and not slow"` with coverage; the
   shell-outs are mocked (§1), no ansible, no lab.
 - **snmp-modules**: rebuild `modules.generated.yml` with the pinned CGO snmp_exporter generator

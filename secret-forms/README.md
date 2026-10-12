@@ -36,8 +36,8 @@ fields:
 
 `type` drives the input: `password`/`token` render masked; `token` may carry `generate` to mint a random
 value on the box (`hex32` = `openssl rand -hex 32`; `base64_32` = `openssl rand -base64 32`). `text` is a
-plain non-secret field (usernames, emails). **Recipiency is owned by [`/.sops.yaml`](../.sops.yaml)**, not
-this file — `recipients:` is documentation only.
+plain non-secret field (usernames, emails). **Recipiency is owned by your instance's `.sops.yaml`** (`instance/.sops.yaml`; the shipped
+template is [`instance.example/.sops.yaml`](../instance.example/.sops.yaml)), not this file — `recipients:` is documentation only.
 
 ## Rotation (`rotatable:` + `actuation:`, #141)
 

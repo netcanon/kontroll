@@ -160,6 +160,21 @@ always exercised). Fixtures and docs use the documentation ranges — `192.0.2.x
 `198.51.100.x`, `203.0.113.x`, `00:00:5e:00:53:xx`, `2001:db8::/32`, `example.com`. A test that
 *must* hold a private address marks the line `pii-guard: allow <reason>`. SECURITY.md C21.
 
+## Document-link gate (`tests/check-doc-links.py`)
+
+`validate` step `doc-links` (pytest twin: `tests/unit/test_check_doc_links.py`) fails on a relative link in a
+tracked Markdown file that does not resolve to a TRACKED file, or a directory holding one, inside the repository.
+The spelling is compared exactly, so a link that only works on a case-insensitive disk, or to a file that is on
+your disk and not tracked (`git add` it first), fails on every machine; and a target that climbs out with `../`
+is a finding even where a file happens to exist there. It is hermetic (no URL is fetched) and does not check
+`#anchors`; fenced code blocks and code spans are skipped, so a document may quote a broken link. A target that
+cannot exist in the shipped tree by design is exempt: `instance/…`, and a dated run folder under `docs/reviews/`
+that this tree does not carry (a link into a run folder the tree does carry is checked). Write any other such
+target as a code span, not as a link — as `SECURITY.md` does even for its design records: the control document
+should not carry a link its public reader cannot follow. `CHANGELOG.md`, the files inside a dated run folder and
+an instance repository's own `instance/` documents are not read. In a git tree that git cannot list, the step
+says so and fails (exit 2) rather than walking the directory.
+
 ## Secret-hygiene gate
 
 `validate` fails if any `instance/secrets/*.sops.yml` is not encrypted, or if a

@@ -86,6 +86,10 @@ fi
 # every test function carries a docstring (docs/testing-standards.md §2 — machine-enforced)
 if [ -n "$PY" ]; then step test-docs 0 "$PY" tests/check-test-docs.py; fi
 
+# every relative link in a tracked Markdown file resolves inside the repository. Hermetic: no URL is fetched, and
+# anchors are not checked. (SECURITY.md's own links all climbed out of the tree with `../` and nothing noticed.)
+if [ -n "$PY" ]; then step doc-links 0 "$PY" tests/check-doc-links.py; fi
+
 # every published compose port binds the mgmt IP (${KONTROLL_MGMT_IP}) — never a literal IP / 0.0.0.0 (SECURITY.md
 # C3), except the NPM-fronted UIs (homepage 3000 / semaphore 3001). Guards the genericization Phase-3 mgmt-IP
 # parameterization from regressing to a hardcoded/empty host that exposes a privileged surface on all interfaces.

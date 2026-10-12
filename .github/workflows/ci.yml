@@ -12,7 +12,8 @@
 # Nothing else differs between the two repos' CI — same file, same gates.
 #
 # TRIGGERS: every push to `main` and to any `homelab*` branch, plus every pull request. The `homelab*` entry is
-# for the private instance repository's permissive tine (docs/homelab-edition.md): a long-lived branch that is
+# for the private instance repository's permissive tine (that branch carries its own description,
+# docs/homelab-edition.md, which the public tree does not carry): a long-lived branch that is
 # NEVER merged to `main`, so a pull request is the wrong vehicle for its CI — on a repository with no branch
 # protection it is one mis-click from landing the tine on main (2026-10-08 review, N18). Gating it on push
 # needs no PR at all. The public repository has no such branch, so the entry is inert there.
