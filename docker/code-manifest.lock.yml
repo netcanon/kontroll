@@ -40,7 +40,7 @@ files:
   scripts/kontroll/service/fleet.py: "4f033bdc15aebc3d35ca4071ad2e01e0e59efb9eabfc3b53edd367c93fa609bd"
   scripts/kontroll/service/homepage.py: "fb78a4e36dbceb62868ef8518d73f8d1967680fe4cede384bfb617cd665590af"
   scripts/kontroll/service/hostvars.py: "215b10b026307e07488d075c48cf4115c4ddc0e4501cad0595bcf636f3036c20"
-  scripts/kontroll/service/identity.py: "97b7afcc204af28159085e35012ed965e09b8b6553e71372a2faf612b0449c11"
+  scripts/kontroll/service/identity.py: "c30b5606a2e1efb3c837bd6dc0d04c39f49e8dbd7e964b4fa28c47145de653ed"
   scripts/kontroll/service/keygen.py: "a02fb2095b7705f8d394ec03cffd1ed4e334ba18045888c936956088b0a75323"
   scripts/kontroll/service/logsvc.py: "073f3650bc7d61ebfd6dd5f6f129920d88332e82c6a3ea61d0efb6e8c67e7fbf"
   scripts/kontroll/service/observe.py: "662fe4a24b232cee38ae61dbcfa69d3f70c1b6b430874f280913c9b33fe30db5"

@@ -125,6 +125,11 @@ jobs:
       - name: Install the code-half test deps (no ansible, no lab — the shell-outs are mocked)
         run: pip install --quiet -r tests/requirements-dev.txt
 
+      # scripts/lib/plaintext-guard.sh runs on a control node's HOST, under whatever `awk` that host has. Its tests
+      # run once under each implementation they find installed — so install the ones a node may have.
+      - name: Install the awk implementations a control node may have
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gawk mawk busybox original-awk
+
       - name: pytest (offline; e2e/slow excluded — the hermetic default)
         run: pytest -m "not e2e and not slow" --cov=scripts --cov=gui --cov=api --cov-report=term-missing
 

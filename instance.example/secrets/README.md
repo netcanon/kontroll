@@ -21,3 +21,12 @@ sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml
 ```
 
 Never commit a plaintext secret or an age private key. See `SECURITY.md` (C8 / C11).
+
+**This directory holds sops documents and nothing else.** The deploy commits your working tree into the local
+canonical, and refuses to do so — naming the file — while a `*.sops.yml` here has any value that is not ciphertext
+(a file typed in an editor and never encrypted, one key added by hand to an encrypted file), or while any other
+file sits here (a `sops -d … > network.yml` copy, an editor's `.bak`). A file that was never encrypted:
+`sops --config instance/.sops.yaml -e -i instance/secrets/<domain>.sops.yml` (on a launch-kit host, inside
+`./kontroll shell` — the host has no sops). Anything else: move it out of the repository. The refusal names a
+rule, and `docs/install-from-scratch.md` ("REFUSING to commit") has the fix for each.
+`scripts/lib/plaintext-guard.sh` is the check; `SECURITY.md` C1.

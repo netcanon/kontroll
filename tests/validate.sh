@@ -35,13 +35,11 @@ have vector; step vector-config $? bash -c '
   set -a; . docker/.env.example; set +a
   vector validate --no-environment -C docker/vector/config.d docker/vector/vector.yaml'
 
-# every instance/secrets/*.sops.yml must be encrypted (contains a `sops:` block)
-have sops; step sops-encrypted $? bash -c '
-  bad=0
-  while IFS= read -r f; do
-    grep -q "^sops:" "$f" || { echo "  unencrypted secret file: $f"; bad=1; }
-  done < <(find instance/secrets ansible/secrets -name "*.sops.yml" 2>/dev/null)
-  exit $bad'
+# every file under the secrets directories is a FULLY sops-encrypted document (every value ciphertext — not merely
+# "has a `sops:` block"), nothing else sits there, and none holds a private key. The same guard gates the commits
+# that take a whole worktree into the canonical (local-canonical.yml, scripts/kontroll.sh). Needs no sops binary
+# and no git: this is the one seat that reads files already committed.
+step sops-encrypted 0 sh scripts/lib/plaintext-guard.sh --tree .
 
 # no secret artifact staged
 step secret-grep 0 bash -c '
@@ -69,6 +67,17 @@ have ansible-playbook; step ansible-syntax $? bash -c '
 PY="$(command -v python3 || command -v python || true)"
 if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
   step pytest 0 "$PY" -m pytest -m "not e2e and not slow" -q
+  # the plaintext guard's predicate against a document the INSTALLED sops writes: the ciphertext token, the
+  # encrypted comment and the metadata block are sops's shapes, not ours, and a sops bump that changes one must
+  # fail HERE — not refuse every healthy secret file at the next deploy. A step of its own, behind `have sops`:
+  # under --strict a missing binary fails the gate. And no test may have been SKIPPED: pytest exits 0 when all
+  # of them are, which would be a green step that proved nothing. (`-rs` lists each skip on a line of its own;
+  # pytest exits 5, not 0, when it ran no test at all; a developer's PYTEST_ADDOPTS is not let in — it could hide
+  # the summary or deselect a test.)
+  have sops; step sops-guard-conformance $? bash -c '
+    out="$(PYTEST_ADDOPTS= "$0" -m pytest tests/integration/test_plaintext_guard_sops.py -rs --color=no 2>&1)"; rc=$?
+    printf "%s\n" "$out"
+    [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
 else
   echo "SKIP  pytest (not installed)"; skip=$((skip+1))
   [ "$STRICT" = "--strict" ] && fail=$((fail+1))

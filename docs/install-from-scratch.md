@@ -311,6 +311,37 @@ Replace `<your-lan-resolver-ip>` with your router / internal DNS (e.g. the mgmt-
 networks that block public DNS — on an unrestricted network Docker's default resolves fine, so kontroll does **not**
 set this for you (a forced default would override a correct config and could clobber an existing `daemon.json`).
 
+### The deploy, or `./kontroll <verb>`, stops with `REFUSING to commit` / `refusing to capture the tree`
+
+**Symptom:** `local-canonical.yml` (every deploy runs it) fails with
+`local-canonical: REFUSING to commit — plaintext-guard: REFUSED <path> — <rule>`, or the launch-kit launcher prints
+`plaintext-guard: REFUSED <path> — <rule>` and `kontroll: refusing to capture the tree`. That run staged, committed
+and pushed nothing.
+
+**Cause:** the deploy commits your whole working tree into the local canonical, and the launcher captures the kit
+tree the same way. Just before either, `scripts/lib/plaintext-guard.sh` reads what would be committed and refuses a
+file that would put a secret there in the clear. The rule says which kind:
+
+| Rule | What it found | Fix |
+|---|---|---|
+| `not-sops-encrypted (no sops block)` | a `*.sops.yml` that was written in an editor and never encrypted | `sops --config instance/.sops.yaml -e -i <path>`. A launch-kit host has no sops: run `./kontroll shell` first (it still works after a refusal) and use the image's |
+| `not-sops-encrypted (line N)` | an encrypted file with something on line N that sops did not write — a key added by hand (also at the very end of the file, where the new line becomes part of the `sops:` block), a plaintext comment | remove the line, then add the value through the GUI's Secrets dialog, or with `sops --config instance/.sops.yaml <path>` on a machine that has sops and an editor. On a launch-kit host: `./kontroll shell`, then `sops --config instance/.sops.yaml set --value-stdin <path> '["<key>"]'`, type the value as JSON (`"<value>"`, with the quotes) and end the input with Ctrl-D — the image has no editor, `set` needs none, and a value read from the input is not left in the shell's history. If line N is a key that contains `: `, or one too long for a single line (sops writes it as `? key`), rename the key |
+| `not-sops-encrypted (unreadable)`, `private-key-material (unreadable)` | a file the deploying user cannot read | fix its owner or mode |
+| `secrets-dir-member` | a file in `instance/secrets/` (or the legacy `ansible/secrets/`) that is not a `*.sops.yml`, `README.md` or `.gitkeep` — a decrypted copy, an editor backup | delete it, or move it out of the repository |
+| `private-key-material (line N)` | a file that holds an age secret key, a line that begins with a PEM or PGP private-key header, or such a header inside a string or a YAML block with the key directly after it (an SSH key inlined in a vars file). A document that quotes a header and begins its next line with a long unbroken word (a digest, a path) is refused too | move it out of the repository; a key never belongs in it. A key Ansible needs goes into a sops-encrypted secrets file. In the document, break the line elsewhere |
+| `unusual-file-name` | a file whose name contains a line break | rename it |
+| a sentence ending `— refusing`, with no `REFUSED` | the guard could not look, so nothing was checked: git cannot read the directory as a worktree (git's own message is printed above — "dubious ownership" means the tree belongs to another user), the directory is not the top of its git repository, the list of files did not arrive whole, or the check itself did not finish | fix what the sentence names, then re-run |
+
+The guard reports the path, the rule and line numbers — never the content. It only reads files the commit would
+take (new, modified or already staged), so a clean tree at the top of its own repository is never refused. If the file is one you want to keep and
+it is not a secret, it is in the wrong directory: `instance/secrets/` holds sops documents and nothing else.
+After a refusal `./kontroll shell` is the one launcher verb that still runs: it deploys nothing, so it captures
+nothing.
+
+A partial-encryption rule in `.sops.yaml` (`unencrypted_suffix`, `encrypted_regex`) leaves values in the clear on
+purpose; the guard refuses a value it leaves in the clear like any other plaintext. The shipped creation rules
+encrypt every value.
+
 ## See also
 - [SETUP.md](SETUP.md) · [bootstrap-control-vm.md](bootstrap-control-vm.md) — the existing setup docs
 - [privileged-mutation-enablement.md](privileged-mutation-enablement.md) — C10 decision + the verified recipe

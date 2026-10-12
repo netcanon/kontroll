@@ -157,3 +157,37 @@ def test_a_writer_s_own_refusal_is_a_bad_value_not_an_exception(tmp_repo, monkey
     plan = identity.build_plan("demo_sw", _sel(role="null"))
     assert plan["error"] == "bad_value" and "plain YAML" in plan["detail"]
     assert identity.build_plan("demo_sw", _sel(role="opnsense_firewall"))["error"] is None
+
+
+def test_the_enact_hint_stages_only_generator_output():
+    """No enact command the identity planner hands the operator contains a blanket add (`add -A`, `add --all`,
+    `add .`): the regenerate step stages exactly the directories the two generators it runs write — read here from
+    the generators' own source, so the hint cannot drift from them. Guards the GUI telling an operator to stage
+    their whole worktree by hand, with no gate in front of it: the hint used to end in `git add -A && git
+    commit`."""
+    import importlib.util
+    import os
+    import re
+    for changes in ([{"kind": "modify", "path": "inventory_group"}], [{"kind": "modify", "path": "status"}], []):
+        for step in identity.identity_enact_commands("demo_sw", changes):
+            assert not re.search(r"\badd\s+(-A|--all|\.)(\s|$)", step["cmd"]), step["cmd"]
+    regen = identity.identity_enact_commands("demo_sw", [])[-1]["cmd"]
+    staged = regen.split("git add -- ", 1)[1].split(" && ", 1)[0].split()
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _load(name):
+        spec = importlib.util.spec_from_file_location(name.replace("-", "_"), os.path.join(root, "scripts", name))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    logging_gen = _load("gen-logging.py")
+    observability_source = io_open(os.path.join(root, "scripts", "gen-observability.py"))
+    assert '"prometheus/targets/%s/%s.generated.yml"' in observability_source
+    assert sorted(staged) == sorted(["prometheus/targets", logging_gen.GEN_DIR,
+                                     os.path.dirname(logging_gen.LOKI_OVERRIDES_REL)])
+    assert "gen-observability.py" in regen and "gen-logging.py" in regen
+
+
+def io_open(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()

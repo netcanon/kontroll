@@ -180,3 +180,51 @@ def test_the_canonical_mirror_refuses_to_discard_promoted_work():
               str(_mod(t, "ansible.builtin.command", "command").get("cmd", ""))]
     assert pushes, "the mirror push task must exist"
     assert all("--force" not in cmd and " -f " not in cmd for cmd in pushes),         "the mirror must never force-push the canonical: %r" % pushes
+
+
+def test_the_plaintext_gate_precedes_the_instance_state_commit():
+    """The play runs scripts/lib/plaintext-guard.sh over the worktree — with `check_mode: false`, so the mandated
+    dry-run names an offender too, and never failing on its own status — then FAILS on any non-zero status, and
+    both tasks come before the one whose shell does `git add -A`. Guards a refactor that moves or drops the gate
+    while the blanket add stays, a gate that only refuses on its "found something" code (a guard that could not
+    run has checked nothing), a refusal that gives a file's remedy when no file was named, a message broken in the
+    middle of a sentence (YAML keeps the line break of a more-indented continuation line), and one that is skipped
+    in check mode — where it would report nothing and the real
+    run would then stop."""
+    tasks = _tasks()
+
+    def _argv(task):
+        module = _mod(task, "ansible.builtin.command", "command") or {}
+        return [str(a) for a in (module.get("argv") or [])] or str(module.get("cmd", "")).split()
+
+    guard = next((i for i, t in enumerate(tasks) if any("plaintext-guard.sh" in a for a in _argv(t))), None)
+    assert guard is not None, "no task runs the plaintext guard"
+    task = tasks[guard]
+    assert task.get("check_mode") is False and task.get("failed_when") is False and task.get("changed_when") is False
+    assert "no_log" not in task, "the guard prints names and rules only — hiding them hides what the operator must read"
+    assert _argv(task)[0] == "sh" and _argv(task)[-1] == "{{ worktree }}" and "--tree" not in _argv(task)
+    register = task.get("register")
+    refuse = tasks[guard + 1]
+    assert _mod(refuse, "ansible.builtin.fail", "fail"), "the task after the guard must be the refusal"
+    assert str(refuse.get("when")).replace(" ", "") == "%s.rc!=0" % register
+    message = str(_mod(refuse, "ansible.builtin.fail", "fail").get("msg"))
+    assert "docs/install-from-scratch.md" in message, "the refusal must say where the fix for each rule is"
+    hint = message.index("sops --config instance/.sops.yaml -e -i")
+    assert "'no sops block' in" in message[message.rindex("{{", 0, hint):message.index("}}", hint)], \
+        "the encrypt command is the remedy for ONE rule (a file never encrypted) and must be offered only for it"
+    move = message.index("Move the named file")
+    assert "'REFUSED' in" in message[message.rindex("{{", 0, move):message.index("}}", move)], \
+        "'move the named file' is advice for a finding; when the guard could not look there is no file to move"
+    assert "\n" not in message, \
+        "the message is ONE folded paragraph: a continuation line indented deeper than the first keeps its line break"
+    commit = next(i for i, t in enumerate(tasks) if "git add -A" in _cmd_text(t))
+    assert guard < guard + 1 < commit, "the gate must stand before the blanket add"
+
+
+def test_the_installer_image_lets_git_read_the_operators_worktree():
+    """docker/installer/Dockerfile keeps `git config --system --add safe.directory '*'`. The play runs as root
+    inside that image on a worktree the OPERATOR owns, and the plaintext gate's first act is to ask git about it.
+    Guards the line being dropped as "convenience": without it git answers "dubious ownership", the gate cannot
+    run, and — because a gate that cannot run refuses — every containerised deploy stops at the commit."""
+    dockerfile = open(os.path.join(ROOT, "docker", "installer", "Dockerfile"), encoding="utf-8").read()
+    assert "git config --system --add safe.directory '*'" in dockerfile

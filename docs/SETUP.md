@@ -133,10 +133,13 @@ The manual equivalents:
    makes them recoverable retroactively. Do it before creating any *further* secrets.)
    On a **trusted machine (not the control node)**, generate a second age key and
    store its **private** half offline (password manager + paper) — it must never
-   touch the control node:
+   touch the control node, and never sit inside a checkout of this repository:
    ```bash
-   age-keygen -o kontroll-breakglass.key      # prints "# public key: age1..."
+   age-keygen -o ~/kontroll-breakglass.key    # in your HOME, not in the repo; prints "# public key: age1..."
    ```
+   (A private key left in the repository directory would be an untracked file like any
+   other. `.gitignore` ignores `*.key`, and the deploy refuses to commit a file that holds
+   a private key — but the key belongs on another machine.)
    Add **both** recipients (control-node + break-glass) to `instance/.sops.yaml` so every
    secret encrypts to both; then re-wrap with the overlay config:
    `sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml`.

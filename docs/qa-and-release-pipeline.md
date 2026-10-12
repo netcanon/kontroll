@@ -101,7 +101,7 @@ recommends but hasn't wired it — we should, given galaxy.py + gui are real cod
 | Control | Tool | Scope | Notes |
 |---|---|---|---|
 | ✅ Secret scanning | **gitleaks** (in `tests/validate` + `.pre-commit-config.yaml`) | working tree | `.gitleaks.toml` allowlists SOPS ciphertext + `local/`; custom age-key rule; verified catches a planted age key. *Next:* a CI job + full-history scan |
-| 🟡 SOPS-encrypted gate | existing `validate` `sops-encrypted` check | `instance/secrets/*` | promote to a CI job; assert no plaintext under `secrets/` |
+| ✅ SOPS-encrypted gate | `validate` `sops-encrypted` = `scripts/lib/plaintext-guard.sh --tree` (every value ciphertext, nothing else in the directory, no private key); the same guard gates the commits that take a whole worktree into the canonical | `instance/secrets/*`, and at deploy everything the commit would take | `tests/unit/test_plaintext_guard.py` runs in CI on every pull request; `sops-guard-conformance` holds the predicate against the installed sops, and fails if any of its tests was skipped |
 | ⬜ `no_log` enforcement | a pytest/grep gate | every task touching a cred/SOPS value | already a convention + partial grep; make it a hard CI assertion |
 | ⬜ Python deps | **pip-audit** | `gui/requirements.txt` + any galaxy deps | netcanon uses Dependabot; add pip-audit too |
 | ⬜ Container/image scan | **trivy** | runner image, onboard-gui, homepage/grafana/prom images | scan on build, fail on HIGH/CRITICAL fixable |

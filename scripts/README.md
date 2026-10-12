@@ -100,6 +100,31 @@ for a remote caller); results stay **queryable** via the Semaphore task API, cor
 `kontroll_run_id` in the output. Exit 0 = PASS. `ping.yml` IS the gate — this formalizes it as a
 one-command, pollable check; no duplicate playbook.
 
+## `lib/plaintext-guard.sh` — the content gate in front of a blanket `git add -A`
+
+`sh scripts/lib/plaintext-guard.sh [--tree] <worktree>`. Run (not sourced) just before the commits that take a
+whole worktree into the local canonical: the deploy's instance-state commit (`local-canonical.yml`) and the
+launch-kit launcher's capture (`kontroll.sh`). `tests/validate.sh` runs it with `--tree` (step `sops-encrypted`).
+POSIX sh plus git and the POSIX base tools (find, awk, tr, wc, cat) — the launch-kit host has no python and no
+sops; its tests run under every awk implementation they find installed.
+
+| Rule | Refuses |
+|---|---|
+| `not-sops-encrypted` | a `*.sops.yml` / `*.sops.yaml` (not the `.sops.yaml` config) in which a value does not have the shape of ciphertext — before the `sops:` block, after it, or inside it (a line that is not one of sops's metadata keys, anything indented that does not stand under a list of recipient entries, anything after `version:`) — or that has no such block |
+| `secrets-dir-member` | anything under `instance/secrets/` or `ansible/secrets/` that is not `*.sops.yml`, `*.sops.yaml`, `README.md` or `.gitkeep` |
+| `private-key-material` | any candidate that holds an age secret key (anywhere in a line), a line that begins with a PEM / PGP private-key header, or such a header anywhere in a line with key material directly after it (one literal `\n` in a string, or the next line of a block scalar). An inlined armored block whose body starts after a blank line or armor header lines — a PGP private-key block — is not seen |
+| `unusual-file-name` | in the default mode, a candidate whose name holds a line break |
+
+Default mode reads what a blanket add would commit (untracked and not ignored, modified, already staged), and
+`<worktree>` must be the top of its repository; `--tree` reads every file under the secrets directories and needs
+no git. Exit `0` nothing to refuse · `3` findings, one line each on stderr
+(`plaintext-guard: REFUSED <path> — <rule>[ (line N)]`, never content) · `2` it could not look, with one sentence
+saying why (git cannot read the directory as a worktree, it is not the top of its repository, the list of files
+did not reach the checker whole, the checker did not finish). **Every caller treats any non-zero status as a refusal.** Read-only. The predicate
+assumes whole-file encryption (the shipped `.sops.yaml`) and knows the line shapes the pinned sops writes;
+`tests/integration/test_plaintext_guard_sops.py` asks the installed sops. What it does not read is listed in the
+script's header and in `SECURITY.md` C1.
+
 ## `lib/run-log.sh` — persistent run-logs (Layer 0)
 
 Sourced fail-soft by the operator scripts (`update`/`backup`/`state-snapshot`/`state-restore`/

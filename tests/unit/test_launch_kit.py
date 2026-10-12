@@ -218,11 +218,30 @@ def test_launch_kit_assembles_without_instance_leak():
         top_level = {n.split("/")[1] for n in names if n.count("/") >= 1}
         for d in ("api", "gui", "tests"):
             assert d not in top_level, "the minimized kit must NOT ship the baked/dev dir %s/ (it runs baked)" % d
-        for keep in ("scripts/kontroll-promote.py", "scripts/gen-requirements.py"):
+        for keep in ("scripts/kontroll-promote.py", "scripts/gen-requirements.py", "scripts/lib/plaintext-guard.sh"):
             assert any(n.endswith("/" + keep) for n in names), \
-                "the kit must KEEP the canonical-run file %s (promote / FIX-M9)" % keep
+                "the kit must KEEP the canonical-run file %s (promote / FIX-M9 / the capture's plaintext gate)" % keep
         for keep in ("ansible", "modules", "scripts"):
             assert keep in top_level, "the kit must KEEP the canonical-run dir %s/ (promote / deploy-stack)" % keep
     finally:
         if os.path.exists(archive):
             os.remove(archive)
+
+
+def test_launcher_gates_the_capture_and_the_kit_ships_the_guard():
+    """scripts/kontroll.sh runs scripts/lib/plaintext-guard.sh on the kit tree BEFORE its `git add -A`, exits when
+    the guard returns non-zero, and does not test for the guard's existence first; make-launch-kit.sh does not
+    strip scripts/lib. Guards the published-install path being the ungated one: on a launch-kit box this capture
+    is the FIRST commit of a scaffolded instance/ (the deploy's own commit then finds a clean tree and never
+    runs), and a kit that silently skipped a missing guard would capture everything."""
+    s = _read("scripts/kontroll.sh")
+    call = 'sh "$ROOT/scripts/lib/plaintext-guard.sh" "$ROOT" || {'
+    assert call in s, "the launcher must run the plaintext guard and act on its status"
+    assert s.index(call) < s.index('git -C "$ROOT" add -A'), "the guard must run before the blanket add"
+    refusal = s[s.index(call):s.index('git -C "$ROOT" add -A')]
+    assert "exit 1" in refusal, "a refusal must stop the launcher"
+    assert "plaintext-guard.sh ]" not in s and "plaintext-guard.sh\" ]" not in s, \
+        "no existence test: a kit without the guard must refuse, not skip"
+    kit = _read("scripts/make-launch-kit.sh")
+    assert '"$dst"/scripts/lib' not in kit and '"$dst"/scripts ' not in kit and '"$dst"/scripts\n' not in kit
+    assert os.path.exists(os.path.join(ROOT, "scripts", "lib", "plaintext-guard.sh"))

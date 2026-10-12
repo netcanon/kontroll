@@ -139,6 +139,11 @@ def apply_plan(plan):
     return {"changed": changed, "paths": [plan["mod_rel"]]}
 
 
+# The directories gen-observability.py and gen-logging.py write (tests/unit/test_identity.py reads the generators'
+# own constants and fails if these drift).
+_REGEN_TREES = ("prometheus/targets", "docker/vector/generated", "docker/loki/overrides")
+
+
 def identity_enact_commands(key, changes):
     """The hand-off steps to make a promoted identity change LIVE — the API runs none. An identity change ripples
     to the dispatch seam + the generators, so the enact NAMES the re-gen + (when the dispatch identity moved) the
@@ -150,9 +155,12 @@ def identity_enact_commands(key, changes):
                      "cmd": "cd ansible && ansible-playbook playbooks/bootstrap.yml -e target=%s --check --diff" % key,
                      "why": "the new identity re-homes/re-classifies %s — dry-run bootstrap (the dispatch seam now "
                             "selects a different role/collection) before applying" % key})
+    # A SCOPED add — the three trees the two generators write, nothing else. The hint used to say `git add -A`:
+    # a blanket add of the operator's whole worktree, typed by hand, with no gate in front of it.
     cmds.append({"kind": "operator",
                  "cmd": "python3 scripts/gen-observability.py && python3 scripts/gen-logging.py "
-                        "&& git add -A && git commit -m 'regen targets after identity change'",
+                        "&& git add -- %s && git commit -m 'regen targets after identity change'"
+                        % " ".join(_REGEN_TREES),
                  "why": "regenerate the scrape/log targets from the updated module identity, then deploy-stack so "
                         "the change takes effect"})
     return cmds

@@ -16,6 +16,25 @@ age/keys.txt
 *.decrypted
 *.plain.yml
 *.plain.yaml
+# ...and the same under the names an editor still highlights (network.dec.yml, network.plaintext.yml)
+*.dec.*
+*.decrypted.*
+*.plain
+*.plain.*
+*.plaintext*
+
+# Private keys under their other common names (keys.txt and *.agekey are covered above). NOT *.pem: a PUBLIC CA
+# certificate is a .pem an operator is told to commit (instance.yml `device_trust.<key>.tls_ca_file`); a PEM
+# PRIVATE key is refused by its content, whatever it is called (scripts/lib/plaintext-guard.sh).
+*.key
+id_rsa
+id_ed25519
+id_ecdsa
+
+# Editor and tool backups: a backup of a file that was open decrypted is a decrypted file
+*.bak
+*.orig
+*~
 
 # Runtime env files for the docker stack (use *.env.example as the committed template)
 docker/.env
@@ -23,6 +42,13 @@ docker/.env.homepage
 docker/**/.env
 *.env
 !*.env.example
+# ...by any suffix: a backup of docker/.env taken before a re-render holds every service password
+.env.*
+!.env.example
+!.env.*.example
+
+# These rules stop a mistake QUIETLY, and only by its name. The tested control is scripts/lib/plaintext-guard.sh,
+# which refuses the commit loudly, by content.
 
 # Ansible runtime artifacts
 ansible/*.retry

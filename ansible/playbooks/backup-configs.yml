@@ -136,6 +136,9 @@
       changed_when: false
       when: _exclude_globs | length > 0
 
+    # A blanket add with NO plaintext gate, on purpose: this repository is device captures, which are plaintext BY
+    # DESIGN (running-configs with hashes and pre-shared keys). Its protection is that it has no remote and lives
+    # in the uid-1001 0700 store (SECURITY.md C8) — an is-encrypted gate here would refuse every capture.
     - name: Stage all captures (excluded ones are gitignored)  # noqa: command-instead-of-module
       ansible.builtin.command:
         cmd: "git -c safe.directory={{ config_backup_dir }} -C {{ config_backup_dir }} add -A"

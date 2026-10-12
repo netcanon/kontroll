@@ -19,6 +19,9 @@ mkdir -p "$DEST" && tar xzf "$BUNDLE" -C "$DEST"
 
 echo "==> Initialising the LOCAL git working tree (no remote — git is internal only)…"
 git -C "$DEST" init -q -b main
+# A blanket add with NO plaintext gate, on purpose: $DEST did not exist a moment ago and holds exactly what the
+# bundle held, and a bundle carries no instance/ (tests/integration/test_make_bundle.py). The blanket adds that
+# CAN take an operator's files are gated: scripts/kontroll.sh and ansible/playbooks/local-canonical.yml.
 git -C "$DEST" add -A
 git -C "$DEST" -c user.name=kontroll -c user.email=kontroll@localhost \
     commit -q -m "kontroll: installed from bundle $(basename "$BUNDLE")"
