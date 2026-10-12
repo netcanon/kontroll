@@ -10,7 +10,10 @@ A **module** is one device class, described as data in `modules/<key>/module.yml
 A **fleet profile** (`instance/fleet.yml`) lists the modules you actually run. The
 **bootstrap** (`ansible/playbooks/bootstrap.yml`) reads the profile and:
 
-1. merges `_core.yml` collections with every enabled module's collections,
+1. merges `_core.yml` collections with every enabled module's collections (`_core.yml` holds what the install
+   playbooks themselves import — `community.sops`, `community.general`, `community.docker` — so they resolve on
+   every fleet; `docker_host` also declares `community.docker` because a class describes itself, and the resolver
+   de-duplicates),
 2. generates `ansible/collections/requirements.generated.yml` and installs **only
    that set** (← the pick-and-choose: disabled modules cost nothing),
 3. installs the toolchain, sets up the age key, and reports which secrets domains

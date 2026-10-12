@@ -67,19 +67,18 @@ WORKDIR /repo
 COPY . /repo
 
 # Bake the CONTROL-PLANE collection base via the SAME never-brick wrapper bootstrap uses (G-4 no-drift). The
-# install playbooks (bootstrap/local-canonical/deploy-stack) import only community.sops + community.general
-# (modules/_core.yml) + community.docker (the control node is itself a `docker_host`) — NOT the device-fleet
-# collections (cisco.ios/fortinet.fortios/… bake into the Semaphore RUNNER image at deploy time, from the full
-# lockfile bootstrap generates). We DERIVE that base from modules/ — never a hardcoded list (CLAUDE.md hard
-# rule) — by handing gen-requirements a transient docker_host-only fleet, so the image builds on a FRESH node
-# BEFORE any instance/fleet.yml exists (the chicken-and-egg break). instance/trust/ is absent ⇒ the wrapper does
-# a plain pin+checksum install (byte-identical to the runner image; L2b applies only on the control node at run
-# time, where instance/trust/ is bind-mounted). Everything transient is removed in this one layer.
+# install playbooks (bootstrap/local-canonical/deploy-stack) import exactly the collections of modules/_core.yml
+# (community.sops, community.general, community.docker) — NOT the device-fleet collections (cisco.ios,
+# fortinet.fortios, … bake into the Semaphore RUNNER image at deploy time, from the full lockfile bootstrap
+# generates). The base is DERIVED from that file by the same generator (`--core`) — never a hardcoded list
+# (CLAUDE.md hard rule) and no fleet: none exists on a FRESH node at image build, and none is fabricated.
+# instance/trust/ is absent ⇒ the wrapper does a plain pin+checksum install (byte-identical to the runner image;
+# L2b applies only on the control node at run time, where instance/trust/ is bind-mounted). The two generated
+# files are removed in this one layer.
 RUN set -eu; \
-    printf 'enabled_modules:\n  - docker_host\n' > config/fleet.yml; \
-    python3 scripts/gen-requirements.py; \
+    python3 scripts/gen-requirements.py --core; \
     KONTROLL_COLLECTIONS_PATH=/usr/share/ansible/collections python3 scripts/install-collections.py; \
-    rm -f config/fleet.yml ansible/collections/requirements.generated.yml ansible/collections/trust.generated.yml
+    rm -f ansible/collections/requirements.generated.yml ansible/collections/trust.generated.yml
 
 # git's dubious-ownership guard: the run-time /repo bind is operator-owned but this container runs as root —
 # trust any repo path (single-tenant, ephemeral). Mirrors the runner image.

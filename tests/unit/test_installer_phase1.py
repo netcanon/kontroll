@@ -115,16 +115,16 @@ def test_dockerignore_excludes_instance_keys_but_keeps_the_lockfile():
 
 
 def test_install_playbook_collections_are_within_the_control_plane_base():
-    """The installer image bakes ONLY the CONTROL-PLANE collection base (modules/_core.yml + the control node's own
-    class, modules/docker_host — derived, never a hardcoded list). The install-path playbooks must therefore import
-    NO collection outside that base, or `check`/`init` would fail 'couldn't resolve' (the PR #87 bug class). Guards
-    a new collection sneaking into bootstrap/local-canonical/deploy-stack without being in the baked base + the
-    runner image. (Device collections bake into the runner at deploy time, not here.)"""
+    """The installer image bakes ONLY the CONTROL-PLANE collection base — modules/_core.yml, derived, never a
+    hardcoded list. The install-path playbooks must therefore import NO collection outside that file, or
+    `check`/`init` would fail 'couldn't resolve' (the PR #87 bug class). The base is `_core.yml` ALONE: a
+    collection that only a device class declares is installed on a host-direct node only when the fleet enables that
+    class — `community.docker` used to come from `docker_host`, so `deploy-stack` could not run on a fleet without
+    Docker hosts, and the installer image hid it behind a fabricated one-module fleet. Guards a new collection
+    sneaking into bootstrap/local-canonical/deploy-stack without being core. (Device collections bake into the
+    runner at deploy time, not here.)"""
     core = yaml.safe_load(_read("modules/_core.yml")).get("collections") or []
-    dh = yaml.safe_load(_read("modules/docker_host/module.yml")).get("collections") or []
-    base = {c["name"] for c in core} | {c["name"] for c in dh}
-    assert {"community.sops", "community.general", "community.docker"} <= base, \
-        "the control-plane base must cover sops+general+docker (the install playbooks' collections)"
+    base = {c["name"] for c in core}
     # Collections actually INVOKED by the install playbooks: a module key (`^  community.x.y:`) or a lookup
     # (`lookup('community.x.y'`) — NOT comment mentions. ansible.builtin needs no collection install.
     usage = re.compile(r"""(?:^[ \t]*|lookup\(\s*['"])((?:community|cisco|fortinet|arista|ansibleguy)\.[a-z0-9_]+)\.[a-z0-9_]+""", re.M)
@@ -214,3 +214,16 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
     assert 'chown -R "$KONTROLL_OPERATOR_UID' in block and "$REPO/instance" in block
     assert "SOPS_AGE_KEY_FILE" in block, "the minted age key is root-owned too"
     assert "exit $rc" in block, "the scaffold's own exit code must survive the chown"
+
+
+def test_installer_bakes_the_core_base_without_fabricating_a_fleet():
+    """The installer Dockerfile derives its collection base with `gen-requirements.py --core` and writes no fleet
+    file. Guards two failures: the fabricated `enabled_modules: [docker_host]` fleet coming back (a file written
+    into the tree and deleted again to make a generator happy), and a build that calls the generator with no flag —
+    which, with no `instance/` in the build context, falls through to the shipped EXAMPLE fleet and bakes device
+    collections into an image that must carry none."""
+    txt = _read(INSTALLER_DOCKERFILE)
+    code = "\n".join(line for line in txt.splitlines() if not line.lstrip().startswith("#"))
+    assert "scripts/gen-requirements.py --core" in code
+    assert "enabled_modules" not in code and "config/fleet.yml" not in code
+    assert len(re.findall(r"gen-requirements\.py", code)) == 1, "the generator runs once, with --core"

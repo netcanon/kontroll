@@ -99,7 +99,8 @@ ansible-playbook playbooks/bootstrap.yml
 ```
 
 This is idempotent and does everything we used to do by hand:
-- generates `requirements.generated.yml` from `_core` + your enabled modules via the
+- generates `requirements.generated.yml` from `_core` (what the install playbooks import, whatever the fleet)
+  + your enabled modules via the
   single-source `scripts/gen-requirements.py` (the same resolver deploy-stack + CI use) and
   installs **only those** collections,
 - installs the toolchain (age, sops, qemu-guest-agent),
