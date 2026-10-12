@@ -23,7 +23,7 @@ another instance's recipients — the default path is additive, which a fresh Jo
 `instance.yml`'s mgmt_ip/domain from flags. See docs/install-from-scratch.md (the genericization overlay).
 
 Usage:  python3 scripts/kontroll-init.py                                   # existing overlay: add your key (additive)
-        python3 scripts/kontroll-init.py --fresh --mgmt-ip <ip> --domain <d>   # brand-new node: your keys only
+        python3 scripts/kontroll-init.py --fresh --mgmt-ip <ip> --domain <d> --trust-mode separated   # brand-new node
 """
 import argparse
 import os
@@ -305,7 +305,9 @@ def main(argv):
     print("    - SAVE the GUI/Grafana passwords above (your onboard-GUI + Grafana logins).")
     print("    - Break-glass + scoped Semaphore keys: the GUI 'Keys' dialog (after deploy), or SETUP.md §5.2.")
     print("    - Enter the remaining service secrets: the GUI 'Secrets' dialog, or `sops instance/secrets/<d>.sops.yml`.")
-    print("    - Deploy: ansible-playbook ansible/playbooks/deploy-stack.yml")
+    print("    - Next: edit instance/fleet.yml and instance/inventory/hosts.yml, then the dry-run —")
+    print("      `scripts/kontroll-installer.sh check` (`./kontroll check` from a launch kit).")
+    print("      The whole sequence is the quickstart at the top of docs/install-from-scratch.md.")
     return 0
 
 

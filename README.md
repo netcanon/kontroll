@@ -24,7 +24,7 @@ metrics, and encrypted secrets, each as an independently restartable component.
 | [docs/adr/](docs/adr/README.md) | Decision records: what was decided, why, and what would change it — with the index of decisions, written and pending. |
 | `modules/` | Device-class registry — one self-describing `module.yml` per class. The fleet catalog. |
 | `instance/fleet.yml` | **The one knob:** which modules you run (pick-and-choose). |
-| `bootstrap.sh` | Stage 0: install ansible+git on a fresh node. |
+| `bootstrap.sh` | Stage 0 shim for `scripts/install-prereqs.sh` (Docker + git). |
 | `docker/` | Compose stack: Semaphore (Ansible UI), Homepage (portal), Prometheus + Grafana. One file per service via `include:`. |
 | `ansible/` | Inventory (functional groups), one role per device class, thin playbooks (incl. `bootstrap.yml`), SOPS-encrypted secrets. |
 | `dashboards/` | Homepage config + Grafana dashboards-as-code. |
@@ -52,15 +52,10 @@ config-backup job → 3 Semaphore → 4 Homepage → 5 metrics — all delivered
 
 ## Quickstart
 
-**From a release bundle on a fresh Debian node** (no GitHub account needed). The complete, tested
-procedure is **[docs/install-from-scratch.md](docs/install-from-scratch.md)** — the short version:
+**From a clone, a release bundle or a launch kit, on a fresh Linux node** (no GitHub account needed for the
+last two): the complete, tested sequence is the quickstart at the top of
+**[docs/install-from-scratch.md](docs/install-from-scratch.md)**. The host needs only Docker and git; everything
+else runs in the installer container — which is also how a play is run later; that page says how.
 
-```bash
-sudo bash scripts/install-prereqs.sh                  # §0: docker, ansible, sops, age, …
-bash scripts/install.sh kontroll-<version>.tar.gz     # extract + init the local working tree, then: cd kontroll
-python3 scripts/kontroll-init.py --fresh --mgmt-ip <your-ip> --domain <your-domain> --trust-mode separated   # scaffold YOUR overlay + keys
-# …then seed the canonical, deploy the stack, wire Semaphore, and open the GUI — install-from-scratch.md §3–§8.
-```
-
-Developers with **repo/clone** access can instead follow the full procedure (first-run + continual
-+ rebuild) in **[docs/SETUP.md](docs/SETUP.md)**.
+The first-run reference, continual configuration and the rebuild procedure are in
+**[docs/SETUP.md](docs/SETUP.md)**.

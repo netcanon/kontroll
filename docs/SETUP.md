@@ -27,11 +27,12 @@ installer container, so the host distro is otherwise irrelevant.
 > in [docs/install-from-scratch.md](install-from-scratch.md) + [docker/installer/README.md](../docker/installer/README.md)).
 > The steps below are the legacy host-ansible path, still valid after `install-prereqs.sh --with-host-ansible`.
 
-The things Ansible can't install before it runs (Ansible, Python) and the one no later step installs
-(Docker — the whole stack runs in compose):
+On the compose-native path this is the quickstart's `sudo bash scripts/install-prereqs.sh` — Docker, compose and
+git, the whole host floor — and you follow the quickstart from there. The commands in §4, §5 and §7 below belong
+to the legacy host-ansible path, which needs Ansible, sops and age on the host as well:
 
 ```bash
-./bootstrap.sh            # → scripts/install-prereqs.sh: Docker + compose + git (the host floor)
+./bootstrap.sh --with-host-ansible     # → scripts/install-prereqs.sh: the host floor PLUS ansible-core, sops, age
 ```
 
 Idempotent (safe to re-run). `bootstrap.sh` is now a thin shim over
@@ -41,18 +42,14 @@ Idempotent (safe to re-run). `bootstrap.sh` is now a thin shim over
 
 **Git-free (recommended for an operator):** install from a release bundle — **no GitHub
 account or clone needed.** On a machine with the code, `bash scripts/make-bundle.sh`
-produces `dist/kontroll-<version>.tar.gz`; copy it to the node (scp/USB/any transfer) and:
+produces `dist/kontroll-<version>.tar.gz`; copy it to the node (scp/USB/any transfer) and follow the quickstart at
+the top of [install-from-scratch.md](install-from-scratch.md) from its first step ("a release bundle"): the bundle
+becomes a local git tree with no remote, and `fresh-init` scaffolds your overlay.
 
-```bash
-bash scripts/install.sh kontroll-<version>.tar.gz     # git-init a local tree, no remote
-cd kontroll
-python3 scripts/kontroll-init.py --fresh --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated
-```
-
-`--trust-mode separated` puts a human review gate on every staged proposal (the recommended posture). What `solo`
-does, and what `--fresh` does when the flag is left out, depends on the edition you are installing — read
-[trust-mode.md](trust-mode.md) before choosing anything else.
-`kontroll-init --fresh` scaffolds your private `instance/` overlay from the shipped
+`--trust-mode separated`, in that scaffold command, puts a human review gate on every staged proposal (the
+recommended posture). What `solo` does, and what the scaffold does when the flag is left out, depends on the
+edition you are installing — read [trust-mode.md](trust-mode.md) before choosing anything else.
+`kontroll-init --fresh` — what `fresh-init` runs — scaffolds your private `instance/` overlay from the shipped
 `instance.example/` skeleton (your keys only — it never inherits the bundle author's
 recipients), mints your control age key, seeds `instance/.sops.yaml` with that key, fills
 `instance/instance.yml`'s `mgmt_ip`/`domain` **and the Homepage portal tiles** (a fresh
@@ -81,9 +78,11 @@ ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
 git clone git@github.com:<owner>/kontroll.git
 ```
 
+A clone of the tool has no `instance/`: scaffold yours as the quickstart does (`fresh-init`), then continue at §3.
+
 ## 3. Declare your fleet + your hosts
 
-Edit your overlay (scaffolded by `kontroll-init --fresh` in §2):
+Edit your overlay (scaffolded by `fresh-init`, §2):
 - **`instance/fleet.yml`** — enable the modules you actually run (catalog in
   `config/fleet.example.yml`). This is the file most setups touch.
 - **`instance/inventory/hosts.yml`** — your hosts, in functional groups
@@ -93,12 +92,11 @@ Edit your overlay (scaffolded by `kontroll-init --fresh` in §2):
 
 ## 4. Stage 1 — run the bootstrap
 
-```bash
-cd ansible        # from the install dir (kontroll/)
-ansible-playbook playbooks/bootstrap.yml
-```
+On the compose-native path the quickstart's bare `scripts/kontroll-installer.sh` runs this playbook and then the
+deploy. On the legacy host path it is `ansible-playbook playbooks/bootstrap.yml`, run from `ansible/`; the rest
+of that sequence is [install-from-scratch.md](install-from-scratch.md) §3–§6.
 
-This is idempotent and does everything we used to do by hand:
+It is idempotent and does everything we used to do by hand:
 - generates `requirements.generated.yml` from `_core` (which lists every collection the install playbooks
   import, whatever the fleet) + your enabled modules via the
   single-source `scripts/gen-requirements.py` (the same resolver deploy-stack + CI use) and
@@ -156,12 +154,13 @@ The manual equivalents:
 
 ## 6. Deploy the stack and open the GUI
 
-```bash
-cd ansible
-ansible-playbook playbooks/local-canonical.yml     # seed the local canonical the instance runs from
-ansible-playbook playbooks/deploy-stack.yml        # brings the composed stack UP (renders docker/.env from instance/instance.yml + SOPS)
-python3 ../scripts/configure-semaphore.py          # wire Semaphore — RUN AFTER deploy (it talks to a RUNNING Semaphore on :3001)
-```
+On the compose-native path this is the end of the quickstart: the bare `scripts/kontroll-installer.sh` seeds the
+local canonical and brings the composed stack up (it renders `docker/.env` from `instance/instance.yml` and SOPS),
+and `scripts/kontroll-installer.sh configure-semaphore` then wires the Semaphore that is now running on `:3001`.
+The legacy host form of the same steps — `local-canonical.yml`, `deploy-stack.yml`, `configure-semaphore.py` — is
+[install-from-scratch.md](install-from-scratch.md) §3, §5 and §6: the two plays from `ansible/`, the script from
+the tree root. The GUI and API surfaces described below come up once you have named those services
+(install-from-scratch.md §7), not with the default deploy.
 
 The stack binds the GUI, the API, Grafana, Prometheus, Loki, the syslog ingress (`:5514`) and, under `acme`,
 Caddy (`:80`/`:443`) to your `mgmt_ip` only. The

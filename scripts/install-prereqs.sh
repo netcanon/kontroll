@@ -148,12 +148,9 @@ fi
 cat <<'NEXT'
 
 ==> Done (idempotent — safe to re-run). The C10 canonical group (gid 1001) was provisioned above.
-  Next, from your kontroll/ install dir:
-  1. scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain>   # scaffold instance/ + mint control key
-  2. edit instance/fleet.yml + instance/inventory/hosts.yml + instance/instance.yml
-  3. scripts/kontroll-installer.sh check                  # the mandated --check --diff dry-run
-  4. scripts/kontroll-installer.sh                        # bootstrap → deploy-stack (the stack comes up)
-  5. scripts/kontroll-installer.sh configure-semaphore    # wire a running Semaphore (:3001)
-  6. wire remaining secrets in the GUI "Secrets"/"Keys" dialogs (https://<ip>:8443) — docs/SETUP.md §5
+  Next, from your kontroll/ directory — after logging out and back in, if this run added you to the docker group:
+    scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated
+  (from a launch kit: ./kontroll in place of scripts/kontroll-installer.sh)
+  The whole sequence, and what --trust-mode decides: docs/install-from-scratch.md, the quickstart at the top.
   (optional) sudo bash scripts/host-systemd.sh            # qemu-guest-agent + the host-systemd residual
 NEXT

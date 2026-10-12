@@ -49,5 +49,6 @@ cat <<MSG
 Air-gap install (consumer side — ZERO registry reachability, host floor = Docker + git):
   tar xzf $(basename "$ARCHIVE") && cd ${kit}
   docker load -i kontroll-images-${VERSION}-${ARCH}.tar          # images now local, digest-addressed
-  cd kontroll-launch-${VERSION} && ./kontroll fresh-init --mgmt-ip <ip> --domain <domain>
+  cd kontroll-launch-${VERSION} && ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated
+  (the whole sequence: docs/install-from-scratch.md — write ./kontroll where it writes scripts/kontroll-installer.sh)
 MSG

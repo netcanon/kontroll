@@ -15,10 +15,15 @@ placeholders (`192.0.2.x`, `example.com`) and one obviously-fake age recipient.
 The guided path mints your control key and personalizes this skeleton in one step:
 
 ```bash
-python3 scripts/kontroll-init.py --fresh --mgmt-ip <your-mgmt-ip> --domain <your-domain>
+scripts/kontroll-installer.sh fresh-init --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated
 ```
 
-`--fresh`:
+(From a launch kit: `./kontroll fresh-init …`. `--trust-mode` is the promote posture —
+[docs/trust-mode.md](../docs/trust-mode.md); what the scaffold does when it is left out depends on the edition,
+so always name it. The whole install sequence
+is the quickstart at the top of [docs/install-from-scratch.md](../docs/install-from-scratch.md).)
+
+`fresh-init` runs `kontroll-init --fresh` in the installer container, which:
 
 1. copies this skeleton to `instance/` (never overwriting an existing file, never
    copying secret ciphertext — there is none to copy);

@@ -4,13 +4,14 @@
 # no host python/ansible/sops/age (those live in the pulled installer image). This is the published-path sibling of
 # scripts/kontroll-installer.sh (which BUILDS the image locally from the repo); the only difference is:
 #   local-build:  docker compose … run --build  init      # builds docker/installer/Dockerfile
-#   published:    docker compose … pull init ; run --no-build init   # KONTROLL_INSTALLER_IMAGE := the ghcr @sha256 digest
+#   published:    docker pull <each image, by its ghcr @sha256 digest> ; docker compose … run init   # nothing is built:
+#                 the image is present (`--no-build` is not a valid `run` flag on every compose version)
 # Design-of-record: docs/reviews/2026-06-29-compose-native-install/22-distribution-images.md §6 (bundle-as-compose).
 # scripts/make-launch-kit.sh copies this to the launch-kit ROOT as `kontroll` (it lives at scripts/kontroll.sh in the
 # repo because scripts/kontroll/ is the Python service package — the name would collide).
 #
 # Usage (verbs mirror docker/installer/entrypoint.sh):
-#   ./kontroll fresh-init --mgmt-ip <ip> --domain <domain>   # scaffold instance/ + mint the control age key
+#   ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ + the control key
 #   $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
 #   ./kontroll check                                         # the mandated --check --diff dry-run
 #   ./kontroll init                                          # bootstrap → deploy-stack (pulls runner/vector by digest)

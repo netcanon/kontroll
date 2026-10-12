@@ -10,7 +10,7 @@ source_of_truth: local
 # as ${KONTROLL_MGMT_IP} / ${KONTROLL_DOMAIN}; the compose port binds use the IP so the GUI, the API and
 # the metrics and log services listen on the management interface only. Homepage and Semaphore are published on
 # all interfaces, to sit behind your reverse proxy (SECURITY.md C3).
-# `kontroll-init --fresh --mgmt-ip X --domain Y` fills these in; otherwise edit them here.
+# The scaffold (`fresh-init`, from its `--mgmt-ip` and `--domain`) fills these in; otherwise edit them here.
 mgmt_ip: 192.0.2.10        # REPLACE — your control node's management IP (RFC 5737 placeholder)
 domain: example.com        # REPLACE — your base domain (placeholder ok for IP-only self_signed)
 

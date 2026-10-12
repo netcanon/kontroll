@@ -1,7 +1,7 @@
 # Homepage portal tiles TEMPLATE — the CONTROL-PLANE services kontroll itself stands up.
 # The only per-instance values are this node's management IP and base domain.
-# `kontroll-init --fresh --mgmt-ip <ip> --domain <d>` fills the __MGMT_IP__ / __DOMAIN__
-# sentinels below at scaffold time. If you copied this file by hand, replace BOTH sentinels
+# The scaffold (`fresh-init`, from its `--mgmt-ip` and `--domain`) fills the __MGMT_IP__ / __DOMAIN__
+# sentinels below. If you copied this file by hand, replace BOTH sentinels
 # (every occurrence) with your mgmt IP and domain — they are deliberately non-routable so an
 # un-personalized board fails OBVIOUSLY rather than pointing at a plausible-looking wrong host.
 #
