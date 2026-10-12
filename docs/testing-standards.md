@@ -112,7 +112,10 @@ Enforced locally (pre-commit) and in CI:
    CLI/API black box → `tests/integration`; a UI flow → `tests/e2e` (+ a `data-testid` and its
    inventory row, §3); a role → a `--check --diff` run against `tests/mock-inventory.yml`, then a second
    apply on a scratch host (`0 changed`).
-4. **Run the hermetic gate:** `pytest -m "not e2e and not slow"` then `bash tests/validate.sh`.
+4. **Run the hermetic gate:** `pytest -m "not e2e and not slow"` then `bash tests/validate.sh`. Hermetic includes
+   the overlay: a test never asserts on the content of `instance/` — the suite reads the shipped
+   `instance.example/` on every checkout ([tests/README.md](../tests/README.md), "The suite never reads a private
+   overlay"), and a generator's `--check` validates the committed file against that example.
 5. **For IaC actuation:** `--check --diff` before any state-changing play; a second apply reports
    `0 changed`.
 6. **Re-run after edits you think are cosmetic** (renames, sanitization) — verify, don't assume.

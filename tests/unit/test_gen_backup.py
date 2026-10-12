@@ -26,10 +26,11 @@ def _gen():
 gen = _gen()
 
 
-def test_real_fleet_generates_the_cisco_schedule():
-    """The real fleet's backup: blocks produce a schedule for cisco_ios, limited to its inventory_group — the
-    worked instance #2. Guards the JOIN (enabled module × backup: block × inventory_group) end-to-end."""
-    specs = gen.backup_schedules(gen._load(gen.paths.resolve("config/fleet.yml")))
+def test_example_fleet_generates_the_cisco_schedule():
+    """The shipped example fleet's backup: blocks produce a schedule for cisco_ios, limited to its inventory_group —
+    the worked instance #2. Guards the JOIN (enabled module × backup: block × inventory_group) end-to-end. Reads
+    instance.example/ by name: the assertion is about a class the EXAMPLE enables, never about an operator's fleet."""
+    specs = gen.backup_schedules(gen._load("instance.example/fleet.yml"))
     cisco = next((s for s in specs if s["key"] == "cisco_ios"), None)
     assert cisco and cisco["name"] == "backup-cisco_ios"
     assert cisco["cron"] == "0 2 * * *" and cisco["limit"] == "core_switch"
@@ -37,9 +38,11 @@ def test_real_fleet_generates_the_cisco_schedule():
 
 
 def test_committed_spec_is_up_to_date():
-    """config/semaphore/schedules.generated.yml byte-matches what the generator renders now — the --check
-    honesty step (a stale committed spec, e.g. after a backup: edit, fails this and the validate gate)."""
-    specs = gen.backup_schedules(gen._load(gen.paths.resolve("config/fleet.yml")))
+    """config/semaphore/schedules.generated.yml byte-matches what the generator renders from the shipped example
+    fleet — the --check honesty step (a stale committed spec, e.g. after a backup: edit, fails this and the validate
+    gate). The committed file is the public, example-derived reference; a node's own schedules are generated on
+    that node."""
+    specs = gen.backup_schedules(gen._load("instance.example/fleet.yml"))
     committed = open(os.path.join(ROOT, "config", "semaphore", "schedules.generated.yml"),
                      encoding="utf-8").read()
     assert committed == gen.render(specs)

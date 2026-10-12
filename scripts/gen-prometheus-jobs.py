@@ -18,7 +18,9 @@ descriptor. Phase 2a carries only operator-owned descriptor values (no caller in
 
 Standalone except kontroll.catalog (no ansible). Kept honest by `--check` (a tests/validate step).
 
-Usage:  python3 scripts/gen-prometheus-jobs.py [--check]
+Usage:  python3 scripts/gen-prometheus-jobs.py              # write from THIS node's fleet (the instance overlay)
+        python3 scripts/gen-prometheus-jobs.py --check      # validate the committed jobs against instance.example/
+        python3 scripts/gen-prometheus-jobs.py --example    # regenerate the committed jobs from instance.example/
 """
 import glob
 import os
@@ -86,7 +88,12 @@ def jobs_files(fleet, methods=None):
 
 
 def main(argv):
-    fleet = _load(paths.resolve("config/fleet.yml"))
+    # The committed output is the PUBLIC, example-derived reference: `--check` VALIDATES it and `--example`
+    # REGENERATES it from instance.example/ (TEST-NET data only), on every checkout — so an operator's own fleet can
+    # never turn this product gate red or make a committed file stale. The bare write (deploy-stack, the capability
+    # regen on a node) reads the instance OVERLAY and writes that node's real file.
+    example = "--check" in argv or "--example" in argv
+    fleet = _load("instance.example/fleet.yml" if example else paths.resolve("config/fleet.yml"))
     want = {os.path.normpath(os.path.join(ROOT, rel)): body for rel, body in jobs_files(fleet).items()}
     have = {os.path.normpath(p)
             for p in glob.glob(os.path.join(ROOT, "prometheus", "jobs.d", "*.generated.yml"))}
@@ -100,7 +107,7 @@ def main(argv):
         for path in have - set(want):
             stale.append(os.path.relpath(path, ROOT) + " (orphaned)")
         if stale:
-            print("STALE prometheus jobs — re-run scripts/gen-prometheus-jobs.py:\n  " + "\n  ".join(stale))
+            print("STALE prometheus jobs — re-run scripts/gen-prometheus-jobs.py --example:\n  " + "\n  ".join(stale))
             return 1
         print("prometheus jobs up to date (%d file(s))" % len(want))
         return 0

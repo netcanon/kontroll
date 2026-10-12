@@ -32,6 +32,15 @@ os.environ.setdefault("GUI_PASSWORD", "test-password")
 os.environ.setdefault("GUI_AUDIT_LOG",
                       os.path.join(tempfile.gettempdir(), "kontroll-test-gui-audit.log"))
 
+sys.path.insert(0, os.path.join(ROOT, "tests"))      # import _hermetic (a helper beside this file)
+import _hermetic  # noqa: E402
+
+# HERMETIC OVERLAY — installed at IMPORT time, before any test module is collected (several read the fleet at module
+# import, before a fixture could run). From here on a reader that goes through kontroll.paths at the REAL checkout
+# sees no `instance/` overlay and lands on the shipped instance.example/, so the suite gives the same verdict on a
+# public clone, a CI runner and a tree that carries a private overlay. A tmp root is untouched. tests/_hermetic.py.
+_hermetic.install()
+
 import galaxy  # noqa: E402  (after sys.path is set up)
 from kontroll import paths  # noqa: E402  (the repo-root ROOT seam moved here in the service refactor)
 
@@ -85,9 +94,10 @@ def pytest_collection_modifyitems(items):
 @pytest.fixture
 def tmp_repo(tmp_path, monkeypatch):
     """A throwaway repo root for the file-mutating paths (enable_in_fleet, onboard
-    --apply). Copies the real instance/fleet.yml and creates the dirs the writers
-    target, then repoints kontroll.paths.ROOT at it — so --apply/enable_in_fleet never touch
-    the real tree. Backends/vectors still load from the real repo (read-only input)."""
+    --apply). Copies the shipped EXAMPLE fleet (the suite never reads a private overlay —
+    tests/_hermetic.py) and creates the dirs the writers target, then repoints
+    kontroll.paths.ROOT at it — so --apply/enable_in_fleet never touch the real tree.
+    Backends/vectors still load from the real repo (read-only input)."""
     (tmp_path / "config").mkdir()
     shutil.copy(paths.resolve("config/fleet.yml"), tmp_path / "config" / "fleet.yml")
     shutil.copy(os.path.join(ROOT, "config", "capture-exceptions.yml"),

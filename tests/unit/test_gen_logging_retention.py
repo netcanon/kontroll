@@ -30,11 +30,11 @@ def _override_doc(gen, fleet):
 
 
 def test_no_retention_emits_empty_overrides_failclosed():
-    """The real fleet (no module sets a `retention` param) emits `overrides: {}` — the FAIL-CLOSED default: the
+    """The shipped example fleet (no module sets a `retention` param) emits `overrides: {}` — the FAIL-CLOSED default: the
     capability streams inherit the bounded global LOKI_RETENTION_PERIOD, never an empty=infinite window. Guards
     a generator that emits a partial/garbage override (which, being invalid, would make Loki refuse to start)."""
     gen = _gen()
-    fleet = gen._load(paths.resolve("config/fleet.yml"))
+    fleet = gen._load("instance.example/fleet.yml")
     assert _override_doc(gen, fleet) == {"overrides": {}}
 
 
@@ -77,11 +77,11 @@ def test_tenant_key_is_fake_not_wildcard():
 
 
 def test_generated_override_is_always_valid_yaml():
-    """The real-fleet override file parses as a mapping with an `overrides` key — the always-valid invariant
+    """The example-fleet override file parses as a mapping with an `overrides` key — the always-valid invariant
     (M-1 F4: a malformed runtime_config is fatal at Loki startup, so the committed/generated file must always
     parse)."""
     gen = _gen()
-    fleet = gen._load(paths.resolve("config/fleet.yml"))
+    fleet = gen._load("instance.example/fleet.yml")
     doc = yaml.safe_load(gen.loki_retention_files(fleet)[gen.LOKI_OVERRIDES_REL])
     assert isinstance(doc, dict) and "overrides" in doc
 

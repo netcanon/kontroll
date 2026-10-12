@@ -20,7 +20,9 @@ non-zero (never a silent missing schedule). The output is a GENERATED lockfile k
 tests/validate step). Standalone — no ansible (the one kontroll import, paths, is os-only: the instance-overlay
 resolver); mirrors gen-observability.py.
 
-Usage:  python3 scripts/gen-backup.py [--check]
+Usage:  python3 scripts/gen-backup.py              # write from THIS node's fleet (the instance overlay)
+        python3 scripts/gen-backup.py --check      # validate the committed spec against instance.example/
+        python3 scripts/gen-backup.py --example    # regenerate the committed spec from instance.example/
 """
 import glob
 import os
@@ -112,7 +114,12 @@ def render(specs):
 
 
 def main(argv):
-    fleet = _load(paths.resolve("config/fleet.yml"))
+    # The committed output is the PUBLIC, example-derived reference: `--check` VALIDATES it and `--example`
+    # REGENERATES it from instance.example/ (TEST-NET data only), on every checkout — so an operator's own fleet can
+    # never turn this product gate red or make a committed file stale. The bare write (deploy-stack, the capability
+    # regen on a node) reads the instance OVERLAY and writes that node's real file.
+    example = "--check" in argv or "--example" in argv
+    fleet = _load("instance.example/fleet.yml" if example else paths.resolve("config/fleet.yml"))
     specs = backup_schedules(fleet)
     body = render(specs)
     path = os.path.join(ROOT, OUT)
@@ -121,7 +128,7 @@ def main(argv):
         # an orphaned spec (no class declares backup anymore) is also stale
         orphan = bool(glob.glob(os.path.join(ROOT, "config", "semaphore", "*.generated.yml"))) and not specs and cur
         if cur != body or orphan:
-            print("STALE %s — re-run scripts/gen-backup.py" % OUT)
+            print("STALE %s — re-run scripts/gen-backup.py --example" % OUT)
             return 1
         print("backup schedules up to date (%d schedule(s))" % len(specs))
         return 0

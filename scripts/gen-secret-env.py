@@ -25,7 +25,9 @@ declaring secret_env_map without a secret_domain, or two methods claiming the sa
 (domain, template). The per-secret fail-SOFT (absent domain -> empty value) is deploy-stack's job, not the generator's.
 Kept honest by --check (in tests/validate + an in-pytest twin).
 
-Usage:  python3 scripts/gen-secret-env.py [--check]
+Usage:  python3 scripts/gen-secret-env.py              # write from THIS node's fleet (the instance overlay)
+        python3 scripts/gen-secret-env.py --check      # validate the committed manifest against instance.example/
+        python3 scripts/gen-secret-env.py --example    # regenerate the committed manifest from instance.example/
 """
 import glob
 import os
@@ -167,7 +169,12 @@ def secret_env_files(fleet):
 
 
 def main(argv):
-    fleet = _load(paths.resolve("config/fleet.yml"))
+    # The committed output is the PUBLIC, example-derived reference: `--check` VALIDATES it and `--example`
+    # REGENERATES it from instance.example/ (TEST-NET data only), on every checkout — so an operator's own fleet can
+    # never turn this product gate red or make a committed file stale. The bare write (deploy-stack, the capability
+    # regen on a node) reads the instance OVERLAY and writes that node's real file.
+    example = "--check" in argv or "--example" in argv
+    fleet = _load("instance.example/fleet.yml" if example else paths.resolve("config/fleet.yml"))
     want = {os.path.normpath(os.path.join(ROOT, rel)): body for rel, body in secret_env_files(fleet).items()}
     cfg_dir = os.path.dirname(MANIFEST_REL)
     # Prune any stale config/*.manifest.generated.yml NOT in want — this auto-removes the retired
@@ -183,7 +190,7 @@ def main(argv):
         for path in have - set(want):
             stale.append(os.path.relpath(path, ROOT) + " (orphaned)")
         if stale:
-            print("STALE secret-env manifest — re-run scripts/gen-secret-env.py:\n  " + "\n  ".join(stale))
+            print("STALE secret-env manifest — re-run scripts/gen-secret-env.py --example:\n  " + "\n  ".join(stale))
             return 1
         print("secret-env manifest up to date (%d file(s))" % len(want))
         return 0

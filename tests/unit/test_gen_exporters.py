@@ -28,7 +28,7 @@ def _gen():
 
 
 gen = _gen()
-FLEET = gen._load(gen.paths.resolve("config/fleet.yml"))
+FLEET = gen._load("instance.example/fleet.yml")     # the shipped example, by name — never an operator's fleet
 
 
 def test_pve_exporter_fragment_generated_with_image_env_network():

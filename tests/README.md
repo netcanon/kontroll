@@ -55,6 +55,21 @@ tests never hard-code a real device. They target `tests/mock-inventory.yml`,
 whose hosts dispatch through the same `device_role` seam as production. To swap
 real ↔ fake you change the inventory, nothing else.
 
+## The suite never reads a private overlay
+
+`kontroll.paths` resolves instance config overlay-first, and the same suite runs on a public clone, on a CI
+runner and on a maintainer's tree that carries a real `instance/`. So `tests/conftest.py` installs a switch at
+import time ([_hermetic.py](_hermetic.py)): at the REAL checkout the resolver's two overlay probes answer
+"absent", and every reader lands on the shipped `instance.example/`. A tmp root (`tmp_repo`, a monkeypatched
+`paths.ROOT`, `KONTROLL_WRITE_ROOT`) is untouched, so the overlay-layout tests still see the `instance/` they
+build. The generators follow the same rule from the other side: `--check` validates the committed file against
+`instance.example/`, `--example` regenerates it, and only the bare run (what a deploy calls on a node) reads that
+node's overlay. A test therefore never asserts on the content of `instance/`.
+
+A few guards read the overlay on purpose, by its own path and not through the resolver, because their job is to
+check it: the leak guard's instance-token list, the vendor-neutral `group_vars` lint, the topology-leak test, and
+validate's `sops-encrypted` step.
+
 ## Adding tests
 
 1. **L1**: nothing to add — new YAML is linted automatically. Keep it valid.
