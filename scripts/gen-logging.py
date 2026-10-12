@@ -11,8 +11,8 @@ by name (the registry, logging/<name>.yml):
 This generator loads the logging-method registry (catalog.load_logging), then JOINS enabled modules
 (instance/fleet.yml) x their logs entries x the inventory hosts in each module's inventory_group, and writes
 ONE full-config Vector fragment per (method, key) into docker/vector/generated/ — a SOURCE + a shaping
-TRANSFORM with EXPLICIT component ids (NOT config.d implicit namespacing, so the ids never collide and
-`vector validate` is predictable) — plus a single aggregate `loki` SINK fragment consuming every generated
+TRANSFORM with EXPLICIT component ids (NOT config.d implicit namespacing, so the ids never collide and what
+Vector loads is what the file says) — plus a single aggregate `loki` SINK fragment consuming every generated
 transform. The fragments are loaded by a second `--config-dir /etc/vector/generated` (disjoint from the
 hand-authored config.d/ tree), so adding a class's log source is a generated drop-in, NEVER a hub edit.
 
@@ -130,7 +130,10 @@ def _validate_transform_vrl_or_exit(method, key):
     into the shaping transform BEFORE the canonical defaults) MUST be a non-empty list of non-empty strings —
     never a bare string (which a `+= list(...)` would splice character-by-character into garbage VRL) and never
     a structured object (un-renderable). The VRL body itself is REGISTRY-authored (same trust boundary as the
-    method's `source:` block); `vector validate` in CI is the semantic gate. This guard catches a malformed
+    method's `source:` block). Nothing compiles the rendered fragment before Vector loads it: the gate's
+    `vector validate` reads the hand-written configuration only, and `gen-logging.py --check` holds the
+    generated files to freshness, not to Vector's parser (SECURITY.md C22, known gaps). This guard catches a
+    malformed
     descriptor at GENERATE time — a typed-wrong transform_vrl — rather than at Vector startup (C12 config-as-
     data: a log-method descriptor is validated before it can shape an event)."""
     tv = method.get("transform_vrl")

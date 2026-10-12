@@ -339,8 +339,9 @@ def test_credentialed_source_env_must_be_declared_in_secret_env_map():
 def test_malformed_transform_vrl_is_rejected():
     """A `transform_vrl` that is a bare string (a `+= list(...)` would splice it char-by-char into garbage VRL)
     or that carries a non-string entry exits non-zero at GENERATE time — the fail-closed config-as-data shape
-    guard, so a mistyped log-method descriptor fails before it can emit broken VRL that only `vector validate`
-    or a live Vector startup would otherwise catch (C12). The absent + well-formed cases must NOT exit."""
+    guard, so a mistyped log-method descriptor fails before it can emit broken VRL that only a live Vector
+    startup would otherwise catch — the gate does not compile a generated fragment (C12). The absent +
+    well-formed cases must NOT exit."""
     gen = _gen()
     with pytest.raises(SystemExit):
         gen._validate_transform_vrl_or_exit({"name": "m", "transform_vrl": "not a list"}, "k")

@@ -1109,7 +1109,13 @@ with unverified provenance (`signature != required`) may **not** target `edge_fi
 `gen-actuation.py` rejects the combination fail-closed at generate (never on plain absence), and the **app-store
 CREATE seam** (`POST /actuation/create`) refuses it earlier still, at author time (**403**), keying off the
 module-DERIVED `inventory_group` (not the operator's blast label) so a downgraded blast can't smuggle an unsigned
-install onto the high-blast tier — see the C10 create rider.
+install onto the high-blast tier — see the C10 create rider. **The cap compares group NAMES** (a known limit,
+written down 2026-10-12; nobody has accepted it): a parent group an instance defines over those two — the shipped
+example inventory has one, `network_devices` — is neither name, so the play of a unit attached to it addresses
+both devices and the cap does not ask; nor does it ask about a unit with no target group, whose play is rendered
+against `all`. What would close the first is a cap that reads group MEMBERSHIP: it needs the inventory, and it
+changes what this control names as its mechanism, so it is a theme with a review of its own. The second is
+listed with C22's known gaps; whether such a unit must then carry `signature: required` is a decision still open.
 
 **Built so far:** (1) **the data foundation** — `scripts/gen-requirements.py` emits the trust sidecar
 (`ansible/collections/trust.generated.yml`, gitignored) with `default_signature_policy: adaptive` + per-collection
@@ -1387,7 +1393,7 @@ off once `instance/` exists), the PII-guard workflow's path assertion (no tracke
 a tree whose `.gitignore` excludes the overlay). Design-of-record and the full sweep:
 `docs/reviews/2026-10-08-public-split-pii-sweep/`; operator runbook `docs/public-split.md`.
 
-### C22 — Request fields are closed charsets; repository writes are confined  ✔ implemented (2026-10-09; leftovers closed 2026-10-12)
+### C22 — Request fields are closed charsets; drop-in writes are confined  ✔ implemented (2026-10-09; leftovers closed 2026-10-12)
 
 **Threat:** the onboard/reconfigure/actuation requests carry fields that become PATH COMPONENTS
 (`modules/<key>/module.yml`, `onboarded-<key>.yml`, `ansible/secrets/<domain>.sops.yml`,
@@ -1458,10 +1464,19 @@ collection. A literal
 host var from a backend's or a class's `inline` credential field is a bool, an int or one plain word
 (`onboard._inline_literal`), because Ansible templates inventory variables; and a credential field's stem — for
 a field derived from an installed module's argument spec, an option name a third party published — is an
-identifier before it is formatted into the host var's lookup expression. Every repository write goes through
-`paths.confined()`, which resolves the target under `write_root()` and refuses an absolute path, a `..` that
-climbs out, a NUL or a symlink that points out. The instance-overlay existence probe confines its own join
-the same way for a READ (`paths._overlay_file_present`: a mapped path that climbs out is "absent"; a symlinked
+identifier before it is formatted into the host var's lookup expression. A write of a drop-in file — a module
+file (at onboard and at each reconfigure), the inventory drop-in at onboard, a unit descriptor and its values —
+goes through `paths.confined()`, which resolves the target under `write_root()` and refuses an absolute path, a
+`..` that climbs out, a NUL or a symlink that points out. No other write a request reaches passes it. Written at a
+fixed path: the fleet file, the instance file, the capture-exception file, the recipients file (`.sops.yaml`), the
+Homepage board's `services.yaml` and `settings.yaml`, the generated backup-schedule and Loki-retention files, and
+the git-ignored matrix cache. Written at a path whose one variable part is a name `paths.component()` has
+checked: a host-vars edit and a secret domain. Written at a path that is checked nowhere: the Prometheus target
+files and the Vector fragments that a telemetry or logging change regenerates inside the worker (and whose
+orphans it deletes) — each is named after a method of the registry and a line of the fleet file as it stands,
+which is the raw `enabled_modules` join of the known gaps below. The audit logs are written where the
+deployment's environment points them. The instance-overlay existence probe applies `confined()`'s rule to its
+own join, for a READ (`paths._overlay_file_present`: a mapped path that climbs out is "absent"; a symlinked
 `instance/` is followed, on purpose). The service readers that ENUMERATE classes — classify, the Fleet index,
 the audit, the discovery sweep — and `fetch-dashboards.py` skip an entry that is not a class key
 (`paths.enabled_keys`, `paths.module_keys`) instead of refusing: such an entry is data read back from a file,
@@ -1487,14 +1502,36 @@ handlers then answer as if a field had been refused — and the group, secrets d
 ADOPTS from an existing module file are not re-checked at all; `galaxy.py scaffold` (the CLI, no route) joins its
 `--key` into a path unvalidated; `gen-homepage.py` quotes a host name with its own escaping, which knows the
 newline and the carriage return and not the other line breaks, and `gen-logging.py` formats a host name and a
-class key into a string literal by hand; a few other anchored patterns (the capture revision, the
-discovery tokens, several generators) are still applied with `match()`; a lookup that finds nothing still
-quotes the unvalidated value it was asked for back to its sender; the deploy-time generators and `bootstrap.yml`
-still join a raw `enabled_modules` entry into a path, and the Settings view lists the fleet as it is — it shows
+class key into a string literal by hand — and nothing compiles the fragments that generator writes before Vector
+loads them: the gate checks them for freshness, and its `vector validate` reads the hand-written configuration
+only; a few other anchored patterns (the capture revision, the discovery tokens, several generators) are still
+applied with `match()`; the deploy-time generators — some of which also run inside the API and GUI workers after
+a capability change — and `bootstrap.yml` still join a raw `enabled_modules` entry into a path, and the Settings
+view lists the fleet as it is — it shows
 some malformed lines and cannot remove one that is not a string; a tree that ALREADY gives one board two names is
 fetched under the first only (a request can no longer create that); `validate_unit` does not look at a unit's
 collection or name, which are bounded where they are rendered rather than where the descriptor is validated; and
-`all`, which Ansible reserves, passes as an inventory group.
+`all`, which Ansible reserves, passes as an inventory group — as does NO group on a unit, which its play renders
+as `all`.
+**Limits written down here, not closed by this control's follow-up:** a lookup that finds nothing still quotes
+the unvalidated value it was asked for back to its sender (it belongs with the work on error bodies, which
+rewrites those answers). The Tier-cap compares group NAMES: a parent group an instance defines over
+`edge_firewall` or `core_switch` is neither name, and the play of a unit attached to it addresses them (C15-a,
+where the limit is written down with what would close it). In a hand-written descriptor a unit's `collection`
+need not be one that its `install.collections` pins, and a standalone unit's playbook path has no charset (both
+are C15-a's to close). `kontroll-init --fresh` writes `--mgmt-ip` and `--domain` as given into the instance file
+and into the Homepage board's `services.yaml` — at a shell, by the operator, into their own files — and
+`scripts/kontroll-promote.py`, when it is run by hand (as root, or as a member of the canonical's group), takes
+its `run_id` with no grammar at all — the promote play checks one before it calls the same script, with `match`,
+as the patterns above are. And `plain_scalar` is a rule about how YAML reads a word, not about how a person
+reads it: characters outside ASCII that format or space text — the bidirectional controls, a zero-width space,
+a no-break space — are plain words to it (the byte-order mark and the line and paragraph separators are not).
+No request field that is held to it admits a non-ASCII character today: every request charset is an ASCII
+class. Two sets are a descriptor author's to choose — a `text` knob's pattern and an `enum` knob's allow-list —
+and in Python `\w`, `\d`, `\S`, `.`, a negated class and a class under `(?i)` all reach beyond ASCII, so the
+rule is owed with the first knob that uses one. Free text that is serialized rather than formatted — a capture
+exception's subject and notes — is not held to the rule at all, and the serializer writes such a character as
+it is.
 **Proves:** `tests/unit/test_request_boundary.py` (every validator's accept/reject table including `..`,
 separators, NUL, a newline — also as the last character —, an IPv6 zone id, a 65th char and a 254-char
 hostname; `confined()` against `../`, absolute and climbing paths; the planner refusing before the probe is

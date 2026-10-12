@@ -217,8 +217,9 @@ capability-detection FEATURE VECTOR — distinct from, but serendipitously align
     defaults. So `syslog_push` maps RFC5424 `.severity` → `.level` and `journald_remote` maps `._SYSTEMD_UNIT`
     → `.service` + `PRIORITY` → `to_syslog_level(...)` — the same derivation the live internal journald
     transform uses — WITHOUT `gen-logging` ever branching on the method name. Adding a derivation is a registry
-    edit, not a generator change; the field is shape-validated at generate time (`vector validate` is the
-    semantic gate).
+    edit, not a generator change; the field is shape-validated at generate time; nothing compiles the rendered
+    VRL before Vector loads it — the gate's `vector validate` reads the hand-written tree only (SECURITY.md C22,
+    known gaps).
   - **Pull fan-out + dedupe (data-driven):** a PULL method that returns `{<field>:[...]}` can declare
     `pull_unnest: <field>` (fan to one event per element via `. = unnest!(.<field>)`, `is_array`-guarded) and
     `dedupe_key: <path>` (a Vector `dedupe` keyed on a unique field, since a recent-window poll re-ingests).

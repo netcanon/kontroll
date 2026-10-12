@@ -11,6 +11,37 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs(security): C22 says which writes are confined, and its known gaps say what is true (2026-10-12)
+
+No behaviour changes. Control C22 of `SECURITY.md` ends with a list of its own known gaps; the design run for
+closing them found that the list, and one sentence above it, were not exact.
+
+- **"Every repository write goes through `paths.confined()`" was not true.** The drop-in writers do — a module
+  file, the inventory drop-in at onboard, a unit descriptor and its values. Nothing else a request can make the
+  server write passes it, and the control now names each such writer and how it builds its path: a fixed path
+  (the fleet file, the instance file, the capture-exception file, the recipients file, the Homepage board's two
+  files, the generated backup-schedule and Loki-retention files, the matrix cache); a path whose one variable
+  part is a checked name (a host-vars edit, a secret domain); and one kind that is checked nowhere — the
+  Prometheus target files and Vector fragments a telemetry or logging change regenerates inside the worker,
+  named after a line of the fleet file as it stands (the raw-fleet-line gap, already listed). The control's
+  heading says "drop-in writes are confined" accordingly; the same claim is corrected in a comment of
+  `paths.py` and in a test's docstring. The writers are unchanged.
+- **Written down, not built:** nothing compiles the Vector fragments `gen-logging.py` writes before Vector loads
+  them (the gate checks them for freshness; `vector validate` reads the hand-written configuration only — the
+  generator's docstring, the logging README, the logging architecture page and a lint exclusion called that
+  "the semantic gate", and no longer do); a unit with NO target group passes the Tier-cap and its play addresses
+  every host; the cap compares group names, so a parent group an instance defines over the edge firewall or the
+  core switch is not seen (C15-a now says so, and what would close it); in a hand-written descriptor a unit's
+  `collection` need not be one its `install.collections` pins; `kontroll-init --fresh` writes `--mgmt-ip` and
+  `--domain` as given; `kontroll-promote.py`, run by hand, takes its `run_id` with no grammar; and
+  `yamlscalar.plain_scalar` is a rule about how YAML reads a word — a bidirectional control or a no-break space
+  is a plain word to it, which no request field held to the rule admits today (a capture exception's free text
+  is not held to it at all).
+- **Moved:** "a lookup that finds nothing quotes the unvalidated value it was asked for back to its sender"
+  belongs with the work on error bodies, and the paragraph says so.
+
+The gaps that remain in the paragraph are closed in the pull requests that follow, each deleting its own clause.
+
 ### docs: one written install sequence — every other copy points at it, and every scaffold command names its trust mode (2026-10-12)
 
 The first-install sequence stood in many places — the quickstart, the README, `docs/SETUP.md`, the VM recipe, the

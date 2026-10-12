@@ -17,7 +17,8 @@ exclude_paths:
   - .github/                        # GitHub Actions workflows — not ansible content
   - ansible/collections/            # generated requirements + installed collections (build artifacts)
   - docker/vector/generated/        # gen-logging.py output (Vector fragments) — generated, not human YAML;
-                                    #   correctness is gated by `gen-logging --check` + `vector validate`
+                                    #   `gen-logging --check` holds it to freshness, and nothing compiles it
+                                    #   before Vector loads it (SECURITY.md C22, known gaps)
   - prometheus/exporters/snmp/modules.generated.yml  # gen-snmp.py output (snmp_exporter if_mib) —
                                     #   generated from public MIBs, not human YAML (long help: lines);
                                     #   gated by `gen-snmp --check` + the CGO `snmp-modules` byte-gate
