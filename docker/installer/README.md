@@ -9,7 +9,7 @@ stack. Design-of-record: [docs/reviews/2026-06-29-compose-native-install/99-synt
 
 | File | Role |
 |---|---|
-| `Dockerfile` | `debian:12-slim` + pinned ansible-core + the **control-plane** collections (via the unchanged never-brick wrapper) + sops/age + the docker CLI. Bakes **no** secret, age key, or `instance/`. |
+| `Dockerfile` | `debian:12-slim` + pinned ansible-core + the **control-plane** collections (`modules/_core.yml`, generated in the build by `gen-requirements.py --core`, installed via the unchanged never-brick wrapper) + sops/age + the docker CLI. Bakes **no** secret, age key, or `instance/`. |
 | `entrypoint.sh` | Thin verb dispatcher — `init` · `check` · `fresh-init` · `configure-semaphore` · `shell` · `*` (ansible-playbook passthrough). No provisioning logic; every verb shells an existing playbook/script. |
 | `../services/installer.yaml` | The ephemeral, portless, `network_mode: host` compose service (a standalone fragment — see *Why standalone*). |
 | `../../scripts/kontroll-installer.sh` | The launcher: injects the operator identity (MF-1) + ensures the host bind targets exist, then runs the service. |

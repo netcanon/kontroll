@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(collections): `community.docker` is a core collection — `deploy-stack` no longer depends on a device class (2026-10-12)
+
+`deploy-stack` builds the control image and its networks with `community.docker` on every fleet, but the only
+declaration of that collection was the `docker_host` DEVICE class. On a host-direct node whose fleet has no Docker
+hosts the bootstrap installed no `community.docker` and `deploy-stack` could not resolve its first image build. It
+was never seen because the compose-native path hid it: the installer image wrote a fabricated
+`enabled_modules: [docker_host]` fleet into its own tree, generated from it, and deleted it again. `modules/_core.yml`
+now carries the collection (same floor as the class, which keeps its own declaration — a class describes itself),
+`gen-requirements.py --core` resolves that file alone without reading any fleet, and the installer image uses it.
+**On an existing node:** the generated lockfile and trust sidecar change (one more entry, or the same entries in a
+different order), so `gen-requirements.py --check` reports them STALE until the next `bootstrap` or local-build
+`deploy-stack` regenerates them — a true report that heals itself. Where the collection is already installed the
+control-node bootstrap fetches nothing. A box that builds its runner image locally rebuilds that image's collection
+layer once on its next `deploy-stack` (the lockfile the image copies in is byte-different, so the layer cache
+misses) — that build needs Galaxy and PyPI, as a fleet change does. No image needs republishing: the published
+images already contain the collection.
+
 ### chore(tests): the Molecule scaffold is removed — it could not fail (2026-10-12)
 
 `tests/molecule/default` converged one role with `molecule_test: true`, and every role's `check` and `backup`

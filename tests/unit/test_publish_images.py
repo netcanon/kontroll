@@ -12,6 +12,7 @@ import os
 import re
 
 import pytest
+import yaml
 
 pytestmark = pytest.mark.unit
 
@@ -57,6 +58,54 @@ def test_all_modules_superset_covers_every_module_and_the_alternatives():
     assert {"fortinet.fortios", "ansibleguy.opnsense", "cisco.ios", "community.routeros"} <= names, \
         "the superset must union the alternative vendor collections, not just one fleet's"
     assert {"community.sops", "community.general", "community.docker"} <= names, "the control-plane base must be present"
+
+
+def test_core_mode_resolves_exactly_the_core_file_and_reads_no_fleet(monkeypatch, tmp_path, capsys):
+    """`gen-requirements.py --core` writes a lockfile AND a trust sidecar holding exactly the collections of
+    modules/_core.yml, in that file's order, and never asks for a fleet — called with an explicit out-path and, as
+    the installer Dockerfile calls it, with `--core` alone and the default destination. Guards the installer's base
+    quietly reading a fleet: on a tree with no `instance/` (an image build context, a public checkout) the resolver
+    falls through to the shipped example fleet, whose device classes would then be baked into the installer. Also
+    pins that `--core` refuses to be combined with `--all-modules` (two different sets) or with `--conflict-check`
+    (it resolves no actuation unit, so that gate could never refuse)."""
+    g = _load_script("scripts/gen-requirements.py", "genreq_core")
+    core = [c["name"] for c in yaml.safe_load(_read("modules/_core.yml"))["collections"]]
+    real_resolve = g.paths.resolve
+
+    def resolve(rel):
+        assert "fleet" not in rel, "--core must not read a fleet: %s" % rel
+        return real_resolve(rel)
+    monkeypatch.setattr(g.paths, "resolve", resolve)
+    out = tmp_path / "requirements.yml"
+    monkeypatch.setattr(g, "SIDECAR_DEST", str(tmp_path / "trust.yml"))
+    monkeypatch.setattr(g.sys, "argv", ["gen-requirements.py", str(out), "--core"])
+    g.main()
+    assert [c["name"] for c in yaml.safe_load(out.read_text(encoding="utf-8"))["collections"]] == core
+    # the Dockerfile's own shape: `--core` first, the default destination
+    default = tmp_path / "default.yml"
+    monkeypatch.setattr(g, "LOCKFILE_DEST", str(default))
+    monkeypatch.setattr(g.sys, "argv", ["gen-requirements.py", "--core"])
+    g.main()
+    assert [c["name"] for c in yaml.safe_load(default.read_text(encoding="utf-8"))["collections"]] == core
+    sidecar = yaml.safe_load((tmp_path / "trust.yml").read_text(encoding="utf-8"))
+    assert [c["name"] for c in sidecar["collections"]] == core
+    for clash in ("--all-modules", "--conflict-check"):
+        monkeypatch.setattr(g.sys, "argv", ["gen-requirements.py", "--core", clash])
+        with pytest.raises(SystemExit):
+            g.main()
+
+
+def test_core_collections_lead_every_generated_lockfile():
+    """Whatever the fleet — every module, or none at all — the resolved set begins with the collections of
+    modules/_core.yml, `community.docker` among them. Guards a host-direct node whose fleet has no Docker hosts
+    installing no `community.docker` and then failing in `deploy-stack`, which builds the control image and its
+    networks with that collection on every fleet."""
+    g = _load_script("scripts/gen-requirements.py", "genreq_lead")
+    core = [c["name"] for c in yaml.safe_load(_read("modules/_core.yml"))["collections"]]
+    assert "community.docker" in core
+    for enabled in ([], ["proxmox"], g.all_module_keys()):
+        out, _ = g.compute(enabled, g.paths.resolve("actuation"))
+        assert [c["name"] for c in out][:len(core)] == core, enabled
 
 
 def test_image_lockfile_is_wellformed_and_roundtrips():

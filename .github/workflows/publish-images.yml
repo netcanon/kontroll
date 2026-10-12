@@ -84,10 +84,10 @@ jobs:
           - image: installer
             context: .
             dockerfile: docker/installer/Dockerfile
-            # NOT superset: the installer bakes only the control-plane base (community.sops/general/docker via its own
-            # transient docker_host fleet, Dockerfile §"Bake the CONTROL-PLANE collection base") — never the device
-            # fleet. The all-modules superset is the RUNNER's job (it runs fleet ansible); the installer only drives
-            # bootstrap/local-canonical/deploy-stack on the control node itself.
+            # NOT superset: the installer bakes only the control-plane base (modules/_core.yml, generated inside
+            # the build by `gen-requirements.py --core` — Dockerfile §"Bake the CONTROL-PLANE collection base") —
+            # never the device fleet. The all-modules superset is the RUNNER's job (it runs fleet ansible); the
+            # installer only drives bootstrap/local-canonical/deploy-stack on the control node itself.
             superset: false
     steps:
       - uses: actions/checkout@v7
