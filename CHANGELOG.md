@@ -11,6 +11,25 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test(gates): the hygiene sweeps read every role, and the read-only pin follows what a view can reach (2026-10-12)
+
+Two guards covered less than their names said. The `set_fact` and self-referencing-variable sweeps read
+`ansible/playbooks/` only, although both faults are fatal on a real run and the role files are what every device
+play executes; and `assert_read_only` — the pin behind "a read view never gains an actuation path" — read the
+pinned function's **direct** calls, so a view whose write sat one helper away passed, and a refactor that split a
+view into helpers un-pinned it without anyone deciding so. The sweeps now walk every role's task and handler files
+at any depth, the copy-me `.role-template` included, and the variable sweep also reads role `defaults/` and
+`vars/` and the playbook-adjacent `group_vars`; a role YAML file in a place neither sweep reads fails a test
+instead of escaping. The pin now follows, by name, the helpers of the same module (called, or handed on as a
+callback) and the functions of other repository modules reached through an import, and in each looks for a
+registered write verb **and** for the write primitives themselves — so a pinned function that writes with
+`Path.write_text` or `os.replace` is refused even where the completeness gate would only have asked for it to be
+registered. A failure names the path, e.g. `fleet_provenance -> paths.write_root -> (a direct write)`. Both
+guards are clean on today's tree — every pinned read view, at the strictest closure — and each is proven by a
+planted violation. What the pin cannot follow is dynamic dispatch (a computed `getattr`, a function passed in as
+data). Proofs: `tests/unit/test_playbook_setfact_hygiene.py`, `tests/unit/test_playbook_vars_hygiene.py`,
+`tests/unit/test_readonly_completeness.py`. No product code changes.
+
 ### fix(tests,generators): the suite and four product gates read the shipped example, never a private fleet (2026-10-12)
 
 `kontroll.paths` resolves instance config overlay-first, so on a tree that carries a real `instance/` — the

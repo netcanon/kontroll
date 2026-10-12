@@ -961,7 +961,14 @@ new read path for crown-jewel secrets (running-config hashes, PSKs, SNMP communi
   **fail-CLOSED completeness gate** (`assert_write_verbs_complete`, P0b/#134) AST-scans the whole service+gitio
   layer and breaks CI if any DIRECT mutator (write-open / git-mutating argv / SOPS write) is not in `WRITE_VERBS`
   — keeping the pin EXHAUSTIVE (its 2026-06-24 sweep closed a real gap: `gitio.sops_write_domain`, an unpinned
-  secret-writer). This read-only-by-construction guarantee underpins the C9/C10 privileged-surface read views too.
+  secret-writer). Since 2026-10-12 `assert_read_only` is **transitive**: it follows the pinned function's helpers
+  (called, or passed on as a callback) and the functions of other repository modules it reaches through an
+  import, and looks in each for a registered verb and for the write primitives themselves. A read view can no
+  longer be un-pinned by splitting it into helpers or by moving the write behind an unregistered function of
+  another module, and a pinned function that writes with a primitive no verb names is refused even if it was
+  registered. What it cannot follow is dynamic dispatch (a computed `getattr`, a function passed in as data) —
+  that stays with review. This read-only-by-construction guarantee underpins the C9/C10 privileged-surface read
+  views too.
 - **Strict input validation BEFORE any `git show`.** `rev` is a 7–40-hex SHA; `file` must be a MEMBER of the
   store's own index allow-list (stronger than a path regex — no `..`/`/`/`-flag`/NUL can be a real capture name);
   `--` precedes every path; subprocess is an argv list (never `shell=True`); output is byte-bounded. Path-traversal

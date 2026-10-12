@@ -167,12 +167,43 @@ guarantee.
 ## Read-only-by-construction gate (`tests/unit/_readonly_pins.py`)
 
 The shared AST pins guard the read-only / C10 two-key guarantee in CI: `assert_read_only`
-(a named read function calls no write/actuation verb, #133) + `assert_no_git_write`
-(a service that shells git picks a read-only subcommand on every argv, #131). Both check
-calls against `WRITE_VERBS`, so they fail **OPEN** — a mutator the registry doesn't know
-is invisible. `assert_write_verbs_complete` (P0b/#134) closes that: it scans the whole
-service+gitio layer and fails CI if any **direct** mutator (write-open / git-mutating argv /
-SOPS write) isn't in `WRITE_VERBS` — so registering a new write verb in the same commit is an
-enforced gate, not a convention (`test_readonly_completeness.py`, proven against planted
-violations). Add a new read view? Add its `assert_read_only` test. Add a new writer? CI tells
-you to register it.
+(a named read function reaches no write, #133) + `assert_no_git_write` (a service that shells
+git picks a read-only subcommand on every argv, #131).
+
+`assert_read_only` is **transitive**. From the pinned function it follows, by name, every
+helper of the same module (called, or handed on as a callback) and every function of another
+module of this repository reached through an import — `alias.func`, `pkg.mod.func`, a
+`from module import func` name, an import inside a function body. In each function on the way
+it looks for a registered write verb called by name **and** for the write primitives themselves
+(a write-mode `open`, `write_text`, `os.replace`, a mutating git argv, a SOPS write), so a
+write that no verb names is seen as well. A failure prints the path, e.g.
+`fleet_provenance -> paths.write_root -> (a direct write)`. It cannot follow what no static
+reading can — `getattr()` with a computed name, a function kept in a dict or passed in as an
+argument, a method reached through another module's object. The fix for a hit is to stop
+writing from the read view, never to trim the closure.
+
+The name check alone fails **open** on a mutator the registry does not know, so
+`assert_write_verbs_complete` (P0b/#134) scans the whole service+gitio layer and fails CI if any
+**direct** mutator (write-open / git-mutating argv / SOPS write) isn't in `WRITE_VERBS` —
+registering a new write verb in the same commit is an enforced gate, not a convention. Both
+halves are proven against planted violations (`test_readonly_completeness.py`): a helper one
+and two calls away, a callback, a sibling module under each import spelling the closure knows,
+a primitive no verb names — plus a check on the real tree that the closure still resolves the
+GUI's and the service layer's imports. Add a new read view? Add its `assert_read_only` test.
+Add a new writer? CI tells you to register it.
+
+## Playbook and role hygiene sweeps
+
+Two faults that pass `--syntax-check` and `ansible-lint` and fail only on a real run are swept
+statically, over every playbook **and every role** — task and handler files at any depth, the
+copy-me `.role-template` included, because role files are what every device play executes:
+
+- `tests/unit/test_playbook_setfact_hygiene.py` — no `set_fact` key templates a sibling key of
+  the same task (the sibling is undefined when the task renders).
+- `tests/unit/test_playbook_vars_hygiene.py` — no variable is defined in terms of itself: play,
+  block and task `vars:`, a role's `defaults/` and `vars/` files, the playbook-adjacent
+  `group_vars`.
+
+A role YAML file in a place neither sweep reads (a role's root, an unknown subdirectory) fails
+`test_every_role_yaml_file_is_of_a_kind_the_sweeps_read`: teach the sweeps the new kind rather
+than leave the file unread.

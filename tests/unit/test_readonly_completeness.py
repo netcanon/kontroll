@@ -10,6 +10,7 @@ WRITE_VERBS in the same commit" an ENFORCED gate, not a human convention. The de
 and the end-to-end gate are both proven against PLANTED violations so the gate can't silently no-op.
 """
 import ast
+import os
 import textwrap
 
 import pytest
@@ -107,3 +108,184 @@ def test_gate_fires_on_an_unregistered_writer(monkeypatch, tmp_path):
     monkeypatch.setattr(_readonly_pins, "ROOT", str(tmp_path))
     with pytest.raises(AssertionError, match="sneaky_write"):
         assert_write_verbs_complete()
+
+
+_PLANTED = """
+import pathlib
+
+
+def commit_and_push(paths, message):
+    return 0
+
+
+def _writes(x):
+    return commit_and_push([x], "m")
+
+
+def _stores(x):
+    with open(x, "w") as fh:
+        fh.write("a")
+
+
+def _reads(x):
+    with open(x) as fh:
+        return fh.read()
+
+
+def view_through_a_helper(x):
+    return _writes(x)
+
+
+def view_through_two_helpers(x):
+    return _middle(x)
+
+
+def _middle(x):
+    return _stores(x)
+
+
+def view_with_a_callback(xs):
+    return list(map(_writes, xs))
+
+
+def view_that_writes_without_a_verb(x):
+    pathlib.Path(x).write_text("a")
+
+
+def view_that_only_reads(x):
+    return _reads(x) + _loops(x)
+
+
+def _loops(x):
+    return _loops(x) if False else ""
+"""
+
+_PLANTED_VIEWS = """
+from . import store
+from . import store as kept
+from .store import save as keep, read_back
+
+
+def view_through_a_module(x):
+    return store.save(x)
+
+
+def view_through_an_alias(x):
+    return kept.save(x)
+
+
+def view_through_an_imported_name(x):
+    return keep(x)
+
+
+def view_with_a_lazy_import(x):
+    from .store import save
+    return save(x)
+
+
+def view_that_reads_through_a_module(x):
+    return read_back(x) + store.read_back(x)
+"""
+
+_PLANTED_STORE = """
+import os
+
+
+def save(x):
+    return _replace(x)
+
+
+def _replace(x):
+    os.replace(x + ".tmp", x)
+
+
+def read_back(x):
+    with open(x) as fh:
+        return fh.read()
+"""
+
+
+def _plant(tmp_path):
+    module = tmp_path / "planted.py"
+    module.write_text(_PLANTED, encoding="utf-8")
+    return str(module)
+
+
+def _plant_package(tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "views.py").write_text(_PLANTED_VIEWS, encoding="utf-8")
+    (pkg / "store.py").write_text(_PLANTED_STORE, encoding="utf-8")
+    return str(pkg / "views.py")
+
+
+def _refused(module, func):
+    with pytest.raises(AssertionError) as e:
+        _readonly_pins.assert_read_only(module, func)
+    return str(e.value)
+
+
+def test_the_pin_follows_a_same_module_helper_to_a_write_verb(tmp_path):
+    """`assert_read_only` fails for a read view whose write is one or two same-module helpers away — a registered
+    write verb, or a file opened for writing — and the message names the path from the view to the write. Guards a
+    refactor that splits a read view into helpers and thereby un-pins it: the pin used to look at the function's
+    direct calls only, so `view() -> _helper() -> commit_and_push()` passed."""
+    module = _plant(tmp_path)
+    assert "view_through_a_helper -> _writes -> commit_and_push" in _refused(module, "view_through_a_helper")
+    assert "view_through_two_helpers -> _middle -> _stores -> (a direct write)" in \
+        _refused(module, "view_through_two_helpers")
+
+
+def test_the_pin_follows_a_helper_that_is_passed_on_and_not_called(tmp_path):
+    """A read view that hands a writing helper to `map()` is refused, with the path. Guards the callback form of
+    the same hiding place: the view never CALLS the helper, so a closure over call names alone would pass it — and
+    `map`, `sorted(key=…)` and a thread target are ordinary ways for a helper to run."""
+    assert "view_with_a_callback -> _writes -> commit_and_push" in _refused(_plant(tmp_path), "view_with_a_callback")
+
+
+def test_the_pin_sees_a_write_primitive_no_verb_names(tmp_path):
+    """A pinned function that writes with `pathlib.Path(...).write_text` — no registered verb, no bare `open` — is
+    refused. Guards the gap between the two gates: the completeness sweep would only have asked for such a function
+    to be REGISTERED as a verb, after which both gates were green while a pinned read view wrote a file."""
+    assert "view_that_writes_without_a_verb -> (a direct write)" in \
+        _refused(_plant(tmp_path), "view_that_writes_without_a_verb")
+
+
+def test_the_pin_follows_a_call_into_another_module(tmp_path):
+    """A read view whose write lives in ANOTHER module of the same package is refused however the import is spelled
+    — `from . import store`, an alias, `from .store import save as keep`, an import inside the function body — and
+    the path names the module. Guards writing by delegation: the name check only ever saw a registered verb called
+    directly, so moving the write behind an unregistered function of a sibling module un-pinned the view."""
+    module = _plant_package(tmp_path)
+    for view in ("view_through_a_module", "view_through_an_alias", "view_through_an_imported_name",
+                 "view_with_a_lazy_import"):
+        message = _refused(module, view)
+        assert "%s -> store.save -> store._replace -> (a direct write)" % view in message, message
+
+
+def test_a_helper_that_only_reads_does_not_trip_the_pin(tmp_path):
+    """A read view that calls helpers which only read — a same-module one, a recursive one, and one in another
+    module — passes, and the closure terminates. Guards the transitive pin against noise and against a loop on a
+    self-calling helper; a pin that cries wolf gets its call sites removed."""
+    module = _plant(tmp_path)
+    _readonly_pins.assert_read_only(module, "view_that_only_reads")
+    assert _readonly_pins.write_paths(module, "view_that_only_reads") == []
+    package = _plant_package(tmp_path)
+    _readonly_pins.assert_read_only(package, "view_that_reads_through_a_module")
+    visited = [trail for _path, _name, trail in _readonly_pins.reachable(package, "view_that_reads_through_a_module")]
+    assert ["view_that_reads_through_a_module", "store.read_back"] in visited      # it WAS followed, and is clean
+
+
+def test_the_closure_resolves_the_real_trees_imports():
+    """From a pinned GUI route the closure reaches functions of the service layer, and from a pinned service view
+    it reaches other modules of that layer. Guards the cross-module step silently resolving nothing — after a
+    package move, or a change in how the GUI imports the service layer — which would leave every pin green while
+    the closure had quietly shrunk back to one file."""
+    service = os.path.join("scripts", "kontroll", "service") + os.sep
+    from_gui = {os.path.relpath(path, _readonly_pins.ROOT)
+                for path, _name, _trail in _readonly_pins.reachable("gui/app.py", "api_provenance")}
+    assert any(p.startswith(service) for p in from_gui), sorted(from_gui)
+    from_view = {os.path.relpath(path, _readonly_pins.ROOT) for path, _name, _trail in
+                 _readonly_pins.reachable("scripts/kontroll/service/configurable.py", "configurable_view")}
+    assert len(from_view) >= 3, sorted(from_view)
