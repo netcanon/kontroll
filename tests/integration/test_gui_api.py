@@ -356,6 +356,35 @@ def test_capability_promote_commits_scoped_and_audits(client, cap_class, monkeyp
     assert "capability-promote" in logpath.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("failing", ["add", "commit"])
+def test_capability_promote_that_does_not_commit_is_an_error_not_a_success(client, cap_class, monkeypatch, tmp_path,
+                                                                           failing):
+    """When the stage does not commit — `git add` refuses a path, or `git commit` fails — the capability route
+    answers 500 with an `error`, audits `committed=False` under the same run id, and issues no push. Guards the one
+    route that did not read the seam's result: it answered 200 `{applied: true, changed: true, committed: false}`
+    and the page printed "committed to main", with the paths and the enact steps, for a change that was staged
+    nowhere."""
+    calls = []
+
+    def run(cmd, cwd=None, quiet_args=0):
+        calls.append(list(cmd))
+        return 1 if cmd[1] == failing else 0
+
+    monkeypatch.setattr(gitio, "_run", run)
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    body = {"key": "demo_sw", "selection": {"method": "host_node"}}
+    token = client.post("/api/capability/telemetry", headers=_auth(), json=body).get_json()["token"]
+    r = client.post("/api/capability/telemetry", headers=_auth(), json=dict(body, apply=True, token=token))
+    assert r.status_code == 500
+    answer = r.get_json()
+    assert "commit failed" in answer["error"] and answer["run_id"] and "applied" not in answer
+    assert [c[1] for c in calls if c[1] in ("commit", "push")] == (["commit"] if failing == "commit" else [])
+    result = [ln for ln in logpath.read_text(encoding="utf-8").splitlines() if "capability-result" in ln]
+    assert len(result) == 1 and "committed=False" in result[0] and answer["run_id"] in result[0]
+
+
 def test_capability_reconfigure_propose_surfaces_the_diff(client, cap_class):
     """Re-proposing a DECLARED backup block with a CHANGED knob (retention keep-all → 90d) is a reconfigure
     (Phase 4a): the propose response carries `changes`/`will_overwrite`/`severity` (the diff the dialog renders

@@ -29,7 +29,8 @@ import yaml
 from kontroll import catalog, paths
 from kontroll.service import promote
 from kontroll.service import _diff
-from kontroll.service._blockwrite import insert_into_block, upsert_into_block, validate_params
+from kontroll.service._blockwrite import (insert_into_block, staged_paths, upsert_into_block, validate_params,
+                                          write_module)
 
 log = logging.getLogger("kontroll.service.logsvc")
 
@@ -73,7 +74,8 @@ def _render_logs_entry(method_name, params):
 # --- PROPOSE (pure) ------------------------------------------------------------------------------------ #
 def build_logging_plan(key, method_name, params=None, methods=None):
     """Compute the logging PLAN for adding `method_name` (+ optional params incl. a `retention` preset) to
-    onboarded class `key`. PURE — reads modules/<key>/module.yml via paths.ROOT, writes nothing. Returns
+    onboarded class `key`. PURE — reads modules/<key>/module.yml through paths.module_file (the clone's copy
+    shadows the baked one), writes nothing; `mod_path` is the WRITE target (paths.module_write_path). Returns
     {"error": "not_onboarded"|"unknown_method"|"bad_param"|"already_declared"|None, ...}; on success the plan
     carries the comment-preserving module text AFTER the add, the repo-rel paths promote will commit (the
     module + the method's generated Vector source/transform drop-ins), the enact commands, and the
@@ -85,8 +87,8 @@ def build_logging_plan(key, method_name, params=None, methods=None):
     methods = methods if methods is not None else catalog.load_logging()
     by_name = {m["name"]: m for m in methods}
     mod_rel = "modules/%s/module.yml" % key
-    mod_path = os.path.join(paths.ROOT, mod_rel)
-    if not os.path.exists(mod_path):
+    read_path = paths.module_file(key)        # the clone shadows the baked root — what current_values() reads too
+    if not os.path.exists(read_path):
         return {"error": "not_onboarded", "key": key}
     method = by_name.get(method_name)
     if method is None:
@@ -95,7 +97,7 @@ def build_logging_plan(key, method_name, params=None, methods=None):
     if bad:
         return {"error": "bad_param", "key": key, "method": method_name, "detail": bad}
 
-    with open(mod_path, encoding="utf-8") as fh:
+    with open(read_path, encoding="utf-8") as fh:
         text_before = fh.read()
     module = yaml.safe_load(text_before) or {}
     # RECONFIGURE (Phase 4a) — mirror observe.build_telemetry_plan: read current, DIFF, then add/no-op/upsert.
@@ -117,7 +119,7 @@ def build_logging_plan(key, method_name, params=None, methods=None):
     regen = _generated_paths(key, method_name)
     sev_dec = _diff.severity_decision(diff)
     return {"error": None, "key": key, "method": method_name, "params": params or {},
-            "mod_rel": mod_rel, "mod_path": mod_path,
+            "mod_rel": mod_rel, "mod_path": paths.module_write_path(key),   # the WRITE target: write_root()
             "text_before": text_before, "text_after": text_after,
             "changes": diff["changes"], "will_overwrite": diff["will_overwrite"], "severity": diff["severity"],
             "current": current, "proposed": proposed,   # the structs verify_no_drop checks at promote
@@ -147,7 +149,7 @@ def offerable_methods(facts):
 
 def current_values(key):
     """The DECLARED logging values of class `key`, for pre-filling the reconfigure renderer + the diff (Phase
-    4a). PURE — reads modules/<key>/module.yml via paths.ROOT; returns {method_name: {param: value}} per
+    4a). PURE — reads modules/<key>/module.yml through paths.module_file; returns {method_name: {param: value}} per
     declared `logs:` entry. {} if not onboarded / no logs block (degrade, never raise). Mirrors
     observe.current_values (design 22 §3.1)."""
     mod_path = paths.module_file(key)
@@ -174,18 +176,15 @@ def apply_plan(plan):
 # --- PROMOTE (the data write + regen) ------------------------------------------------------------------ #
 def apply_logging_plan(plan):
     """Write the `logs:` block into modules/<key>/module.yml (comment-preserving) and REGENERATE the Vector
-    config drop-ins from it. Idempotent: identical content -> no write. Returns {"changed", "paths"} — the
-    repo-rel paths the route's scoped commit stages (the module + the class's regenerated drop-ins). The API
-    runs NO play; making logs flow is the operator's enact step. Mirror of observe.apply_telemetry_plan."""
-    changed = False
-    with open(plan["mod_path"], encoding="utf-8") as fh:
-        if fh.read() != plan["text_after"]:
-            with open(plan["mod_path"], "w", encoding="utf-8", newline="\n") as out:
-                out.write(plan["text_after"])
-            changed = True
-            log.info("logsvc: wrote %s logs block for %s", plan["method"], plan["key"])
+    config drop-ins from it. Idempotent: a plan that changes nothing, or a target that already holds the text, is
+    no write (_blockwrite.write_module). Returns {"changed", "paths"} — the repo-rel paths the route's scoped
+    commit stages (the module + the class's regenerated drop-ins). The API runs NO play; making logs flow is the
+    operator's enact step. Mirror of observe.apply_telemetry_plan."""
+    changed = write_module(plan)
+    if changed:
+        log.info("logsvc: wrote %s logs block for %s", plan["method"], plan["key"])
     regen = regenerate_logging(plan["key"])
-    return {"changed": changed or bool(regen), "paths": sorted(set([plan["mod_rel"]] + regen))}
+    return {"changed": changed or bool(regen), "paths": staged_paths(plan, regen)}
 
 
 def regenerate_logging(key):

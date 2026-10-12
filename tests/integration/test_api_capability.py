@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from api.audit import read_audit
 from api.main import create_app
 from api.settings import Settings
-from kontroll import catalog, gitio, paths, probe
+from kontroll import catalog, gitio, probe
 
 pytestmark = pytest.mark.integration
 
@@ -41,7 +41,6 @@ def cap(tmp_repo, tmp_path, monkeypatch):
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
     monkeypatch.setattr(catalog, "local_installed", lambda: {})
     monkeypatch.setattr(probe, "deep_probe", _fake_probe)
-    monkeypatch.setattr(paths, "MATRIX_CACHE", str(tmp_path / "matrix.json"))
     (tmp_repo / "modules" / "demo_sw").mkdir(parents=True)
     (tmp_repo / "modules" / "demo_sw" / "module.yml").write_text(yaml.safe_dump({
         "key": "demo_sw", "collections": [{"name": "cisco.ios"}], "inventory_group": "core_switch"}),
@@ -125,6 +124,26 @@ def test_promote_with_token_commits_only_plan_paths_and_audits(cap):
     rows = read_audit(cap.audit_log, action="capability-promote")
     assert rows and rows[0]["run_id"] == body["run_id"]
     assert "if_mib" not in rows[0]["detail"] or "module" not in rows[0]["detail"]  # method name ok; no secret values
+
+
+@pytest.mark.parametrize("failing", ["add", "commit"])
+def test_promote_that_does_not_commit_is_a_500(cap, monkeypatch, failing):
+    """When the stage does not commit — `git add` refuses a path, or `git commit` fails — promote answers 500
+    "commit failed" and issues no push. Guards a refused or failed stage being answered as a staged proposal. No
+    route test on either surface covered `committed: False` after a changed apply — which is how the GUI's twin of
+    this route answered 200 for it, unseen."""
+    def run(cmd, cwd=None, quiet_args=0):
+        cap.calls.append(list(cmd))
+        return 1 if cmd[1] == failing else 0
+
+    monkeypatch.setattr(gitio, "_run", run)
+    selection = {"method": "snmp", "params": {"module": "if_mib"}}
+    token = cap.client.post("/capability/telemetry", headers=AUTH,
+                            json={"key": "demo_sw", "selection": selection}).json()["token"]
+    r = cap.client.post("/capability/telemetry", headers=AUTH,
+                        json={"key": "demo_sw", "apply": True, "token": token, "selection": selection})
+    assert r.status_code == 500 and "commit failed" in r.text
+    assert [c[1] for c in cap.calls if c[1] in ("commit", "push")] == (["commit"] if failing == "commit" else [])
 
 
 def test_promote_with_a_stale_token_is_409(cap):

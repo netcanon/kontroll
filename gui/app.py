@@ -684,7 +684,9 @@ def api_capability(cap):
     _audit("capability-result", "cap=%s key=%s severity=%s changed=%s paths=%d committed=%s staged=%s run_id=%s" % (
         cap, key, (out["plan"].get("severity") or "add"), True, len(out.get("paths") or []),
         git["committed"], git["staged"], run_id))
-    return jsonify({"applied": True, "changed": True, "committed": git["committed"],
+    if not git["committed"]:        # a refused add or a failed commit: nothing was staged — never answer as if it were
+        return jsonify({"error": "commit failed; nothing staged (repo may be dirty)", "run_id": run_id}), 500
+    return jsonify({"applied": True, "changed": True, "committed": True,
                     "pushed_canonical": git["pushed_canonical"], "paths": out["paths"],
                     "target_ref": git["target_ref"], "staged": git["staged"], "run_id": run_id,
                     "links": out["plan"].get("links") or [],   # Grafana deep-links to surface post-promote (#122)

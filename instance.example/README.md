@@ -46,7 +46,9 @@ sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml
 | `inventory/hosts.yml` | your hosts, in FUNCTIONAL groups (`edge_firewall`, `core_switch`, …). |
 | `secrets/` | your encrypted `*.sops.yml` — **created on your node, never shipped** (see its README). |
 | `dashboards/homepage/` | the Homepage portal tiles/settings — edit for your services. |
-| `.gitignore` | re-includes the overlay's known entries under the root `/instance/*` rule, so your instance repository — and the control node's canonical — tracks them. Add a line when you add a new top-level entry. |
+| `actuation/<key>/` | the app-store units you create in the GUI (`unit.yml`) and their values (`vars.yml`). Not in this skeleton: the first unit creates it. |
+| `certs/` | PUBLIC material you pin in `instance.yml` (`device_trust.<key>.tls_ca_file`, `ssh_known_hosts_file`): a CA certificate, a `known_hosts` file. Commit them — the deploy reads them from this tree. Never a private key. Not in this skeleton. |
+| `.gitignore` | re-includes the overlay's known entries under the root `/instance/*` rule, so your instance repository — and the control node's canonical — tracks them. Add a line when you add a new top-level entry. An instance scaffolded before `actuation/` and `certs/` were on the list needs those two lines added by hand (`!/actuation/`, `!/certs/`): the scaffold never overwrites a file you have. After adding them, look at what `git status` now shows under `certs/` before you commit it, and see the CHANGELOG entry "a staged write lands whole, or not at all" for a unit an earlier attempt left in a service's clone. |
 | `leak-tokens.example.txt` → `leak-tokens.txt` | the names that identify YOUR deployment (hostnames, domain, user names), one regex per line; `tests/_leak_guard.py` fails the gate if any appears in a file that ships publicly. Ships with synthetic canaries; `--fresh` copies it under its live name for you to fill in. |
 
 A checkout with **no `instance/` at all** (a fresh clone, CI) reads this skeleton through the same

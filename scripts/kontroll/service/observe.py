@@ -8,7 +8,8 @@ capability-NEUTRAL spine (the dialog/route/promote.plan_token) lives elsewhere a
 `capabilities/telemetry.yml` descriptor; registering telemetry touched zero spine file (the seam's whole point).
 
 Three boundaries the design pins (docs/observability/secondary-capability-dialog.md, master §6):
-  * PROPOSE writes nothing — `build_telemetry_plan` is PURE (reads via paths.ROOT; returns the plan + token).
+  * PROPOSE writes nothing — `build_telemetry_plan` is PURE (reads the class through paths.module_file; returns
+    the plan + token).
   * PROMOTE writes the DECLARED block (the source of truth) and REGENERATES the targets FROM it — the targets
     can't drift independently, so `plan_token` gates the declared block alone, and the scoped commit carries
     the block + its regenerated artifacts (so `gen-observability --check` stays green in CI).
@@ -33,7 +34,8 @@ from kontroll.service import promote
 # Shared with logsvc (logging) + any future capability instance — one comment-preserving block writer + one
 # config-injection guard, so the copies can never re-diverge (test_blockwrite.py pins them). Lifted from here.
 from kontroll.service import _diff
-from kontroll.service._blockwrite import insert_into_block, upsert_into_block, validate_params
+from kontroll.service._blockwrite import (insert_into_block, staged_paths, upsert_into_block, validate_params,
+                                          write_module)
 from kontroll.service._validate import plain_scalar
 
 log = logging.getLogger("kontroll.service.observe")
@@ -232,10 +234,12 @@ def telemetry_grafana_links(base, dashboards):
 # --- PROPOSE (pure) ------------------------------------------------------------------------------------ #
 def build_telemetry_plan(key, method_name, params=None, dashboards=None, methods=None):
     """Compute the telemetry PLAN for adding `method_name` (+ optional curated `dashboards`) to onboarded
-    class `key`. PURE — reads modules/<key>/module.yml via paths.ROOT, writes nothing. Returns
+    class `key`. PURE — reads modules/<key>/module.yml through paths.module_file (the clone's copy shadows the
+    baked one: the same bytes current_values() reads), writes nothing. Returns
     {"error": "not_onboarded"|"unknown_method"|"bad_param"|"already_declared"|None, ...}; on success the plan
     carries the comment-preserving module text AFTER the add, the repo-rel paths the promote will commit
-    (the module + the method's generated target), the enact commands, the Grafana `links` to surface after
+    (the module + the method's generated target), `mod_path` — the WRITE target, always under write_root()
+    (paths.module_write_path) —, the enact commands, the Grafana `links` to surface after
     promote (#122 — read-only: the dashboard uids from the committed JSON + the deploy's KONTROLL_MGMT_IP/
     KONTROLL_DOMAIN env for the base; [] when neither is set, never a fabricated host), and the propose→promote
     `plan_token` (a hash of the declared block being written — the targets are generated FROM it, so they cannot
@@ -247,8 +251,8 @@ def build_telemetry_plan(key, method_name, params=None, dashboards=None, methods
     methods = methods if methods is not None else catalog.load_telemetry()
     by_name = {m["name"]: m for m in methods}
     mod_rel = "modules/%s/module.yml" % key   # repo-rel paths are POSIX (git + the scoped commit use them)
-    mod_path = os.path.join(paths.ROOT, mod_rel)
-    if not os.path.exists(mod_path):
+    read_path = paths.module_file(key)        # the clone shadows the baked root — what current_values() reads too
+    if not os.path.exists(read_path):
         return {"error": "not_onboarded", "key": key}
     method = by_name.get(method_name)
     if method is None:
@@ -261,7 +265,7 @@ def build_telemetry_plan(key, method_name, params=None, dashboards=None, methods
     if bad:
         return {"error": "bad_param", "key": key, "method": method_name, "detail": bad}
 
-    with open(mod_path, encoding="utf-8") as fh:
+    with open(read_path, encoding="utf-8") as fh:
         text_before = fh.read()
     module = yaml.safe_load(text_before) or {}
     # RECONFIGURE (Phase 4a): a declared method is no longer a wall — read the current values + DIFF the
@@ -292,7 +296,8 @@ def build_telemetry_plan(key, method_name, params=None, dashboards=None, methods
     target_rel = "prometheus/targets/%s/%s.generated.yml" % (method["job"], key)
     sev_dec = _diff.severity_decision(diff)
     return {"error": None, "key": key, "method": method_name, "params": params or {},
-            "dashboards": dashboards or [], "mod_rel": mod_rel, "mod_path": mod_path,
+            "dashboards": dashboards or [], "mod_rel": mod_rel,
+            "mod_path": paths.module_write_path(key),   # the WRITE target: write_root(), never the baked root
             "text_before": text_before, "text_after": text_after,
             "changes": diff["changes"], "will_overwrite": diff["will_overwrite"], "severity": diff["severity"],
             "current": current, "proposed": proposed,   # the structs verify_no_drop checks at promote
@@ -323,8 +328,8 @@ def offerable_methods(facts):
 
 def current_values(key):
     """The DECLARED telemetry values of class `key`, for pre-filling the reconfigure renderer + the diff (Phase
-    4a). PURE — reads modules/<key>/module.yml via paths.ROOT, writes nothing; returns {method_name: {param:
-    value}} per declared `metrics:` entry. {} if not onboarded / no metrics block (degrade, never raise —
+    4a). PURE — reads modules/<key>/module.yml through paths.module_file, writes nothing; returns {method_name:
+    {param: value}} per declared `metrics:` entry. {} if not onboarded / no metrics block (degrade, never raise —
     service-never-sys.exit). The reconfigure read-back (design 22 §3.1)."""
     mod_path = paths.module_file(key)
     try:
@@ -351,19 +356,15 @@ def apply_plan(plan):
 # --- PROMOTE (the data write + regen) ------------------------------------------------------------------ #
 def apply_telemetry_plan(plan):
     """Write the telemetry block into modules/<key>/module.yml (comment-preserving) and REGENERATE the
-    Prometheus targets from it. Idempotent: identical content → no write. Returns {"changed", "paths"} — the
-    repo-rel paths the route's scoped commit stages (the module + the class's regenerated target files). The
-    API runs NO play here; making metrics flow is the operator's enact step (telemetry_enact_commands)."""
-    changed = False
-    with open(plan["mod_path"], encoding="utf-8") as fh:
-        if fh.read() != plan["text_after"]:
-            with open(plan["mod_path"], "w", encoding="utf-8", newline="\n") as out:
-                out.write(plan["text_after"])
-            changed = True
-            log.info("observe: wrote %s telemetry block for %s", plan["method"], plan["key"])
+    Prometheus targets from it. Idempotent: a plan that changes nothing, or a target that already holds the text,
+    is no write (_blockwrite.write_module). Returns {"changed", "paths"} — the repo-rel paths the route's scoped
+    commit stages (the module + the class's regenerated target files). The API runs NO play here; making metrics
+    flow is the operator's enact step (telemetry_enact_commands)."""
+    changed = write_module(plan)
+    if changed:
+        log.info("observe: wrote %s telemetry block for %s", plan["method"], plan["key"])
     regen = regenerate_observability(plan["key"])
-    paths_changed = [plan["mod_rel"]] + regen
-    return {"changed": changed or bool(regen), "paths": sorted(set(paths_changed))}
+    return {"changed": changed or bool(regen), "paths": staged_paths(plan, regen)}
 
 
 def regenerate_observability(key):

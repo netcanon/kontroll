@@ -23,7 +23,7 @@ import yaml
 
 from kontroll import catalog, paths
 from kontroll.service import _diff, promote
-from kontroll.service._blockwrite import upsert_top_level_key
+from kontroll.service._blockwrite import upsert_top_level_key, write_module
 from kontroll.service._validate import validate_value
 
 log = logging.getLogger("kontroll.service.identity")
@@ -39,13 +39,15 @@ def _knobs():
 
 
 def _mod_path(key):
+    """Where the class is READ from: the clone's copy, or the baked one when the clone has none. Never a write
+    target — a plan's `mod_path` is paths.module_write_path(key)."""
     return paths.module_file(key)
 
 
 def current_values(key):
     """The DECLARED identity values of class `key` — a FLAT `{identity_key: value}` over the reconfigurable keys
-    PRESENT in modules/<key>/module.yml (for pre-filling the renderer + the diff). PURE — reads via paths.ROOT,
-    writes nothing; {} if not onboarded / unreadable (degrade, never raise — service-never-sys.exit). The
+    PRESENT in modules/<key>/module.yml (for pre-filling the renderer + the diff). PURE — reads through
+    paths.module_file, writes nothing; {} if not onboarded / unreadable (degrade, never raise — service-never-sys.exit). The
     reconfigure read-back (design 22 §3.3); these are non-secret config keys, so the value (never a secret) is
     surfaced."""
     try:
@@ -67,6 +69,8 @@ def build_plan(key, selection):
     checks, the enact hand-off, and `token_parts`/`plan_token` (text_after + the severity decision — anti-drift +
     no-quiet-upgrade, M1). At most ONE identity-severity change per proposal (so the type-to-confirm is
     unambiguous); a `status` modify may ride along."""
+    # Where the class is READ from (the clone's copy, or the baked one). The plan's "mod_path", below, is the
+    # WRITE target, and is not this path for a shipped class the clone does not hold yet.
     mod_path = _mod_path(key)
     if not os.path.exists(mod_path):
         return {"error": "not_onboarded", "key": key}
@@ -114,7 +118,9 @@ def build_plan(key, selection):
     # upsert_top_level_key only replaces/appends (never removes), so a legit edit keeps every key → passes; the
     # operator-facing diff stays the editable change-set (review SHOULD-FIX 1).
     after_module = yaml.safe_load(text_after) or {}
-    return {"error": None, "key": key, "mod_rel": mod_rel, "mod_path": mod_path,
+    # the WRITE target is always under write_root(): the read path above is the BAKED copy for a shipped class the
+    # clone does not hold yet, and that tree is read-only (and is not where a proposal is staged from)
+    return {"error": None, "key": key, "mod_rel": mod_rel, "mod_path": paths.module_write_path(key),
             "text_before": text_before, "text_after": text_after,
             "changes": diff["changes"], "will_overwrite": diff["will_overwrite"], "severity": diff["severity"],
             "current": module, "proposed": after_module,     # FULL top-level keys — what verify_no_drop checks
@@ -126,16 +132,13 @@ def build_plan(key, selection):
 
 def apply_plan(plan):
     """Write the reconfigured identity keys into modules/<key>/module.yml (comment-preserving line-surgery).
-    Idempotent: identical content → no write. Returns {"changed", "paths"} — the repo-rel paths the route's
-    scoped commit stages (module.yml only; the operator regenerates targets at enact). The API runs no play."""
-    changed = False
-    with open(plan["mod_path"], encoding="utf-8") as fh:
-        if fh.read() != plan["text_after"]:
-            with open(plan["mod_path"], "w", encoding="utf-8", newline="\n") as out:
-                out.write(plan["text_after"])
-            changed = True
-            log.info("identity: wrote identity keys for %s (paths %s)",
-                     plan["key"], ",".join(c["path"] for c in plan["changes"]))
+    Idempotent: a plan that changes nothing, or a target that already holds the text, is no write
+    (_blockwrite.write_module). Returns {"changed", "paths"} — the repo-rel paths the route's scoped commit stages
+    (module.yml only; the operator regenerates targets at enact). The API runs no play."""
+    changed = write_module(plan)
+    if changed:
+        log.info("identity: wrote identity keys for %s (paths %s)",
+                 plan["key"], ",".join(c["path"] for c in plan["changes"]))
     return {"changed": changed, "paths": [plan["mod_rel"]]}
 
 

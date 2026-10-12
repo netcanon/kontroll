@@ -28,7 +28,7 @@ import yaml
 
 from kontroll import paths
 from kontroll.service import _diff, promote
-from kontroll.service._blockwrite import upsert_into_block
+from kontroll.service._blockwrite import staged_paths, upsert_into_block, write_module
 
 log = logging.getLogger("kontroll.service.backup")
 
@@ -78,8 +78,8 @@ def offerable_methods(facts):
 
 def current_values(key):
     """The DECLARED backup knobs of class `key` (the single `backup:` mapping as the pseudo-method 'backup'),
-    for pre-filling the reconfigure renderer + the diff (Phase 4a). PURE — reads modules/<key>/module.yml via
-    paths.ROOT; {} if not onboarded / no backup block (degrade, never raise). The reconfigure read-back
+    for pre-filling the reconfigure renderer + the diff (Phase 4a). PURE — reads modules/<key>/module.yml through
+    paths.module_file; {} if not onboarded / no backup block (degrade, never raise). The reconfigure read-back
     (design 22 §3.1)."""
     mod_path = paths.module_file(key)
     try:
@@ -99,15 +99,17 @@ def build_plan(key, selection):
     {method:'backup', params:{schedule:<preset cron>}}. Returns
     {error: 'not_onboarded'|'not_backup_capable'|'bad_param'|'already_declared'|None, ...}; writes nothing.
     Mirrors observe.build_telemetry_plan but for the `backup:` MAPPING block; the plan_token gates it. `key` is
-    a REQUEST value and is refused first (paths.RequestBoundaryError), before the join and before any other answer."""
+    a REQUEST value and is refused first (paths.RequestBoundaryError), before the join and before any other answer.
+    The class is read through paths.module_file (the clone's copy shadows the baked one); `mod_path` is the WRITE
+    target, always under write_root() (paths.module_write_path)."""
     paths.component(key, "device-class key")            # C22: the request boundary, before the join
     params = (selection or {}).get("params") or {}
     schedule = params.get("schedule")
     retention = params.get("retention") or "keep-all"     # default-safe: keep the full history (no prune)
     destination = params.get("destination") or "local"
     mod_rel = "modules/%s/module.yml" % key
-    mod_path = os.path.join(paths.ROOT, mod_rel)
-    if not os.path.exists(mod_path):
+    read_path = paths.module_file(key)        # the clone shadows the baked root — what current_values() reads too
+    if not os.path.exists(read_path):
         return {"error": "not_onboarded", "key": key}
     if schedule not in _SCHEDULES:
         return {"error": "bad_param", "key": key, "detail": "schedule %r is not a preset" % schedule}
@@ -121,7 +123,7 @@ def build_plan(key, selection):
         return {"error": "bad_param", "key": key,
                 "detail": "destination 'offsite' is deferred — config captures aren't encrypted at rest; an "
                           "offsite copy needs the encryption-at-rest story first (SECURITY.md C8). Use 'local'."}
-    with open(mod_path, encoding="utf-8") as fh:
+    with open(read_path, encoding="utf-8") as fh:
         text_before = fh.read()
     module = yaml.safe_load(text_before) or {}
     role = module.get("role") or key
@@ -148,7 +150,8 @@ def build_plan(key, selection):
             "params": {"schedule": schedule, "retention": retention, "destination": destination},
             "changes": diff["changes"], "will_overwrite": diff["will_overwrite"], "severity": diff["severity"],
             "current": current, "proposed": proposed,   # the structs verify_no_drop checks at promote
-            "dashboards": [], "mod_rel": mod_rel, "mod_path": mod_path,
+            "dashboards": [], "mod_rel": mod_rel,
+            "mod_path": paths.module_write_path(key),   # the WRITE target: write_root(), never the baked root
             "text_before": text_before, "text_after": text_after,
             "paths": [mod_rel, sched_rel], "regen_paths": [sched_rel],
             "enact": backup_enact_commands(key),
@@ -160,15 +163,11 @@ def apply_plan(plan):
     """PROMOTE — write the `backup:` block into module.yml (idempotent) + regenerate the schedule spec.
     Returns {changed, paths} for the route's scoped commit. The API runs NO play — registering the schedule in
     Semaphore is the operator's enact step."""
-    changed = False
-    with open(plan["mod_path"], encoding="utf-8") as fh:
-        if fh.read() != plan["text_after"]:
-            with open(plan["mod_path"], "w", encoding="utf-8", newline="\n") as out:
-                out.write(plan["text_after"])
-            changed = True
-            log.info("backup: wrote backup block for %s", plan["key"])
+    changed = write_module(plan)         # no write for a plan that changes nothing (_blockwrite.write_module)
+    if changed:
+        log.info("backup: wrote backup block for %s", plan["key"])
     regen = regenerate_schedules()
-    return {"changed": changed or bool(regen), "paths": sorted(set([plan["mod_rel"]] + regen))}
+    return {"changed": changed or bool(regen), "paths": staged_paths(plan, regen)}
 
 
 def regenerate_schedules():

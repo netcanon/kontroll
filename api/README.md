@@ -22,7 +22,7 @@ for a row whose route is gone.
 | `POST /units/preview` | — | **write-free** (renders, stages nothing): the Review-stage preview of what unit `key` would run with `values` → the would-run `play` + resolved `vars` + `check_first` + `enact` (404 no unit; 422 invalid values) |
 | `GET /classify/{collection}` | — | the fitting execution backend(s) (404 if not installed; 422 if the segment is not `namespace.name`) |
 | `GET /health` | — | liveness `{status, service}` |
-| `POST /refresh` | token | rebuild the (gitignored) capability-matrix cache → `{count, run_id}` |
+| `POST /refresh` | token | rebuild the (gitignored) capability-matrix cache, written under the write root (the propose clone on a baked install) → `{count, run_id}` |
 | `POST /capture-exceptions` | token | add a capture-exception + commit + push the canonical → what changed |
 | `POST /onboard` | token | dry-run plan, or apply (module + drop-in host + fleet-enable + creds→SOPS + commit + push) |
 | `GET /onboard/cred-fields?backend=…&secrets=…&collection=…&deep=` | token | the credential fields a backend (or a curated class) asks for — names, kinds and labels, never values |

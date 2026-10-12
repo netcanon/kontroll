@@ -313,13 +313,55 @@ def _rebase_proposal_onto_canonical():
         _run(["git", "rebase", "--abort"])
 
 
+def _for_run(run_id):
+    """The run id as the tail of a narrated line — what ties the line to the request's audit entry — or nothing."""
+    return " (run_id %s)" % run_id if run_id else ""
+
+
+def _drop_refused(rel_paths, run_id=None):
+    """Remove what an apply wrote and git would not take: the FILES among `rel_paths` still on disk and untracked
+    after the staging roll-back. `git reset --hard` restores every tracked file and removes one that was added,
+    but it leaves an IGNORED file where it is — and the service's readers then see a write that reached no
+    proposal (a unit descriptor that exists nowhere but this clone, listed as registered). Files only, and matched
+    literally: a directory is never handed to `git clean` (it removes one recursively, with or without `-d`), and
+    a name holding a wildcard stands for that one name — so nothing but a file at one of the request's own paths
+    can go. A path that does not resolve inside the write root is skipped. A clean that fails says so: under `-q`
+    there would be no line of ours for a file that is still there. Staging-only — see commit_and_push."""
+    files = [rel for rel in rel_paths if paths.confined_file(rel)]
+    if files and _run(["git", "--literal-pathspecs", "clean", "-f", "-x", "-q", "--"] + files) != 0:
+        print("  ! could not remove a file git refused — it is still in the clone%s" % _for_run(run_id))
+
+
+def _unstage(rel_paths, run_id=None):
+    """Take `rel_paths` back out of the index, and touch no file. For a caller that is NOT the staging service —
+    the GUI run from a checkout: its tree is the operator's and is never rolled back, but a request that did not
+    commit must not leave a part of itself staged either. The next request's commit takes the whole index, and
+    would publish that part under its own message, after the first was answered "nothing committed". Matched
+    literally, like the clean. (The add before it is not: no producer builds a path with a wildcard or a leading
+    colon — paths.component.) Something staged by hand at one of the same paths is un-staged with it — the add had
+    already replaced it in the index; its content stays in the working tree. With NO path there is nothing to
+    take back, and nothing is run: a `git reset` without a path resets the whole index. A reset that fails (the
+    index is locked) says so, because the request's paths are then still staged. See commit_and_push."""
+    if not rel_paths:
+        return
+    if _run(["git", "--literal-pathspecs", "reset", "-q", "--"] + list(rel_paths)) != 0:
+        print("  ! could not take the request's paths back out of the index — they are still staged%s"
+              % _for_run(run_id))
+
+
 def commit_and_push(paths, message_lines, push_origin=False, run_id=None):
     """Stage `paths`, commit with the given -m `message_lines`, push the LOCAL canonical, and
     optionally push origin. Returns {"committed","pushed_canonical","pushed_origin","commit_rc","target_ref",
-    "staged"}. A failed commit pushes NOTHING (never a stale HEAD). The canonical push targets `main` by
-    default, OR a `proposed/<run_id>` STAGING ref when the caller is a staging network service
-    (`KONTROLL_STAGE_PUSHES=1`, C10) — pass `run_id` so the operator can promote the exact proposal. The API +
-    GUI routes share this; the CLI keeps its own inline gate. Goes through _run, so tests patch the one seam.
+    "staged"} (+ "add_rc" when the stage itself was refused). A failed commit pushes NOTHING (never a stale
+    HEAD), and so does a refused `git add`: git exits non-zero for a path a .gitignore rule ignores (having staged
+    the others) and for one that is not there (having staged nothing) — so committing after it would publish a
+    proposal that is MISSING a file and report it as staged. All of `paths` land, or none; and a request that
+    does not commit leaves nothing of itself in the index: the staging service's clone is rolled back (below),
+    any other caller gets the request's paths taken back out of its index (`_unstage`) and keeps its working
+    tree. The canonical push targets `main` by default, OR a `proposed/<run_id>` STAGING ref when the caller is a
+    staging network service (`KONTROLL_STAGE_PUSHES=1`, C10) — pass `run_id` so the operator can promote the
+    exact proposal. The API + GUI routes share this; the CLI keeps its own inline gate. Goes through _run, so
+    tests patch the one seam.
 
     The optional `origin` push is the OPERATOR CLI's offsite backup ONLY: it is unreachable while STAGING
     (target != main, `and not staging`), so a staging network service can never push HEAD (-> main) to any remote —
@@ -328,16 +370,29 @@ def commit_and_push(paths, message_lines, push_origin=False, run_id=None):
     to origin).
 
     STAGING (target != main) resets the content clone back to the canonical `main` after the push (and after a
-    failed commit, to drop the half-written tree) so the next read-back is the source of truth, never this stage's
-    drift — see `_reset_content_clone_to_canonical`. The operator CLI (target == main) is NEVER reset: it advances
+    failed commit or a refused add, to drop the half-written tree — after a refused add the files git would not
+    take are removed as well, `_drop_refused`) so the next read-back is the source of truth, never this stage's
+    drift — see `_reset_content_clone_to_canonical`. A caller with target == main is NEVER reset: it advances
     `main` directly and its working tree is the operator's."""
     target = _push_target(run_id)   # resolve FIRST: a staging service without a run_id raises before any mutation
     staging = target != "main"
-    _run(["git", "add"] + list(paths))
+    arc = _run(["git", "add"] + list(paths))
+    if arc != 0:                    # git refused a path and staged the rest: never commit a part of a change
+        print("  ! git add refused a path (ignored by a .gitignore rule, or missing) — nothing committed%s"
+              % _for_run(run_id))
+        if staging:                 # drop the index, the tracked edits, and the refused files the apply wrote
+            _reset_content_clone_to_canonical()
+            _drop_refused(paths, run_id)
+        else:                       # the operator's tree: only this request's paths leave the index
+            _unstage(paths, run_id)
+        return {"committed": False, "pushed_canonical": False, "pushed_origin": False,
+                "commit_rc": None, "add_rc": arc, "target_ref": None, "staged": False}
     crc = _run(["git", "commit"] + commit_message_args(message_lines))   # + the one configurable trailer
     if crc != 0:
         if staging:                 # a failed commit left the apply's write in the tree — drop it so the next read is clean
             _reset_content_clone_to_canonical()
+        else:                       # ...and outside staging what it staged must not ride in the next request's commit
+            _unstage(paths, run_id)
         return {"committed": False, "pushed_canonical": False, "pushed_origin": False,
                 "commit_rc": crc, "target_ref": None, "staged": False}
     if staging:                     # rebase the proposal onto CURRENT canonical main so it stays a FF even after an

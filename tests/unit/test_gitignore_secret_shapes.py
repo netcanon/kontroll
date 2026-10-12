@@ -31,6 +31,9 @@ IGNORED = [
     "instance/secrets/network.sops.yml.bak", "instance/secrets/network.sops.yml.orig",
     "instance/secrets/network.sops.yml~", "instance/secrets/age.key", "instance/secrets/keys.txt",
     "kontroll-breakglass.key", "breakglass.agekey", "id_rsa", "id_ed25519", "id_ecdsa", "instance/inventory/id_ed25519",
+    # instance/certs/ and instance/actuation/ are re-included: a key-shaped NAME inside them must stay ignored
+    "instance/certs/server.key", "instance/certs/ca-key.agekey", "instance/certs/id_ed25519", "instance/certs/keys.txt",
+    "instance/actuation/demo/.env", "instance/actuation/demo/unit.yml.bak",
     ".env", ".env.local", ".env.bak", "docker/.env", "docker/.env.bak", "docker/.env.homepage",
     "docker/.env.homepage.bak", "docker/.env.example.bak", "notes.txt~",
 ]
@@ -38,6 +41,8 @@ TRACKABLE = [
     "docker/.env.example",                    # the committed template
     "docker/.env.homepage.example",           # ...and a template for one of the other env files
     "instance/trust/keys/pve-ca.pem",         # a PUBLIC certificate as `.pem`, in a directory that is re-included
+    "instance/certs/pve-ca.pem",              # ...and where instance.yml tells the operator to put one
+    "instance/certs/known_hosts", "instance/actuation/demo/unit.yml", "instance/actuation/demo/vars.yml",
     "instance/secrets/network.sops.yml",      # the encrypted domain itself
     "instance/secrets/README.md", "instance/fleet.yml", "instance/.sops.yaml",
     # NOT covered by a name rule, on purpose — nothing about the name says "secret"; the guard refuses it by rule

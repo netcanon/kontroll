@@ -9,7 +9,7 @@
 |---|---|---|
 | The tool — code, playbooks, registries, generators, tests, docs | **yes** (this is the source of truth for the tool) | mirrored |
 | `instance.example/` — the placeholder overlay (TEST-NET addresses, one fake age recipient, canary tokens) | yes | yes |
-| `instance/` — YOUR overlay: inventory, `.sops.yaml` recipients, encrypted secrets, fleet selection, Homepage tiles, `leak-tokens.txt` | **never** — the root `.gitignore` ignores everything under it (`/instance/*`); the PII guard checks that nothing under it is tracked | tracked — `instance/.gitignore` (scaffolded by `kontroll-init --fresh` from `instance.example/.gitignore`) re-includes the overlay's known entries; the root `.gitignore` is identical in both repositories |
+| `instance/` — YOUR overlay: inventory, `.sops.yaml` recipients, encrypted secrets, fleet selection, Homepage tiles, app-store units, pinned public certificates, `leak-tokens.txt` | **never** — the root `.gitignore` ignores everything under it (`/instance/*`); the PII guard checks that nothing under it is tracked | tracked — `instance/.gitignore` (scaffolded by `kontroll-init --fresh` from `instance.example/.gitignore`) re-includes the overlay's known entries; the root `.gitignore` is identical in both repositories |
 | `docs/reviews/` dossiers written before the split (they quote the maintainer's real topology) | never | tracked |
 | `local/` | never (git-ignored everywhere) | never |
 | Git history | **fresh** — the public repository starts at the cut commit | the full history |
