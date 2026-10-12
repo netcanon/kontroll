@@ -11,6 +11,24 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test(docs): every relative Markdown link resolves — SECURITY.md's own references left the repository (2026-10-12)
+
+The root `SECURITY.md` wrote each of its relative links as if it sat one directory down (`](../docs/…)`). From
+the repository root `../` leaves the repository, so on the published page every reference the control document
+makes — to the install guide, the logging architecture, the trust-mode notes — was a 404, and no gate read
+links. They resolve now. The references into review dossiers that exist only in the private repository are
+written as code spans, not links, and two READMEs with the same fault
+(`instance.example/dashboards/homepage/README.md`, `secret-forms/README.md`) are corrected. A new validate step,
+`doc-links` (`tests/check-doc-links.py`), fails on a relative link in a tracked Markdown file that does not
+resolve to a tracked path inside the repository — spelled exactly, so "it resolves on my disk" (a
+case-insensitive file system, a file that was never added) is not a pass — and a target that climbs out is a
+finding even where a file happens to exist there. It is hermetic: no URL is fetched, anchors are not checked,
+and fenced code blocks and code spans are skipped. Exempt by declaration, because the target cannot exist in
+the shipped tree: `instance/…`, and a dated run folder under `docs/reviews/` that the tree does not carry. Not
+read at all: `CHANGELOG.md`, the files inside such a folder, and an instance repository's own `instance/`
+documents. Where git cannot list a git tree, the step fails and says so instead of reading some other set of
+files. Proofs: `tests/unit/test_check_doc_links.py`.
+
 ### fix(security): the blanket commits into the canonical are gated — a plaintext secret is refused, by content (C1) (2026-10-12)
 
 Two places commit a whole working tree into the control node's canonical with nobody reading the diff: the

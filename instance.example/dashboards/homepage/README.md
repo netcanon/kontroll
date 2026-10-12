@@ -34,5 +34,5 @@ fills the `services.yaml` sentinels with your mgmt IP + domain.
   fleet devices by onboarding, not by editing tiles. A tile derives `https://<mgmt-addr>` by default; a class can
   steer its own tile with an optional `homepage: {scheme, port, icon}` block in `modules/<key>/module.yml`.
 
-See also: [SECURITY.md](../../../../SECURITY.md) C3 (mgmt-bound exposure) · the kontroll onboard-GUI Fleet panel
+See also: [SECURITY.md](../../../SECURITY.md) C3 (mgmt-bound exposure) · the kontroll onboard-GUI Fleet panel
 (the authoritative onboarded index — Homepage only links *to* it).
