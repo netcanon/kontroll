@@ -34,6 +34,7 @@ from kontroll.service import promote
 # config-injection guard, so the copies can never re-diverge (test_blockwrite.py pins them). Lifted from here.
 from kontroll.service import _diff
 from kontroll.service._blockwrite import insert_into_block, upsert_into_block, validate_params
+from kontroll.service._validate import plain_scalar
 
 log = logging.getLogger("kontroll.service.observe")
 
@@ -65,8 +66,112 @@ def _render_metrics_entry(method_name, params):
 
 
 def _render_dashboard_entry(d):
-    """A single `dashboards:` list item (`- {gnet: 10347, name: proxmox}`)."""
+    """A single `dashboards:` list item (`- {gnet: 10347, name: proxmox}`). A hand-formatted line, so it renders
+    only what _clean_dashboards() let through: an integer and one path component."""
     return "  - {gnet: %d, name: %s}" % (int(d["gnet"]), d["name"])
+
+
+_MAX_DASHBOARDS = 32                    # per request; a class declares a handful
+_MAX_GNET = 2 ** 31 - 1                 # a grafana.com board id (scripts/fetch-dashboards.py holds the same bound;
+                                        # that script does not import the service layer)
+
+
+def _declared_dashboards():
+    """{name: {board ids}} over every class's `dashboards:` block, shipped and onboarded. One name is ONE file
+    under dashboards/grafana/dashboards/, whichever class declares it — so a selection may not give a declared name
+    another board id (fetch-dashboards.py would write the later download over the curated one), nor a declared
+    board another name (the fetch keeps one name per board; the second file would never be written). A module file
+    that cannot be read, or whose block is not a list of {gnet, name} items, contributes what it validly holds and
+    nothing else: one damaged class must not turn every class's propose into an error."""
+    out = {}
+    for key in paths.module_keys():
+        try:
+            with open(paths.module_file(key), encoding="utf-8") as fh:
+                module = yaml.safe_load(fh)
+        except (OSError, ValueError, yaml.YAMLError):          # ValueError: bytes that are not UTF-8
+            continue
+        block = module.get("dashboards") if isinstance(module, dict) else None
+        for d in block if isinstance(block, list) else []:
+            if not isinstance(d, dict):
+                continue
+            name, gnet = d.get("name"), d.get("gnet")
+            if isinstance(name, str) and isinstance(gnet, int) and not isinstance(gnet, bool):
+                out.setdefault(name, set()).add(gnet)
+    return out
+
+
+def _clean_dashboards(dashboards, declared=None):
+    """(list of {gnet, name}, None), or (None, message) when the selection is outside the closed shape. An item is
+    exactly `{gnet: <positive integer>, name: <one path component>}`. The name is written into a hand-formatted
+    YAML line (with a newline inside it, it rewrote the class's role and inventory group; with none, the item
+    itself — its board id and its `derived` mark), is a FILE name when the plan reads the board's uid, and is the
+    file fetch-dashboards.py later writes an internet download to. So it gets the request-boundary charset, which a
+    serializer would not have given it (`../x` is valid YAML); it must also be a word YAML reads as a string
+    (`null`, `true` and `123` are inside the charset) where the line puts it — inside a flow mapping; and a name is
+    one file and a board is one name: no name repeated within the selection or tied by `declared`
+    ({name: {board ids}} over every class) to another board id, and no board id given a second name. The message
+    names the item and the rule, never the value."""
+    if not dashboards:
+        return [], None
+    if not isinstance(dashboards, list):
+        return None, "dashboards must be a list"
+    if len(dashboards) > _MAX_DASHBOARDS:
+        return None, "dashboards holds more items than one request may declare"
+    declared = declared or {}
+    names_of = {}                                            # board id -> the names it already has
+    for known, boards in declared.items():
+        for board in boards:
+            names_of.setdefault(board, set()).add(known)
+    out, seen = [], set()
+    for i, d in enumerate(dashboards):
+        if not isinstance(d, dict) or set(d) != {"gnet", "name"}:
+            return None, "dashboards[%d] must be exactly {gnet, name}" % i
+        gnet, name = d["gnet"], d["name"]
+        if isinstance(gnet, bool) or not isinstance(gnet, int) or not 0 < gnet <= _MAX_GNET:
+            return None, "dashboards[%d].gnet must be a positive integer (a grafana.com board id)" % i
+        try:
+            paths.component(name, "dashboard name")
+        except paths.RequestBoundaryError:
+            return None, "dashboards[%d].name must be 1-64 chars of [a-z0-9_-]" % i
+        if not plain_scalar(name, flow=True):
+            return None, ("dashboards[%d].name is a word YAML reads as another type (null, a boolean, a number, a "
+                          "date)" % i)
+        if name in seen:
+            return None, "dashboards[%d].name repeats an earlier item — a name is one file" % i
+        if declared.get(name, {gnet}) != {gnet}:
+            return None, "dashboards[%d].name is already declared with another board id — a name is one file" % i
+        if names_of.get(gnet) and name not in names_of[gnet]:
+            return None, "dashboards[%d].gnet is already declared under another name — a board is one file" % i
+        seen.add(name)
+        names_of.setdefault(gnet, set()).add(name)
+        out.append({"gnet": gnet, "name": name})
+    return out, None
+
+
+def _dashboard_path(name):
+    """dashboards/grafana/dashboards/<name>.json in the clone — dashboards/ is config-as-data in the canonical, NOT
+    baked into the control image, so write_root() and not the read-only ROOT. `name` is one path component."""
+    return os.path.join(paths.write_root(), "dashboards", "grafana", "dashboards", "%s.json" % name)
+
+
+def _foreign_dashboard_file(dashboards):
+    """A message when an item of a CLEANED selection names a file that already exists under
+    dashboards/grafana/dashboards/ and does not say it is that board (its `gnetId`), else None. fetch-dashboards.py
+    writes a download to `<name>.json`, and a name no class declares is not thereby a free name: the hand-authored
+    logs dashboard is such a file. (The fetch refuses the overwrite as well — this is the same rule at the request,
+    so the operator hears it before the proposal is promoted.)"""
+    for i, d in enumerate(dashboards):
+        path = _dashboard_path(d["name"])
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                have = json.load(fh).get("gnetId")
+        except (OSError, ValueError, AttributeError):
+            have = None
+        if isinstance(have, bool) or have != d["gnet"]:
+            return "dashboards[%d].name is an existing dashboard file that is not this board — a name is one file" % i
+    return None
 
 
 # --- Grafana deep-links (surfaced in the capability dialog after a telemetry promote — #122) ------------ #
@@ -92,7 +197,11 @@ def _dashboard_uid(name):
     config-as-data in the canonical, NOT baked into the control image — so write_root(), not the read-only ROOT)."""
     if not name:
         return None
-    p = os.path.join(paths.write_root(), "dashboards", "grafana", "dashboards", "%s.json" % name)
+    try:
+        paths.component(name, "dashboard name")         # C22, at the join: here the name is a file name
+    except paths.RequestBoundaryError:
+        return None
+    p = _dashboard_path(name)
     if not os.path.exists(p):
         return None
     try:
@@ -128,7 +237,11 @@ def build_telemetry_plan(key, method_name, params=None, dashboards=None, methods
     promote (#122 — read-only: the dashboard uids from the committed JSON + the deploy's KONTROLL_MGMT_IP/
     KONTROLL_DOMAIN env for the base; [] when neither is set, never a fabricated host), and the propose→promote
     `plan_token` (a hash of the declared block being written — the targets are generated FROM it, so they cannot
-    drift independently). ADD-ONLY: a method already declared on the class is `already_declared` (idempotent)."""
+    drift independently). ADD-ONLY: a method already declared on the class is `already_declared` (idempotent).
+    `key` and `dashboards` are REQUEST values: the key is refused first (paths.RequestBoundaryError — before the
+    join, and before any answer that would say whether some other directory holds a module.yml), and a dashboards
+    selection outside the closed `{gnet, name}` shape is `bad_param` before anything is rendered or read."""
+    paths.component(key, "device-class key")            # C22: the request boundary, before the join
     methods = methods if methods is not None else catalog.load_telemetry()
     by_name = {m["name"]: m for m in methods}
     mod_rel = "modules/%s/module.yml" % key   # repo-rel paths are POSIX (git + the scoped commit use them)
@@ -139,6 +252,10 @@ def build_telemetry_plan(key, method_name, params=None, dashboards=None, methods
     if method is None:
         return {"error": "unknown_method", "key": key, "method": method_name}
     bad = validate_params(method, params)
+    if bad:
+        return {"error": "bad_param", "key": key, "method": method_name, "detail": bad}
+    dashboards, bad = _clean_dashboards(dashboards, _declared_dashboards() if dashboards else None)
+    bad = bad or _foreign_dashboard_file(dashboards)
     if bad:
         return {"error": "bad_param", "key": key, "method": method_name, "detail": bad}
 

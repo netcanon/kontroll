@@ -15,11 +15,11 @@ per §8 of the architecture:
 | Method & path | Auth | Returns |
 |---|---|---|
 | `GET /search?q=…&origin=…&limit=…&vector=…&deep=` | — | capability records for the keyword(s); local hits are SHALLOW by default, `deep=true` (or a `vector`) re-probes them deeply |
-| `GET /probe/{collection}` | — | a deep-probe record + raw module/plugin facts (404 if not installed) |
+| `GET /probe/{collection}` | — | a deep-probe record + raw module/plugin facts (404 if not installed; 422 if the segment is not `namespace.name`) |
 | `GET /units/{collection}` | — | the collection's runnable units (collection-shipped playbooks + roles; empty if it ships only modules; 404 if not installed) |
 | `POST /units/{key}/configure` | — | **write-free** (validates, stages nothing): re-check an actuation unit's submitted configure `values` against its curated knobs → `{key, ok, errors}` (404 if no such unit) |
 | `POST /units/preview` | — | **write-free** (renders, stages nothing): the Review-stage preview of what unit `key` would run with `values` → the would-run `play` + resolved `vars` + `check_first` + `enact` (404 no unit; 422 invalid values) |
-| `GET /classify/{collection}` | — | the fitting execution backend(s) (404 if not installed) |
+| `GET /classify/{collection}` | — | the fitting execution backend(s) (404 if not installed; 422 if the segment is not `namespace.name`) |
 | `GET /health` | — | liveness `{status, service}` |
 | `POST /refresh` | token | rebuild the (gitignored) capability-matrix cache → `{count, run_id}` |
 | `POST /capture-exceptions` | token | add a capture-exception + commit + push the canonical → what changed |
@@ -53,7 +53,12 @@ never open. The token is compared constant-time. Every privileged call is **audi
 append-only, size-rotated TSV line (`ts, user, ip, action, run_id, detail`, never a credential) at
 `KONTROLL_API_AUDIT_LOG` — and the audit write is **fail-closed**: a mutation that can't be audited is
 refused (503). Each request carries a `kontroll_run_id` (in the response + the audit line). C9 of
-[SECURITY.md](../SECURITY.md).
+[SECURITY.md](../SECURITY.md). A request field that is not a closed charset is answered **422** with a `code`
+derived from the field (`invalid_collection`, `invalid_device_class_key`, …) and a message that never quotes the
+value; a privileged refusal leaves a best-effort `request-refuse` line (nothing was mutated), an open route writes
+none (C22). On `POST /onboard` the line is `onboard-refuse`, with `reason=request-boundary field=<name>` for a
+refused field and `reason=planner-guard` (body `code: invalid_request`) for a planner refusal that is not about
+one field, such as a partially filled credential set.
 
 ```bash
 export KONTROLL_API_TOKEN=…          # at deploy, sourced from SOPS like GUI_PASSWORD

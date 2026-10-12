@@ -11,6 +11,87 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(security): the request boundary closes its leftovers — the probe's argv, zone ids, the plan builders, the dashboards selection (C22) (2026-10-12)
+
+C22 says every request field that becomes a path component, an inventory key or an argv word is a closed charset,
+checked at the seam and again at the join. A second pass found the boundary still open, starting with the one place
+that needs no credential: `GET /probe/{collection}` and `GET /classify/{collection}` are open routes, and the name
+went onto `ansible-doc`'s command line unvalidated (an option-shaped word such as `--version` was accepted).
+`probe.deep_probe` now validates the name itself, at the join, so no caller can forget. Others. The validators
+were anchored patterns used with `match()`, which say yes to a value followed by one newline, and `hostname()`
+deferred to the standard library, which accepts an IPv6 zone id with *any* text after the `%` — braces included, in
+a value that becomes an inventory variable Ansible templates. A name such as `null`, `true` or `123` is inside the
+charset and is not a string once it stands unquoted in a file: a class key of `null` made every reader of the fleet
+list hold `None`. The telemetry, logging and backup plan builders tested `modules/<key>/module.yml` for existence
+before anything had checked `key`. A telemetry `dashboards` selection was written into the class's module file by
+string formatting, where one name with a newline rewrote the class's role and inventory group, one with no newline
+rewrote the item itself — its board id and its `derived` mark — and either later named the file an internet
+download is written to; a name another class already used with a different board id would have replaced that
+class's curated dashboard. And a unit's version pin was checked against a list of forbidden operators and then
+hand-formatted, inside quotes, into the collection lockfile, where a quote made that file unparseable. All are
+closed. The validators are patterns that end in `\Z`, applied with `fullmatch()`; no zone id. A value that goes
+into a hand-formatted YAML line must read back as the same string **where it is written**
+(`kontroll/yamlscalar.plain_scalar`: after `key: `, as a list item, before a comment, inside a flow mapping when
+the caller renders into one — and never with a line-break character: the writers' single-line rule knew the
+newline and the carriage return, and split the file on the Unicode separators as well). That rule
+holds for every onboard field that becomes a name — the class key, the inventory group, the secrets domain, the
+backend — a dashboard name, a backup remote name and the `text` and `hostname` knobs, and again inside the scalar
+writers and the fleet writer, which fail closed. A host name is not held to it (`123` is a host name): the
+generators that hand-format a name they read back — the Prometheus targets, the backup schedules, the play
+preview, the trust sidecar's keyring — quote one that is not a plain word (`yamlscalar.word`), so a group stored
+as `null` no longer reaches Prometheus as an absent label or Semaphore as no limit, no name is refused at deploy
+time (a word the YAML reader cannot even build, such as a host named like a date that does not exist, is quoted
+too — the check answers every string and never raises), and no shipped generated file changes by a byte. The key
+is refused as each builder's first statement. A
+dashboards item is exactly `{gnet, name}`, the name one path component; a name is one file and a board one name
+— not repeated, not already declared with another id, not a second name for a declared board, and not an
+existing file that does not say it is that board (no class declares the hand-authored logs dashboard, so any
+board id was accepted under its name and the next fetch would have written a download over it).
+`fetch-dashboards.py` fails closed on a bad item, on one name with two ids, and — before anything is fetched —
+on a target file that is not the board it fetches; a board it writes says which board it is. The pin is one
+plain version word and a unit's digest sixty-four hex digits; `gen-requirements.py` refuses, also at the promote
+gate, to render a collection whose name is not `namespace.name` (each half starting with a letter) or whose
+version holds anything but version characters, and a unit's trust statement whose signature policy is outside
+the closed set or whose digest is not one — the policy stands unquoted in the trust sidecar, where one with line
+breaks added an entry for another collection. A literal host var from an `inline` credential field is one plain
+word, and a credential field's name an identifier before it enters a lookup expression. The service readers that
+enumerate the fleet (classify, the Fleet index, the audit, the discovery sweep) now skip a line that is not a
+class key instead of refusing the whole request; the deploy-time generators still read the list as it is. The
+API's audit writer flattened a tab and a newline but
+not a carriage return, which its reader treats as the end of a line, so one byte in a field that is audited before
+it is validated cut the row short — everything the route recorded after that field (on a promote: the method, the
+token prefix, the push flag) vanished from the audit query; both writers now share one flattener
+(`kontroll/auditfmt.py`). A refusal is mapped once per app — the API and the GUI both answer **422** with a `code`
+derived from the field (the GUI answered 500 on the reconfigure routes, and SECURITY.md said 400) — its message
+names the field and the rule and no longer quotes the value, and a privileged refusal leaves an audit line naming
+the field (`onboard-refuse` on the onboard routes, `request-refuse` with the route elsewhere). Fixed on the way: a
+host onboarded under a dotted name (`sw.lab.example`) got a credential lookup that could never resolve; it now
+reads one key, and every existing drop-in is unchanged. **For API clients:** a malformed class key on the
+capability routes is 422 (was 500 or 404); a dashboards selection outside its shape or its bounds is 422 (any
+other key, an uppercase or keyword name, a non-integer or out-of-range id, a repeated name, a name already
+declared with another id or already a file of another board, a second name for a declared board); an inventory
+group, secrets domain or backend that YAML reads as a keyword, a number or a date is refused at onboard; an
+address with a zone id is refused at onboard and by the `ipv6` / `ip` knob types; the `hostname` knob — the
+instance domain — refuses a keyword, a number or a date with a 422 (it used to be stored: `domain: null` is no
+domain at all); a unit version that is not one plain version word
+(letters, digits, `.`, `+`, `-`, starting with a letter or digit) is refused; a boundary or planner-guard refusal
+on the onboard route gains a `code`; the refusal message no longer contains the value. The CLI prints a refused
+argument as one line. **For an existing instance:** a class key, group, secrets domain or backend spelled like a
+YAML keyword, or made only of digits, can no longer be onboarded — one that already exists keeps working, the
+generators quote it; a dashboard file that does not carry the `gnetId` of the board declared under its name
+stops `fetch-dashboards.py`, with the file named, until one of the two is renamed or the file is deleted; and
+`gen-requirements.py` — at bootstrap, at deploy-stack and at the promote gate — now stops on an ACTIVE unit whose
+`signature` is not one of the policies or whose `sha256` is not sixty-four lowercase hex digits, and on a
+collection name with a half that does not start with a letter. It used to render those as they stood.
+`python3 scripts/gen-actuation.py --check` (offline) shows such a unit beforehand: run it on a node before its
+next deploy.
+Proofs: `tests/unit/test_request_boundary.py`, `test_yamlscalar.py` (every position a writer uses, exhaustively
+for short strings), `test_validate.py`, `test_blockwrite.py`, `test_observe.py`, `test_fetch_dashboards.py`,
+`test_gen_observability.py`, `test_gen_backup.py`, `test_actuation_service.py`, `test_settings.py`,
+`test_identity.py`, `test_onboard_ssh_key.py`, `test_create_unit_service.py`, `test_actuation_registry.py`,
+`test_api_audit.py` and the route pins in `tests/integration/` — each new refusal test fails on the previous
+tree; the accept tables, the read-back tests and the dashboards write path are new coverage. SECURITY.md C22.
+
 ### docs(process): which review loop a change gets, and a home for decisions (2026-10-12)
 
 The process documents had two sentences on when to run a multi-agent review ("on a wave… for a one-off, fix it

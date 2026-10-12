@@ -7,7 +7,9 @@ the API analogue of test_gui_api.py.
 import pytest
 from fastapi.testclient import TestClient
 
+from api.audit import read_audit
 from api.main import create_app
+from api.settings import Settings
 from kontroll import catalog, probe
 from kontroll.service.openapi import build_openapi_recipe
 
@@ -212,3 +214,41 @@ def test_dogfood_galaxy_ingests_own_spec(client):
     recipe = build_openapi_recipe(spec)
     assert recipe["name"]
     assert recipe["summary"]["check"]["path"] == "/health"
+
+
+@pytest.mark.parametrize("path", ["/probe/--version", "/classify/--version", "/probe/-M..", "/classify/-vvvv",
+                                  "/probe/Cisco.IOS", "/classify/cisco.ios%0A"])
+def test_the_open_inquiry_routes_refuse_a_name_that_is_not_a_collection(monkeypatch, tmp_path, path):
+    """GET /probe/{collection} and GET /classify/{collection} need no token, and both hand the path segment to
+    `ansible-doc`. An option-shaped or otherwise malformed segment — including a valid name followed by a newline —
+    is answered 422 with the field's code, no process is started, the value is not echoed, and NO audit line is
+    written (the refusal handler audits only a request that carries a principal). Guards the one request value an
+    unauthenticated caller could put on a command line, the refusal surfacing as a 500, the check being added only
+    behind the token, and a refusal giving an unauthenticated caller a new way to write the audit log."""
+    def must_not_run(args):
+        raise AssertionError("ansible-doc must not be started: %r" % (args,))
+    monkeypatch.setattr(probe, "_ad", must_not_run)
+    audit_log = str(tmp_path / "audit" / "api-audit.log")
+    with TestClient(create_app(Settings(api_token="t", audit_log=audit_log))) as c:
+        r = c.get(path)                                         # no Authorization header at all
+    assert r.status_code == 422, (path, r.status_code, r.text)
+    assert r.json()["code"] == "invalid_collection"
+    assert not any(word in r.text for word in ("--version", "-M..", "-vvvv", "Cisco"))
+    assert read_audit(audit_log) == []
+
+
+def test_classify_survives_a_fleet_file_line_that_is_not_a_class_key(tmp_repo, monkeypatch, make_facts):
+    """With a fleet file whose `enabled_modules` holds a `- null` (how an unquoted `null` key reads back) and a
+    number, GET /classify for an installed collection still answers 200 — the entries that are not a class key are
+    skipped. Guards one bad line in a fleet file turning every route that enumerates the fleet into a 422 that names
+    a field the caller never sent: the readers used to hand each entry to `paths.module_file`, which raises the
+    request-boundary refusal the app now maps for the whole API."""
+    fleet = tmp_repo / "config" / "fleet.yml"
+    fleet.write_text(fleet.read_text(encoding="utf-8").replace(
+        "enabled_modules:\n", "enabled_modules:\n  - null\n  - 123\n", 1), encoding="utf-8")
+    monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(
+        collection=coll, version="5.0.0", plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
+    with TestClient(create_app()) as c:
+        r = c.get("/classify/cisco.ios")
+    assert r.status_code == 200, r.text
+    assert "code" not in r.json()

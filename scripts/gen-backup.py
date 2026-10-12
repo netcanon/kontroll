@@ -30,7 +30,7 @@ import sys
 
 import yaml
 
-from kontroll import paths
+from kontroll import paths, yamlscalar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = "config/semaphore/schedules.generated.yml"
@@ -100,16 +100,17 @@ def render(specs):
         lines.append("schedules: []")
         return "\n".join(lines) + "\n"
     lines.append("schedules:")
-    for s in specs:
-        lines.append("  - name: %s" % s["name"])
-        lines.append('    cron: "%s"' % s["cron"])
-        lines.append("    limit: %s" % (s["limit"] or "all"))
-        lines.append("    key: %s" % s["key"])
+    word = yamlscalar.word                           # a value read back from a module file is quoted when it is
+    for s in specs:                                  # not a plain word: `limit: null` reached Semaphore as no limit
+        lines.append("  - name: %s" % word(s["name"]))
+        lines.append("    cron: %s" % yamlscalar.quoted(s["cron"]))
+        lines.append("    limit: %s" % word(s["limit"] or "all"))
+        lines.append("    key: %s" % word(s["key"]))
         lines.append("    playbook: %s" % s["playbook"])
         if s.get("retention"):                       # optional knobs (#123) — only when declared (keeps the lockfile stable)
-            lines.append("    retention: %s" % s["retention"])
+            lines.append("    retention: %s" % word(s["retention"]))
         if s.get("destination"):
-            lines.append("    destination: %s" % s["destination"])
+            lines.append("    destination: %s" % word(s["destination"]))
     return "\n".join(lines) + "\n"
 
 

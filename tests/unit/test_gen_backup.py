@@ -92,3 +92,23 @@ def test_retention_and_destination_are_carried_only_when_declared(monkeypatch):
                                                      "backup": {"capable": True, "schedule": "0 2 * * *"}})
     bare = gen.render(gen.backup_schedules({"enabled_modules": ["x"]}))
     assert "retention:" not in bare and "destination:" not in bare
+
+
+def test_a_schedule_field_that_is_not_a_plain_word_is_quoted_and_reads_back_as_itself():
+    """`render` writes a class key or an inventory group that YAML would read as another type, or that holds a
+    line break, as a quoted scalar — the schedules file parses back to exactly the strings of the spec. Guards
+    `limit: null` reaching configure-semaphore as no limit at all (the play then runs against whatever the
+    default is), and a value read back from a module file adding a schedule of its own."""
+    import yaml
+    spec = {"name": "backup-null", "cron": '0 2 * * * " #', "limit": "null", "key": "123",
+            "playbook": "ansible/playbooks/backup-configs.yml", "retention": "30d",
+            "destination": "local\n  - name: evil"}
+    parsed = yaml.safe_load(gen.render([spec]))["schedules"]
+    assert parsed == [spec]
+    # every field that goes through the helper, with a word the YAML reader resolves and cannot build
+    odd = dict(spec, name="backup: yes #", limit="2026-02-30", key="0x_", retention="0000-00-00", destination="~")
+    assert yaml.safe_load(gen.render([odd]))["schedules"] == [odd]
+    plain = dict(spec, name="backup-cisco_ios", cron="0 2 * * *", limit="core_switch", key="cisco_ios",
+                 destination="local")
+    text = gen.render([plain])
+    assert "    limit: core_switch\n" in text and "    key: cisco_ios\n" in text and '    cron: "0 2 * * *"\n' in text

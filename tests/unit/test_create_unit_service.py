@@ -122,11 +122,21 @@ def test_collision_never_overwrites_an_existing_unit(tmp_path, monkeypatch):
     ({"version": ">=3.0"}, "version"),              # a range, not an exact pin
     ({"version": ""}, "version"),
     ({"blast_radius": "galaxy"}, "blast_radius"),
+    ({"collection": "cisco.ios.a..b"}, "collection"),   # not exactly namespace.name
+    ({"collection": "cisco.ios\n"}, "collection"),      # a trailing newline (`$` matches before it)
+    ({"name": "swarm\n"}, "name"),
+    ({"version": '1"x'}, "version"),                    # a quote: the pin is hand-formatted into the lockfile
+    ({"version": '1"\ncollections:\n#'}, "version"),    # …where this parsed the lockfile to `collections: null`
+    ({"version": "1:2"}, "version"),
+    ({"version": "1#2"}, "version"),
 ])
 def test_invalid_inputs_are_rejected_per_field(over, field):
     """Each malformed input is rejected as 'invalid' with a per-field error naming the fault — fail closed BEFORE
-    any path is built or any module looked up. Covers the collection shape, the closed kind set (no standalone),
-    the unit-name shape, the exact-pin rule, and the blast enum."""
+    any path is built or any module looked up. Covers the collection shape (exactly `namespace.name`, no trailing
+    newline), the closed kind set (no standalone), the unit-name shape, the exact-pin rule, and the blast enum —
+    and the version's CHARSET: the pin is written into the unit descriptor and later hand-formatted, inside double
+    quotes, into the collection lockfile, where a quote or a line break made that file unparseable or parse to
+    something else."""
     out = build_create_unit_plan(dict(GOOD, **over), module=MODULE_LOW, enabled_modules=EN)
     assert out["error"] == "invalid" and field in out["errors"]
 

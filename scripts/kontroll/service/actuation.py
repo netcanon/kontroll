@@ -20,6 +20,7 @@ import re
 import yaml
 
 from kontroll import catalog, paths
+from kontroll.yamlscalar import word as _yw       # one YAML scalar on one line: bare when plain, else quoted
 from kontroll.service import _actuation_schema as _schema
 from kontroll.service import promote, units
 
@@ -29,7 +30,7 @@ log = logging.getLogger("kontroll.service.actuation")
 # build_actuation_plan rejects a key that doesn't match BEFORE it builds any path, so a crafted route {key}
 # (`../`, absolute, slashes, NUL) can never reach the path-builder (_vars_rel) — the SEC-3 analog for the WRITE
 # path (R5 review MF-1: the escape is closed by CONSTRUCTION here, not only by the catalog-lookup ordering).
-_KEY_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+_KEY_RE = re.compile(r"^[a-z][a-z0-9-]*\Z")
 
 
 def _yv(value):
@@ -49,6 +50,9 @@ def _access_chain_header(unit, target):
     dc = target.get("device_class") or "?"
     blast = target.get("blast_radius") or "this-device"
     runs = ("%s.%s" % (u.get("collection"), u.get("name"))) if u.get("collection") else (u.get("repo_playbook") or "?")
+    # every value is read back from a unit descriptor or a module file — rendered as ONE word each (_yw), so none
+    # can end a comment line and continue the preview with a line of its own
+    grp, dc, runs, blast = _yw(grp), _yw(dc), _yw(runs), _yw(blast)
     return ("# Access chain used:   Semaphore runner -> %s (group %s) via the %s device-class backend.\n"
             "# May break:           runs %s against %s.\n"
             "# Fallback required:   per the %s device-class access-chain.\n"
@@ -64,14 +68,14 @@ def _wrapper_play(unit, target, values):
     grp = target.get("inventory_group") or "all"
     fqcn = "%s.%s" % (u.get("collection"), u.get("name"))
     lines = ["---",
-             "- name: App-store unit %s (%s on %s)" % (unit.get("key"), fqcn, grp),
-             "  hosts: %s" % grp,
+             "- name: %s" % _yw("App-store unit %s (%s on %s)" % (unit.get("key"), fqcn, grp)),
+             "  hosts: %s" % _yw(grp),
              "  gather_facts: false",
              "  ignore_unreachable: true"]
     if values:
         lines.append("  vars:")
         lines += ["    %s: %s" % (k, _yv(values[k])) for k in sorted(values)]
-    lines += ["  roles:", "    - role: %s" % fqcn]
+    lines += ["  roles:", "    - role: %s" % _yw(fqcn)]
     return "\n".join(lines)
 
 
@@ -83,7 +87,7 @@ def _run_spec(unit, target, values):
     ref = ("%s.%s" % (u.get("collection"), u.get("name"))) if u.get("kind") == "collection_playbook" \
         else (u.get("repo_playbook") or "?")
     grp = target.get("inventory_group") or "all"
-    lines = ["playbook: %s" % ref, "limit: %s" % grp]
+    lines = ["playbook: %s" % _yw(ref), "limit: %s" % _yw(grp)]
     if values:
         lines.append("extra_vars:")
         lines += ["  %s: %s" % (k, _yv(values[k])) for k in sorted(values)]
@@ -125,7 +129,7 @@ def build_actuation_plan(key, values, unit=None):
     when the key is absent (→ 404), or `{"error": "invalid", errors}` when the values don't validate (→ 422).
     WRITES NOTHING (pinned `assert_read_only`): the staged write + the generated change-set are R5. No `vars`
     value is ever a secret (secret-typed actuation vars are forbidden at the descriptor layer; SEC-2)."""
-    if not isinstance(key, str) or not _KEY_RE.match(key):
+    if not isinstance(key, str) or not _KEY_RE.fullmatch(key):   # fullmatch: `$` also matches before a final \n
         return {"error": "no_unit", "key": key}     # SEC-3 analog (write path): a malformed key matches no unit
     unit = unit if unit is not None else catalog.actuation_unit(key)   # AND never reaches _vars_rel (no traversal)
     if not unit:
@@ -225,8 +229,7 @@ def stage_plan(key, values, token):
 
 # A bare collection name (`namespace.name`, lowercase) and a runnable-unit name (`[a-z0-9_]+`, an ansible
 # playbook/role stem). Shape-checked so a crafted value can never corrupt the rendered YAML / the derived key.
-_COLLECTION_RE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_.]+$")
-_NAME_RE = re.compile(r"^[a-z0-9_]+$")
+_NAME_RE = re.compile(r"^[a-z0-9_]+\Z")
 # "create" is reserved: the WRITE route is POST /actuation/create (a static path declared before /{key}), so a
 # unit may not be keyed "create" or the stage route's {key} could never address it. create-derivation never mints
 # it (a key is collection+name slug, which always carries a dash), but the guard closes the loop.
@@ -263,8 +266,13 @@ def _normalize_pin(version):
     if not v:
         return None, "version is required (the exact reviewed version to pin)"
     if any(c in v for c in "<>=!~*^ "):
-        return None, "version %r must be an EXACT version, not a range/operator (an app-store install pins one " \
-                     "reviewed version)" % version
+        return None, "version must be an EXACT version, not a range/operator (an app-store install pins one " \
+                     "reviewed version)"
+    if not _schema.PIN_VERSION_RE.fullmatch(v):
+        # A CLOSED charset, not a list of forbidden operators: the pin is written into the unit descriptor and
+        # later hand-formatted, inside double quotes, into the collection lockfile — a quote or a newline there
+        # made that file unparseable, or parse to something else.
+        return None, "version must be a plain version string (letters, digits, `.`, `+`, `-`)"
     return "==" + v, None
 
 
@@ -310,11 +318,13 @@ def build_create_unit_plan(inputs, module=None, enabled_modules=None):
 
     # 1. shape-check the operator inputs (fail closed with a per-field message; nothing reaches the path-builder yet).
     errs = {}
-    if not isinstance(collection, str) or not _COLLECTION_RE.match(collection):
+    try:
+        paths.collection_fqcn(collection)                # exactly namespace.name — the request-boundary validator
+    except paths.RequestBoundaryError:
         errs["collection"] = "collection must be a 'namespace.name' galaxy collection"
     if kind not in _schema.INSTALLABLE:
         errs["kind"] = "kind must be one of %s (a runnable collection unit)" % list(_schema.INSTALLABLE)
-    if not isinstance(name, str) or not _NAME_RE.match(name):
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):     # fullmatch: `$` also matches before a final \n
         errs["name"] = "name must be a runnable-unit name (^[a-z0-9_]+$)"
     if blast not in _schema.BLAST:
         errs["blast_radius"] = "blast_radius must be one of %s" % list(_schema.BLAST)
@@ -326,7 +336,7 @@ def build_create_unit_plan(inputs, module=None, enabled_modules=None):
 
     # 2. derive + guard the key BEFORE any path is built (SEC-3 analog; the key IS the on-disk dir name).
     key = _derive_key(collection, name)
-    if not _schema.KEY_RE.match(key) or key in _RESERVED_KEYS:
+    if not _schema.KEY_RE.fullmatch(key) or key in _RESERVED_KEYS:
         return {"error": "invalid", "errors": {"key": "could not derive a valid registry key from the inputs"}}
 
     # 3. resolve the target device-class from the module that DECLARES the collection (the one dispatch seam).

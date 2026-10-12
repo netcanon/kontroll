@@ -137,3 +137,65 @@ def test_promote_with_a_stale_token_is_409(cap):
     assert r.status_code == 409
     assert _module_text(cap) == before
     assert not any("commit" in " ".join(c) for c in cap.calls)
+
+
+@pytest.mark.parametrize("key", ["../modules/demo_sw", "Demo_SW", "demo_sw\n"])
+def test_capability_refuses_a_bad_key_with_422_and_an_audit_line(cap, key):
+    """A malformed class `key` on the capability surface — suggest, propose and promote — is answered 422 with the
+    field's code before the service asks the filesystem anything, and each refusal leaves ONE audit line that names
+    the route and the field and not the value. Guards a boundary refusal reaching the client as a bare 500 (no
+    capability route catches it — the mapping is app-wide), and a refusal that leaves no trace."""
+    r = cap.client.get("/capability/telemetry/suggest", headers=AUTH, params={"key": key})
+    assert r.status_code == 422 and r.json()["code"] == "invalid_device_class_key", r.text
+    for apply in (False, True):
+        r = cap.client.post("/capability/telemetry", headers=AUTH,
+                            json={"key": key, "selection": {"method": "host_node"}, "apply": apply, "token": "x"})
+        assert r.status_code == 422 and r.json()["code"] == "invalid_device_class_key", r.text
+        assert "demo_sw" not in r.json()["detail"].lower()
+    assert cap.calls == [], "a refused request must never reach git"
+    rows = read_audit(cap.audit_log, action="request-refuse")
+    assert len(rows) == 3, rows
+    for row in rows:
+        assert "reason=request-boundary field=device-class key" in row["detail"]
+        # the route TEMPLATE, never the concrete path: a path parameter is a request value too
+        assert "route=/capability/{cap}" in row["detail"]
+        assert "demo_sw" not in row["detail"].lower(), "the audit line names the FIELD, never the refused value"
+
+
+@pytest.mark.parametrize("name", ["x}\ninventory_group: edge_firewall\nrole: opnsense_firewall\n_pad: {a: 1",
+                                  "a, derived: true, gnet: 99999", "../../../../tmp/x"],
+                         ids=["newline", "one-line-flow-mapping", "path-traversal"])
+def test_capability_refuses_a_hostile_dashboard_name(cap, name):
+    """A `dashboards` item whose name is not one path component is 422 on propose AND on promote, and the refusal
+    names that item; the class's module file is untouched and git is never called. Guards the route being the
+    place that forgets: the selection is handed to the service whole, and the name used to be written into the
+    module file by string formatting — where a newline rewrote the class's role and inventory group, and a
+    `, key: value` with no newline rewrote the item itself (its board id, its `derived` mark)."""
+    before = _module_text(cap)
+    selection = {"method": "host_node", "dashboards": [{"gnet": 1860, "name": name}]}
+    for apply in (False, True):
+        r = cap.client.post("/capability/telemetry", headers=AUTH,
+                            json={"key": "demo_sw", "selection": selection, "apply": apply, "token": "x"})
+        assert r.status_code == 422, (apply, r.status_code, r.text)
+        assert r.json()["detail"].startswith("dashboards[0].name"), r.text      # THIS validator, no other bad_param
+        assert "edge_firewall" not in r.text and "tmp/x" not in r.text
+    assert _module_text(cap) == before and cap.calls == []
+
+
+def test_a_field_with_a_carriage_return_does_not_cut_its_audit_row_short(cap):
+    """A promote audits `key` and the method name BEFORE validating them. A request whose key holds a carriage
+    return leaves ONE whole `capability-promote` row when the log is read back: the text after the carriage return
+    and everything the route recorded after the key (down to the push flag) are still in that row's detail. Guards
+    a token holder hiding the rest of an audit entry from the audit query: the reader opens the log with universal
+    newlines, where a lone `\r` ends a line, and the writer used to flatten only tab and newline."""
+    forged = "x\r2026-01-01T00:00:00Z\tadmin\t192.0.2.1\tonboard-apply\tFORGED-RUN\tkey=victim"
+    r = cap.client.post("/capability/telemetry", headers=AUTH,
+                        json={"key": forged, "selection": {"method": "host_node"}, "apply": True, "token": "x"})
+    assert r.status_code == 422                                   # the key is refused — after it was audited
+    rows = read_audit(cap.audit_log)
+    assert [row["action"] for row in rows if row["action"] != "request-refuse"] == ["capability-promote"]
+    assert not any(row["run_id"] == "FORGED-RUN" or row["user"] == "admin" for row in rows)
+    assert len(rows) == 2, rows                                   # the promote line and its refusal — nothing else
+    promote = next(row for row in rows if row["action"] == "capability-promote")
+    assert "FORGED-RUN" in promote["detail"] and "push=False" in promote["detail"], \
+        "the row is whole: nothing after the carriage return was cut off"

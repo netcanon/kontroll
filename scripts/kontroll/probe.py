@@ -136,6 +136,12 @@ def _ad(args):
 
 
 def deep_probe(coll, version=None):
+    """DEEP-probe an installed collection through `ansible-doc`: its modules, its plugins by type, and the options
+    of each `*_config` module. `coll` becomes an argv word of every one of those calls, so it is validated HERE, at
+    the join (SEC-3 / SECURITY.md C22) — a caller cannot forget it, and some callers are routes that need no token
+    (GET /probe/{collection}, GET /classify/{collection}). Raises paths.RequestBoundaryError before any process
+    starts."""
+    paths.collection_fqcn(coll)
     f = _facts(coll, version, "local", "deep")
     f["modules"] = [k.split(".")[-1] for k in json.loads(_ad(["-l", coll, "-j"]) or "{}")]
     for t in PLUGIN_TYPES:

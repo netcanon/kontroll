@@ -62,7 +62,7 @@ def declared_metrics_methods(collection, fleet=None):
     if fleet is None:
         fp = paths.resolve("config/fleet.yml")
         fleet = (yaml.safe_load(open(fp, encoding="utf-8")) if os.path.exists(fp) else {}) or {}
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = paths.module_file(key)
         if not os.path.exists(mp):
             continue
@@ -264,7 +264,7 @@ def declared_backup(collection, fleet=None):
     if fleet is None:
         fp = paths.resolve("config/fleet.yml")
         fleet = (yaml.safe_load(open(fp, encoding="utf-8")) if os.path.exists(fp) else {}) or {}
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = paths.module_file(key)
         if not os.path.exists(mp):
             continue
@@ -304,7 +304,7 @@ def declared_logs_methods(collection, fleet=None):
     if fleet is None:
         fp = paths.resolve("config/fleet.yml")
         fleet = (yaml.safe_load(open(fp, encoding="utf-8")) if os.path.exists(fp) else {}) or {}
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = paths.module_file(key)
         if not os.path.exists(mp):
             continue

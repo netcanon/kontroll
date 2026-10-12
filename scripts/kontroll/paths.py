@@ -187,63 +187,93 @@ def overlay_target(rel):
 
 # --- Request-boundary validators (2026-10-08 review, finding 1; CodeQL py/path-injection) --------------------------
 # Every request field that becomes a PATH COMPONENT (a device-class key, an actuation unit key, a secret domain, an
-# inventory group) or an INVENTORY KEY (a host name, an address) passes one of these at the service seam, and every
-# repo-relative write target passes confined(). A closed charset, not a denylist: a value that passes cannot carry a
-# separator, a `..`, a NUL, a newline or a YAML/shell metacharacter, so the joins need no per-site check — and
-# CodeQL's "this path depends on a user-provided value" is answered once, here. Each raises ValueError naming the
-# FIELD (the value only as a short repr): the API maps it to 422 and the GUI to 400, both before any write.
-_COMPONENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_FQCN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}\.[a-z][a-z0-9_]{0,63}$")
+# inventory group) or an INVENTORY KEY (a host name, an address) passes one of these at the service seam and again at
+# the join that uses it, and every repo-relative write target passes confined(). A closed charset, not a denylist: a
+# value that passes cannot carry a separator, a `..`, a NUL, a newline or a YAML/shell metacharacter — and CodeQL's
+# "this path depends on a user-provided value" is answered once, here. Each raises RequestBoundaryError naming the
+# FIELD and the rule, never the value; the API and the GUI both answer 422, before any write.
+# The patterns are applied with fullmatch(). `$` also matches BEFORE a final newline, so `^…$` with match() says yes
+# to `cisco_ios\n` — a character the contract above excludes, through a pattern that looks closed. Each pattern
+# also ends in `\Z` (end of string, no newline exception), so a later `.match()` on one of them stays exact
+# instead of becoming a prefix test.
+# (A pattern elsewhere whose repetition is UNBOUNDED — a unit key, a remote name — keeps a leading `^` as well:
+# end-anchored and start-unanchored it would be quadratic under search(). fullmatch() never searches; the anchor
+# makes the pattern safe under any method, which is the same reason for the \Z.)
+_COMPONENT_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
+_FQCN_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\.[a-z][a-z0-9_]{0,63}\Z")
 _LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-_HOSTNAME_RE = re.compile(r"^%s(?:\.%s)*\.?$" % (_LABEL, _LABEL))
+_HOSTNAME_RE = re.compile(r"%s(?:\.%s)*\.?\Z" % (_LABEL, _LABEL))
+# The characters of an IPv4/IPv6 literal. The standard library's parser is NOT the charset: ipaddress.ip_address()
+# accepts an IPv6 zone id (`fe80::1%eth0`) and takes any text after the `%` — a newline, braces, quotes.
+_IP_LITERAL_RE = re.compile(r"[0-9A-Fa-f:.]{2,45}\Z")
 
 
 class RequestBoundaryError(ValueError):
-    """A request field failed its closed-charset check. A ValueError (every existing handler maps it to 422/400
-    before any write) that also names the FIELD, so an audit line can say which field was refused without quoting
-    the value — a refused `key` of `../../etc` must not be copied into the audit log either."""
+    """A request field failed its closed-charset check. A ValueError (so a handler written for the planner's other
+    guards still maps it to a 4xx before any write) that also names the FIELD, so the response, the audit line and
+    any log can say which field was refused WITHOUT the value: a refused `key` of `../../etc` — or a credential
+    pasted into the wrong box — must not travel on in a message. The message states the field and the rule only."""
 
     def __init__(self, field, message):
         super().__init__(message)
         self.field = field
 
-
-def _short(value):
-    r = repr(value)
-    return r if len(r) <= 40 else r[:37] + "..."
+    @property
+    def code(self):
+        """A stable machine code for the refused FIELD: `collection` → `invalid_collection`, `device-class key` →
+        `invalid_device_class_key`. What a client keys its next-step copy on — derived from the field name, never
+        from the value. The API and the GUI both put it beside the message in their 422 body."""
+        return "invalid_%s" % re.sub(r"[^a-z0-9]+", "_", str(self.field).lower()).strip("_")
 
 
 def component(value, what="name"):
     """ONE path component from a request field — a device-class key, a unit key, a secret domain, an inventory
     group: lowercase letters, digits, `_` and `-`; 1–64 chars; starting with a letter or digit. Returns the value."""
-    if not isinstance(value, str) or not _COMPONENT_RE.match(value):
-        raise RequestBoundaryError(what, "%s %s is not a valid name: 1-64 chars of [a-z0-9_-], starting with a "
-                                   "letter or digit" % (what, _short(value)))
+    if not isinstance(value, str) or not _COMPONENT_RE.fullmatch(value):
+        raise RequestBoundaryError(what, "%s is not a valid name: 1-64 chars of [a-z0-9_-], starting with a letter "
+                                   "or digit" % what)
     return value
+
+
+def is_component(value):
+    """True when `value` would pass component(). For ENUMERATORS over data the tool reads back — a directory
+    listing, a fleet file's `enabled_modules` — which must SKIP a malformed entry: it is not a request field, and
+    raising a request-boundary refusal for it would answer a request with a 422 that names a field nobody sent."""
+    return isinstance(value, str) and _COMPONENT_RE.fullmatch(value) is not None
+
+
+def enabled_keys(fleet):
+    """The device-class keys a PARSED fleet file enables, without the entries that are not a key at all: a
+    `- null`, a number, a mapping, a name outside the charset. Every reader that enumerates the fleet and resolves
+    each class through module_file() takes its keys from here, so one bad line in a fleet file cannot turn every
+    route that enumerates classes into a refusal."""
+    mods = fleet.get("enabled_modules") if isinstance(fleet, dict) else None
+    return [key for key in mods if is_component(key)] if isinstance(mods, list) else []
 
 
 def collection_fqcn(value, what="collection"):
     """An Ansible collection name, exactly `namespace.name` in Galaxy's charset (lowercase, digits, `_`) — the form
     every `ansible_collections/<ns>/<name>` join and every `ansible-doc` / `ansible-galaxy` argv word expects."""
-    if not isinstance(value, str) or not _FQCN_RE.match(value):
-        raise RequestBoundaryError(what, "%s %s is not a collection name (expected namespace.name, lowercase)"
-                                   % (what, _short(value)))
+    if not isinstance(value, str) or not _FQCN_RE.fullmatch(value):
+        raise RequestBoundaryError(what, "%s is not a collection name (expected namespace.name, lowercase)" % what)
     return value
 
 
 def hostname(value, what="host"):
-    """A device address or inventory host name: an IPv4/IPv6 literal, or an RFC-1123 hostname (labels of letters,
-    digits and hyphens joined by single dots, at most 253 chars). Content rather than a path, but it becomes an
-    inventory KEY and is rendered into YAML, so the closed charset keeps `..`, separators and metacharacters out."""
+    """A device address or inventory host name: an IPv4/IPv6 literal WITHOUT a zone id, or an RFC-1123 hostname
+    (labels of letters, digits and hyphens joined by single dots, at most 253 chars). Content rather than a path, but
+    it becomes an inventory KEY, an inventory variable Ansible templates, and part of a lookup expression, so the
+    closed charset keeps `..`, separators, braces and every other metacharacter out."""
     if isinstance(value, str) and value:
-        try:
-            ipaddress.ip_address(value)
+        if _IP_LITERAL_RE.fullmatch(value):
+            try:
+                ipaddress.ip_address(value)
+                return value
+            except ValueError:
+                pass
+        if len(value) <= 253 and _HOSTNAME_RE.fullmatch(value):
             return value
-        except ValueError:
-            pass
-        if len(value) <= 253 and _HOSTNAME_RE.match(value):
-            return value
-    raise RequestBoundaryError(what, "%s %s is not an address or RFC-1123 hostname" % (what, _short(value)))
+    raise RequestBoundaryError(what, "%s is not an IP address (without a zone id) or an RFC-1123 hostname" % what)
 
 
 def confined(rel_path):
@@ -251,11 +281,11 @@ def confined(rel_path):
     absolute path, a `..` that climbs out, a NUL, or a symlink that points out. The last check before every drop-in
     write (gitio._write_new / write_inventory_host, the actuation descriptor + values writers)."""
     if not isinstance(rel_path, str) or not rel_path or os.path.isabs(rel_path) or "\x00" in rel_path:
-        raise RequestBoundaryError("path", "refusing to write outside the repository: %s" % _short(rel_path))
+        raise RequestBoundaryError("path", "refusing to write outside the repository")
     root = os.path.realpath(write_root())
     full = os.path.realpath(os.path.join(root, rel_path))
     if full != root and not full.startswith(root + os.sep):
-        raise RequestBoundaryError("path", "refusing to write outside the repository: %s" % _short(rel_path))
+        raise RequestBoundaryError("path", "refusing to write outside the repository")
     return full
 
 
@@ -294,7 +324,7 @@ def module_keys():
             for name in os.listdir(base):
                 # a class is a DIRECTORY whose name is a valid key — README.md, _core.yml and a stray file are not
                 # classes, and module_file() now refuses a non-key, so the enumerator must not hand it one (C22)
-                if os.path.isdir(os.path.join(base, name)) and _COMPONENT_RE.match(name):
+                if os.path.isdir(os.path.join(base, name)) and is_component(name):
                     keys.add(name)
     return sorted(keys)
 

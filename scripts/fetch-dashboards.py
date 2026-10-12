@@ -33,6 +33,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GNET = "https://grafana.com/api/dashboards"
 DS_UID = "prometheus"   # must match the uid pinned in dashboards/grafana/provisioning/datasources/prometheus.yml
 OUT_DIR = os.path.join(ROOT, "dashboards", "grafana", "dashboards")
+_MAX_GNET = 2 ** 31 - 1   # a grafana.com board id — the bound service/observe.py applies to a request (_MAX_GNET);
+                          # this script does not import the service layer, so the number stands in both
 
 
 def _load(rel):
@@ -46,15 +48,55 @@ def _get(url):
         return resp.read().decode("utf-8")
 
 
+def _dashboard_entry(d):
+    """(gnet, name) of one declared `dashboards:` item, or None when it is not a positive board id plus a name that
+    is one path component. The name is the FILE this script writes and the id chooses what an internet download
+    puts in it, so a module file is not trusted to carry either: a promoted line is still a line somebody proposed
+    (SECURITY.md C22 — the check at the join)."""
+    if not isinstance(d, dict):
+        return None
+    gnet, name = d.get("gnet"), d.get("name")
+    if isinstance(gnet, bool) or not isinstance(gnet, int) or not 0 < gnet <= _MAX_GNET:
+        return None
+    try:
+        paths.component(name, "dashboard name")
+    except ValueError:
+        return None
+    return gnet, name
+
+
 def declared_dashboards(fleet):
-    """-> {gnet: name} unique across every enabled module's `dashboards:` block (first name wins on dup)."""
-    out = {}
-    for key in fleet.get("enabled_modules") or []:
+    """-> {gnet: name} unique across every enabled module's `dashboards:` block (first name wins on dup). FAILS
+    CLOSED (SystemExit naming the module files, before anything is fetched or written) when an item's `gnet` is
+    not a positive integer or its `name` is not one path component (other keys, such as `derived`, are allowed
+    here), and when one NAME is declared with two different board ids: a name is one file, and the later download
+    would replace the earlier — a curated board overwritten by whichever id sorts last."""
+    out, bad, owner, clash = {}, set(), {}, set()
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
-        for d in (_load(mp).get("dashboards") or []):
-            out.setdefault(d["gnet"], d["name"])
+        module = _load(mp)
+        block = module.get("dashboards") if isinstance(module, dict) else None
+        if block is not None and not isinstance(block, list):
+            bad.add(mp)                                   # `dashboards: 5` — not a list of items at all
+            continue
+        for d in block or []:
+            entry = _dashboard_entry(d)
+            if entry is None:
+                bad.add(mp)
+                continue
+            gnet, name = entry
+            first_gnet, first_mp = owner.setdefault(name, (gnet, mp))
+            if first_gnet != gnet:
+                clash.add("%s (%s and %s)" % (name, first_mp, mp))
+            out.setdefault(gnet, name)
+    if bad:
+        raise SystemExit("fetch-dashboards: refusing to run — a `dashboards:` item in %s has a gnet that is not a "
+                         "positive integer or a name that is not 1-64 chars of [a-z0-9_-]" % ", ".join(sorted(bad)))
+    if clash:
+        raise SystemExit("fetch-dashboards: refusing to run — one dashboard name is declared with two board ids: "
+                         "%s. A name is one file under dashboards/grafana/dashboards/." % "; ".join(sorted(clash)))
     return out
 
 
@@ -77,11 +119,36 @@ def pin_datasource(dash):
 
 
 def fetch(gnet):
-    """-> (revision, name, pinned_dashboard_dict) for a Grafana.com dashboard id."""
+    """-> (revision, name, pinned_dashboard_dict) for a Grafana.com dashboard id. The dict says which board it is
+    (`gnetId`): a download carries that itself — every board fetched so far does, so the bytes are unchanged — and
+    it is set here for one that does not, because `foreign_targets()` decides by it whether a file may be
+    replaced. gen-dashboard-floor.py takes its boards through this function too, so both write the same bytes."""
     meta = json.loads(_get("%s/%d" % (GNET, gnet)))
     rev = meta["revision"]
     raw = json.loads(_get("%s/%d/revisions/%d/download" % (GNET, gnet, rev)))
-    return rev, meta.get("name"), pin_datasource(raw)
+    dash = pin_datasource(raw)
+    dash["gnetId"] = gnet
+    return rev, meta.get("name"), dash
+
+
+def foreign_targets(want, out_dir=None):
+    """The `<name>.json` targets of `want` ({gnet: name}) that already exist and do NOT say they are that board
+    (`gnetId`) — a hand-authored dashboard such as the shipped logs one, or another board. Offline. A download is
+    never written over such a file: a module line gives a name to a board, it does not hand over whatever file
+    already has that name."""
+    foreign = []
+    for gnet, name in sorted(want.items()):
+        path = os.path.join(out_dir or OUT_DIR, "%s.json" % name)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                have = json.load(fh).get("gnetId")
+        except (OSError, ValueError, AttributeError):
+            have = None
+        if isinstance(have, bool) or have != gnet:
+            foreign.append("%s.json (declared as board %d)" % (name, gnet))
+    return foreign
 
 
 def main(argv):
@@ -90,6 +157,12 @@ def main(argv):
         for gnet, name in sorted(want.items()):
             print("%-8d %s" % (gnet, name))
         return 0
+    foreign = foreign_targets(want)
+    if foreign:
+        raise SystemExit("fetch-dashboards: refusing to run — a file under dashboards/grafana/dashboards/ would be "
+                         "overwritten by a board it is not: %s. A hand-authored dashboard is never replaced by a "
+                         "download. Declare the board under another name, or delete the file to fetch the board "
+                         "anew." % "; ".join(foreign))
     os.makedirs(OUT_DIR, exist_ok=True)
     for gnet, name in sorted(want.items()):
         rev, title, dash = fetch(gnet)

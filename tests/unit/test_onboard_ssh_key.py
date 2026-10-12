@@ -183,3 +183,65 @@ def test_render_copy_guarantees_one_trailing_newline():
     assert "content: |\n" in src, "the key copy must use a literal block (content: |) so a trailing newline survives"
     assert "| trim }}" in src, "the extracted key must be `| trim`-normalized so exactly one newline is re-added"
     assert "content: >-" not in src, "content: >- strips the trailing newline -> OpenSSH 'error in libcrypto'"
+
+
+def test_a_dotted_host_name_gets_a_lookup_that_resolves_one_key(monkeypatch):
+    """The host var that reads a credential out of the decrypted SOPS domain names ONE key. For a host named
+    `sw.lab.example` (a name the boundary accepts on purpose) the key is `sw.lab.example_password`, and written as
+    `(…).sw.lab.example_password` it is an attribute chain that can never resolve — so that name gets the bracket
+    form, while an identifier-shaped name keeps the dotted form byte for byte. Guards both halves: a host whose
+    credentials silently cannot be read, and a rewrite of every existing drop-in (a second onboard must still
+    report no change)."""
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "5.0.0"})
+
+    def _fake(coll, version=None):
+        f = probe._facts(coll, "5.0.0", "local", "deep")
+        f["plugins"] = {"cliconf": ["ios"]}
+        f["modules"] = ["ios_command"]
+        return f
+    monkeypatch.setattr(probe, "deep_probe", _fake)
+
+    def host_vars(host_name):
+        plan = onboard.build_onboard_plan("cisco.ios", "cisco_ios", "core_switch", "192.0.2.10",
+                                          host_name=host_name, secrets="network", username="admin", password="pw")
+        return plan["host_block"]["core_switch"]["hosts"][host_name], plan["creds_to_set"]
+
+    plain, _ = host_vars("sw-core-1")
+    assert plain["ansible_password"].endswith(").sw_core_1_password }}")          # unchanged: the dotted form
+    dotted, creds = host_vars("sw.lab.example")
+    assert dotted["ansible_password"].endswith(")['sw.lab.example_password'] }}")   # one key, in brackets
+    assert "sw.lab.example_password" in creds
+    assert onboard._sops_ref("X", "a_b") == "{{ (X).a_b }}" and onboard._sops_ref("X", "9a") == "{{ (X)['9a'] }}"
+
+
+@pytest.mark.parametrize("stem", ["pw }} {{ lookup('pipe', 'id')", "pw']", "pw.x", "pw-x", "", "pw\n", None])
+def test_a_credential_field_whose_name_is_not_an_identifier_is_refused(monkeypatch, stem):
+    """A credential field's stem is formatted into the host var's lookup expression. For a field derived from an
+    installed module's argument_spec (F1 TIER-B) the stem is an option NAME a third party published — so it is an
+    identifier, or the onboard is refused before anything is rendered, with the field named and the name not echoed.
+    Guards a published option called `pw }} {{ … }}` becoming a Jinja expression in a host's inventory variables the
+    moment an operator fills that field in."""
+    monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"fields": [
+        {"field": "password", "kind": "password", "label": "password", "maps_to": "ansible_password",
+         "sops_stem": stem, "secret": True, "required": False}]})
+    with pytest.raises(ValueError) as e:
+        _plan(monkeypatch, password="pw")
+    assert getattr(e.value, "field", None) == "credential field" and "lookup" not in str(e.value)
+
+
+def test_an_inline_credential_field_reaches_the_inventory_only_as_a_plain_word(monkeypatch):
+    """For a credential field marked `inline: true` the PLANNER writes the value itself into the host's inventory
+    variables — and refuses a value that is not one plain word, with the field named, while `8443` lands unchanged.
+    The helper is pinned on its own elsewhere; this pins the CALL SITE, because no shipped backend declares an
+    inline field and nothing else would notice the check being bypassed. Guards `{{ … }}` in a literal host var,
+    which Ansible evaluates on the runner when a play touches the host."""
+    from kontroll import paths
+    monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"fields": [
+        {"field": "api_port", "kind": "port", "label": "port", "maps_to": "ansible_httpapi_port",
+         "sops_stem": "api_port", "inline": True, "secret": False, "required": False}], "source": "shallow"})
+    with pytest.raises(paths.RequestBoundaryError) as e:
+        _plan(monkeypatch, creds={"api_port": "{{ 7*7 }}"})
+    assert e.value.field == "api_port"
+    plan = _plan(monkeypatch, creds={"api_port": "8443"})
+    assert plan["host_block"]["core_switch"]["hosts"]["sw1"]["ansible_httpapi_port"] == "8443"
+    assert "api_port" not in str(plan["creds_to_set"])                   # an inline value is not a SOPS secret

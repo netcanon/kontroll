@@ -146,3 +146,14 @@ def test_apply_is_idempotent(tmp_repo):
     assert identity.apply_plan(plan)["changed"] is False
     re_plan = identity.build_plan("demo_sw", _sel(role="backend_ssh"))
     assert re_plan["changes"] == [] and re_plan["text_after"] == re_plan["text_before"]
+
+
+def test_a_writer_s_own_refusal_is_a_bad_value_not_an_exception(tmp_repo, monkeypatch):
+    """With the knob validator replaced by one that accepts anything — a future identity knob whose validator is
+    looser than the scalar writer — a value the writer refuses comes back as `bad_value` and nothing is raised.
+    Guards the writers' fail-closed check reaching the identity route (which has no `try`) as an uncaught error."""
+    _write_module(tmp_repo, "demo_sw", _MODULE)
+    monkeypatch.setattr(identity, "validate_value", lambda knob, value: None)
+    plan = identity.build_plan("demo_sw", _sel(role="null"))
+    assert plan["error"] == "bad_value" and "plain YAML" in plan["detail"]
+    assert identity.build_plan("demo_sw", _sel(role="opnsense_firewall"))["error"] is None

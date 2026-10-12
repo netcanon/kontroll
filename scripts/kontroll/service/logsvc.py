@@ -79,7 +79,9 @@ def build_logging_plan(key, method_name, params=None, methods=None):
     module + the method's generated Vector source/transform drop-ins), the enact commands, and the
     propose->promote plan_token (a hash of the declared block — the config is generated FROM it, so it can't
     drift independently). ADD-ONLY: a method already declared on the class is `already_declared` (idempotent).
-    Mirrors observe.build_telemetry_plan."""
+    Mirrors observe.build_telemetry_plan. `key` is a REQUEST value and is refused first
+    (paths.RequestBoundaryError), before the join and before any other answer."""
+    paths.component(key, "device-class key")            # C22: the request boundary, before the join
     methods = methods if methods is not None else catalog.load_logging()
     by_name = {m["name"]: m for m in methods}
     mod_rel = "modules/%s/module.yml" % key

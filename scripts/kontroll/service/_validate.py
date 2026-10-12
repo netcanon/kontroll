@@ -17,9 +17,13 @@ one source of truth that the client type→widget table mirrors key-for-key.
 import ipaddress
 import re
 
+# The "may this string stand unquoted in a hand-formatted YAML line" rule lives in kontroll/yamlscalar.py, because
+# the generators need it as well as the validators here; it is re-exported so the service modules keep one import.
+from kontroll.yamlscalar import plain_scalar  # noqa: F401  (re-exported)
+
 # A conservative DNS label (RFC-1123-ish): 1..63 of [A-Za-z0-9-], no leading/trailing hyphen. `fullmatch`'d per
 # dot-separated label so a hostname can carry no whitespace, metacharacter, or trailing newline.
-_HOSTNAME_LABEL = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
+_HOSTNAME_LABEL = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)\Z")
 
 
 def infer_type(knob):
@@ -85,8 +89,10 @@ def _v_ipv6(knob, value, name):
     any non-hex-colon text, any embedded metacharacter, and any trailing junk (`2001:db8::1; rm` is not a valid
     address). Additionally rejects the addresses that are never a usable host/management target — loopback (::1),
     unspecified (::), multicast (ff00::/8), reserved, AND link-local (fe80::/10, interface-scoped: real on the wire but
-    not a routable/onboardable mgmt address without a zone id); ordinary global or ULA unicast still validates."""
-    if not isinstance(value, str):
+    not a routable/onboardable mgmt address without a zone id); ordinary global or ULA unicast still validates.
+    A ZONE ID is refused outright: `ipaddress` accepts `2001:db8::1%<anything>` and takes any text after the `%` —
+    a newline, braces, markup — so the parser alone is not the charset (SECURITY.md C22)."""
+    if not isinstance(value, str) or "%" in value:
         return "param %s=%r is not a valid IPv6 address" % (name, value)
     try:
         addr = ipaddress.IPv6Address(value)
@@ -110,12 +116,20 @@ def _v_ip(knob, value, name):
 
 def _v_hostname(knob, value, name):
     """A dotted hostname of RFC-1123-ish labels (`_HOSTNAME_LABEL` per label, ≤253 total). `fullmatch` per label
-    rejects whitespace, metacharacters, and a trailing newline — so a hostname knob can carry no injection."""
+    rejects whitespace, metacharacters, and a trailing newline — so a hostname knob can carry no injection. A name
+    whose labels are all in the charset can still be a YAML keyword or number (`null`, `on`, `123`, `1.5`); a
+    hostname knob is written unquoted into instance.yml, so such a name is refused as well (`plain_scalar`)."""
     if not isinstance(value, str) or not value or len(value) > 253:
         return "param %s=%r is not a valid hostname" % (name, value)
-    if all(_HOSTNAME_LABEL.fullmatch(lbl) for lbl in value.split(".")):
-        return None
-    return "param %s=%r is not a valid hostname" % (name, value)
+    if not all(_HOSTNAME_LABEL.fullmatch(lbl) for lbl in value.split(".")):
+        return "param %s=%r is not a valid hostname" % (name, value)
+    if not plain_scalar(value):
+        # `null`, `true`, `no`, `123`, `1.5`, a date: every label is in the charset, and the scalar writers would
+        # store the word as another type. Refused HERE so the caller gets a clean message — the writers refuse it
+        # too, but with a plain ValueError that a route without a `try` answers as a 500.
+        return ("param %s is a word YAML reads as another type (null, a boolean, a number, a date) — it cannot be "
+                "stored as a hostname" % name)
+    return None
 
 
 def _v_text(knob, value, name):
@@ -131,6 +145,9 @@ def _v_text(knob, value, name):
         return "param %s=%r must be a string" % (name, value)
     if re.fullmatch(pattern, value) is None:
         return "param %s=%r does not match the required pattern %r" % (name, value, pattern)
+    if not plain_scalar(value):
+        return ("param %s is a word YAML reads as another type (null, a boolean, a number, a date) — it cannot be "
+                "stored as text" % name)
     return None
 
 

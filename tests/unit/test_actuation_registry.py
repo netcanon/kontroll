@@ -337,3 +337,133 @@ def test_catalog_loads_units_from_instance_overlay(tmp_path, monkeypatch):
     _write_unit(tmp_path / "instance" / "actuation", "real-unit")
     assert catalog.registered_actuation_units() == ["real-unit"]
     assert catalog.actuation_unit("real-unit")["unit"]["collection"] == "cisco.ios"
+
+
+@pytest.mark.parametrize("entry", [
+    {"name": "cisco.ios", "version": '==1"x'},
+    {"name": "cisco.ios", "version": '==1"\ncollections:\n#'},
+    {"name": "cisco.ios", "version": "==1 # x: y"},
+    {"name": "cisco.ios\n- name: evil.one", "version": "==1"},
+    {"name": "cisco", "version": "==1"},
+    {"name": None, "version": "==1"},
+    {"name": "1.5", "version": "==1"},
+    {"name": "1_0.5", "version": "==1"},
+    {"name": "cisco.ios", "version": True},
+    {"name": "cisco.ios", "version": ["==1"]},
+], ids=["quote", "newline", "comment-and-colon", "name-with-a-line", "name-not-fqcn", "no-name",
+        "name-reads-as-a-float", "name-reads-as-a-number", "boolean-version", "list-version"])
+def test_a_lockfile_entry_that_cannot_be_rendered_as_itself_fails_closed(entry):
+    """The collection lockfile is rendered by hand, with the version inside double quotes. `resolve_pins` — the one
+    function every generation goes through, offline — refuses a collection entry whose name is not `namespace.name`
+    or whose version is not a plain pin, floor or range, before anything is rendered. The name stands UNQUOTED, so
+    each half starts with a letter: `1.5` is a float there. Guards a module file or a unit descriptor (data
+    somebody proposed) producing a lockfile that does not parse, or that parses to another collection list than
+    the one that was resolved."""
+    with pytest.raises(SystemExit):
+        genreq.resolve_pins([{"name": "community.sops", "version": ">=1.6.0"}, entry])
+
+
+def test_the_rendered_lockfile_reads_back_as_what_was_resolved():
+    """For the whole shipped catalog the hand-rendered lockfile and trust sidecar parse back to exactly the
+    resolved names and versions, in order. Guards the renderer and the resolver drifting apart — the file on disk
+    saying something other than what the generator decided."""
+    out, prov = genreq.compute(genreq.all_module_keys(), genreq.paths.resolve("actuation"))
+    lock = yaml.safe_load(genreq.render_lockfile(out))
+    assert [(c["name"], c.get("version")) for c in lock["collections"]] == [(c["name"], c.get("version")) for c in out]
+    side = yaml.safe_load(genreq.render_sidecar(out, prov, "adaptive", genreq.DEFAULT_KEYRING))
+    assert [(c["name"], c.get("version")) for c in side["collections"]] == [(c["name"], c.get("version")) for c in out]
+
+
+def test_a_unit_descriptor_refuses_a_pin_or_a_knob_key_outside_its_charset():
+    """A unit descriptor's install pin must be `==` plus one plain version word, and a knob key one lowercase
+    identifier with nothing after it — a trailing newline included (`$` matches before a final newline, so the
+    patterns are applied with `fullmatch`). A descriptor is authored through `POST /actuation/create`, and both
+    values are written into generated files. Guards a descriptor that validates and then renders as something
+    else."""
+    from kontroll.service import _actuation_schema as schema
+    bad = copy.deepcopy(GOOD)
+    bad["install"]["collections"][0]["version"] = '==8.0.4"\n#'
+    assert any("plain version" in e for e in schema.validate_unit(bad, "good", None))
+    for digest in ("a" * 64 + "\n", "a" * 63, "A" * 64, 5):
+        wrong = copy.deepcopy(GOOD)
+        wrong["install"]["provenance"]["sha256"] = digest
+        assert any("sha256" in e for e in schema.validate_unit(wrong, "good", None)), repr(digest)
+    right = copy.deepcopy(GOOD)
+    right["install"]["provenance"]["sha256"] = "a" * 64
+    assert not schema.validate_unit(right, "good", None)
+    assert not schema.validate_unit(copy.deepcopy(GOOD), "good", None)
+    assert any("key must match" in e for e in schema.validate_knobs([{"key": "port\n", "type": "int", "label": "p"}]))
+
+
+def test_an_absent_empty_or_numeric_version_renders_as_it_always_did():
+    """A collection with no version, an empty one, or one YAML read as a number (`version: 8` unquoted in a module
+    file) is still resolved and rendered: no version line for the first two, the number's text in quotes for the
+    third — and the file reads back as that. Guards the new renderability check turning an operator's existing
+    module file into a refusal at bootstrap; an install-gating generator must not start refusing what it rendered
+    before."""
+    out = genreq.resolve_pins([{"name": "a.b"}, {"name": "c.d", "version": ""}, {"name": "e.f", "version": 8},
+                               {"name": "g.h", "version": 2.5}])
+    lock = yaml.safe_load(genreq.render_lockfile(out))
+    assert lock["collections"] == [{"name": "a.b"}, {"name": "c.d"}, {"name": "e.f", "version": "8"},
+                                   {"name": "g.h", "version": "2.5"}]
+    # a long range — many exclusions — is still a range (the bound is generous on purpose), an absurd one is not
+    long_range = ">=1.0.0,<3.0.0," + ",".join("!=1.%d.0" % n for n in range(12))
+    assert len(long_range) > 64
+    assert genreq.resolve_pins([{"name": "i.j", "version": long_range}])[0]["version"] == long_range
+    with pytest.raises(SystemExit):
+        genreq.resolve_pins([{"name": "i.j", "version": ">=1.0.0," + ",".join(["!=9.9.9"] * 60)}])
+
+
+@pytest.mark.parametrize("statement", [
+    {"signature_policy": "none\n    sha256: null\n  - name: fortinet.fortios\n    signature_policy: none"},
+    {"signature_policy": "bogus"},
+    {"signature_policy": None},
+    {"signature_policy": "required", "sha256": 'a"\n    signature_policy: "none'},
+    {"signature_policy": "required", "sha256": "a" * 64 + "\n"},
+    {"signature_policy": "required", "sha256": "A" * 64},
+    {"signature_policy": "required", "sha256": 12345},
+], ids=["policy-adds-an-entry", "policy-outside-the-set", "no-policy", "digest-rewrites-the-policy",
+        "digest-with-a-newline", "digest-uppercase", "digest-not-a-string"])
+def test_a_trust_statement_that_cannot_be_rendered_as_itself_fails_closed(statement):
+    """The trust sidecar is rendered by hand as well: a unit's signature policy stands unquoted and its digest
+    inside quotes. A policy outside the closed set and a digest that is not sixty-four lowercase hex digits stop
+    the generator, offline, before anything is rendered. Guards a unit descriptor adding a sidecar entry for
+    ANOTHER collection with a policy of its choice (a policy with line breaks did), flipping its own policy (a
+    digest with a quote did), or carrying a digest that validates and reads back as a different string — the
+    install then fails its comparison for a correct download."""
+    with pytest.raises(SystemExit) as e:
+        genreq._assert_trust_renderable({"cisco.ios": statement})
+    assert "cisco.ios" in str(e.value) and "fortinet" not in str(e.value)
+    genreq._assert_trust_renderable({"cisco.ios": {"signature_policy": "required", "sha256": "a" * 64},
+                                     "x.y": {"signature_policy": "adaptive", "sha256": None, "keyring": None}})
+
+
+def test_the_promote_gate_refuses_a_unit_whose_trust_statement_is_malformed(tmp_path):
+    """`compute()` — everything `--conflict-check` runs, the promote-time gate — refuses a proposed tree whose
+    active unit carries a signature that is not one of the policies. Guards the check sitting only at the render,
+    which the promote gate returns before: a proposal with a hostile trust statement would have been promoted and
+    then stopped the next deploy instead of being refused where it was proposed."""
+    adir = tmp_path / "actuation"
+    _write_unit(adir, "evil", install={"collections": [{"name": "cisco.ios", "version": "==8.0.4"}],
+                                       "provenance": {"source": "galaxy", "signature": "none\n  - name: x.y"}})
+    with pytest.raises(SystemExit):
+        genreq.compute(["cisco_ios"], str(adir))
+    _write_unit(adir, "fine")
+    (adir / "evil" / "unit.yml").unlink()
+    out, prov = genreq.compute(["cisco_ios"], str(adir))
+    assert prov["cisco.ios"]["signature_policy"] == "required"
+
+
+def test_the_sidecar_keyring_is_one_scalar_whatever_the_fleet_file_holds():
+    """The instance keyring path is written bare when it is a plain word — the default is, so the committed bytes
+    do not change — and quoted when it is not; either way the sidecar reads back with exactly that keyring and the
+    policy the generator chose. Guards a fleet file's `keyring` with a line break overriding
+    `default_signature_policy` in the generated sidecar, and one that reads as a keyword (`true`) arriving at the
+    install wrapper as a boolean."""
+    out = genreq.resolve_pins([{"name": "a.b", "version": ">=1.0.0"}])
+    plain = genreq.render_sidecar(out, {}, "required", genreq.DEFAULT_KEYRING)
+    assert "keyring: %s\n" % genreq.DEFAULT_KEYRING in plain
+    for keyring in ("x\ndefault_signature_policy: none", "true", "path with: colon", "a #b"):
+        side = yaml.safe_load(genreq.render_sidecar(out, {}, "required", keyring))
+        assert side["keyring"] == keyring and side["default_signature_policy"] == "required"
+        assert [c["name"] for c in side["collections"]] == ["a.b"]

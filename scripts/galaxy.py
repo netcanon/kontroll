@@ -441,8 +441,8 @@ def main():
     args = ap.parse_args()
     try:
         args.func(args)
-    except gitio.WriteConflict as e:
-        sys.exit(str(e))   # clean CLI message; the in-process GUI/API catch the same for a 409
+    except (gitio.WriteConflict, paths.RequestBoundaryError) as e:
+        sys.exit(str(e))   # one clean line: a write conflict (the GUI/API's 409) or a refused argument (their 422)
 
 
 if __name__ == "__main__":

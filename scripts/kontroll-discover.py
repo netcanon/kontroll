@@ -490,8 +490,8 @@ def sweep(fleet_doc, groups, methods_by, fetchers, environ, only_key=None, audit
     everything (fleet_doc/groups/methods_by/fetchers/environ) so the whole sweep is hermetically testable. `audit`
     is an optional `(key, method, status, count) -> None` sink for the per-source run_id-correlated line."""
     sources, leases = [], []
-    for key in (fleet_doc.get("enabled_modules") or []):
-        if only_key and key != only_key:
+    for key in paths.enabled_keys(fleet_doc):               # a fleet line that is not a class key is skipped —
+        if only_key and key != only_key:                     # handed on, it raised out of the whole sweep
             continue
         module = _load_module(key)
         if not module:

@@ -8,11 +8,12 @@ Semaphore — the API does not run Ansible (docs/api-architecture.md §8).
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from api.auth import Principal, audit_action, require_token
 from api.deps import Catalog, get_catalog
-from kontroll import authspec, catalog, gitio, probe
+from kontroll import authspec, catalog, gitio, paths, probe
 from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan
 
 router = APIRouter(tags=["privileged"])
@@ -88,9 +89,13 @@ def onboard(body: OnboardIn, request: Request,
         # api_user+token_id+token_secret). A clean 422, never a 500 (mirrors WriteConflict → 409); no creds were
         # written (the guards run pre-`creds_to_set`). AUDITED by field NAME, never value: a refused `key` of
         # `../../etc` must not be copied into the audit log, and a refusal that leaves no trace is a blind spot.
-        audit_action(request, principal, "onboard-refuse",
-                     "reason=request-boundary field=%s" % getattr(e, "field", "input"))
-        raise HTTPException(status_code=422, detail=str(e))
+        boundary = isinstance(e, paths.RequestBoundaryError)
+        audit_action(request, principal, "onboard-refuse", "reason=%s field=%s" % (
+            "request-boundary" if boundary else "planner-guard", getattr(e, "field", "input")))
+        # the SAME body the app-wide handler gives every other route (api/main.py): the message and a code derived
+        # from the field — this route catches the planner's other guards too, so it builds the answer itself
+        return JSONResponse(status_code=422, content={"detail": str(e),
+                                                      "code": e.code if boundary else "invalid_request"})
     if plan["error"] == "not_installed":
         raise HTTPException(status_code=404, detail="install the collection first: %s" % body.collection)
     if plan["error"] == "no_backend":

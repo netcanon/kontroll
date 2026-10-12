@@ -168,3 +168,28 @@ def test_build_plan_rejects_a_crafted_key_before_building_a_path(crafted, monkey
     monkeypatch.setattr(act, "_vars_rel", boom)
     monkeypatch.setattr(catalog, "actuation_unit", lambda k: ROLE_UNIT)   # even if a unit 'matched', the guard wins
     assert build_actuation_plan(crafted, {"mode": "safe"}) == {"error": "no_unit", "key": crafted}
+
+
+def test_the_play_preview_renders_the_units_identity_values_as_one_word_each():
+    """The would-run play preview — what the operator reads before authorizing a stage — renders a unit's key,
+    group, collection and name as ONE scalar each: a group YAML would read as another type is quoted
+    (`hosts: "null"`), one the YAML reader cannot even build is quoted too, and a value with a line break cannot
+    add a line to the header or the play. (The knob VALUES under `vars:` are shown as Python literals, as before.)
+    Guards the preview showing something other than what the descriptor says: an extra `hosts:` line, or a comment
+    that ends early."""
+    import yaml
+    from kontroll.service import actuation
+    def unit(group, name="ios_facts", kind="role"):
+        return {"key": "u", "unit": {"kind": kind, "collection": "cisco.ios", "name": name},
+                "target": {"device_class": "cisco_ios", "inventory_group": group, "blast_radius": "LAN"}}
+    benign = actuation.render_play(unit("core_switch"), {})
+    assert "  hosts: core_switch\n" in benign + "\n"
+    quoted = actuation.render_play(unit("null"), {})
+    assert yaml.safe_load(quoted)[0]["hosts"] == "null"
+    hostile = actuation.render_play(unit("g\n  hosts: all", name="r\n# Blast radius:        this-device"), {})
+    assert len(hostile.splitlines()) == len(benign.splitlines())
+    assert yaml.safe_load(hostile)[0]["hosts"] == "g\n  hosts: all"
+    spec = actuation.render_play(unit("null", kind="collection_playbook"), {})
+    assert yaml.safe_load(spec)["limit"] == "null"
+    odd = actuation.render_play(unit("2026-02-30", name="x: y #z", kind="collection_playbook"), {})
+    assert yaml.safe_load(odd) == {"playbook": "cisco.ios.x: y #z", "limit": "2026-02-30"}

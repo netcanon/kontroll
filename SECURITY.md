@@ -336,12 +336,15 @@ the operator, and the honest `capability_gap` names an unresolved selector.
   (SOPS-backed at deploy, like `GUI_PASSWORD`); **unset ⇒ the privileged routes are disabled
   (503)**, never open. The token is compared **constant-time** (`hmac.compare_digest`); a
   bad/absent token is a 401. Read-only inquiry (search/probe/units/classify/health) needs no token.
-- **Path params resolve against the enumerated installed set (SEC-3), never a raw join.** The
+- **A collection path param is resolved against the installed set or checked against `namespace.name` before
+  it is used (SEC-3), never joined raw.** The
   collection-keyed read routes (`/probe`, `/units`, `/classify`) take a `{collection}` from the
-  caller; `service/units.py` (and peers) match it against the names `ansible-galaxy collection list`
-  reports and only then walk that collection's own on-disk dir — so a `../`/absent/crafted value is a
-  clean 404, never a filesystem traversal. Verified by `tests/unit/test_units.py` (the walker is made
-  to explode if a non-member name ever reaches it).
+  caller. `service/units.py` matches it against the names `ansible-galaxy collection list` reports and
+  only then walks that collection's own on-disk dir — so a `../`/absent/crafted value is a clean 404,
+  never a filesystem traversal; verified by `tests/unit/test_units.py` (the walker is made to explode if
+  a non-member name ever reaches it). `/probe` and `/classify` hand the name to `ansible-doc`, so
+  `probe.deep_probe` first checks that it is exactly `namespace.name` (C22): an option-shaped or otherwise
+  malformed value is a 422 and no process is started.
 - **The configure form (R3) is a write-free, fail-closed read surface.** An actuation unit's CURATED
   knobs render through the one knob renderer (`configurable` kind `actuation-unit`); their submitted
   values re-validate server-side via `POST /units/{key}/configure` → `service/units.py::validate_unit_config`,
@@ -1324,33 +1327,140 @@ off once `instance/` exists), the PII-guard workflow's path assertion (no tracke
 a tree whose `.gitignore` excludes the overlay). Design-of-record and the full sweep:
 `docs/reviews/2026-10-08-public-split-pii-sweep/`; operator runbook `docs/public-split.md`.
 
-### C22 — Request fields are closed charsets; repository writes are confined  ✔ implemented (2026-10-09)
+### C22 — Request fields are closed charsets; repository writes are confined  ✔ implemented (2026-10-09; leftovers closed 2026-10-12)
 
 **Threat:** the onboard/reconfigure/actuation requests carry fields that become PATH COMPONENTS
 (`modules/<key>/module.yml`, `onboarded-<key>.yml`, `ansible/secrets/<domain>.sops.yml`,
 `actuation/<key>/unit.yml`) or INVENTORY KEYS (a host name, an address) — and until 2026-10-09 the planner
 validated only the collection's installed-ness. `key`, `group`, `host`, `host_name` and `secrets` were bare
 strings joined into paths and rendered into YAML (2026-10-08 review, finding 1; CodeQL `py/path-injection`,
-45 alerts on the same class of join).
+45 alerts on the same class of join). A second pass on 2026-10-12 found the boundary still open in several places:
+a collection name reached `ansible-doc`'s command line unvalidated — on routes that need no token; the
+validators accepted a value followed by one newline, `hostname()` accepted an IPv6 zone id with any text after
+the `%`, and a name such as `null` or `123` passed the charset although YAML reads it as another type once it
+stands unquoted in a file; the telemetry, logging and backup plan builders joined `key` into a path before
+anything had checked it; and a telemetry `dashboards` selection was written into the class's module file by
+string formatting, where one name with a newline rewrote the class's role and inventory group, and one with none
+rewrote the item itself.
 **Implements:** `kontroll.paths.component()` (a device-class key, unit key, secret domain or inventory group:
 `[a-z0-9][a-z0-9_-]{0,63}`), `paths.collection_fqcn()` (exactly `namespace.name`), `paths.hostname()` (an
-IP literal or an RFC-1123 hostname) — called at the service seam (`build_onboard_plan`, before anything is
-read, probed or written) AND at every join (`paths.module_file`, the inventory drop-in path, the secret-domain
-path, the unit path, the probe's `ansible_collections/<ns>/<name>` walk), so a value that passed the seam is
-re-checked where it is used and a new caller cannot forget. Every repository write goes through
+IP literal **without a zone id**, or an RFC-1123 hostname) — each a pattern that ends in `\Z` and is applied
+with `fullmatch()`, because `$` also matches before a final newline — called at the service seam
+(`build_onboard_plan`, and as the first statement of the telemetry, logging and backup plan builders, before
+anything is read, probed or written) AND at every join (`paths.module_file`, the inventory drop-in path, the
+secret-domain path, the unit path, the probe's `ansible_collections/<ns>/<name>` walk and the `ansible-doc`
+argv word in `probe.deep_probe`), so a value that passed the seam is re-checked where it is used and a new
+caller cannot forget. A charset is not the whole rule for a value that is written into YAML by hand (to keep a
+file's comments, or because a generated file is rendered line by line). `kontroll/yamlscalar.plain_scalar()`
+refuses a word that PyYAML — the reader of every file these writers touch — reads as another type (`null`,
+`true`, `123`, a date), and a word that is structure **where a writer puts it**: after `key: `, as a list item,
+before a trailing comment, and, when the caller renders into one, inside a flow mapping. A string with a
+line-break character is refused outright — the Unicode separators included: PyYAML keeps those verbatim in a
+bare scalar, so a check of the bare word alone would pass them, and the file would have a line more. The rule is
+applied to
+every onboard field that becomes a NAME (the class key, the inventory group, the secrets domain, the backend),
+a dashboard name, a backup remote name and every `text` and `hostname` knob, and again inside the writers
+themselves: the scalar writers of `service/_blockwrite.py` take None, a bool, a number or such a string and
+nothing else, `onboard.enable_in_fleet` re-checks its key, and the settings and identity planners answer a
+writer's refusal as `bad_value`. A HOST name is not held to it (`123` and `true` are host names): the inventory
+is serialized, and a generator that renders a name it merely read back — a group or a host into the Prometheus
+targets, a group or a class key into the backup schedules, a unit's group and collection into the play preview,
+the instance keyring into the trust sidecar — writes it through `yamlscalar.word()`, bare when it is a plain
+word and double-quoted when it is not. No NAME is refused at deploy time — a generator quotes what it cannot
+write bare — and no shipped generated file changes by a byte. (`gen-requirements.py` does fail closed at deploy
+time, on a collection entry or a trust statement it could not render as itself: below.) The check ANSWERS every
+string: a word PyYAML resolves to a type and then cannot build — a date that does not exist, a hex number with no
+digits — is "not plain", never an exception, because the same check runs inside those generators and inside the
+validator that the discovery inbox applies to names a DHCP client chose. (A YAML 1.2 reader differs from PyYAML
+on a few words — `1e3`, `0o17`; the one non-Python reader of a file these helpers write into is Prometheus, whose
+labels are strings whatever the scalar looks like, except `null`. The Homepage tiles, read by a JavaScript YAML
+parser, are quoted field by field by `gen-homepage.py` itself.)
+A telemetry `dashboards` selection is a closed shape — a bounded list of exactly
+`{gnet: <positive integer>, name: <one path component>}` — and a name is one file and a board is one name
+(`observe._clean_dashboards`): no name repeated, none that any class already declares with another board id, no
+board id given a second name, and none that is already a file under the dashboards directory which does not say
+it is that board (`gnetId`) — the hand-authored logs dashboard is such a file, and no class declares it. The
+name is re-checked where it becomes a file name: the uid read in `observe._dashboard_uid`, and
+`scripts/fetch-dashboards.py`, which fails closed on a module file whose `dashboards:` is not a list of items
+with a positive-integer `gnet` and a one-component `name` (other keys, such as `derived`, are allowed there), on
+one name declared with two board ids, and — before anything is fetched — on a target file that is not the board
+being fetched; a board it writes says which board it is. A unit's install pin is `==` plus one plain version
+word (`_actuation_schema.PIN_VERSION_RE`) and its digest sixty-four hex digits; and `scripts/gen-requirements.py`
+refuses, offline — also at the promote-time gate, which resolves without rendering — a collection entry whose
+name is not `namespace.name` with each half starting with a letter or whose version holds anything but version
+characters, and a unit's trust statement whose signature policy is outside the closed set or whose digest is
+not one: the policy stands unquoted in the trust sidecar, where one with line breaks added an entry for another
+collection. A literal
+host var from a backend's or a class's `inline` credential field is a bool, an int or one plain word
+(`onboard._inline_literal`), because Ansible templates inventory variables; and a credential field's stem — for
+a field derived from an installed module's argument spec, an option name a third party published — is an
+identifier before it is formatted into the host var's lookup expression. Every repository write goes through
 `paths.confined()`, which resolves the target under `write_root()` and refuses an absolute path, a `..` that
-climbs out, a NUL or a symlink that points out. The instance-overlay existence probe confines its own join the
-same way for a READ (`paths._overlay_file_present`: a mapped path that climbs out is "absent"; a symlinked
-`instance/` is followed, on purpose). The API maps the `ValueError` to **422**, the GUI to **400**,
-both before any write and without echoing the value, and both **audit the refusal by field name**
-(`onboard-refuse reason=request-boundary field=<name>`) — never the refused value, which can itself be the
-payload. The Fleet index paints host names and addresses with `ET()` (text), the C19 rule applied to inventory
-bytes.
+climbs out, a NUL or a symlink that points out. The instance-overlay existence probe confines its own join
+the same way for a READ (`paths._overlay_file_present`: a mapped path that climbs out is "absent"; a symlinked
+`instance/` is followed, on purpose). The service readers that ENUMERATE classes — classify, the Fleet index,
+the audit, the discovery sweep — and `fetch-dashboards.py` skip an entry that is not a class key
+(`paths.enabled_keys`, `paths.module_keys`) instead of refusing: such an entry is data read back from a file,
+not a request field.
+A refusal is a `RequestBoundaryError` whose message names the field and the rule and **never the value**. It is
+mapped **once per app** — `api/main.py` and `gui/app.py` both answer **422** with a `code` derived from the
+field, before any write, so a route with no `try`, or a new one, cannot turn it into a 500 (the two onboard
+routes catch the planner's other guards as well and build the same body themselves). A privileged refusal is
+**audited by field name**, never by value — the value can itself be the payload: `onboard-refuse` on the
+onboard routes (`reason=request-boundary field=<name>`; a planner guard that is not a field refusal says
+`reason=planner-guard`), `request-refuse` with the route elsewhere — the path TEMPLATE on the API, the endpoint
+name on the GUI, because a path parameter is a request value too. An open inquiry route has no principal and
+writes no audit line, so a refusal gives an unauthenticated caller no new way to write the audit log (its only
+lines stay the auth-denial and the throttled rate-limit line). Some routes audit request text BEFORE
+validating it (a class key, a method name, a free-text subject); every field of every audit line goes through
+one flattener (`kontroll/auditfmt.py`, shared by the API's writer and the GUI's), so a tab or a line break in
+such a value cannot add a column or end the row early — a lone carriage return used to do the latter and hide
+the rest of the entry from the audit query. The Fleet index paints host names and addresses as text (the C19
+rule applied to inventory bytes).
+**Known gaps, each with a theme of its own:** `confined()` and the module-reuse path raise the same refusal
+for a value that is not a request field (a server-built path, a group adopted from a module file), which the
+handlers then answer as if a field had been refused — and the group, secrets domain, backend and role that path
+ADOPTS from an existing module file are not re-checked at all; `galaxy.py scaffold` (the CLI, no route) joins its
+`--key` into a path unvalidated; `gen-homepage.py` quotes a host name with its own escaping, which knows the
+newline and the carriage return and not the other line breaks, and `gen-logging.py` formats a host name and a
+class key into a string literal by hand; a few other anchored patterns (the capture revision, the
+discovery tokens, several generators) are still applied with `match()`; a lookup that finds nothing still
+quotes the unvalidated value it was asked for back to its sender; the deploy-time generators and `bootstrap.yml`
+still join a raw `enabled_modules` entry into a path, and the Settings view lists the fleet as it is — it shows
+some malformed lines and cannot remove one that is not a string; a tree that ALREADY gives one board two names is
+fetched under the first only (a request can no longer create that); `validate_unit` does not look at a unit's
+collection or name, which are bounded where they are rendered rather than where the descriptor is validated; and
+`all`, which Ansible reserves, passes as an inventory group.
 **Proves:** `tests/unit/test_request_boundary.py` (every validator's accept/reject table including `..`,
-separators, NUL, newline, a 65th char and a 254-char hostname; `confined()` against `../`, absolute and
-climbing paths; the planner refusing before the probe is reached), the API parametrised 422 pin in
-`tests/integration/test_api_onboard.py` (git never touched), the paint gate's `h.name`/`.ansible_host` tokens,
-`tests/unit/test_paths_overlay.py` (the overlay probe: a climbing path is absent, a symlinked overlay is found).
+separators, NUL, a newline — also as the last character —, an IPv6 zone id, a 65th char and a 254-char
+hostname; `confined()` against `../`, absolute and climbing paths; the planner refusing before the probe is
+reached, also for a class key YAML reads as another type; `deep_probe` refusing before `ansible-doc` starts;
+the telemetry, logging, backup, identity, host-vars and suggest builders refusing before the filesystem is
+asked; a refusal's message never carrying the value; the enumerators skipping what is not a key; every onboard
+field that becomes a name refusing a keyword while a host name may be one; no boundary pattern accepting a
+trailing newline even with `match()`), `tests/unit/test_yamlscalar.py` (`plain_scalar`, `quoted` and `word`
+against every position a writer uses — exhaustively for short strings over the indicator alphabet, the
+line-break characters and the Unicode separators included), `tests/unit/test_validate.py` and
+`tests/unit/test_blockwrite.py` (the `text` and `hostname` knobs, the zone id on the address knobs, the writers
+failing closed on a keyword, a line break and a value that is not a scalar), `tests/unit/test_settings.py` and
+`tests/unit/test_identity.py` (a writer's refusal is `bad_value`, not an exception), `tests/unit/test_observe.py`
+and `tests/unit/test_fetch_dashboards.py` (the dashboards shape, including the name that rewrote a class's role
+with a newline and the one that rewrote the item with none, one name with two board ids, a board with two names,
+an existing file that is not the board, a damaged module file, and the fetch never writing over a file that is
+not the board it fetches), `tests/unit/test_gen_observability.py`, `tests/unit/test_gen_backup.py` and
+`tests/unit/test_actuation_service.py` (a group, host or key that is not a plain word is quoted and reads back
+as itself), `tests/unit/test_create_unit_service.py` and `tests/unit/test_actuation_registry.py` (the pin's
+charset and the digest; the rendered lockfile and sidecar reading back as what was resolved; a trust statement
+that cannot be rendered as itself, also at the promote gate; the keyring), `tests/unit/test_fleet.py` and
+`tests/unit/test_discovery.py` (the readers of a fleet file with a line that is not a key),
+`tests/unit/test_onboard_ssh_key.py` (the lookup
+expression, the inline literal at the planner's call site, the stem), the API pins in
+`tests/integration/test_api_onboard.py` (git never touched; the code in the body), `test_api.py` (the open
+routes, with no token and no audit line; a fleet line that is not a key) and `test_api_capability.py`, the GUI
+pins in `tests/integration/test_gui_api.py` (the capability, identity, host-vars, suggest and configurable
+routes), `tests/unit/test_api_audit.py` (one request value is one cell of one audit row, read back through the
+real file), `tests/unit/test_paths_overlay.py` (the overlay probe: a climbing path is absent, a symlinked
+overlay is found), and the C19 paint gate for the Fleet index.
 
 ---
 ## Accepted risks / known limitations

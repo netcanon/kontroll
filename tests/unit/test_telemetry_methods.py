@@ -102,3 +102,21 @@ def test_two_methods_sharing_a_job_on_one_class_fails_loud(monkeypatch):
     monkeypatch.setattr(gen, "_load", lambda rel: dup if rel.startswith("modules/") else real_load(rel))
     with pytest.raises(SystemExit):
         gen.metrics_files({"enabled_modules": ["proxmox"]}, INV)
+
+
+def test_every_method_param_renders_safely_inside_a_flow_mapping():
+    """A method's params are written into the class's module file as `{method: m, params: {k: v}}` — a hand-formatted
+    FLOW mapping, where a `,`, a `}`, a `:` or a `#` in a value is structure. Today every param of every shipped
+    telemetry and logging method is an `enum`, an `int` or a `bool`, and every allowed enum value reads back from
+    such a line as itself. Guards the day someone adds a free-text param: this test then fails, and the renderer
+    has to learn to quote before that param can ship (the dashboards item was the same sink with no such pin)."""
+    import yaml
+    from kontroll.service._validate import infer_type
+    for method in catalog.load_telemetry() + catalog.load_logging():
+        for name, pdef in (method.get("params") or {}).items():
+            kind = infer_type(pdef)
+            assert kind in ("enum", "int", "bool"), "%s.%s is %r — the flow-mapping renderer cannot carry it" % (
+                method["name"], name, kind)
+            for value in pdef.get("allowed") or []:
+                line = "- {method: %s, params: {%s: %s}}" % (method["name"], name, value)
+                assert yaml.safe_load(line) == [{"method": method["name"], "params": {name: value}}], line

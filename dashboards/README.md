@@ -19,6 +19,9 @@ Grafana is **deployed** (Phase 5, `${KONTROLL_MGMT_IP}:3002`).
   pins them here (the dashboard analogue of the generated scrape targets). A hand-authored
   JSON dropped here works too — e.g. `logs.json` (the Loki logs pane, Layer 3); pin every
   panel/target to the Loki datasource `uid: loki` (a uid rename breaks provisioning fatally).
+  A fetched file says which board it is (`gnetId`), and the fetch **never writes a download over
+  a file that is not that board**: declaring a board under the name of a hand-authored JSON is
+  refused at the request, and stops `fetch-dashboards.py` with the file named.
 - `derived/` — the **DERIVED dashboard-floor** pins (north-star Rung 4a). A telemetry method
   carries a `derive_dashboard:` SELECTOR (a search query, not an id); `scripts/gen-dashboard-floor.py
   --resolve` derives the grafana.com board — **even its id** — from the parseable registry and pins
@@ -31,7 +34,8 @@ Grafana is **deployed** (Phase 5, `${KONTROLL_MGMT_IP}:3002`).
   keys of the `dashboards` SOPS domain, rendered by deploy-stack into `docker/.env.homepage` (Homepage's OWN env —
   it never sees the stack `.env`) as `HOMEPAGE_VAR_<NAME>`.
 - Grafana dashboard → declare its Grafana.com id in the device's `module.yml`
-  (`dashboards:`) + run `scripts/fetch-dashboards.py` (or drop a hand-authored JSON).
+  (`dashboards:` — a positive integer id and a `name` of `[a-z0-9_-]`, which is the file name; one name, one id)
+  + run `scripts/fetch-dashboards.py` (or drop a hand-authored JSON).
 - Derived floor board → add a `derive_dashboard:` selector to the telemetry method
   (`telemetry/<method>.yml`) + run `scripts/gen-dashboard-floor.py --resolve` (derives the id,
   pins the lock + board). A `derived: true` class then auto-carries it — see
