@@ -10,7 +10,8 @@
 # Fallback required:   no
 # Blast radius:        this VM only
 # Idempotence:         re-runnable; init is `creates:`-guarded, remote add tolerated,
-#                      the mirror push is a fast-forward (no-op if already current).
+#                      the mirror push is a fast-forward (no-op if already current);
+#                      the plaintext gate in front of the commit is read-only.
 
 - name: Ensure the local canonical bare repo
   hosts: localhost
@@ -194,12 +195,44 @@
       changed_when: _remote.rc == 0
       failed_when: _remote.rc != 0 and 'already exists' not in _remote.stderr
 
+    - name: List anything the commit below would take in plaintext (names only, never content)
+      # The commit below is a BLANKET add of the operator's worktree; this is its content gate
+      # (scripts/lib/plaintext-guard.sh — a secret file that is not fully sops-encrypted, a stray file in a secrets
+      # directory, a private key). Read-only: it lists what WOULD be staged and reads those files, so it runs under
+      # --check as well and the mandated dry-run names the offender before the real run does. Its output is file
+      # names, a rule and line numbers — never a value — so no_log is not needed, and would hide the one thing the
+      # operator has to read.
+      ansible.builtin.command:
+        argv:
+          - sh
+          - "{{ worktree }}/scripts/lib/plaintext-guard.sh"
+          - "{{ worktree }}"
+      register: _plaintext_guard
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to commit plaintext into the canonical, and say which file
+      # ANY non-zero status refuses, not only the guard's "found something" code: a guard that is missing or
+      # could not run has checked nothing.
+      ansible.builtin.fail:
+        msg: >-
+          local-canonical: REFUSING to commit —
+          {{ (_plaintext_guard.stderr_lines | default([]) | join('; ')) or 'the plaintext guard could not run' }}.
+          This run staged, committed and pushed nothing.
+          {{ 'Move the named file out of the repository, or see' if 'REFUSED' in (_plaintext_guard.stderr | default(''))
+          else 'Nothing was checked: see' }}
+          docs/install-from-scratch.md ("REFUSING to commit") for the fix that fits.
+          {{ 'A file with no sops block is encrypted with `sops --config instance/.sops.yaml -e -i <file>`.'
+          if 'no sops block' in (_plaintext_guard.stderr | default('')) else '' }}
+      when: _plaintext_guard.rc != 0
+
     - name: Commit uncommitted instance state into the canonical  # noqa: command-instead-of-module
       # kontroll-init --fresh scaffolds instance/ AFTER install.sh's initial commit, so on a fresh node the
       # overlay (inventory, fleet, .sops.yaml, ENCRYPTED secrets) is untracked — the mirror below pushes HEAD,
       # which would omit it, leaving Semaphore's canonical clone without any instance config. Commit it here (the
-      # operator needs no git knowledge — local-source-of-truth goal); everything committed is ciphertext or
-      # public. Idempotent: a no-op when the tree is already clean.
+      # operator needs no git knowledge — local-source-of-truth goal). "Everything committed is ciphertext or
+      # public" is CHECKED by the two tasks above, not asserted. Idempotent: a no-op when the tree is already clean.
       ansible.builtin.shell: |
         cd {{ worktree }}
         if [ -n "$(git status --porcelain)" ]; then

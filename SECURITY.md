@@ -47,8 +47,47 @@ to every managed device — so **encryption at rest is mandatory here.**
 **Implements:** `.sops.yaml` (real control-VM recipient + per-domain rules), age
 key on the control VM, and the live secret files `instance/secrets/network.sops.yml`
 + `proxmox.sops.yml` (SOPS/age-encrypted, committed).
-**Proves:** `tests/validate` refuses to pass if a file under `instance/secrets/`
-is not SOPS-encrypted; `.gitignore` blocks the age key.
+**Proves:** `scripts/lib/plaintext-guard.sh` stands in front of the commits that take a
+whole worktree into the canonical with nobody reading the diff — the deploy's
+instance-state commit (`local-canonical.yml`) and the launch-kit launcher's capture
+(`scripts/kontroll.sh`) — and refuses, naming the file: a secrets file in which a value
+does not have the shape of ciphertext (not merely "has a `sops:` block": a key added by
+hand on a line of its own is refused with its line number — before the block, inside it,
+and anywhere after its last line, which is where an editor puts a line appended at the end
+of the file), any other file in a secrets directory (a decrypted copy, an editor backup),
+and any file that holds a private key: an age identity anywhere in a line, a PEM or PGP
+private-key header that begins its line, or such a header anywhere in a line when key
+material follows it directly (after one literal `\n` in a quoted string, or on the next
+line of a block scalar). It prints paths, rules and line numbers, never content. When it cannot look —
+git cannot read the directory as a worktree, the directory is not the top of its
+repository, the list of files does not reach the checker whole — it refuses, and both
+callers treat every non-zero status as a refusal. `tests/validate` runs the same guard
+over the secrets directories (step `sops-encrypted`; it needs no sops binary and no git)
+and, where sops and pytest are installed, checks the predicate against documents the
+installed sops wrote (step `sops-guard-conformance`, which fails when one of its tests was
+skipped). `.gitignore` keeps the age key and the common decrypted-copy, key and backup
+names out of the index — quietly, and only by name. Covering tests:
+`tests/unit/test_plaintext_guard.py` (run under every awk implementation installed, since
+the launcher's seat runs on the host's; it also keeps "the commits that take a whole
+worktree" a true list: a blanket add under `scripts/`, `ansible/`, `docker/`, `api/` or
+`gui/` that is neither gated nor explained in place fails it),
+`tests/unit/test_launcher_capture.py`, `tests/integration/test_plaintext_guard_sops.py`,
+`tests/unit/test_gitignore_secret_shapes.py`, `tests/unit/test_local_canonical.py`,
+`tests/unit/test_launch_kit.py`. **Not covered:** a plaintext file that is ALREADY committed
+and unmodified is not re-read at deploy (only `tests/validate` sees it — refusing it there
+would turn an old mistake into a deploy outage whose remedy is history surgery); a commit
+made by hand and then mirrored, and the scoped commits of the API and the GUI, which do not
+pass this gate; a secret in a KEY name (sops does not encrypt names); a value written by
+hand in the shape of a ciphertext token (the guard reads shapes; it holds no key); inside
+the `sops:` block, a line put among the recipient entries, the VALUE of one of sops's own
+scalar keys (a line named like one placed before `version:`, or text typed onto such a
+line — the last line included), and a second block; a secret in a `README.md` inside a
+secrets directory, or in a free-named notes file elsewhere, unless it holds a private key;
+an armored key INLINED in another file whose body does not follow its header directly
+(every PGP private-key block, a passphrase-protected legacy PEM — each is recognised only
+where its header begins a line); a PEM header with nothing key-like after it, a key stored
+base64-encoded as a whole, an age key in lower case, a key file saved as UTF-16, a binary
+key store.
 **Break-glass — NOT IMPLEMENTED (this row previously claimed otherwise).** The
 *intended* design is two age recipients per domain: the control-VM operational
 key plus an **offline break-glass recovery key** whose private half never touches
@@ -185,7 +224,10 @@ crown jewel — protect it where it lives, not at a remote.
 
 **Implements:**
 - Secrets are **SOPS-encrypted** wherever state flows — the canonical repo, the offsite
-  backup, the DR snapshot, and the install bundle all carry only ciphertext (C1). The
+  backup, the DR snapshot, and the install bundle all carry only ciphertext (C1). For the
+  canonical, the commits that take a whole worktree unread are gated by
+  `scripts/lib/plaintext-guard.sh`; a commit made by hand and then mirrored, and the scoped
+  commits of the API and the GUI, are not re-read (C1, "Not covered"). The
   age key is on the VM + offline break-glass, never in any of those artifacts.
 - The local canonical (`/srv/kontroll.git`) is operator-owned; the runner mounts it
   **read-only**; the secret captures (`/var/lib/kontroll/backups`) are `0700`/uid-1001.

@@ -1,9 +1,10 @@
 # instance/.gitignore — re-includes the overlay's KNOWN entries under the root rule `/instance/*`, so an
 # INSTANCE repository (and the control node's canonical) tracks them. Scaffolded by `kontroll-init --fresh`
 # from instance.example/.gitignore; add a line when you add a new top-level overlay entry. The root
-# .gitignore's secret patterns (*.agekey, keys.txt, *.dec, instance/trust/observed-digests.yml,
-# instance/trust/*.gpg) still apply inside these directories: a re-include names a directory or a config
-# file, never key material. In the PUBLIC repository no such file exists and the whole overlay stays ignored.
+# .gitignore's secret patterns (*.agekey, keys.txt, *.key, *.dec, *.dec.*, *.plain, *.plain.*, *.bak, *.orig, *~,
+# instance/trust/observed-digests.yml, instance/trust/*.gpg) still apply inside these directories: a re-include
+# names a directory or a config file, never key material. In the PUBLIC repository no such file exists and the
+# whole overlay stays ignored.
 !/.gitignore
 !/.sops.yaml
 !/instance.yml

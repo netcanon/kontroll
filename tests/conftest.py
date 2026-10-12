@@ -92,6 +92,25 @@ def pytest_collection_modifyitems(items):
 
 
 @pytest.fixture
+def isolated_git(tmp_path_factory, monkeypatch):
+    """Every git a test starts sees the test, and nothing of whoever runs the suite. Its CONFIGURATION is empty:
+    `GIT_CONFIG_GLOBAL` names an empty file, the system file is switched off, `XDG_CONFIG_HOME` is a directory with
+    nothing in it — a global hooks path, excludes file, `core.safecrlf` or signing setting must not decide a test.
+    And no variable points it at a REPOSITORY: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`
+    and `GIT_COMMON_DIR` are removed. A suite started from a git hook inherits them, and a test's
+    `git -C <scratch> init`, `config` and `add -A` would then act on the DEVELOPER's repository instead of the
+    scratch one. For tests that run the real git (name it in `pytest.mark.usefixtures`, and as a parameter of any
+    fixture that copies `os.environ`)."""
+    home = tmp_path_factory.mktemp("no-git-config")
+    (home / "gitconfig").write_bytes(b"")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
 def tmp_repo(tmp_path, monkeypatch):
     """A throwaway repo root for the file-mutating paths (enable_in_fleet, onboard
     --apply). Copies the shipped EXAMPLE fleet (the suite never reads a private overlay —

@@ -11,6 +11,67 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(security): the blanket commits into the canonical are gated — a plaintext secret is refused, by content (C1) (2026-10-12)
+
+Two places commit a whole working tree into the control node's canonical with nobody reading the diff: the
+deploy's "instance state" commit (`local-canonical.yml`) and — missed by the review that asked for this — the
+launch-kit launcher (`scripts/kontroll.sh`), which on a published install is the FIRST capture of a freshly
+scaffolded `instance/`; the deploy's own commit then finds a clean tree and never runs. "Everything committed is
+ciphertext or public" was a comment in the play. A secrets file typed in an editor and never encrypted has the
+right name; one plaintext value added by hand to an encrypted file still has its `sops:` block, which is all
+`tests/validate` looked for; a `sops -d … > network.yml` copy, an editor backup, a break-glass key generated in
+the repository directory (as SETUP.md's command did) — each was staged by `git add -A`, pushed to the canonical,
+cloned from there by the runner and copied by every backup. Both commits now run
+`scripts/lib/plaintext-guard.sh` first and stop, naming the file and the rule, on: a `*.sops.yml` in which a
+value does not have the shape of ciphertext — before the `sops:` block, **inside** it, or after its last line —
+or that has no such block; any other file in a secrets directory; any file that holds a private key (an age
+identity anywhere in a line; a PEM or PGP private-key header that begins its line, or one anywhere in a line
+with key material directly after it — the shape an SSH key has when it is inlined in `group_vars`; an inlined
+PGP block, whose body starts after a blank line, is NOT seen).
+"Inside" is the case that took several attempts: the block is the last thing in the file, so a key added "at
+the end" gets the indent of the block's last line from the editor and becomes part of it; sops ignores such a
+line and keeps decrypting, so nothing else notices. The block's structure is read now — its keys must be
+sops's own, and nothing follows `version:`. The guard is POSIX sh with git and the base tools (awk, tr, wc,
+find — the launch-kit host has no python and no sops), is read-only, runs under `--check` too, and prints
+paths, rules and line numbers — never content. It runs on the HOST's awk, so its tests run under each
+implementation they find (gawk, mawk, busybox awk, the one-true-awk), and CI installs them. When it cannot
+look — git cannot read the directory, the directory is not the top of its repository, the list of files does
+not reach the checker whole — it refuses, with a sentence saying which: a stage that dies on the way to the
+checker used to hand it a short list, and a short list read as "nothing wrong". `tests/validate`'s
+`sops-encrypted` step is now the same guard over the secrets directories: it needs no sops binary, and it
+checks values, not a marker. A new step, `sops-guard-conformance`, holds the predicate against documents the
+installed sops wrote and fails when one of its tests was skipped, so a sops release that changes its output
+format fails the gate instead of refusing every healthy secrets file at the next deploy. Running it against the
+pinned sops is what found three shapes nobody had guessed, each of which the first version refused: a comment
+that is only `#` (left as it is), a note on a value's line (kept there, as an encrypted comment behind the
+token), and an empty item in a list (written back empty).
+
+The launcher changes in two ways besides the gate. A kit extracted inside another git repository — a home
+directory kept under git — now gets a repository of its own; it used to stage and commit the outer one, and the
+canonical was then seeded from that. And `./kontroll shell` skips the capture: it deploys nothing, and it is the
+only way to the image's sops on a host that has none, so a refusal must not lock it out. `.gitignore` gains the
+names a decrypted copy, a key, an editor backup and an env-file backup are commonly saved under — not `*.pem`:
+a public CA certificate is a `.pem` an operator is told to commit, and a PEM private key is refused by its
+content. The identity dialog's enact hint no longer tells the operator to `git add -A`; it stages the
+generators' output directories. SETUP.md gives the break-glass key a path outside the repository.
+
+**On an existing node:** a working tree that holds such a file — new, modified or staged — fails its next
+deploy at this task, by design, with the file named; a clean tree at the top of its own repository is never
+refused, and a file that is already committed and unmodified is not re-read at deploy (only `tests/validate`
+reports it). A value that a partial-encryption rule in `.sops.yaml` (`unencrypted_suffix`, `encrypted_regex`)
+leaves in the clear is refused like any other plaintext: the guard assumes the whole file is secret, as the
+shipped rules make it. So is a secrets file with a key that contains `: `, or a key long enough for sops to
+write it as `? key` — rename the key. A launch kit that an earlier launcher captured into an OUTER repository
+gets its own repository on the next run; that node's canonical was seeded from the outer repository's history,
+so the deploy's fast-forward-only mirror will refuse — rebuild the canonical. Not covered: a file already
+committed, a commit made by hand, the API's and the GUI's scoped commits, a secret in a key name, a value typed
+in the shape of a ciphertext token, a line put by hand among the recipient entries of the `sops:` block, a
+`README.md` in a secrets directory, a free-named notes file elsewhere. Proofs:
+`tests/unit/test_plaintext_guard.py`, `tests/unit/test_launcher_capture.py`,
+`tests/integration/test_plaintext_guard_sops.py`, `tests/unit/test_gitignore_secret_shapes.py`,
+`tests/unit/test_local_canonical.py`, `tests/unit/test_launch_kit.py`, `tests/unit/test_identity.py`.
+SECURITY.md C1, C8.
+
 ### docs: five things the documents said that the tree does not do — and one dead link fixed with them (2026-10-12)
 
 **One of these changes what an install renders.** The Grafana link in the GUI's Index panel

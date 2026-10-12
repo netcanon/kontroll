@@ -74,19 +74,44 @@ if [ -f "$ROOT/scripts/lib/canonical-group.sh" ]; then
   canonical_group_ensure_or_warn "$KONTROLL_OPERATOR_USER"
 fi
 
+# The verb, read here because the capture below is not for every one of them.
+verb="${1:-init}"
+
 # The C10 canonical is seeded from THIS working tree's git (local-canonical adds a `local` remote to it + pushes). A
 # launch kit is a tarball extract with NO .git, so git-init it (the step scripts/install.sh does for the bundle path)
 # and capture the current tree — including a freshly-scaffolded instance/ — so the canonical seed has a HEAD to push.
 # Operator-owned, local-only, no remote. Idempotent: re-commits only when the tree changed (e.g. after fresh-init).
-if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git -C "$ROOT" init -q
-  git -C "$ROOT" config user.email "kontroll@localhost"
-  git -C "$ROOT" config user.name "kontroll"
-  git -C "$ROOT" config commit.gpgsign false
-fi
-if ! git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1 || [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
-  git -C "$ROOT" add -A
-  git -C "$ROOT" -c core.fileMode=false commit -qm "kontroll launch-kit tree" >/dev/null 2>&1 || true
+# `shell` deploys nothing and captures nothing. It is the break-glass verb, and the only way to the image's sops on a
+# host that has none — so a refusal of the gate below must not lock it out.
+if [ "$verb" != shell ]; then
+  # A GIT_DIR exported in the operator's shell (some dotfile set-ups do) would send every git call below to THAT
+  # repository instead of this directory's; the others would put this one's index or objects somewhere else.
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+  # Its OWN repository. A kit extracted somewhere inside another repository (a home directory kept under git) is
+  # "inside a work tree" too, and `git add -A` there stages THAT repository. So the question is whether this
+  # directory is the top of a repository, not whether it is inside one.
+  if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+     || [ -n "$(git -C "$ROOT" rev-parse --show-cdup 2>/dev/null)" ]; then
+    git -C "$ROOT" init -q
+    git -C "$ROOT" config user.email "kontroll@localhost"
+    git -C "$ROOT" config user.name "kontroll"
+    git -C "$ROOT" config commit.gpgsign false
+  fi
+  if ! git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1 || [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+    # This is the FIRST capture of a scaffolded instance/ on a launch-kit box (the deploy's own commit then finds a
+    # clean tree and never runs), so the plaintext gate has to stand here too. It needs sh, git and the POSIX base
+    # tools every distribution ships (find, awk, tr, wc, cat) — still no python and no sops on the host. No existence
+    # test on purpose: this is a control, and a kit without it must refuse, not skip.
+    sh "$ROOT/scripts/lib/plaintext-guard.sh" "$ROOT" || {
+      echo "kontroll: refusing to capture the tree — see the line(s) above. This run committed nothing." >&2
+      echo "kontroll: a file named there is moved out of this directory, or fixed as docs/install-from-scratch.md" >&2
+      echo "          (\"REFUSING to commit\") says for its rule. With no file named, nothing was checked: the same" >&2
+      echo "          section says why. \`./kontroll shell\` still runs, and has sops." >&2
+      exit 1
+    }
+    git -C "$ROOT" add -A
+    git -C "$ROOT" -c core.fileMode=false commit -qm "kontroll launch-kit tree" >/dev/null 2>&1 || true
+  fi
 fi
 
 # init/check run deploy-stack — force use_published_images=true so it pulls the runner/vector by digest (the kit ships
@@ -94,7 +119,6 @@ fi
 # the published control image at /opt/kontroll (Phase B Rung 3 — a minimized launch kit has NO api/gui source to run
 # from the /repo clone; make-launch-kit.sh strips it). Both appended AFTER any operator -e so an explicit override
 # still wins. (The repo-based local-build path, scripts/kontroll-installer.sh, defaults both off — byte-identical.)
-verb="${1:-init}"
 if [ $# -gt 0 ]; then shift; fi
 case "$verb" in
   init|check) set -- "$verb" "$@" -e use_published_images=true -e bake_code=true ;;
