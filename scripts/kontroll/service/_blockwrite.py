@@ -10,7 +10,28 @@ type→widget table.
 """
 import re
 
-from kontroll.service._validate import validate_value
+import yaml
+
+from kontroll.service._validate import plain_scalar, validate_value
+from kontroll.yamlscalar import LINE_BREAKS
+
+
+def _reads_back(value):
+    """True when `value`, rendered unquoted by a writer below, is read back by YAML as the value given. The
+    writers' last check, and a closed list of types: None (an empty value), a bool, an int, a float whose text
+    YAML reads as that float, and a string that is plain where a writer puts it (`plain_scalar`). Anything else —
+    a list, a mapping, a date — is refused: Python's text for a list or a dict IS YAML flow syntax, so it would
+    land in the file as structure."""
+    if value is None or isinstance(value, (bool, int)):
+        return True
+    if isinstance(value, str):
+        return plain_scalar(value)
+    if isinstance(value, float):
+        try:
+            return yaml.safe_load(str(value)) == value
+        except Exception:          # noqa: BLE001 — the reader's refusal is whatever it raises (see kontroll.yamlscalar)
+            return False
+    return False
 
 
 def validate_params(method, params):
@@ -61,9 +82,12 @@ def upsert_top_level_key(text, key, value):
     caller validates first, so this never fires on the live path; it keeps the primitive safe even if a future
     descriptor adds a knob with a looser pattern (the no-bespoke-config tenet means a knob is a drop-in)."""
     rendered = "" if value is None else str(value)
-    if "\n" in rendered or "\r" in rendered:
+    if LINE_BREAKS & set(rendered):                          # the set splitlines() below breaks on — not only \n, \r
         raise ValueError("upsert_top_level_key: a top-level scalar value must be single-line — refusing %r "
                          "(it would inject a second key)" % value)
+    if not _reads_back(value):
+        raise ValueError("upsert_top_level_key: the value for %s would not read back from YAML as the value given "
+                         "(a keyword, a number or structure) — refusing" % key)
     lines = text.rstrip("\n").splitlines()
     for i, ln in enumerate(lines):
         if ln[:len(key)] == key and ln[len(key):len(key) + 1] == ":":   # top-level `key:` (col 0, exact)
@@ -80,8 +104,11 @@ def set_nested_scalar(text, parent, child, value):
     top-level key, the `child:` an indented key under it. FAIL-CLOSED on a multi-line value (a `\n` would inject a
     sibling key). PURE — returns text, writes nothing; the value MUST be pre-validated (service/_validate)."""
     rendered = "" if value is None else str(value)
-    if "\n" in rendered or "\r" in rendered:
+    if LINE_BREAKS & set(rendered):
         raise ValueError("set_nested_scalar: a scalar value must be single-line — refusing %r" % value)
+    if not _reads_back(value):
+        raise ValueError("set_nested_scalar: the value for %s.%s would not read back from YAML as the value given "
+                         "(a keyword, a number or structure) — refusing" % (parent, child))
     lines = text.rstrip("\n").splitlines()
     pstart = next((i for i, ln in enumerate(lines)
                    if ln[:len(parent)] == parent and ln[len(parent):len(parent) + 1] == ":"), None)
@@ -114,8 +141,11 @@ def set_list_block(text, key, items):
     the trailing items behind — so the operator's `['new']` landed as `['new', orphaned]`, invisible to the
     no-drop (lists are not descended) and to the token (computed over the same buggy bytes)."""
     for it in items:
-        if not isinstance(it, str) or "\n" in it or "\r" in it:
+        if not isinstance(it, str) or LINE_BREAKS & set(it):
             raise ValueError("set_list_block: list items must be single-line strings — refusing %r" % (it,))
+        if not plain_scalar(it):
+            raise ValueError("set_list_block: an item of %s would not read back from YAML as the string given "
+                             "(a keyword, a number or structure) — refusing" % key)
     lines = text.rstrip("\n").splitlines()
     start = next((i for i, ln in enumerate(lines)
                   if ln[:len(key)] == key and ln[len(key):len(key) + 1] == ":"), None)

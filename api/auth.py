@@ -48,7 +48,9 @@ def require_token(request: Request,
             pass                       # denied-auth audit is best-effort; the 401 stands regardless
         raise HTTPException(status_code=401, detail="invalid or missing bearer token",
                             headers={"WWW-Authenticate": "Bearer"})
-    return Principal(user="api-token", ip=ip, run_id=run_id)
+    principal = Principal(user="api-token", ip=ip, run_id=run_id)
+    request.state.principal = principal        # for the app-wide boundary-refusal handler's audit line (api/main.py)
+    return principal
 
 
 def audit_action(request: Request, principal: Principal, action: str, detail: str = "") -> None:

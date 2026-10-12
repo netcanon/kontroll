@@ -14,14 +14,17 @@ are fail-closed: no KONTROLL_API_TOKEN ⇒ 503. Still **not deployed** — mgmt-
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
+from api.audit import write_audit
 from api.deps import load_catalog
 from api.ratelimit import RateLimitMiddleware
 from api.routes import audit as audit_routes
 from api.routes import (actuation, capability, classify, exceptions, health, onboard, probe, refresh, search,
                         secrets, units)
 from api.settings import from_env
+from kontroll import paths
 
 
 @asynccontextmanager
@@ -31,6 +34,25 @@ async def lifespan(app: FastAPI):
     galaxy_search) stays in the service functions, not here."""
     app.state.catalog = load_catalog()
     yield
+
+
+def _boundary_refused(request: Request, exc: paths.RequestBoundaryError) -> JSONResponse:
+    """A request field failed its closed-charset check somewhere below a route (SECURITY.md C22): answer 422 with
+    the field's message and code — never the value — instead of the 500 an uncaught ValueError would be. Mapped
+    ONCE for the app, so a new route or a new service function cannot forget it. A privileged request leaves a
+    best-effort audit line naming the route's path TEMPLATE (a path parameter is a request value too) and the
+    FIELD; an open inquiry route (no principal) leaves none — a refusal must not give an unauthenticated caller a
+    new way to write the audit log."""
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        route = request.scope.get("route")
+        try:
+            write_audit(request.app.state.settings.audit_log, principal.user, principal.ip, "request-refuse",
+                        principal.run_id, "reason=request-boundary field=%s route=%s" % (
+                            exc.field, getattr(route, "path", "-")))
+        except OSError:
+            pass                       # the refusal stands whether or not it could be recorded; nothing was written
+    return JSONResponse(status_code=422, content={"detail": str(exc), "code": exc.code})
 
 
 def create_app(settings=None) -> FastAPI:
@@ -49,6 +71,7 @@ def create_app(settings=None) -> FastAPI:
     )
     app.state.settings = settings or from_env()
     app.add_middleware(RateLimitMiddleware, settings=app.state.settings)
+    app.add_exception_handler(paths.RequestBoundaryError, _boundary_refused)
     for module in (health, search, probe, units, classify, refresh, exceptions, onboard, capability, secrets,
                    actuation, audit_routes):
         app.include_router(module.router)

@@ -14,11 +14,12 @@ Usage:  python3 scripts/gen-requirements.py [<out-path>]
         python3 scripts/gen-requirements.py --conflict-check --root <tree>   # FIX-M9: judge ANOTHER tree's data
 """
 import os
+import re
 import sys
 
 import yaml
 
-from kontroll import paths
+from kontroll import paths, yamlscalar
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -37,6 +38,57 @@ def _is_exact(v):
     return isinstance(v, str) and v.strip().startswith("==")
 
 
+# What may stand in the two hand-formatted lockfiles. The lockfile and the trust sidecar are rendered by hand (they
+# have to be yamllint-clean), so a value outside these sets made a file unparseable, or parse to something else —
+# and module files and unit descriptors are data somebody proposed.
+#   NAME      `namespace.name`, each half starting with a letter: it stands UNQUOTED, and `1.5` is a float there.
+#   VERSION   a pin, a floor or a range, inside double quotes: never a quote, a backslash, a colon, a `#`, a break.
+#   POLICY    one of SIG_POLICIES (unquoted).         DIGEST   sixty-four lowercase hex digits (inside quotes).
+# The instance keyring path is not refused: it is written through yamlscalar.word(), bare when it is a plain word
+# (the default is) and quoted when it is not.
+_LOCK_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*\Z")
+_LOCK_VERSION_RE = re.compile(r"[0-9A-Za-z.+\-<>=!~^*, ]{1,256}\Z")
+_LOCK_DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _assert_renderable(colls):
+    """Fail closed (offline, before anything is rendered or written) on a collection entry whose name or version
+    could not be written into the lockfile as itself. An absent or empty version is "no constraint", as it always
+    was; a version YAML read as a number (`version: 8` unquoted in a module file) is taken by its text, as it
+    always was — the text of a number is inside the charset."""
+    for c in colls:
+        name = c.get("name") if isinstance(c, dict) else None
+        version = c.get("version") if isinstance(c, dict) else None
+        if not isinstance(name, str) or not _LOCK_NAME_RE.fullmatch(name):
+            raise SystemExit("gen-requirements: a collection entry has a name that is not `namespace.name` — "
+                             "refusing to render the lockfile (fail closed)")
+        if version is None or version == "":
+            continue
+        if isinstance(version, (int, float)) and not isinstance(version, bool):
+            version = str(version)
+        if not isinstance(version, str) or not _LOCK_VERSION_RE.fullmatch(version):
+            raise SystemExit("gen-requirements: collection %s has a version that is not a plain pin, floor or "
+                             "range — refusing to render the lockfile (fail closed)" % name)
+
+
+def _assert_trust_renderable(prov_by_name):
+    """Fail closed on a unit's trust statement that could not be written into the sidecar as itself: a signature
+    policy outside SIG_POLICIES (it stands unquoted — one with a line break added an entry for ANOTHER collection,
+    with a policy of its choice), or a digest that is not sixty-four hex digits (inside quotes — one with a quote
+    in it rewrote its own entry's policy; one with a trailing newline read back as a different digest, so a correct
+    install failed its comparison). A malformed trust statement is never quietly taken for the default."""
+    for name in sorted(prov_by_name):
+        p = prov_by_name[name] or {}
+        if p.get("signature_policy") not in SIG_POLICIES:
+            raise SystemExit("gen-requirements: the unit that installs %s declares a signature policy that is not "
+                             "one of %s — refusing to render the trust sidecar (fail closed)"
+                             % (name, list(SIG_POLICIES)))
+        sha = p.get("sha256")
+        if sha is not None and sha != "" and not (isinstance(sha, str) and _LOCK_DIGEST_RE.fullmatch(sha)):
+            raise SystemExit("gen-requirements: the unit that installs %s declares a sha256 that is not sixty-four "
+                             "lowercase hex digits — refusing to render the trust sidecar (fail closed)" % name)
+
+
 def resolve_pins(colls):
     """Dedup the unioned collection pins by name with the app-store policy (report 21 §4.3; MVP per §11.1):
     a unit's EXACT '==' pin WINS over a module FLOOR ('>=') for the same collection (an app-store install pins a
@@ -44,7 +96,8 @@ def resolve_pins(colls):
     collection FAIL CLOSED (no single install satisfies both — re-pin one). String-equality only, no SemVer floor
     math (deferred per report 32 §5.4) — this closes the silent-downgrade hole without a dependency. Floors-only
     names keep the FIRST (the pre-actuation behaviour, so a fleet with no units derives a byte-identical lockfile).
-    Raises SystemExit on an irreconcilable conflict."""
+    Raises SystemExit on an irreconcilable conflict, and on an entry that could not be rendered as itself."""
+    _assert_renderable(colls)
     chosen, order = {}, []
     for c in colls:
         name = c["name"]
@@ -146,7 +199,7 @@ def render_sidecar(out, prov_by_name, default_policy, keyring):
          "# null; the wrapper records the real digest at install (docs/reviews/2026-06-25-never-brick-supply-chain).\n"
          "schema: 1\n"
          "default_signature_policy: %s\n" % default_policy +
-         "keyring: %s\n" % (keyring or "null") +
+         "keyring: %s\n" % (yamlscalar.word(keyring) if keyring else "null") +
          "collections:\n")
     for c in out:
         p = prov_by_name.get(c["name"], {})
@@ -168,7 +221,9 @@ def compute(enabled, adir):
             colls += _load(mp).get("collections") or []
     colls += _actuation_collections(adir, enabled)     # R2: the app-store units' pins union in
     out = resolve_pins(colls)                          # exact-wins-over-floor; fail-closed on conflicting exacts
-    return out, _actuation_provenance(adir, enabled)
+    prov = _actuation_provenance(adir, enabled)
+    _assert_trust_renderable(prov)                     # here, not at the render: the promote gate stops after compute
+    return out, prov
 
 
 def all_module_keys():

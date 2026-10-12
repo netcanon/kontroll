@@ -109,3 +109,25 @@ def test_committed_targets_match_the_example_inventory():
         assert os.path.exists(path), "missing committed target %s — re-run gen-observability against instance.example/" % rel
         assert open(path, encoding="utf-8").read() == body, \
             "%s drifted from the example inventory — re-run gen-observability against instance.example/" % rel
+
+
+def test_a_label_that_is_not_a_plain_word_is_quoted_and_reads_back_as_itself():
+    """`_render` writes a group or a host name that YAML would read as another type — `null`, `true`, `123` — or
+    that holds a line break, as a quoted scalar: the file parses back to exactly the strings it was given, one
+    entry per target. A plain value is written bare, as before. Guards a group named `null` (stored quoted in the
+    module file, rendered bare here) reaching Prometheus as an absent label, and a value read back from the
+    inventory adding a line to the targets file."""
+    import yaml
+    entries = [(["192.0.2.9:9100"], {"group": "null", "host": "true"}),
+               (["192.0.2.8:9100"], {"group": "123", "host": "sw1" + chr(0x2028) + "- targets: [evil]"}),
+               # a host may be NAMED like a date that does not exist; the YAML reader cannot build one, and the
+               # generator must quote it — not die, at every deploy and every telemetry promote, on a name
+               (["192.0.2.6:9100"], {"group": "0x_", "host": "2026-02-30"}),
+               # ...and a target is one quoted scalar whatever its address holds
+               (['a"b\\c:9100', "192.0.2.5:9100"], {"group": "core_switch", "host": "0000-00-00"}),
+               (["192.0.2.7:9100"], {"group": "core_switch", "host": "sw-01", "__param_module": "if_mib"})]
+    text = gen._render(entries)
+    parsed = yaml.safe_load(text)
+    assert [(e["targets"], e["labels"]) for e in parsed] == entries
+    assert "    group: core_switch\n" in text and "    host: sw-01\n" in text       # plain values stay bare
+    assert '    group: "null"\n' in text and '    host: "true"\n' in text

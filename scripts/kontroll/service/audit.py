@@ -17,7 +17,7 @@ def service_audit():
     modules], "installed": {collection: version}} — pure reads of instance/fleet.yml +
     modules/*/module.yml + `ansible-galaxy collection list`."""
     fleet = yaml.safe_load(open(paths.resolve("config/fleet.yml"), encoding="utf-8")) or {}
-    enabled = fleet.get("enabled_modules", [])
+    enabled = paths.enabled_keys(fleet)
     declared = set()
     for key in enabled:
         mp = paths.module_file(key)

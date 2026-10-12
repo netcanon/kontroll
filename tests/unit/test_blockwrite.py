@@ -228,3 +228,47 @@ def test_validate_params_enforces_widened_knob_types_through_the_method_loop():
     assert "above the maximum" in validate_params(method, {"interval": 9999})
     assert "must be an integer" in validate_params(method, {"interval": "60; rm"})   # injection can't pass as int
     assert "requires param 'interval'" in validate_params(method, {})
+
+
+def test_the_scalar_writers_refuse_a_value_that_would_not_read_back():
+    """The three hand-formatting scalar writers fail closed on a value YAML would read back as something else — a
+    string that is a keyword, a number or structure, a string holding ANY line-break character (the Unicode
+    separators included), and a value that is a list or a mapping — and still write an int, a bool and an ordinary
+    word. They are the last check: a caller validates first, but a new knob type with a looser validator must not
+    be able to turn `role: null` or `mode: [a]` into a file, or add a key. Guards the primitive itself, whatever
+    its callers do."""
+    text = "key: demo\nrole: backend_api\nfrontend:\n  tls_mode: self_signed\nbackup_remotes: []\n"
+    # U+2028 / U+2029: PyYAML keeps them verbatim in a bare scalar, so the word round-trips as a document — and
+    # it is a line break where the writer puts it: `a<U+2028>? injected` added a top-level key `injected`
+    separators = ["a" + chr(0x2028) + "? injected", "a" + chr(0x2029) + "b", "a\x0bb", "a\x85b"]
+    for bad in ["null", "true", "123", "a: b", "x #y", "[a]"] + separators:
+        with pytest.raises(ValueError):
+            upsert_top_level_key(text, "role", bad)
+        with pytest.raises(ValueError):
+            set_nested_scalar(text, "frontend", "tls_mode", bad)
+        with pytest.raises(ValueError):
+            set_list_block(text, "backup_remotes", [bad])
+    # a value with ANY line break is refused by the single-line rule, with the message that says why — the rule
+    # used to look for a newline and a carriage return only, while the same writers split the file with
+    # splitlines(), which breaks on all of these
+    for broken in ["a\nb"] + separators:
+        for call in (lambda v: upsert_top_level_key(text, "role", v),
+                     lambda v: set_nested_scalar(text, "frontend", "tls_mode", v),
+                     lambda v: set_list_block(text, "backup_remotes", [v])):
+            with pytest.raises(ValueError, match="single-line"):
+                call(broken)
+    # a value that is not a scalar at all: Python's text for a list or a dict IS YAML flow syntax
+    for structure in (["x"], {"a": 1}, [], (1, 2)):
+        with pytest.raises(ValueError):
+            upsert_top_level_key(text, "role", structure)
+        with pytest.raises(ValueError):
+            set_nested_scalar(text, "frontend", "tls_mode", structure)
+    assert "role: opnsense\n" in upsert_top_level_key(text, "role", "opnsense")
+    assert "retries: 5\n" in upsert_top_level_key(text, "retries", 5)
+    # a float is written only when its text reads back as that float: 1.5 does, 1e+20 (no dot) is a string to YAML
+    assert "ratio: 1.5\n" in upsert_top_level_key(text, "ratio", 1.5)
+    for unreadable in (1e20, float("inf"), float("nan")):
+        with pytest.raises(ValueError):
+            upsert_top_level_key(text, "ratio", unreadable)
+    assert "enabled: True\n" in upsert_top_level_key(text, "enabled", True)
+    assert "  - offsite\n" in set_list_block(text, "backup_remotes", ["offsite"])

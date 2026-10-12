@@ -157,21 +157,28 @@ def test_onboard_missing_field_is_400(client):
     assert "missing required field" in r.get_json()["error"]
 
 
-def test_onboard_partial_auth_set_is_a_422_not_a_500(client, onboard_env, monkeypatch):
+def test_onboard_partial_auth_set_is_a_422_not_a_500(client, onboard_env, monkeypatch, tmp_path):
     """Parity with the API route: a planner guard's catchable ValueError — a partially-filled required auth_set
     (more reachable via F1 TIER-B's derived proxmox api-token set) or the MF-S2 domain-confinement refusal — is a
-    clean 422 CLIENT error, NOT a 500 worker crash. Guards the GUI onboard relay 500-ing on a normal operator
-    credential mistake (the route now catches ValueError → 422). The guard is pinned at the service layer
-    (test_onboard_proxmox_auth.py); this pins the GUI route's mapping."""
+    clean 422 CLIENT error, NOT a 500 worker crash, with the code `invalid_request`, and it is audited as
+    `reason=planner-guard` — not as a request-boundary refusal, which names a field. Guards the GUI onboard relay
+    500-ing on a normal operator credential mistake, and the audit log blaming a field for a refusal that is about
+    the combination of fields. The guard is pinned at the service layer (test_onboard_proxmox_auth.py); this pins
+    the GUI route's mapping."""
     def _raise(*a, **k):
         raise ValueError("incomplete credential set 'proxmox_api' — provide all of "
                          "['api_user', 'api_token_id', 'api_token_secret'] together (missing ['api_token_secret'])")
     monkeypatch.setattr(gui, "build_onboard_plan", _raise)
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.post("/api/onboard",
                     json={"collection": "community.proxmox", "key": "proxmox",
                           "group": "hypervisors", "host": "192.0.2.40"}, headers=_auth())
     assert r.status_code == 422
     assert "incomplete credential set" in r.get_json()["error"]
+    assert r.get_json()["code"] == "invalid_request"
+    refusals = [ln for ln in (tmp_path / "audit.log").read_text(encoding="utf-8").splitlines() if "onboard-refuse" in ln]
+    assert len(refusals) == 1 and "reason=planner-guard" in refusals[0] and "request-boundary" not in refusals[0]
 
 
 def test_onboard_dryrun_returns_plan_no_git(client, onboard_env):
@@ -1394,7 +1401,7 @@ def test_audit_flattens_injected_newlines_and_tabs(monkeypatch):
     caller-influenced value — e.g. the discard route audits the RAW URL run_id BEFORE validation — can never forge an
     extra TSV line (`\\n`) or corrupt the tab-delimited columns (`\\t`). Captures the real audit logger output and
     asserts the emitted line has exactly the 3 field separators and no injected newline/CR. Systemic: this protects
-    EVERY `_audit` caller, not just discard (mirrors `api/audit.write_audit`'s sanitize)."""
+    EVERY `_audit` caller, not just discard (it is the same function `api/audit.write_audit` uses — kontroll/auditfmt.py)."""
     import logging
     records = []
 
@@ -1430,3 +1437,85 @@ def test_gui_onboard_boundary_refusal_is_a_422_with_a_field_code(client):
                                           "host": "192.0.2.9"}, headers=_auth())
     assert r.status_code == 422 and r.get_json()["code"] == "invalid_device_class_key"
     assert "../etc" not in r.get_json()["code"]
+    assert "../etc" not in r.get_json()["error"], "the message names the field and the rule, never the value"
+
+
+def test_gui_classify_refuses_a_name_that_is_not_a_collection(client, monkeypatch):
+    """GET /api/classify hands its `collection` query value to the deep probe. An option-shaped value is 422 with
+    the field's code; `ansible-doc` is never started and the value is not echoed. Guards the route's broad `except`
+    turning a boundary refusal into "classify failed: …" with status 500 — and a request value on a command line."""
+    def must_not_run(args):
+        raise AssertionError("ansible-doc must not be started: %r" % (args,))
+    monkeypatch.setattr(probe, "_ad", must_not_run)
+    monkeypatch.setattr(gui, "_CATALOG", None)
+    r = client.get("/api/classify?collection=--playbook-dir%3D/x", headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["code"] == "invalid_collection" and "playbook-dir" not in body["error"]
+
+
+@pytest.mark.parametrize("method, url, body", [
+    ("post", "/api/capability/telemetry", {"key": "../modules/demo_sw", "selection": {"method": "host_node"}}),
+    ("post", "/api/capability/telemetry", {"key": "../modules/demo_sw", "selection": {"method": "host_node"},
+                                           "apply": True, "token": "x"}),
+    ("post", "/api/capability/logging", {"key": "Demo_SW", "selection": {"method": "syslog"}}),
+    ("post", "/api/capability/backup", {"key": "demo_sw\n", "selection": {"params": {"schedule": "daily"}}}),
+    ("post", "/api/identity/Demo_SW", {"selection": {"values": {}}}),
+    ("post", "/api/host/Demo_SW/sw1", {"selection": {"values": {}}}),
+    ("get", "/api/capability/telemetry/suggest?key=..%2Fmodules%2Fdemo_sw", None),
+    ("get", "/api/configurable?kind=module-identity&id=Demo_SW", None),
+], ids=["telemetry-propose", "telemetry-promote", "logging-propose", "backup-propose", "identity", "host-vars",
+        "suggest", "configurable"])
+def test_a_bad_key_is_422_with_a_field_code_on_every_reconfigure_route(client, cap_class, monkeypatch, method, url,
+                                                                       body):
+    """Every GUI route that takes a device-class key and hands it to a plan builder answers a malformed key with 422,
+    the field's code and a message that does not quote the value — and leaves exactly one `request-refuse` audit
+    line naming the route and the field. Guards a boundary refusal reaching the operator as a bare 500 or as an
+    exception string: none of these routes catches the refusal itself — the suggest and configurable routes wrap
+    their service call in a broad `except` that used to turn it into "… failed: <message>", and the others have no
+    `try` at all."""
+    lines = []
+    monkeypatch.setattr(gui, "_audit", lambda action, detail="": lines.append((action, detail)))
+    r = getattr(client, method)(url, headers=_auth(), **({"json": body} if body is not None else {}))
+    assert r.status_code == 422, (url, r.status_code, r.get_data(as_text=True))
+    out = r.get_json()
+    assert out["code"] == "invalid_device_class_key" and "demo_sw" not in out["error"].lower()
+    refusals = [detail for action, detail in lines if action == "request-refuse"]
+    assert len(refusals) == 1, lines
+    assert "reason=request-boundary field=device-class key route=api_" in refusals[0]
+    assert "demo_sw" not in refusals[0].lower()
+
+
+def test_gui_capability_refuses_a_hostile_dashboard_name(client, cap_class):
+    """The GUI's capability route accepts whatever JSON arrives (the page itself never sends `dashboards`). A
+    dashboards item whose name would rewrite the class's inventory group is 422 on propose and on promote, and the
+    module file is byte-identical afterwards. Guards the second credential that reaches the same writer."""
+    module = cap_class / "modules" / "demo_sw" / "module.yml"
+    before = module.read_text(encoding="utf-8")
+    selection = {"method": "host_node",
+                 "dashboards": [{"gnet": 1860, "name": "x}\ninventory_group: edge_firewall\n_pad: {a: 1"}]}
+    for extra in ({}, {"apply": True, "token": "x"}):
+        r = client.post("/api/capability/telemetry", headers=_auth(),
+                        json={"key": "demo_sw", "selection": selection, **extra})
+        assert r.status_code == 422, r.get_data(as_text=True)
+        # the GUI answers 422 for EVERY plan error, so the status alone does not name this validator
+        assert (r.get_json().get("detail") or "").startswith("dashboards[0].name"), r.get_data(as_text=True)
+        assert "edge_firewall" not in r.get_data(as_text=True)
+    assert module.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("value", ["null", "true", "123", "no", "2026-10-12", "2026-02-30", "0000-00-00"])
+def test_settings_domain_that_yaml_reads_as_another_type_is_a_422_on_propose_and_on_promote(
+        client, settings_repo, monkeypatch, tmp_path, value):
+    """POST /api/settings/domain with a name YAML reads as a keyword, a number or a date answers 422 `bad_value`
+    — on propose and on promote — and instance.yml is unchanged. Guards the route's 500: the validator said
+    "valid", the scalar writer then refused with a plain ValueError, the route has no `try`, and on the promote
+    path the `settings-promote` audit line had already been written with nothing after it."""
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    before = (settings_repo / "config" / "instance.yml").read_text(encoding="utf-8")
+    sel = {"selection": {"values": {"domain": value}}}
+    for body in (sel, {"apply": True, "token": "x", **sel}):
+        r = client.post("/api/settings/domain", headers=_auth(), json=body)
+        assert r.status_code == 422 and r.get_json()["error"] == "bad_value", (body, r.get_json())
+    assert (settings_repo / "config" / "instance.yml").read_text(encoding="utf-8") == before

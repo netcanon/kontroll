@@ -9,6 +9,7 @@ the same TSV back for the query route.
 import os
 from datetime import datetime, timezone
 
+from kontroll.auditfmt import flatten_field
 from kontroll.envguard import positive_int
 
 # Rotation knobs (storage paradigm). FAIL-CLOSED via positive_int: an empty/unset/garbage env value falls to the
@@ -35,11 +36,12 @@ def _rotate_if_needed(path: str) -> None:
 
 
 def write_audit(path: str, user: str, ip: str, action: str, run_id: str, detail: str = "") -> None:
-    """Append one append-only TSV audit line. Tabs/newlines in fields are flattened so the line
-    stays parseable. RAISES (OSError) on write failure — callers fail-closed on it. NEVER pass a
-    credential as any field."""
+    """Append one append-only TSV audit line. A tab and every line-breaking character in a field are
+    flattened (kontroll.auditfmt — the one flattener the GUI's writer shares), so a request value that
+    is audited before it is validated cannot add a column or forge a row. RAISES (OSError) on write
+    failure — callers fail-closed on it. NEVER pass a credential as any field."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    safe = [str(x).replace("\t", " ").replace("\n", " ") for x in (ts, user, ip, action, run_id, detail)]
+    safe = [flatten_field(x) for x in (ts, user, ip, action, run_id, detail)]
     os.makedirs(os.path.dirname(path), exist_ok=True)
     _rotate_if_needed(path)
     with open(path, "a", encoding="utf-8") as fh:

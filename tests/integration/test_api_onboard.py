@@ -181,20 +181,31 @@ def test_onboard_partial_auth_set_is_a_422_not_a_500(onb, monkeypatch):
     r = onb.client.post("/onboard", headers=AUTH, json=_body(collection="community.proxmox", key="proxmox"))
     assert r.status_code == 422
     assert "incomplete credential set" in r.json()["detail"]
+    assert r.json()["code"] == "invalid_request"                # not a field refusal: no field code to offer
+    audit = open(onb.audit_log, encoding="utf-8").read()
+    assert "onboard-refuse" in audit and "reason=planner-guard" in audit and "request-boundary" not in audit
 
 
 @pytest.mark.parametrize("field,value", [
     ("key", "../../etc"), ("key", "edge/os"), ("key", "Edge"), ("group", "edge router"), ("group", "x;y"),
     ("host", "192.0.2.50; rm -rf /"), ("host", "a..b"), ("host_name", "../h"), ("secrets", "../network"),
     ("collection", "../acme.edgeos"), ("collection", "acme/edgeos"),
+    ("host", "2001:db8::1%x}} {{ 7*7 }}"), ("host_name", "2001:db8::1%eth0"), ("key", "edgeos\n"),
+    ("host", "192.0.2.50\n"),
 ])
 def test_onboard_refuses_a_path_shaped_field_before_any_write(onb, field, value):
     """THE REQUEST BOUNDARY (2026-10-08 review, finding 1). A `key`/`group`/`host`/`host_name`/`secrets`/`collection`
     carrying a separator, a `..`, a space or a metacharacter is refused 422 by the planner's closed-charset validators
-    BEFORE the probe runs or anything is written — git is never touched. Guards the bare-string era, when only the
-    collection's installed-ness was checked and `key` went straight into `modules/<key>/`."""
+    BEFORE the probe runs or anything is written — git is never touched. So is an address with an IPv6 ZONE ID (the
+    standard library accepts any text after the `%`, and `host` becomes an inventory variable Ansible templates) and a
+    valid value followed by one newline. The response names the field and never quotes the value. Guards the
+    bare-string era, when only the collection's installed-ness was checked and `key` went straight into
+    `modules/<key>/`."""
     r = onb.client.post("/onboard", headers=AUTH, json=_body(**{field: value}))
     assert r.status_code == 422, (field, value, r.status_code, r.text)
+    assert value not in r.json()["detail"] and value.strip() not in r.json()["detail"], "the value is never echoed"
+    assert r.json()["code"].startswith("invalid_") and r.json()["code"] != "invalid_request", \
+        "the same body every other route gives: the message and a code derived from the FIELD"
     assert field in r.json()["detail"] or field.replace("_", " ") in r.json()["detail"] or "collection" in r.json()["detail"]
     assert onb.calls == [], "a refused request must never reach git"
     audit = open(onb.audit_log, encoding="utf-8").read()

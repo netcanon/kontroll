@@ -110,7 +110,7 @@ def list_fleet():
         return []
     groups = _inventory_groups()
     out = []
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = paths.module_file(key)
         if not os.path.exists(mp):
             continue

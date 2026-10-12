@@ -98,7 +98,9 @@ def build_plan(key, selection):
     """PROPOSE (pure) — the plan to add a `backup:` block to onboarded class `key`. selection =
     {method:'backup', params:{schedule:<preset cron>}}. Returns
     {error: 'not_onboarded'|'not_backup_capable'|'bad_param'|'already_declared'|None, ...}; writes nothing.
-    Mirrors observe.build_telemetry_plan but for the `backup:` MAPPING block; the plan_token gates it."""
+    Mirrors observe.build_telemetry_plan but for the `backup:` MAPPING block; the plan_token gates it. `key` is
+    a REQUEST value and is refused first (paths.RequestBoundaryError), before the join and before any other answer."""
+    paths.component(key, "device-class key")            # C22: the request boundary, before the join
     params = (selection or {}).get("params") or {}
     schedule = params.get("schedule")
     retention = params.get("retention") or "keep-all"     # default-safe: keep the full history (no prune)

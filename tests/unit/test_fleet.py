@@ -90,3 +90,18 @@ def test_template_wires_the_two_section_index():
     assert "'service-row'" in tpl and "'fleet-classes'" in tpl
     assert ">Index<" in tpl                                  # the header button label widened to "Index"
     assert 'data-testid="fleet-open"' in tpl                # …but the testid contract is unchanged
+
+
+def test_readers_of_the_fleet_survive_a_line_that_is_not_a_class_key(tmp_repo, monkeypatch):
+    """With `- null`, a number and a mapping among `enabled_modules`, the Fleet index and the audit service still
+    answer — with the valid classes — instead of raising a request-boundary refusal for a field nobody sent.
+    Guards the two readers the classify-route test does not reach: each took the raw list before."""
+    from kontroll import catalog
+    from kontroll.service.audit import service_audit
+    _class(tmp_repo, "demo_sw", "core_switch")
+    (tmp_repo / "config" / "fleet.yml").write_text(
+        "enabled_modules:\n  - null\n  - 123\n  - {a: 1}\n  - demo_sw\n", encoding="utf-8")
+    assert [c["key"] for c in fleet.list_fleet()] == ["demo_sw"]
+    monkeypatch.setattr(catalog, "local_installed", lambda: {})
+    audit = service_audit()
+    assert audit["enabled"] == ["demo_sw"] and audit["declared"] == ["ns.demo_sw"]

@@ -24,13 +24,13 @@ import yaml
 from kontroll import catalog, paths
 from kontroll.service import _diff, promote
 from kontroll.service._blockwrite import disable_in_fleet, set_list_block, set_nested_scalar, upsert_top_level_key
-from kontroll.service._validate import validate_value
+from kontroll.service._validate import plain_scalar, validate_value
 from kontroll.service.fleet import list_services
 from kontroll.service.secrets import offerable_fields
 
 log = logging.getLogger("kontroll.service.settings")
 
-_REMOTE_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]*")   # a single offsite-backup git-remote name (per-item validate)
+_REMOTE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]*\Z")   # a single offsite-backup git-remote name (per-item validate)
 
 
 def _load_yaml(rel):
@@ -167,16 +167,24 @@ def build_plan(knob, value):
     if k["writer"] == "list":                                # backup_remotes — comma-separated → a validated list
         items = [s.strip() for s in str(value or "").split(",") if s.strip()]
         for it in items:
-            if _REMOTE_NAME.fullmatch(it) is None:
+            if _REMOTE_NAME.fullmatch(it) is None or not plain_scalar(it):
                 return {"error": "bad_value", "knob": knob, "detail": "%r is not a valid remote name" % it}
-        proposed, text_after = items, set_list_block(text_before, knob, items)
+        proposed = items
     else:
         bad = validate_value(dict(k, key=knob), value)       # the P0a config-injection guard (ipv4/hostname/enum)
         if bad:
             return {"error": "bad_value", "knob": knob, "detail": bad}
         proposed = value
-        text_after = (set_nested_scalar(text_before, k["parent"], knob, value) if k["writer"] == "nested"
+    try:
+        text_after = (set_list_block(text_before, knob, proposed) if k["writer"] == "list"
+                      else set_nested_scalar(text_before, k["parent"], knob, value) if k["writer"] == "nested"
                       else upsert_top_level_key(text_before, knob, value))
+    except ValueError:
+        # The writers fail closed on a value that would not read back from YAML as itself. A validator in front
+        # should have refused it with its own message; this keeps a knob type whose validator is looser than its
+        # writer from turning the refusal into an uncaught error (a 500, after the promote was already audited).
+        return {"error": "bad_value", "knob": knob,
+                "detail": "the value for %s cannot be written as plain YAML" % knob}
     meta = {knob: {"severity": k.get("severity"), "blast_radius": k.get("blast_radius")}}
     diff = _diff.compute_changes({knob: cur}, {knob: proposed}, meta)
     if not diff["changes"]:

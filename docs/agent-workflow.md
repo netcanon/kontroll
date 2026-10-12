@@ -195,13 +195,13 @@ loop; a rule that decided by path alone would send them all through the full one
 | Boundary | Paths |
 |---|---|
 | Propose → promote, and the canonical | `scripts/kontroll-promote.py`, `scripts/kontroll/service/promote.py`, `scripts/kontroll/service/discard.py`, `scripts/kontroll/service/pending.py`, `scripts/kontroll/gitio.py`, `ansible/playbooks/promote.yml`, `ansible/playbooks/local-canonical.yml`, `ansible/playbooks/files/canonical-update-hook.sh`, `tests/unit/_readonly_pins.py` |
-| The request boundary | `api/auth.py`, `api/deps.py`, `api/ratelimit.py`, `api/routes/`, `gui/app.py`, `gui/templates/index.html`, `scripts/kontroll/paths.py`, `scripts/kontroll/probe.py`, `scripts/kontroll/service/onboard.py`, `scripts/kontroll/service/_validate.py`, `scripts/kontroll/service/_blockwrite.py`, `scripts/kontroll/envguard.py` |
+| The request boundary | `api/auth.py`, `api/deps.py`, `api/ratelimit.py`, `api/routes/`, `gui/app.py`, `gui/templates/index.html`, `scripts/kontroll/paths.py`, `scripts/kontroll/yamlscalar.py`, `scripts/kontroll/probe.py`, `scripts/kontroll/service/onboard.py`, `scripts/kontroll/service/_validate.py`, `scripts/kontroll/service/_blockwrite.py`, `scripts/kontroll/envguard.py` |
 | Secrets and keys | `scripts/kontroll/service/secrets.py`, `scripts/kontroll/service/keygen.py`, `scripts/gen-secret-env.py`, `secret-forms/`, `key-roles/`, `instance.example/.sops.yaml`, and any task that handles a decrypted value |
 | The supply chain | `scripts/gen-requirements.py`, `scripts/install-collections.py`, `scripts/gen-image-digests.py`, `scripts/gen-code-manifest.py`, `docker/images.lock.yml`, `docker/code-manifest.lock.yml`, `instance.example/trust/`, `docker/installer/Dockerfile`, `docker/semaphore-runner/Dockerfile`, `.github/workflows/`, `.github/dependabot.yml` |
 | Posture, privilege and exposure | `scripts/kontroll-init.py`, `ansible/playbooks/deploy-stack.yml`, `docker/compose.yaml`, `docker/services/`, `tests/check-mgmt-port-binding.py`, `tests/check-storage-chown.py` |
 | What may leave the instance | `tests/_leak_guard.py`, `.gitignore`, `instance.example/.gitignore`, `.gitleaks.toml`, `.dockerignore`, `scripts/make-bundle.sh`, `scripts/make-launch-kit.sh` |
 | Clients that reach a device or the internet | `scripts/gen-validate-live.py`, `scripts/kontroll-discover.py`, `scripts/kontroll/catalog.py` |
-| The audit trail | `scripts/kontroll/service/audit.py`, `api/audit.py` |
+| The audit trail | `scripts/kontroll/service/audit.py`, `scripts/kontroll/auditfmt.py`, `api/audit.py` |
 | The review process itself | `.claude/workflows/blackboard.js` (the read-only contract it prepends to every agent) |
 <!-- boundary-paths:end -->
 

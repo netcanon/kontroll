@@ -20,10 +20,12 @@ plan display shows var NAMES, never values, and they are never logged.
 """
 import logging
 import os
+import re
 
 import yaml
 
 from kontroll import authspec, catalog, gitio, paths, predicate, probe
+from kontroll.service._validate import plain_scalar
 from kontroll.service.classify import derive_class_capabilities, suggest_telemetry
 
 log = logging.getLogger("kontroll.service.onboard")
@@ -56,6 +58,43 @@ def _module_collections(mod):
     return {c.get("name") for c in (mod.get("collections") or []) if isinstance(c, dict)}
 
 
+_INLINE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,252}\Z")
+_STEM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+_NOT_A_NAME = "%s is a word YAML reads as another type (null, a boolean, a number, a date)"
+
+
+def _plain_name(value, field):
+    """A request field that becomes a NAME somebody later writes unquoted — the class key into the fleet list,
+    the inventory group into the generated Prometheus targets and backup schedules, the secrets domain and the
+    backend into the module file's readers — is one path component (the caller checked that) AND a word YAML reads
+    as a string. `null`, `true`, `123` and a date are inside the charset; a group named `null` was stored quoted
+    in the module file and then written bare by the generators that read it back."""
+    if not plain_scalar(value):
+        raise paths.RequestBoundaryError(field, _NOT_A_NAME % field)
+
+
+def _sops_ref(sops_expr, sops_key):
+    """The host var that resolves ONE key of a decrypted SOPS domain: `(…).key` when the key is an identifier — what
+    every existing drop-in holds, so a second onboard of the same host still reports no change — else
+    `(…)['key']`. A host named `sw.lab.example` (or `192.0.2.9`) gets the key `sw.lab.example_password`, and the
+    dotted form of that is an attribute CHAIN that can never resolve. The expression is built by formatting, so it
+    is safe only because the key's charset is closed first (paths.hostname on the host name, an identifier for
+    the field's stem — see the planner's loop): no quote, brace or bracket can reach it."""
+    return ("{{ (%s).%s }}" if sops_key.isidentifier() else "{{ (%s)['%s'] }}") % (sops_expr, sops_key)
+
+
+def _inline_literal(value, field):
+    """A non-secret credential field a backend marks `inline: true` is written INTO the inventory as a literal host
+    var (a host, a port, a flag). Ansible templates inventory variables, so a string there is an expression unless
+    its charset is closed: a bool, an int, or one word of letters, digits, `.`, `_`, `:` and `-`. No shipped backend
+    declares an inline field today; this is the boundary for the first one that does (SECURITY.md C22)."""
+    if isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, str) and _INLINE_RE.fullmatch(value):
+        return value
+    raise paths.RequestBoundaryError(field, "%s is not a plain host, port or flag value" % field)
+
+
 def build_onboard_plan(collection, key, group, host, host_name=None, secrets="network",
                        backend=None, username=None, password=None, api_token=None,
                        ssh_private_key=None, backends=None, vectors=None, creds=None, deep=False):
@@ -73,19 +112,28 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
     connecting module's argument_spec, when `deep` and the collection is installed). Values flow through
     creds_to_set in memory only."""
     # REQUEST BOUNDARY (2026-10-08 review, finding 1). Every field that becomes a path component, an inventory key
-    # or an argv word is a closed charset BEFORE anything is read, probed or written — the API maps the ValueError
-    # to 422 and the GUI to 400, both pre-write. The planner used to validate only `collection`'s installed-ness;
+    # or an argv word is a closed charset BEFORE anything is read, probed or written — the API and the GUI both map
+    # the ValueError to 422, pre-write. The planner used to validate only `collection`'s installed-ness;
     # `key`, `group`, `host`, `host_name` and `secrets` were bare strings joined into modules/<key>/,
     # onboarded-<key>.yml and ansible/secrets/<domain>.sops.yml.
     paths.collection_fqcn(collection)
     paths.component(key, "device-class key")
+    # `null`, `true`, `123`, `2026-10-12`: inside the charset, and not a string once it stands unquoted in the
+    # fleet list — every reader of that list would then hold None, a bool, a number or a date for a class key.
+    # The same for every other field that becomes a name (_plain_name). NOT for `host` / `host_name`: `123` and
+    # `true` are legitimate host names, the inventory drop-in is serialized (quoted), and the generators that
+    # render a host name by hand quote one that is not plain (kontroll.yamlscalar.word).
+    _plain_name(key, "device-class key")
     paths.component(group, "inventory group")
+    _plain_name(group, "inventory group")
     paths.hostname(host, "host")
     if host_name is not None:
         paths.hostname(host_name, "host_name")
     paths.component(secrets, "secrets domain")
+    _plain_name(secrets, "secrets domain")
     if backend is not None:
         paths.component(backend, "backend")
+        _plain_name(backend, "backend")
     backends = backends if backends is not None else catalog.load_backends()
     vectors = vectors if vectors is not None else catalog.load_vectors()
     f = probe.deep_probe(collection)
@@ -237,7 +285,13 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # pve-exporter uses for every node) → stored FLAT under its sops_stem so its consumer reads the exact name
         # (telemetry/pve.yml's secret_env_map {proxmox_api_user}…). A normal cred stays HOST-keyed so two onboarded
         # hosts never collide. Re-onboarding another node of the same domain re-sets the same shared key (idempotent).
-        sops_key = cf["sops_stem"] if cf.get("shared") else "%s_%s" % (cred_key, cf["sops_stem"])
+        # The stem is the backend registry's own name — or, for a TIER-B-derived field, an option name out of an
+        # installed module's argument_spec: bytes a third party published. It is formatted into a lookup EXPRESSION
+        # below, so it is an identifier or the onboard is refused (SECURITY.md C22); the name is not echoed.
+        stem = cf["sops_stem"]
+        if not isinstance(stem, str) or not _STEM_RE.fullmatch(stem):
+            raise paths.RequestBoundaryError("credential field", "a credential field's name is not an identifier")
+        sops_key = stem if cf.get("shared") else "%s_%s" % (cred_key, stem)
         if cf["kind"] == "ssh_key":
             # SSH KEY AUTH — the unified root seam. The PEM is SOPS-encrypted per host; the hostvar points at a 0600
             # file `_render-ssh-keys.yml` materializes from SOPS into the run-keyed kontroll_device_key_dir.
@@ -263,17 +317,18 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             # one. Do NOT restore the old claim that the planner resolves it from the recipe: nothing reads
             # paths.RECIPES_DIR, and believing otherwise cost a silently-broken edge-firewall check.
             tok_var = (params.get("token_var") or "%s_api_token" % cred_key)
-            hostvars[tok_var] = "{{ (%s).%s }}" % (_sops, sops_key)
+            hostvars[tok_var] = _sops_ref(_sops, sops_key)
             creds_to_set[sops_key] = val
         elif cf.get("inline"):
-            hostvars[cf["maps_to"]] = val            # a non-secret literal hostvar (host/port/bool) — not SOPS
+            # a non-secret literal hostvar (host/port/bool) — not SOPS, so the VALUE itself lands in the inventory
+            hostvars[cf["maps_to"]] = _inline_literal(val, cf["field"])
         else:
             # SOPS-store the value, and wire a hostvar inline-lookup ONLY if the field maps to one. A shared
             # domain cred (proxmox exporter token) has NO maps_to — it is read from the SOPS domain by its consumer
             # (deploy-stack renders it into the exporter .env via the class's secret_env_map), not via a hostvar.
             creds_to_set[sops_key] = val
             if cf.get("maps_to"):
-                hostvars[cf["maps_to"]] = "{{ (%s).%s }}" % (_sops, sops_key)
+                hostvars[cf["maps_to"]] = _sops_ref(_sops, sops_key)
     host_block = {group: {"hosts": {host_name: {"ansible_host": host, **hostvars}}}}
     host_text = yaml.safe_dump(host_block, sort_keys=False, allow_unicode=True, width=4096)
 
@@ -357,6 +412,8 @@ def apply_onboard_plan(plan, overwrite=False):
 def enable_in_fleet(key):
     """Insert `  - <key>` into instance/fleet.yml's enabled_modules, preserving the
     file's comments. Idempotent: a no-op if the key is already active."""
+    paths.component(key, "device-class key")              # the join: this line is hand-formatted into the list
+    _plain_name(key, "device-class key")
     path = paths.resolve("config/fleet.yml", write=True)   # a WRITER: never the shipped instance.example/ stub
     lines = open(path, encoding="utf-8").read().splitlines()
     start = next((i for i, ln in enumerate(lines) if ln.strip() == "enabled_modules:"), None)

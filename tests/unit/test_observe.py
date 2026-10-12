@@ -12,6 +12,8 @@ import os
 
 import pytest
 
+import yaml
+
 from kontroll import catalog
 from kontroll.service import observe, promote
 
@@ -161,3 +163,171 @@ def test_grafana_links_deep_link_to_committed_uid(tmp_repo, monkeypatch):
     monkeypatch.setenv("KONTROLL_DOMAIN", "lab.example")
     base = observe.build_telemetry_plan("demo_host", "host_node", methods=METHODS)["links"][0]["url"]
     assert base == "https://grafana.lab.example"
+
+
+_SHIPPED_SHAPE = """key: demo_sw
+description: demo switch
+collections:
+  - name: cisco.ios
+role: backend_network_cli
+inventory_group: core_switch
+metrics:
+  - {method: snmp, params: {module: if_mib}}
+dashboards:
+  - {gnet: 13659, name: snmp_if}
+"""
+
+
+@pytest.mark.parametrize("dashboards", [
+    [{"gnet": 1, "name": "x}\ninventory_group: edge_firewall\nrole: opnsense_firewall\n_pad: {a: 1"}],
+    [{"gnet": 1, "name": "a, derived: true, gnet: 99999"}],
+    [{"gnet": 1, "name": "../../../../tmp/x"}],
+    [{"gnet": 1, "name": "Node"}],
+    [{"gnet": 1, "name": "node\n"}],
+    [{"gnet": 1, "name": "node", "derived": True}],
+    [{"gnet": True, "name": "node"}],
+    [{"gnet": "1860", "name": "node"}],
+    [{"gnet": 0, "name": "node"}],
+    [{"gnet": 10 ** 12, "name": "node"}],
+    [{"gnet": 1860.0, "name": "node"}],
+    [{"name": "node"}],
+    ["node"],
+    {"gnet": 1, "name": "node"},
+    "node",
+    [{"gnet": 5, "name": "null"}],
+    [{"gnet": 5, "name": "true"}],
+    [{"gnet": 5, "name": "123"}],
+    [{"gnet": 5, "name": "2026-10-12"}],
+    [{"gnet": 5, "name": "fresh"}, {"gnet": 6, "name": "fresh"}],
+    [{"gnet": 5, "name": "fresh"}, {"gnet": 5, "name": "fresh"}],
+    [{"gnet": 99999, "name": "snmp_if"}],
+    [{"gnet": 99999, "name": "node"}],
+    [{"gnet": 1, "name": "n%d" % i} for i in range(40)],
+    [{"gnet": 999999, "name": "logs"}],
+    [{"gnet": 31337, "name": "other"}],
+    [{"gnet": 1860, "name": "mynode"}],
+    [{"gnet": 7, "name": "p"}, {"gnet": 7, "name": "q"}],
+    [{"gnet": 31338, "name": "junk"}],
+    [{"gnet": 31339, "name": "listfile"}],
+    [{"gnet": 1, "name": "boolfile"}],
+], ids=["newline-rewrites-role", "one-line-flow-mapping", "path-traversal", "uppercase", "trailing-newline",
+        "extra-key", "boolean-id", "string-id", "zero-id", "huge-id", "float-id", "missing-id", "non-mapping-item",
+        "not-a-list", "a-string", "yaml-null", "yaml-bool", "yaml-number", "yaml-date", "repeated-name",
+        "repeated-item", "own-name-other-id", "another-class-name-other-id", "too-many-items",
+        "existing-file-no-class-declares", "existing-file-of-another-board", "declared-board-second-name",
+        "one-board-two-names", "existing-file-unreadable", "existing-file-not-a-board", "existing-file-boolean-id"])
+def test_a_dashboard_selection_outside_the_closed_shape_is_refused_before_anything_is_rendered(
+        tmp_repo, monkeypatch, dashboards):
+    """A `dashboards` selection is a REQUEST value that becomes a hand-formatted YAML line, a file name when the
+    plan reads the board's uid, and the file `fetch-dashboards.py` later writes an internet download to. Anything
+    but a bounded list of exactly `{gnet: <positive int>, name: <one path component>}` is `bad_param`, and neither
+    the renderer nor the uid read is reached. So is a name YAML reads as another type (`null`, `true`, `123`, a
+    date — inside the charset, and not a string once written unquoted), a name repeated within the selection, and
+    a name this class or ANOTHER class already declares with a different board id (a name is one file: the later
+    download would replace the curated board). So is a name that is already a FILE under the dashboards directory
+    and does not say it is that board — the hand-authored `logs` dashboard, which no class declares, or a file of
+    another board — and a board id given a second name (the fetch keeps one name per board, so the second file
+    would never be written). Guards one request field rewriting a class's ROLE and INVENTORY GROUP with a newline,
+    rewriting its own item — the board id, the `derived` mark — with none, choosing a path outside the dashboards
+    directory, and overwriting another class's board or a hand-authored one. The refusal names the item and the
+    rule, never the value."""
+    _write_module(tmp_repo, "demo_sw", _SHIPPED_SHAPE)
+    _write_module(tmp_repo, "demo_hv", "key: demo_hv\ndashboards:\n  - {gnet: 1860, name: node}\n")
+    boards = tmp_repo / "dashboards" / "grafana" / "dashboards"
+    boards.mkdir(parents=True)
+    (boards / "logs.json").write_text('{"uid": "kontroll-logs", "title": "Logs"}', encoding="utf-8")   # hand-authored
+    (boards / "other.json").write_text('{"uid": "x", "gnetId": 4242}', encoding="utf-8")              # another board
+    (boards / "junk.json").write_text("not json at all", encoding="utf-8")                            # unreadable
+    (boards / "listfile.json").write_text("[1, 2]", encoding="utf-8")                                 # not a board
+    (boards / "boolfile.json").write_text('{"gnetId": true}', encoding="utf-8")                       # True == 1
+
+    def must_not_run(*a, **k):
+        raise AssertionError("a refused selection reached the renderer or the uid read")
+    monkeypatch.setattr(observe, "_render_dashboard_entry", must_not_run)
+    monkeypatch.setattr(observe, "_dashboard_uid", must_not_run)
+    plan = observe.build_telemetry_plan("demo_sw", "host_node", dashboards=dashboards, methods=METHODS)
+    assert plan["error"] == "bad_param" and plan["detail"].startswith("dashboards")
+    assert "edge_firewall" not in plan["detail"] and "tmp/x" not in plan["detail"]
+
+
+def test_a_valid_dashboard_selection_adds_one_item_and_changes_no_other_key(tmp_repo):
+    """With `{gnet: 1860, name: node}` the proposed module text parses to the same mapping as before plus exactly
+    that one `dashboards` item and the one `metrics` entry the method adds — every other top-level key is equal
+    before and after, and the item reads back as the two values that were sent (a name another class declares with
+    the SAME board id is allowed: it is the same file). Guards the write path, which had no test at all: a change
+    to the renderer that touches another key of the class (its role, its inventory group) would not otherwise be
+    seen."""
+    _write_module(tmp_repo, "demo_sw", _SHIPPED_SHAPE)
+    _write_module(tmp_repo, "demo_hv", "key: demo_hv\ndashboards:\n  - {gnet: 1860, name: node}\n")
+    plan = observe.build_telemetry_plan("demo_sw", "host_node", dashboards=[{"gnet": 1860, "name": "node"}],
+                                        methods=METHODS)
+    assert plan["error"] is None
+    before, after = yaml.safe_load(plan["text_before"]), yaml.safe_load(plan["text_after"])
+    assert after["dashboards"] == before["dashboards"] + [{"gnet": 1860, "name": "node"}]
+    assert after["metrics"] == before["metrics"] + [{"method": "host_node"}]
+    assert {k: v for k, v in after.items() if k not in ("dashboards", "metrics")} == \
+           {k: v for k, v in before.items() if k not in ("dashboards", "metrics")}
+    assert after["role"] == "backend_network_cli" and after["inventory_group"] == "core_switch"
+
+
+def test_dashboard_uid_reads_only_inside_the_dashboards_directory(tmp_repo, monkeypatch):
+    """`_dashboard_uid` re-checks the name at the join: a name that is not one path component returns None — also
+    for a name that reached `main` in a module file some other way — while a real board's uid is still read.
+    Guards a propose reflecting the `uid` field of an arbitrary JSON file the service can read."""
+    (tmp_repo / "secret.json").write_text('{"uid": "LEAKED"}', encoding="utf-8")
+    dd = tmp_repo / "dashboards" / "grafana" / "dashboards"
+    dd.mkdir(parents=True)
+    (dd / "node.json").write_text('{"uid": "rYdddlPWk"}', encoding="utf-8")
+    assert observe._dashboard_uid("node") == "rYdddlPWk"
+    for name in ("../../../secret", "..", "a/b", "Node", "node\n", ""):
+        assert observe._dashboard_uid(name) is None, name
+
+
+def test_a_name_whose_existing_file_is_that_board_is_accepted(tmp_repo):
+    """A selection whose name is already a file under the dashboards directory is accepted when the file says it
+    is that board (`gnetId`) — whether a class still declares it or not. Guards the existing-file rule refusing the
+    ordinary cases: re-proposing a fetched board, and declaring again a board whose class was removed while its
+    file stayed."""
+    _write_module(tmp_repo, "demo_sw", _SHIPPED_SHAPE)
+    boards = tmp_repo / "dashboards" / "grafana" / "dashboards"
+    boards.mkdir(parents=True)
+    (boards / "snmp_if.json").write_text('{"uid": "a", "gnetId": 13659}', encoding="utf-8")   # declared, fetched
+    (boards / "orphan.json").write_text('{"uid": "b", "gnetId": 4242}', encoding="utf-8")     # no class declares it
+    for selection in ([{"gnet": 13659, "name": "snmp_if"}], [{"gnet": 4242, "name": "orphan"}],
+                      [{"gnet": 777, "name": "brand_new"}]):
+        plan = observe.build_telemetry_plan("demo_sw", "host_node", dashboards=selection, methods=METHODS)
+        assert plan["error"] is None, (selection, plan.get("detail"))
+
+
+def test_one_damaged_module_file_does_not_break_every_class_s_dashboards(tmp_repo):
+    """`_declared_dashboards()` reads every class's module file on a propose that carries dashboards. A file that
+    is not UTF-8, is not YAML, is a list, or whose `dashboards:` is a number or holds a boolean id contributes what
+    it validly declares and nothing else — and the propose for another class is still built. Guards one damaged
+    class turning every class's telemetry propose into an uncaught error, and `gnet: true` being taken for
+    board 1."""
+    _write_module(tmp_repo, "demo_sw", _SHIPPED_SHAPE)
+    _write_module(tmp_repo, "bad_number", "key: bad_number\ndashboards: 5\n")
+    _write_module(tmp_repo, "bad_list_doc", "- a\n- b\n")
+    _write_module(tmp_repo, "bad_yaml", "key: [unterminated\n")
+    _write_module(tmp_repo, "bad_bool", "key: bad_bool\ndashboards:\n  - {gnet: true, name: boolboard}\n  - 7\n")
+    (tmp_repo / "modules" / "bad_bytes").mkdir()
+    (tmp_repo / "modules" / "bad_bytes" / "module.yml").write_bytes(b"key: \xff\xfe\n")
+    assert observe._declared_dashboards() == {"snmp_if": {13659}}
+    plan = observe.build_telemetry_plan("demo_sw", "host_node", dashboards=[{"gnet": 1, "name": "boolboard"}],
+                                        methods=METHODS)
+    assert plan["error"] is None
+
+
+def test_the_dashboard_name_check_knows_the_name_goes_into_a_flow_mapping(tmp_repo, monkeypatch):
+    """With the path-component charset switched off, a dashboard name holding a `,` or a `}` is still refused: the
+    name is rendered inside `{gnet: N, name: <name>}`, where those are structure although the same word is plain
+    after `key: `. Today the charset refuses them first, so this is a second layer — pinned because the charset is
+    a rule about FILE NAMES, and the day it is widened nothing else would stand between a name and the item's
+    other fields."""
+    _write_module(tmp_repo, "demo_sw", _SHIPPED_SHAPE)
+    monkeypatch.setattr(observe.paths, "component", lambda value, field="x": value)
+    for name in ("a,b", "a}", "x, derived: true", "0x_", "2026-13-45"):
+        cleaned, bad = observe._clean_dashboards([{"gnet": 5, "name": name}], {})
+        assert cleaned is None and bad.startswith("dashboards[0].name"), name
+    assert observe._clean_dashboards([{"gnet": 5, "name": "plain_name"}], {}) == \
+        ([{"gnet": 5, "name": "plain_name"}], None)

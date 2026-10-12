@@ -98,9 +98,14 @@ def build_plan(key, selection):
                           "fields: %s" % ", ".join(sorted(c["path"] for c in identity_changes))}
 
     text_after = text_before
-    for c in diff["changes"]:                                # fold each changed key (≤1 identity + optional status)
-        if c["kind"] in ("add", "modify"):
-            text_after = upsert_top_level_key(text_after, c["path"], c["after"])
+    try:
+        for c in diff["changes"]:                            # fold each changed key (≤1 identity + optional status)
+            if c["kind"] in ("add", "modify"):
+                text_after = upsert_top_level_key(text_after, c["path"], c["after"])
+    except ValueError:
+        # the writer's own refusal (a value that would not read back from YAML as itself) — the knob validators
+        # above refuse such a value first; this keeps a looser future knob from surfacing as an uncaught error
+        return {"error": "bad_value", "key": key, "detail": "an identity value cannot be written as plain YAML"}
 
     mod_rel = "modules/%s/module.yml" % key
     sev_dec = _diff.severity_decision(diff)

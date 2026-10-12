@@ -24,10 +24,13 @@ KINDS = ("role", "collection_playbook", "standalone")
 INSTALLABLE = ("role", "collection_playbook")
 SOURCES = ("galaxy", "git")
 SIGNATURES = ("required", "adaptive", "none")   # adaptive = verify-if-served/pass-if-absent (the brick-proof default)
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 HIGH_BLAST_GROUPS = ("edge_firewall", "core_switch")   # the Tier-cap: unverified provenance may not reach these
 BLAST = ("this-device", "VLAN", "LAN", "WAN", "all")
-KEY_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+KEY_RE = re.compile(r"^[a-z][a-z0-9-]*\Z")
+# The version of an exact `==` pin: one plain version word. It ends up inside double quotes in the generated
+# collection lockfile (scripts/gen-requirements.py renders that file by hand), so the charset is closed here.
+PIN_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}\Z")
 
 # The curated configure-form knob vocabulary (R3): EXACTLY the server-validated type set (service/_validate's
 # registry) — so a unit's `knobs:` render through the ONE knob renderer and re-validate through the SAME P0a
@@ -37,7 +40,7 @@ KEY_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 # Secrets dialog. An ansible var name is lowercase-with-underscores.
 KNOB_TYPES = tuple(sorted(_validate._VALIDATORS))
 FORBIDDEN_KNOB_TYPES = ("secret", "password", "token", "textarea")
-KNOB_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+KNOB_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
 
 def validate_knobs(knobs):
@@ -61,7 +64,7 @@ def validate_knobs(knobs):
             continue
         key = k.get("key")
         where = key if key else "[%d]" % i
-        if not key or not KNOB_KEY_RE.match(str(key)):
+        if not key or not KNOB_KEY_RE.fullmatch(str(key)):
             errs.append("knob %s key must match %s" % (where, KNOB_KEY_RE.pattern))
         elif key in seen:
             errs.append("knob %s key is duplicated" % key)
@@ -101,7 +104,7 @@ def validate_unit(doc, dirkey, enabled_modules):
         errs.append("schema must be %r (got %r)" % (SCHEMA, doc.get("schema")))
 
     key = doc.get("key")
-    if not key or not KEY_RE.match(str(key)):
+    if not key or not KEY_RE.fullmatch(str(key)):
         errs.append("key %r must match %s" % (key, KEY_RE.pattern))
     elif key != dirkey:
         errs.append("key %r must equal its directory name %r" % (key, dirkey))
@@ -127,6 +130,9 @@ def validate_unit(doc, dirkey, enabled_modules):
             if not (isinstance(v, str) and v.strip().startswith("==")):
                 errs.append("install.collections[%s].version must be an EXACT '==' pin (got %r)"
                             % ((c or {}).get("name"), v))
+            elif not PIN_VERSION_RE.fullmatch(v.strip()[2:].strip()):
+                errs.append("install.collections[%s].version must be '==' plus a plain version (letters, digits, "
+                            "`.`, `+`, `-`)" % ((c or {}).get("name"),))
         prov = install.get("provenance") or {}
         if prov.get("source") is not None and prov["source"] not in SOURCES:
             errs.append("install.provenance.source %r must be one of %s" % (prov["source"], list(SOURCES)))
@@ -139,7 +145,7 @@ def validate_unit(doc, dirkey, enabled_modules):
         if kr is not None and not isinstance(kr, str):
             errs.append("install.provenance.keyring must be a host path string (or absent)")
         sha = prov.get("sha256")
-        if sha is not None and not SHA256_RE.match(str(sha)):
+        if sha is not None and not (isinstance(sha, str) and SHA256_RE.fullmatch(sha)):
             errs.append("install.provenance.sha256 must be a 64-hex digest (or null/absent)")
         # Tier-cap (NB-4): a DOWNLOADED unit with unverified provenance may not reach the highest-blast tier. Fails
         # on the COMBINATION (high-blast target + signature != required), NEVER on plain absence — and only for

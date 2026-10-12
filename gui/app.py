@@ -23,7 +23,6 @@ import functools
 import hmac
 import logging
 import os
-import re
 import sys
 import time
 import uuid
@@ -33,10 +32,12 @@ from flask import Flask, Response, jsonify, render_template, request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))   # the kontroll service layer (search/classify in-process)
+from kontroll import auditfmt  # noqa: E402  (the one audit-field flattener, shared with the API's writer)
 from kontroll import authspec  # noqa: E402  (F1: derive the onboard form's per-backend credential fields)
 from kontroll import catalog as _catalog  # noqa: E402  (after sys.path is set up)
 from kontroll import probe  # noqa: E402  (F1 TIER-B: deep-probe an installed collection for candidate auth modules)
 from kontroll import gitio  # noqa: E402  (onboard + capability promote commit the scoped paths in-process)
+from kontroll import paths  # noqa: E402  (the request-boundary refusal, mapped once for the app — C22)
 from kontroll.envguard import positive_int  # noqa: E402  (fail-closed audit-rotation knobs — M-5)
 from kontroll.service import capability  # noqa: E402  (the secondary-capability dialog backend)
 from kontroll.service import identity as identity_service  # noqa: E402  (the module-identity reconfigure backend, Phase 4b)
@@ -112,12 +113,12 @@ def _get_audit_logger():
 
 
 def _flatten_audit_field(v):
-    """Flatten tab/newline/carriage-return in an audit field to a space so a caller-influenced value (e.g. a URL
-    path variable like a discard run_id) can NEVER forge an extra TSV line (`\\n`) or corrupt the tab-delimited
-    columns (`\\t`) — audit-log injection. Mirrors api/audit.write_audit's sanitize; applied to action + detail so
-    every _audit caller is protected, not just the one that surfaced it (the discard route, which audits the raw
-    run_id before validation)."""
-    return str(v).replace("\t", " ").replace("\n", " ").replace("\r", " ")
+    """Flatten a tab and every line-breaking character in an audit field to a space so a caller-influenced value
+    (e.g. a URL path variable like a discard run_id) can NEVER forge an extra TSV line or corrupt the tab-delimited
+    columns — audit-log injection. The SAME function the API's writer uses (kontroll.auditfmt), not a copy of it;
+    applied to action + detail so every _audit caller is protected, not just the one that surfaced it (the discard
+    route, which audits the raw run_id before validation)."""
+    return auditfmt.flatten_field(v)
 
 
 def _audit(action, detail=""):
@@ -131,6 +132,16 @@ def _audit(action, detail=""):
             ts, _flatten_audit_field(ip), _flatten_audit_field(action), _flatten_audit_field(detail)))
     except OSError:
         pass
+
+
+@app.errorhandler(paths.RequestBoundaryError)
+def _boundary_refused(e):
+    """A request field failed its closed-charset check somewhere below a route (SECURITY.md C22): answer 422 with
+    the field's message and code — never the value — and leave an audit line naming the route and the FIELD. Mapped
+    ONCE for the app, so a route with no `try`, or a new one, cannot turn a refusal into a bare 500 or an exception
+    string. The routes that hand a request value to a service inside a broad `except` re-raise this error first."""
+    _audit("request-refuse", "reason=request-boundary field=%s route=%s" % (e.field, request.endpoint or "-"))
+    return jsonify({"error": str(e), "code": e.code}), 422
 
 
 def require_auth(fn):
@@ -440,6 +451,8 @@ def api_classify():
     _, _, backends = _catalog_triple()
     try:
         result = service_classify(coll, backends=backends)
+    except paths.RequestBoundaryError:
+        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
     except Exception as e:
         return jsonify({"error": "classify failed: %s" % e}), 500
     if result is None:
@@ -525,8 +538,9 @@ def api_onboard():
         # it from the refused FIELD — `collection` → invalid_collection, `device-class key` → invalid_device_class_key —
         # never from the value, which is also kept out of the audit line.
         field = getattr(e, "field", None)
-        code = ("invalid_%s" % re.sub(r"[^a-z0-9]+", "_", field.lower()).strip("_")) if field else "invalid_request"
-        _audit("onboard-refuse", "reason=request-boundary field=%s" % (field or "input"))
+        code = e.code if isinstance(e, paths.RequestBoundaryError) else "invalid_request"
+        _audit("onboard-refuse", "reason=%s field=%s" % (
+            "request-boundary" if isinstance(e, paths.RequestBoundaryError) else "planner-guard", field or "input"))
         return jsonify({"error": str(e), "code": code}), 422
     if plan["error"] == "not_installed":
         return jsonify({"error": "install the collection first: %s" % d["collection"]}), 404
@@ -587,6 +601,8 @@ def api_configurable():
     obj_id = request.args.get("id") or ""
     try:
         view = configurable.configurable_view(kind, obj_id)
+    except paths.RequestBoundaryError:
+        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
     except Exception as e:               # a probe/registry failure → a clean 500, not a worker crash
         return jsonify({"error": "configurable read failed: %s" % e}), 500
     if view.get("error") in ("no_kind", "no_capability", "no_form", "not_onboarded", "no_knob", "not_enabled",
@@ -605,6 +621,8 @@ def api_capability_suggest(cap):
     vectors, _, _ = _catalog_triple()
     try:
         view = capability.suggest_view(cap, key, vectors=vectors)
+    except paths.RequestBoundaryError:
+        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
     except Exception as e:               # a probe/registry failure → a clean 500, not a crash
         return jsonify({"error": "suggest failed: %s" % e}), 500
     if view.get("error") == "no_capability":
@@ -716,6 +734,8 @@ def api_units(collection):
     from kontroll.service.units import service_units  # local import — read-only, no per-request catalog
     try:
         result = service_units(collection)
+    except paths.RequestBoundaryError:
+        raise                                # a refused field is a 422 (the app-wide handler), not a "failed" 500
     except Exception as e:               # a probe failure → a clean 500, not a worker crash
         return jsonify({"error": "units read failed: %s" % e}), 500
     if result is None:

@@ -178,3 +178,31 @@ def test_settings_edit_reads_are_read_only_by_construction():
     assert_read_only("scripts/kontroll/service/settings.py", "current_value")
     assert_read_only("scripts/kontroll/service/configurable.py", "_settings_knob_view")
     assert_read_only("scripts/kontroll/service/configurable.py", "_settings_fleet_view")
+
+
+@pytest.mark.parametrize("knob,value", [("domain", "null"), ("domain", "true"), ("domain", "123"), ("domain", "no"),
+                                        ("domain", "2026-10-12"), ("domain", "2026-02-30"), ("domain", "0000-00-00"),
+                                        ("backup_remotes", "null"), ("backup_remotes", "ok, true"),
+                                        ("backup_remotes", "0x_"), ("backup_remotes", "2026-13-45")])
+def test_a_settings_value_yaml_reads_as_another_type_is_bad_value(tmp_repo, knob, value):
+    """A `domain` or a backup remote name that is inside its charset and that YAML reads as a keyword, a number or
+    a date — or as a date that does not exist, or a number with no digits, which the YAML reader cannot even
+    build — is `bad_value` at the plan: nothing is written and nothing is raised. Guards three generations of the
+    same defect: the value being stored (`domain: null` is no domain); the plan raising a plain ValueError once
+    the writers refused it; and the check itself raising for a word the reader resolves and cannot build."""
+    _write_instance(tmp_repo)
+    plan = settings.build_plan(knob, value)
+    assert plan["error"] == "bad_value"
+    # ...and it is the VALIDATOR in front that says so, with its own message — not the writers' fallback
+    assert ("remote name" if knob == "backup_remotes" else "another type") in plan["detail"]
+
+
+def test_a_writer_s_own_refusal_is_a_bad_value_not_an_exception(tmp_repo, monkeypatch):
+    """With the knob validator replaced by one that accepts anything — a future knob type whose validator is
+    looser than its writer — a value the scalar writer refuses still comes back as `bad_value`. Guards the
+    writers' fail-closed check surfacing as an uncaught error on a route that has no `try`."""
+    _write_instance(tmp_repo)
+    monkeypatch.setattr(settings, "validate_value", lambda knob, value: None)
+    for knob, value in (("domain", "null"), ("domain", "a" + chr(0x2028) + "? k"), ("tls_mode", "true")):
+        plan = settings.build_plan(knob, value)
+        assert plan["error"] == "bad_value" and "plain YAML" in plan["detail"], (knob, plan)

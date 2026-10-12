@@ -115,7 +115,39 @@ def test_make_launch_kit_strips_crlf_and_deploy_check_runs_digest_read():
 # original "4-file slice" missed — kontroll-promote.py:_would_brick_generate execs the PROPOSED tree's copy of it,
 # and absent it the never-brick FIX-M9 gate fails OPEN.
 _PROMOTE_SLICE = ("scripts/kontroll-promote.py", "scripts/gen-requirements.py",
-                  "scripts/kontroll/__init__.py", "scripts/kontroll/paths.py", "scripts/kontroll/gitio.py")
+                  "scripts/kontroll/__init__.py", "scripts/kontroll/paths.py", "scripts/kontroll/gitio.py",
+                  "scripts/kontroll/yamlscalar.py")     # imported by gen-requirements.py (the sidecar's keyring)
+
+
+def test_the_promote_slice_names_everything_the_promote_gate_imports():
+    """Every `kontroll.*` module that scripts/gen-requirements.py and scripts/kontroll-promote.py import — the two
+    scripts the promote gate runs from the canonical clone — is listed in `_PROMOTE_SLICE`, and every listed file
+    exists. Guards the slice going stale the day one of them gains an import: the list is what the next test
+    protects from being stripped out of the launch kit, and a module that is imported and not listed could be
+    stripped with every test green — the promote gate would then fail to start on a kit-installed node."""
+    import ast
+    roots = ["scripts/gen-requirements.py", "scripts/kontroll-promote.py"]
+    imported, queue = set(), list(roots)
+    while queue:                                              # transitively: a listed module's own imports count
+        script = queue.pop()
+        for node in ast.walk(ast.parse(_read(script))):
+            found = set()
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "kontroll":
+                base = "scripts/" + node.module.replace(".", "/")
+                for alias in node.names:
+                    candidate = "%s/%s.py" % (base, alias.name)
+                    found.add(candidate if os.path.exists(os.path.join(ROOT, candidate)) else base + ".py")
+            elif isinstance(node, ast.Import):
+                found = {"scripts/" + a.name.replace(".", "/") + ".py" for a in node.names
+                         if a.name.split(".")[0] == "kontroll"}
+            for path in found - imported:
+                imported.add(path)
+                queue.append(path)
+    assert "scripts/kontroll/yamlscalar.py" in imported and "scripts/kontroll/gitio.py" in imported, \
+        "the scan is not reading the scripts' imports"
+    assert sorted(imported - set(_PROMOTE_SLICE)) == []
+    assert sorted(set(_PROMOTE_SLICE) - imported - set(roots) - {"scripts/kontroll/__init__.py"}) == []
+    assert [f for f in _PROMOTE_SLICE if not os.path.exists(os.path.join(ROOT, f))] == []
 
 
 def test_launch_kit_strips_baked_code_but_keeps_the_canonical_closure():

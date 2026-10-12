@@ -933,3 +933,24 @@ def test_discover_audit_path_defaults_under_write_root(monkeypatch, tmp_path):
     assert discover._audit_path() == os.path.join(str(tmp_path), "local", "discover-audit.log")
     monkeypatch.setenv("KONTROLL_DISCOVER_AUDIT_LOG", "/tmp/override.log")   # first branch wins over the default
     assert discover._audit_path() == "/tmp/override.log"
+
+
+def test_the_sweep_skips_a_fleet_line_that_is_not_a_class_key():
+    """`sweep()` over a fleet whose `enabled_modules` holds `null`, a number and a name outside the charset
+    returns an artifact (no source, no lease) instead of raising out of the whole run. Guards the last reader that
+    handed a raw fleet entry to `module_file()`: one bad line in the fleet file blanked discovery for every
+    class."""
+    result = discover.sweep({"enabled_modules": [None, 123, "../x", "Upper"]}, {}, {}, {}, {})
+    assert result["sources"] == [] and result["leases"] == []
+
+
+def test_a_lease_named_like_an_impossible_date_does_not_blank_the_inbox():
+    """A device-supplied host name the YAML reader resolves and cannot build — `2026-02-30`, `0000-00-00` — is
+    cleaned to "no host name" like any other name that is not a plain host name; `_clean_hostname` returns None
+    and does not raise. The name is chosen by whoever asks a lease-serving device for an address, and one such
+    lease made the whole Discovery panel answer 500: the hostname validator had gained a YAML check, and the
+    check raised."""
+    from kontroll.service import discovery as discovery_service
+    for name in ("2026-02-30", "0000-00-00", "9999-99-99", "null", "123"):
+        assert discovery_service._clean_hostname(name) is None, name
+    assert discovery_service._clean_hostname("printer-3") == "printer-3"

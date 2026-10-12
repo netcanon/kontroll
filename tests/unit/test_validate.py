@@ -12,7 +12,7 @@ type, an out-of-range bound) and must REJECT it. The fail-closed defaults (unkno
 """
 import pytest
 
-from kontroll.service._validate import infer_type, validate_value
+from kontroll.service._validate import infer_type, plain_scalar, validate_value
 
 pytestmark = pytest.mark.unit
 
@@ -121,6 +121,17 @@ def test_ipv6_rejects_non_host_bands_and_injection():
         assert "usable" in validate_value(k, bad), bad
 
 
+@pytest.mark.parametrize("value", ["2001:db8::1%eth0", "2001:db8::1%x\n  a: b", "2001:db8::1%<img src=x>",
+                                   "fe80::1%1"])
+def test_ipv6_and_ip_refuse_a_zone_id(value):
+    """The `ipv6` and dual-stack `ip` knob types refuse an address with a zone id, whatever follows the `%`. The
+    standard library accepts ANY text there — a newline, markup, braces — so `ipaddress` alone is not the charset.
+    Guards the discovery read side passing device-reported text after a `%` to the page and on into the onboard
+    form's host field (SECURITY.md C22)."""
+    assert "IPv6" in validate_value({"key": "addr", "type": "ipv6"}, value)
+    assert "IPv4 or IPv6" in validate_value({"key": "addr", "type": "ip"}, value)
+
+
 def test_hostname_accepts_labels_and_rejects_injection():
     """A `hostname` knob accepts RFC-1123-ish dotted labels and rejects whitespace, a metacharacter, a leading
     hyphen, a trailing newline, and an over-long value. Guards a hostname knob smuggling an injection. The
@@ -164,3 +175,52 @@ def test_validate_value_never_raises_on_odd_input():
     malformed request can't crash the in-process worker (the service-never-sys.exit posture)."""
     assert validate_value({"type": "ipv4"}, None) is not None   # no `key`, None value → an error string, no raise
     assert validate_value({"type": "int"}, None) is not None
+
+
+@pytest.mark.parametrize("value", ["cisco_ios", "node", "7d", "192.0.2.10", "example.test", "a-b", "v1"])
+def test_plain_scalar_accepts_words_yaml_reads_as_strings(value):
+    """Ordinary names, a duration preset, an address and a domain read back from YAML as themselves. Guards the
+    check refusing the values the hand-formatting writers exist to write."""
+    assert plain_scalar(value)
+
+
+@pytest.mark.parametrize("value", ["null", "Null", "~", "true", "False", "yes", "no", "on", "off", "123", "0x10",
+                                   "1.5", "2026-10-12", "", " a", "a ", "a: b", "x #y", "[a]", "{a}", "- a",
+                                   "*a", "&a", "!a", "a\nb", None, 5, True, ["a"]])
+def test_plain_scalar_refuses_what_yaml_reads_as_something_else(value):
+    """A YAML keyword, a number, a date, an empty or padded word, structure, an anchor or tag, a line break and
+    every non-string are refused. Guards a value that is inside a closed CHARSET and still lands in a
+    hand-formatted file as None, a boolean, a number, a date — or as structure."""
+    assert not plain_scalar(value)
+
+
+@pytest.mark.parametrize("value", ["null", "true", "yes", "no", "on"])
+def test_a_text_knob_refuses_a_word_yaml_reads_as_another_type(value):
+    """A `text` knob whose pattern is a lowercase slug — the identity knobs `role`, `inventory_group`, `backend` —
+    refuses `null`, `true`, `yes`: each matches the pattern and would be written unquoted as `role: null`, which
+    YAML reads as no role at all. A real slug still passes. Guards a class losing its role or its inventory group
+    to one well-formed-looking word."""
+    knob = {"key": "role", "type": "text", "pattern": "[a-z][a-z0-9_]*"}
+    assert "another type" in validate_value(knob, value)
+    assert validate_value(knob, "core_switch") is None
+
+
+@pytest.mark.parametrize("value", ["null", "Null", "true", "no", "on", "off", "yes", "123", "1.5", "0x10",
+                                   "2026-10-12", "2026-02-30", "0000-00-00", "9999-99-99"])
+def test_a_hostname_knob_refuses_a_word_yaml_reads_as_another_type(value):
+    """A `hostname` knob — the instance `domain` — refuses a name whose labels are all inside the charset and
+    which YAML reads as a keyword, a number or a date; a real domain still passes. The knob is written unquoted
+    into instance.yml, so `domain: null` was no domain at all; and once the scalar writers refused such a value
+    themselves, this validator answering "valid" turned the request into an uncaught error. Guards both: the wrong
+    write, and the 500 that replaced it."""
+    knob = {"key": "domain", "type": "hostname"}
+    assert "another type" in validate_value(knob, value)
+    assert validate_value(knob, "example.test") is None
+    assert validate_value(knob, "sw-01.lab.example.test") is None
+
+
+def test_the_validators_and_the_writers_share_one_plain_scalar():
+    """`service/_validate.plain_scalar` IS `kontroll.yamlscalar.plain_scalar` — re-exported, not copied. Guards
+    the request-side rule and the generators' rule drifting into two definitions of "a plain word"."""
+    from kontroll import yamlscalar
+    assert plain_scalar is yamlscalar.plain_scalar

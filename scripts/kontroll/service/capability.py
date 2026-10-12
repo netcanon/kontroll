@@ -79,7 +79,10 @@ def suggest_view(cap, key, vectors=None, fleet=None, caps=None):
     with open(mp, encoding="utf-8") as fh:
         module = yaml.safe_load(fh) or {}
     collection = ((module.get("collections") or [{}])[0] or {}).get("name")
-    facts = probe.deep_probe(collection) if collection else None
+    try:
+        facts = probe.deep_probe(collection) if collection else None
+    except paths.RequestBoundaryError:
+        facts = None      # the class's module file names something that is not `namespace.name`: nothing to probe
     suggestion = suggest(cap, facts, vectors=vectors, caps=caps) if facts else None
     declared_here = declared(cap, collection, fleet, caps=caps) if collection else []
     offerable, reconfigurable, current = [], [], {}
