@@ -10,6 +10,15 @@
 - [ ] Generated artifacts regenerated (`gen-*.py`, never hand-edited)
 - [ ] Documentation only
 
+## Review loop
+
+Which loop this change gets — `docs/agent-workflow.md`, "Which loop a change gets". Tick one.
+
+- [ ] **Light** — it adds no route, request field, outbound client, container privilege, secret domain or
+      recipient rule; it does not change what reaches `main` without a human; `SECURITY.md` stays true as it is.
+      If it edits a file on the boundary list, say in one line why none of that applies:
+- [ ] **Full** — a security-boundary change. Boundary:
+
 ## Doc-sync checklist
 
 Audit CLAUDE.md's "Documentation Sync Checklist" — every row that applies to this change has

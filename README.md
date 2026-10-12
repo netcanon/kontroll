@@ -20,7 +20,8 @@ metrics, and encrypted secrets, each as an independently restartable component.
 | [docs/install-from-scratch.md](docs/install-from-scratch.md) | **The complete "stock VM → working instance" install** (bundle flow; no GitHub needed). |
 | [docs/SETUP.md](docs/SETUP.md) | First-run + continual config for developers with **repo/clone** access. |
 | [docs/engineering-standards.md](docs/engineering-standards.md) | Testing/docs/logging/security doctrine, distilled from the NetConfig project. |
-| [docs/agent-workflow.md](docs/agent-workflow.md) | How we run multi-agent reviews: read-only agents report into `docs/reviews/`, the main thread actuates. |
+| [docs/agent-workflow.md](docs/agent-workflow.md) | How we run multi-agent reviews: read-only agents report into `docs/reviews/`, the main thread actuates. Which review loop a change gets. |
+| [docs/adr/](docs/adr/README.md) | Decision records: what was decided, why, and what would change it — with the index of decisions, written and pending. |
 | `modules/` | Device-class registry — one self-describing `module.yml` per class. The fleet catalog. |
 | `instance/fleet.yml` | **The one knob:** which modules you run (pick-and-choose). |
 | `bootstrap.sh` | Stage 0: install ansible+git on a fresh node. |
