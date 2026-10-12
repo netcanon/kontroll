@@ -10,12 +10,18 @@
 # severity (design 22 §7):  modify (a value replaced — overwrite-confirm) < identity (a re-classify that
 # re-homes hosts / orphans creds — the type-to-confirm reconfig-identity-confirm). An `add` (first-set) is
 # NEVER upgraded — only a change to an EXISTING value carries the heavier gate (design 22 §10).
+#
+# The names are bounded in LENGTH like the path join their value ends up in (paths.component: sixty-four
+# characters): an unbounded pattern let a request store a name the next onboard of the class then refused. The
+# charset is narrower than the onboard field's (no hyphen, no leading digit): a class onboarded with such a group
+# or domain keeps it and stays editable — the dialog does not judge a value it reads back unchanged — and the
+# dialog cannot set one. `inventory_group` is additionally none of `all`, `ungrouped`, `localhost`.
 area: module-identity
 file: "modules/{key}/module.yml"
 knobs:
   - key: secrets_domain
     type: text
-    pattern: "[a-z][a-z0-9_]*"
+    pattern: "[a-z][a-z0-9_]{0,63}"
     reconfigurable: true
     severity: identity
     blast_radius: orphan-creds
@@ -25,7 +31,7 @@ knobs:
       creds from the NEW domain after promote, so re-encrypt them there (or the next run fails to authenticate).
   - key: inventory_group
     type: text
-    pattern: "[a-z][a-z0-9_]*"
+    pattern: "[a-z][a-z0-9_]{0,63}"
     reconfigurable: true
     severity: identity
     blast_radius: re-home-hosts
@@ -35,7 +41,7 @@ knobs:
       collection set will manage them after promote. Verify the new group's role fits the device.
   - key: backend
     type: text
-    pattern: "[a-z][a-z0-9_]*"
+    pattern: "[a-z][a-z0-9_]{0,63}"
     reconfigurable: true
     severity: identity
     blast_radius: re-connect
@@ -45,7 +51,7 @@ knobs:
       backend (wrong transport / missing creds) fails the next run.
   - key: role
     type: text
-    pattern: "[a-z][a-z0-9_]*"
+    pattern: "[a-z][a-z0-9_]{0,63}"
     reconfigurable: true
     severity: identity
     blast_radius: re-classify

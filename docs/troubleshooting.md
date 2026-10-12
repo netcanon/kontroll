@@ -76,8 +76,26 @@ re-ships from where it stopped rather than re-reading everything.
   (+ per-stream tiers); see the storage paradigm
   ([docs/reviews/2026-06-16-storage-logging/99-synthesis.md](reviews/2026-06-16-storage-logging/99-synthesis.md)).
 
+## 5. An answer that is not about your request — 409 `repository_data`
+
+An onboard, or an identity / capability / unit preview or apply, answers **409** with `code: repository_data`
+when what stops it is the repository's own data or layout. Nothing in the request is wrong: the remedy is the
+file or the layout. The sentence says where to look:
+
+| The sentence names | The cause | The remedy |
+|---|---|---|
+| a device class and `modules/<key>/module.yml`, with a rule | the class's module file holds a group, secrets domain, backend or role that is not a name (lower-case letters, digits, `_`, `-`; starting with a letter or digit; at most sixty-four characters; not a word YAML reads as another type), a group Ansible reserves (`all`, `ungrouped`, `localhost`), or — at an onboard or an identity edit — is not a mapping at all | correct that file; a group rename re-homes the class (move its hosts in `instance/inventory/onboarded-<key>.yml`, rename its `group_vars` file if it has one, regenerate, dry-run the deploy) |
+| a device class and a backend's credential field | a credential field is declared — in the class's `auth:` block or the backend's registry entry — with a name, or a host var, that is not an identifier, or as `inline` with no host var | correct the declaration |
+| a device class whose backend needs a `role:` | the class's backend — adopted from its module file, or chosen from the backend registry — names no role, and `backend_<name>` is not a name (too long, or outside the charset); or the registry entry's own `role` is not a name | give the backend a `role:` in its registry entry (`ansible/backends/<name>/backend.yml`), or correct the one it holds; for a class that already has a module file, a `role:` there works too |
+| a write target that does not resolve inside the repository | `instance/` or `modules/` is a symlink out of the write root, or `KONTROLL_WRITE_ROOT` points at another tree | make the directory a real directory of the write root (a bind mount is one), or fix the variable |
+
+The audit log has `repository-refuse what=<kind> route=<route>` for it — not `request-refuse`, which is a field
+the caller got wrong (422). `POST /onboard` has another 409, without a `code`: a drop-in that exists with
+different content; that one is retried with `overwrite`.
+
 ## See also
 - [logging-architecture.md](logging-architecture.md) — the layered design + the degrade-path source of truth
+- [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, and the refusal that is the repository's own
 - [observability/logging-capability-vector.md](observability/logging-capability-vector.md) — the logging capability
 - [../SECURITY.md](../SECURITY.md) **C12** — logs are a secret surface (label hygiene, mgmt-only, at-rest)
 - `dashboards/grafana/dashboards/logs.json` — the same signals as a Grafana pane

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from api.audit import read_audit
 from api.main import create_app
 from api.settings import Settings
-from kontroll import catalog, gitio
+from kontroll import catalog, gitio, paths
 from kontroll.service import actuation
 
 pytestmark = pytest.mark.integration
@@ -155,3 +155,21 @@ def test_create_is_503_when_no_token_configured(tmp_repo, monkeypatch):
     app = create_app(Settings(api_token=None, audit_log=str(tmp_repo / "audit.log")))
     with TestClient(app) as c:
         assert c.post("/actuation/create", json=BODY).status_code == 503
+
+
+def test_create_onto_a_target_that_does_not_confine_is_a_409(cre):
+    """A create whose descriptor target the confinement refuses answers 409 `repository_data`: no unit file, no
+    commit, and `repository-refuse what=path` in the audit log after the `actuation-create` line.
+
+    Guards the app-wide handler being the one answer for this caller of `confined()` too — never a 500, never a
+    refused field."""
+    proposed = cre.client.post("/actuation/create", headers=AUTH, json=BODY).json()
+
+    def refuse(rel_path):
+        raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
+    cre.monkeypatch.setattr(paths, "confined", refuse)
+    r = cre.client.post("/actuation/create", headers=AUTH, json=dict(BODY, apply=True, token=proposed["token"]))
+    assert r.status_code == 409 and r.json()["code"] == "repository_data", r.text
+    assert not _unit_file(cre).exists() and not any("commit" in c for c in cre.calls)
+    rows = read_audit(cre.audit_log, action="repository-refuse")
+    assert rows and "what=path" in rows[-1]["detail"] and "route=/actuation/create" in rows[-1]["detail"]

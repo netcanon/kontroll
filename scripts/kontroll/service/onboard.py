@@ -14,8 +14,8 @@ logs: blocks (#124); the inventory drop-in MERGES so a 2nd device of a class nev
 1st. A genuinely DIFFERENT class colliding on a key still hard-stops (WriteConflict) unless the
 operator deliberately Overwrites.
 The commit/push-canonical GATE stays in the CLI wrapper (galaxy.py cmd_onboard), exactly
-as the capture-exception exemplar keeps it. enable_in_fleet/_existing_groups live here as
-onboard-domain helpers. Credential VALUES flow through creds_to_set in memory only — the
+as the capture-exception exemplar keeps it. enable_in_fleet lives here as an
+onboard-domain helper. Credential VALUES flow through creds_to_set in memory only — the
 plan display shows var NAMES, never values, and they are never logged.
 """
 import logging
@@ -41,21 +41,33 @@ def _existing_module(key):
     baked ROOT, Phase-B Fork B) if it exists, else None. This is the SHIPPED/already-onboarded device-class we must
     REUSE rather than clobber when onboarding another device of the same class (#124): regenerating a minimal module
     here would strip the curated metrics:/backup:/logs: blocks. Resolved so a baked deploy sees an operator class in
-    the propose clone AND a pristine shipped class in the image; a malformed file degrades to None (treated as absent
-    → the normal generate path, which then no-clobbers)."""
+    the propose clone AND a pristine shipped class in the image; a file that cannot be read or parsed degrades to
+    None (treated as absent → the normal generate path, which then no-clobbers). A file that parses to something
+    other than a mapping — a list, a bare word — is neither absent nor a class: it is answered as the file it is
+    (RepositoryDataError), not as the AttributeError its first `.get` would be."""
     mp = paths.module_file(key)
     if not os.path.exists(mp):
         return None
     try:
         with open(mp, encoding="utf-8") as fh:
-            return yaml.safe_load(fh) or {}
+            doc = yaml.safe_load(fh)
     except (OSError, yaml.YAMLError):
         return None
+    if doc is None:
+        return {}
+    if not isinstance(doc, dict):
+        raise paths.RepositoryDataError(
+            "module file", "the %s device class's module file is not a mapping — correct modules/%s/module.yml"
+            % (key, key))
+    return doc
 
 
 def _module_collections(mod):
-    """The collection NAMES a module declares (modules/<key>/module.yml collections[].name), as a set."""
-    return {c.get("name") for c in (mod.get("collections") or []) if isinstance(c, dict)}
+    """The collection NAMES a module declares (modules/<key>/module.yml collections[].name), as a set; a block
+    that is not a list, and an entry whose name is not a string, declare none."""
+    block = mod.get("collections")
+    return {c["name"] for c in (block if isinstance(block, list) else [])
+            if isinstance(c, dict) and isinstance(c.get("name"), str)}
 
 
 _INLINE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,252}\Z")
@@ -71,6 +83,69 @@ def _plain_name(value, field):
     in the module file and then written bare by the generators that read it back."""
     if not plain_scalar(value):
         raise paths.RequestBoundaryError(field, _NOT_A_NAME % field)
+
+
+_ADOPTED = ("backend", "secrets_domain", "inventory_group", "role")
+
+
+def _adopted(module, field, key):
+    """A name the reuse path takes from an EXISTING module file instead of from the request (one of _ADOPTED).
+    It is held to the rule the request field of the same meaning is held to — one path component that YAML reads
+    as a string, and for the group not a name Ansible reserves — because it goes where that field would have gone:
+    a path, an inventory key, a host var Ansible templates, a lookup expression. Absent (or null) means "use the
+    request's own, or the registry's". Anything else that fails is the FILE's fault, never the caller's: a
+    RepositoryDataError that names the class, the key of the file and the RULE it breaks — the inner refusal's own
+    sentence, which names the key and the rule and never the value."""
+    value = module.get(field)
+    if value is None:
+        return None
+    try:
+        if field == "inventory_group":
+            paths.inventory_group(value, field)
+        else:
+            paths.component(value, field)
+        _plain_name(value, field)
+    except paths.RequestBoundaryError as refused:
+        raise paths.RepositoryDataError(
+            "module file", "the %s device class's module file: %s — correct modules/%s/module.yml"
+            % (key, refused, key)) from None
+    return value
+
+
+def _derived_role(backend, key, from_request):
+    """The role name for a backend no file names one for: `backend_<name>`. It is written into the module file
+    and ADOPTED from it by the next onboard of the class, so it is held to the adopted role's rule where it is
+    derived. A backend the request sent, or the plan adopted, has passed component(): only the length of the
+    derived name can fail. A registry entry's own name has passed nothing, so its derived name can fail the
+    charset as well. Whose fault it is depends on where the backend came from: the request's own field is refused
+    as that field; a backend the request did not send — adopted from the class's module file, or chosen from the
+    registry — is the declaring file's, and is answered as repository data, naming the class and never the
+    backend."""
+    role = "backend_%s" % backend
+    if paths.is_component(role):
+        return role
+    if from_request:
+        raise paths.RequestBoundaryError(
+            "backend", "backend is too long for the role name built from it (backend_<name>: 64 characters)")
+    raise paths.RepositoryDataError(
+        "backend", "the backend of the %s device class names no role, and no role name can be built from its own "
+        "name (backend_<name> must be 1-64 chars of [a-z0-9_-]) — give it a `role:` where it is declared (the "
+        "backend's registry entry, or the class's module file if that names the backend)" % key)
+
+
+def _role_of(bdef, backend, key, from_request):
+    """The role of a class no module file gives one: the registry entry's own, else the one derived from the
+    backend's name. Either is written into the module file and adopted by the next onboard, so either is held to
+    the adopted role's rule here; a registry entry whose role fails is repository data, naming the class only (a
+    registry NAME reached through the classifier has passed no validator)."""
+    role = bdef.get("role")
+    if role is None or role == "":
+        return _derived_role(backend, key, from_request)
+    if not (paths.is_component(role) and plain_scalar(role)):
+        raise paths.RepositoryDataError(
+            "backend", "the backend registry entry chosen for the %s device class holds a `role` that is not a "
+            "valid name — correct that entry (its backend.yml under ansible/backends/)" % key)
+    return role
 
 
 def _sops_ref(sops_expr, sops_key):
@@ -124,14 +199,15 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
     # `true` are legitimate host names, the inventory drop-in is serialized (quoted), and the generators that
     # render a host name by hand quote one that is not plain (kontroll.yamlscalar.word).
     _plain_name(key, "device-class key")
-    paths.component(group, "inventory group")
+    paths.inventory_group(group)                 # a component that is not `all`, `ungrouped` or `localhost`
     _plain_name(group, "inventory group")
     paths.hostname(host, "host")
     if host_name is not None:
-        paths.hostname(host_name, "host_name")
+        paths.inventory_host(host_name)          # none of RESERVED_HOST_NAMES (the group's, and the two loopbacks)
     paths.component(secrets, "secrets domain")
     _plain_name(secrets, "secrets domain")
-    if backend is not None:
+    backend_from_request = backend is not None
+    if backend_from_request:
         paths.component(backend, "backend")
         _plain_name(backend, "backend")
     backends = backends if backends is not None else catalog.load_backends()
@@ -149,16 +225,22 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
     module_reuse = existing is not None and collection in _module_collections(existing)
     if module_reuse:
         # Adopt the curated class's identity so the host attaches FAITHFULLY (its declared role/backend/domain/
-        # group), not a freshly re-classified one that could drift from the shipped module.
-        backend = backend or existing.get("backend")
-        secrets = existing.get("secrets_domain") or secrets
-        group = existing.get("inventory_group") or group
+        # group), not a freshly re-classified one that could drift from the shipped module. Each adopted name
+        # replaces a request field that was checked above with a file value nothing had checked — and the domain
+        # is formatted into a lookup EXPRESSION below, the role is a host var Ansible templates, the group is the
+        # drop-in's top-level key. So each one the plan TAKES is held to its field's rule here (the role just
+        # below, once the backend is known), long before any write (_adopted); a file that fails is not answered
+        # as a refused request.
+        backend = backend or _adopted(existing, "backend", key)
+        secrets = _adopted(existing, "secrets_domain", key) or secrets
+        group = _adopted(existing, "inventory_group", key) or group
 
     backend = backend or (predicate.classify(f, backends)[:1] or [None])[0]
     if not backend:
         return {"error": "no_backend"}
     bdef = next((b for b in backends if b["name"] == backend), {})
-    role = (existing.get("role") if module_reuse else None) or bdef.get("role", "backend_%s" % backend)
+    role = ((_adopted(existing, "role", key) if module_reuse else None)
+            or _role_of(bdef, backend, key, backend_from_request))
     version = catalog.local_installed().get(collection) or f["version"] or "0.0.0"
     params = {}
     if "network_os" in (bdef.get("requires") or []):
@@ -285,12 +367,27 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # pve-exporter uses for every node) → stored FLAT under its sops_stem so its consumer reads the exact name
         # (telemetry/pve.yml's secret_env_map {proxmox_api_user}…). A normal cred stays HOST-keyed so two onboarded
         # hosts never collide. Re-onboarding another node of the same domain re-sets the same shared key (idempotent).
-        # The stem is the backend registry's own name — or, for a TIER-B-derived field, an option name out of an
-        # installed module's argument_spec: bytes a third party published. It is formatted into a lookup EXPRESSION
-        # below, so it is an identifier or the onboard is refused (SECURITY.md C22); the name is not echoed.
+        # The stem is the name the backend registry or the class's module file declares (a TIER-B-derived field's
+        # stem is an option name `authspec` has already held to this rule). It is formatted into a lookup
+        # EXPRESSION below, so it is an identifier or the onboard is refused (SECURITY.md C22); the name is not
+        # echoed.
+        # `maps_to` is the NAME of the host var the field is written under. It is a key of the inventory drop-in,
+        # so it is an identifier too: no brace, no space, no line break, no value that is not a string. WHICH
+        # variable it names is the declaring file's to choose — a module's own `auth:` entry may name
+        # `ansible_connection` as the registry names `ansible_user` — and is not restricted here (SECURITY.md
+        # C22, limits). Neither name is anything the caller sent: the backend registry or the class's module
+        # file declared it (an option name out of an installed module that is not an identifier is not offered
+        # at all — authspec), so the refusal is the repository-data one and says where to look.
+        _where = ("declared for the %s device class (its module file's `auth:` block, or the %s backend's "
+                  "registry entry)" % (key, backend))
         stem = cf["sops_stem"]
         if not isinstance(stem, str) or not _STEM_RE.fullmatch(stem):
-            raise paths.RequestBoundaryError("credential field", "a credential field's name is not an identifier")
+            raise paths.RepositoryDataError(
+                "credential field", "a credential field %s has a name that is not an identifier" % _where)
+        maps_to = cf.get("maps_to")
+        if maps_to is not None and not (isinstance(maps_to, str) and _STEM_RE.fullmatch(maps_to)):
+            raise paths.RepositoryDataError(
+                "credential field", "a credential field %s maps to something that is not a variable name" % _where)
         sops_key = stem if cf.get("shared") else "%s_%s" % (cred_key, stem)
         if cf["kind"] == "ssh_key":
             # SSH KEY AUTH — the unified root seam. The PEM is SOPS-encrypted per host; the hostvar points at a 0600
@@ -320,8 +417,13 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             hostvars[tok_var] = _sops_ref(_sops, sops_key)
             creds_to_set[sops_key] = val
         elif cf.get("inline"):
-            # a non-secret literal hostvar (host/port/bool) — not SOPS, so the VALUE itself lands in the inventory
-            hostvars[cf["maps_to"]] = _inline_literal(val, cf["field"])
+            # a non-secret literal hostvar (host/port/bool) — not SOPS, so the VALUE itself lands in the inventory.
+            # It has nowhere else to go: an inline field with no host var would be written under the key `null`.
+            if not maps_to:
+                raise paths.RepositoryDataError(
+                    "credential field", "an inline credential field %s names no host var to be written under"
+                    % _where)
+            hostvars[maps_to] = _inline_literal(val, cf["field"])
         else:
             # SOPS-store the value, and wire a hostvar inline-lookup ONLY if the field maps to one. A shared
             # domain cred (proxmox exporter token) has NO maps_to — it is read from the SOPS domain by its consumer
@@ -382,10 +484,24 @@ def apply_onboard_plan(plan, overwrite=False):
     Prints progress and returns {"changed": bool, "paths": [repo-rel paths to git-add]}. A divergent existing
     module / a foreign inventory file raises gitio.WriteConflict unless `overwrite=True` (the GUI 'Overwrite'
     button / API `overwrite` flag — the deliberate, loudly-warned escape hatch)."""
+    # The drop-in targets this apply will WRITE, before the first write: a layout the confinement refuses must not
+    # leave half an onboard behind. A reuse writes no module file, so it does not ask about one.
+    for rel in ((plan["inv_path"],) if plan.get("module_reuse") else (plan["mod_path"], plan["inv_path"])):
+        paths.confined(rel)
     if plan.get("module_reuse"):
         print("  = reusing existing device-class %s (curated module kept; adding host only)" % plan["mod_path"])
         changed = False
     else:
+        # The READER's view (paths.module_file): on an install whose write root is not its code root a shipped
+        # class is not at the write target, and a new module written there would shadow it for every reader
+        # (#124). A one-root tree answers this through _write_new's own comparison; this makes the split layout
+        # give the same answer, before the first write. `overwrite` stays the deliberate way to shadow.
+        shipped = paths.module_file(plan["key"])
+        if (not overwrite and os.path.exists(shipped)
+                and os.path.realpath(shipped) != os.path.realpath(paths.confined(plan["mod_path"]))):
+            raise gitio.WriteConflict(
+                "%s already exists with different content — pick a new device-class key, "
+                "or use Overwrite to replace it" % plan["mod_path"])
         changed = gitio._write_new(plan["mod_path"], plan["module_text"], _MODULE_BANNER, overwrite=overwrite)
     group, gbody = next(iter(plan["host_block"].items()))
     changed |= gitio.write_inventory_host(plan["inv_path"], group, gbody.get("hosts") or {},
@@ -441,30 +557,3 @@ def enable_in_fleet(key):
     print("  + enabled %s in instance/fleet.yml" % key)
     return True
 
-
-def _existing_groups():
-    """Group names already declared in the inventory (hub + any drop-ins)."""
-    inv_dir = paths.resolve("ansible/inventory")
-    groups = set()
-
-    def _walk(node):
-        if not isinstance(node, dict):
-            return
-        for g, body in node.items():
-            groups.add(g)
-            if isinstance(body, dict) and isinstance(body.get("children"), dict):
-                _walk(body["children"])
-
-    for fn in os.listdir(inv_dir):
-        if fn.endswith((".yml", ".yaml")):
-            try:
-                doc = yaml.safe_load(open(os.path.join(inv_dir, fn), encoding="utf-8")) or {}
-            except yaml.YAMLError:
-                continue
-            if "all" in doc and isinstance(doc["all"], dict):
-                _walk(doc["all"].get("children") or {})
-            else:
-                _walk(doc)
-    groups.discard("hosts")
-    groups.discard("vars")
-    return groups

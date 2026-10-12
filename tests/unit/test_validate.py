@@ -224,3 +224,20 @@ def test_the_validators_and_the_writers_share_one_plain_scalar():
     the request-side rule and the generators' rule drifting into two definitions of "a plain word"."""
     from kontroll import yamlscalar
     assert plain_scalar is yamlscalar.plain_scalar
+
+
+@pytest.mark.parametrize("field", ["secrets_domain", "inventory_group", "backend", "role"])
+def test_identity_names_are_bounded_like_the_join(field):
+    """Each identity knob that holds a name accepts a sixty-four-character one and refuses a sixty-five-character
+    one — and `paths.is_component`, the rule of the join the name ends up in, agrees on both.
+
+    Guards a request storing a name the join then refuses: the knob's pattern had no length bound, so an
+    eighty-letter secrets domain was accepted, promoted into the module file, and the next onboard of that class
+    was refused at apply — for a field nobody had sent, after the inventory drop-in had been written (and the
+    fleet line, where the class was not enabled yet)."""
+    from kontroll import catalog, paths
+    doc = next(a for a in catalog.load_knob_descriptors() if a.get("area") == "module-identity")
+    knob = next(k for k in doc["knobs"] if k["key"] == field)
+    longest, too_long = "a" * 64, "a" * 65
+    assert validate_value(knob, longest) is None and paths.is_component(longest)
+    assert validate_value(knob, too_long) is not None and not paths.is_component(too_long)

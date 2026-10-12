@@ -93,7 +93,8 @@ def test_hostname_rejects_paths_metacharacters_bad_labels_and_length(value):
 def test_confined_accepts_repository_paths_and_refuses_climbing_out(tmp_path, monkeypatch):
     """`confined()` returns the absolute target for a repo-relative path and refuses an absolute path, a `..` that
     climbs out, a path that climbs out and back through a sibling, and a NUL — resolved against the REAL
-    write_root(), so a symlink pointing outside is refused too. The last check before every drop-in write."""
+    write_root(), so a symlink pointing outside is refused too. The last check before every drop-in write. The
+    refusal is `RepositoryDataError`: every caller passes a path the server built, so it is never a field's."""
     root = tmp_path / "repo"
     (root / "modules").mkdir(parents=True)
     monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(root))
@@ -101,7 +102,7 @@ def test_confined_accepts_repository_paths_and_refuses_climbing_out(tmp_path, mo
     assert inside == os.path.realpath(os.path.join(str(root), "modules", "x", "module.yml"))
     assert paths.confined("modules/../modules/y.yml").endswith("y.yml")          # climbs but stays inside
     for bad in ("../outside.yml", "modules/../../outside.yml", str(tmp_path / "abs.yml"), "a\x00b", "", None):
-        with pytest.raises(ValueError):
+        with pytest.raises(paths.RepositoryDataError):
             paths.confined(bad)
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -110,7 +111,7 @@ def test_confined_accepts_repository_paths_and_refuses_climbing_out(tmp_path, mo
         os.symlink(str(outside), str(link), target_is_directory=True)
     except (OSError, NotImplementedError):
         pytest.skip("symlinks need privileges on this host")
-    with pytest.raises(ValueError):
+    with pytest.raises(paths.RepositoryDataError):
         paths.confined("escape/evil.yml")
 
 
@@ -120,9 +121,9 @@ def test_write_new_and_write_inventory_host_go_through_confined(tmp_path, monkey
     root = tmp_path / "repo"
     root.mkdir()
     monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(root))
-    with pytest.raises(ValueError):
+    with pytest.raises(paths.RepositoryDataError):
         gitio._write_new("../evil.yml", "x: 1\n", "# banner\n")
-    with pytest.raises(ValueError):
+    with pytest.raises(paths.RepositoryDataError):
         gitio.write_inventory_host("../../evil.yml", "g", {"h": {}}, "# banner\n")
     assert not (tmp_path / "evil.yml").exists()
     assert gitio._write_new("modules/ok/module.yml", "x: 1\n", "# banner\n") is True
@@ -181,9 +182,6 @@ def test_a_refusal_names_its_field_and_is_still_a_value_error():
     with pytest.raises(paths.RequestBoundaryError) as e:
         paths.collection_fqcn("acme/edgeos")
     assert e.value.field == "collection"
-    with pytest.raises(paths.RequestBoundaryError) as e:
-        paths.confined("../out")
-    assert e.value.field == "path"
 
 
 MARKER = "Zz-refused-value-zZ"
@@ -193,8 +191,8 @@ MARKER = "Zz-refused-value-zZ"
     (lambda v: paths.component(v, "device-class key"), "device-class key"),
     (lambda v: paths.collection_fqcn(v), "collection"),
     (lambda v: paths.hostname(v + " x", "host"), "host"),
-    (lambda v: paths.confined("../" + v), "path"),
-], ids=["component", "collection_fqcn", "hostname", "confined"])
+    (lambda v: paths.inventory_group(v + " x"), "inventory group"),
+], ids=["component", "collection_fqcn", "hostname", "inventory_group"])
 def test_a_refusal_names_the_field_and_never_the_value(refuse, field):
     """The message of a refusal carries the FIELD and not the refused value, in any form. Guards the
     value travelling on in the message — to a service log that is shipped off the box, to an API client that logs
@@ -204,7 +202,7 @@ def test_a_refusal_names_the_field_and_never_the_value(refuse, field):
         refuse(MARKER)
     assert e.value.field == field
     assert "refused-value" not in str(e.value)
-    assert field in str(e.value) or field == "path"
+    assert field in str(e.value)
 
 
 def test_a_refusal_carries_a_code_derived_from_the_field():

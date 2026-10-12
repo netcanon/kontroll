@@ -123,6 +123,7 @@ tests/unit/          # pure functions, no I/O
   test_discovery.py          # discovery inbox (Rung 1a/2/3): registry load + declared offers reach opnsense/fortigate/routeros/cisco_ios + json_rows (results-key & bare-array, Bearer/Basic) + snmp arp_table (transport dispatch, snmp_walk byte-cap, MAC/suffix parse) + read-only 2-primitive fetcher surface + sweep parse/cap + read_inbox IP-diff/normalize + read-only-pin canary
   test_request_boundary.py   # C22: the request-field validators' accept/reject tables, the joins (the probe's argv, every plan builder), refusals that never quote the value
   test_api_audit.py          # one request value is one cell of one audit row: the shared flattener, and the API writer read back through a real file
+  test_repository_data.py    # C22: a name adopted from a module file, the reserved names at each seam, the scaffold's arguments, and the refusal that is the repository's own (409), never a field's
   test_yamlscalar.py         # may a string stand unquoted in a hand-formatted YAML line: every position a writer uses, exhaustively for short strings; the quoting fallback of the generators
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
   test_onboard_dryrun.py     # dry-run plans nothing; --apply mutates tmp repo idempotently

@@ -138,7 +138,10 @@ the **one** data-driven reconfigure dialog (`openReconfigureDialog` — the shar
   `backend`/`role`/`status` (`POST /api/identity/<key>` → `service/identity.py` → `upsert_top_level_key`,
   comment-preserving). An identity change is the heaviest tier — it **re-homes hosts / orphans creds** — so the
   `settings/module-identity.yml` descriptor upgrades it to `severity: identity`, gated by a **type-to-confirm**
-  (`reconfig-identity-confirm` — retype the new value); **at most one** identity key per proposal.
+  (`reconfig-identity-confirm` — retype the new value); **at most one** identity key per proposal. A new
+  `inventory_group` may not be `all`, `ungrouped` or `localhost`; a value the dialog reads back unchanged is not
+  judged, so a class whose file already holds such a group (or a name the knob would not accept today) can still
+  have its other keys edited.
 - **edit IP** (a per-host control) → `inventory-host` change of `ansible_host` (`POST /api/host/<key>/<host>` →
   `service/hostvars.py` → `gitio.owned_merge`, which lifts `write_inventory_host`'s silent `.update()` into a
   reported diff). MVP is `ansible_host` (validated by the P0a `ipv4` guard); the host's **templated cred-lookup

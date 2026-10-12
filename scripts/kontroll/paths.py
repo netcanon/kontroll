@@ -197,10 +197,11 @@ def overlay_target(rel):
 # Every request field that becomes a PATH COMPONENT (a device-class key, an actuation unit key, a secret domain, an
 # inventory group) or an INVENTORY KEY (a host name, an address) passes one of these at the service seam and again at
 # the join that uses it, and every DROP-IN write target passes confined() (the writers that do not are named in
-# SECURITY.md C22). A closed charset, not a denylist: a
-# value that passes cannot carry a separator, a `..`, a NUL, a newline or a YAML/shell metacharacter — and CodeQL's
-# "this path depends on a user-provided value" is answered once, here. Each raises RequestBoundaryError naming the
-# FIELD and the rule, never the value; the API and the GUI both answer 422, before any write.
+# SECURITY.md C22; confined() raises RepositoryDataError, because its refusal is never a field's). A closed
+# charset, not a denylist: a value that passes cannot carry a separator, a `..`, a NUL, a newline or a YAML/shell
+# metacharacter — and CodeQL's "this path depends on a user-provided value" is answered once, here. Each raises
+# RequestBoundaryError naming the FIELD and the rule, never the value; the API and the GUI both answer 422,
+# before any write.
 # The patterns are applied with fullmatch(). `$` also matches BEFORE a final newline, so `^…$` with match() says yes
 # to `cisco_ios\n` — a character the contract above excludes, through a pattern that looks closed. Each pattern
 # also ends in `\Z` (end of string, no newline exception), so a later `.match()` on one of them stays exact
@@ -235,6 +236,25 @@ class RequestBoundaryError(ValueError):
         return "invalid_%s" % re.sub(r"[^a-z0-9]+", "_", str(self.field).lower()).strip("_")
 
 
+class RepositoryDataError(Exception):
+    """The repository's OWN data or layout stopped a request: a module file whose adopted name is not a name, a
+    credential field that a registry or a module declares with a name that is not one, a backend that names no
+    role and whose name none can be built from (or whose registry entry holds a role that is not a name), a write
+    target that does not resolve under the write root. The
+    fault is not in the request, and the remedy is the file or the layout (a request can sometimes step around
+    it — by naming a backend itself — and the file stays wrong for the next caller): an operator fixes it.
+    Deliberately NOT a ValueError — a handler written for the planner's guards must not answer it as a refused
+    field (422, "your request is malformed", a `code` naming a field nobody sent). Each app maps it once, to 409
+    `repository_data`. `what` names the KIND of thing, for the audit line; the message says where to look and
+    which rule; neither ever carries the value."""
+    status = 409
+    code = "repository_data"
+
+    def __init__(self, what, message):
+        super().__init__(message)
+        self.what = what
+
+
 def component(value, what="name"):
     """ONE path component from a request field — a device-class key, a unit key, a secret domain, an inventory
     group: lowercase letters, digits, `_` and `-`; 1–64 chars; starting with a letter or digit. Returns the value."""
@@ -249,6 +269,32 @@ def is_component(value):
     listing, a fleet file's `enabled_modules` — which must SKIP a malformed entry: it is not a request field, and
     raising a request-boundary refusal for it would answer a request with a 422 that names a field nobody sent."""
     return isinstance(value, str) and _COMPONENT_RE.fullmatch(value) is not None
+
+
+# Names Ansible gives a meaning of its own: its two built-in groups and its implicit host. A device class attached
+# to `all` addresses every host wherever its group is a play's pattern — the logging wiring play, the backup
+# schedule's limit, an app-store unit's play — (`ungrouped`: every host that has no group); a group NAMED
+# `localhost` takes the name the control-node plays address, so those plays run on its hosts instead. A HOST of
+# one of these names does it from the other side: an inventory host named `localhost` replaces the implicit
+# control node, and with a host named `all` the pattern `all` addresses that one host (each measured).
+RESERVED_NAMES = frozenset({"all", "ungrouped", "localhost"})
+# A HOST has more names that are the control node to Ansible: its own list is ('127.0.0.1', 'localhost', '::1') —
+# an inventory host carrying any of them becomes the host every `hosts: localhost` play and every
+# `delegate_to: localhost` task is given (ansible.constants.LOCALHOST; measured). A group cannot carry them:
+# component() admits no dot and no colon. The comparison upstream is an exact string, so it is one here.
+RESERVED_HOST_NAMES = RESERVED_NAMES | {"127.0.0.1", "::1"}
+
+
+def inventory_group(value, what="inventory group"):
+    """An inventory group a device class may be ATTACHED to — the onboard field, the identity knob, the scaffold's
+    argument, a group adopted from a module file: one path component (component()) that is not a name in
+    RESERVED_NAMES. A closed deny-list, applied where a group is CHOSEN; a group merely read back by a generator
+    or a play is never refused. Returns the value."""
+    component(value, what)
+    if value in RESERVED_NAMES:
+        raise RequestBoundaryError(what, "%s is a name Ansible reserves (all, ungrouped, localhost) — choose the "
+                                   "functional group this device belongs to" % what)
+    return value
 
 
 def enabled_keys(fleet):
@@ -285,16 +331,35 @@ def hostname(value, what="host"):
     raise RequestBoundaryError(what, "%s is not an IP address (without a zone id) or an RFC-1123 hostname" % what)
 
 
+def inventory_host(value, what="host_name"):
+    """The NAME a host is given in the inventory, where a request chooses it: a hostname() that is not a name in
+    RESERVED_HOST_NAMES. The address (`ansible_host`) is not a name of the inventory and takes hostname() alone.
+    Returns the value."""
+    hostname(value, what)
+    if value in RESERVED_HOST_NAMES:
+        raise RequestBoundaryError(what, "%s is a name Ansible reserves (all, ungrouped, localhost, 127.0.0.1, "
+                                   "::1) — give the host a name of its own" % what)
+    return value
+
+
+_NOT_CONFINED = ("a write target does not resolve inside the repository (a symlink on the way, or a wrong write "
+                 "root) — a fault of the server's layout, not of the request")
+
+
 def confined(rel_path):
-    """The ABSOLUTE write target for a repo-relative path, or ValueError if it would land outside write_root(): an
-    absolute path, a `..` that climbs out, a NUL, or a symlink that points out. The last check before every drop-in
-    write (gitio._write_new / write_inventory_host, the actuation descriptor + values writers)."""
+    """The ABSOLUTE write target for a repo-relative path, or RepositoryDataError if it would land outside
+    write_root(): an absolute path, a `..` that climbs out, a NUL, or a symlink that points out. The last check
+    before every drop-in write (gitio._write_new / write_inventory_host, the actuation descriptor + values
+    writers, module_write_path). Every caller passes a path the SERVER built from parts that already passed a
+    validator, so a refusal here is never about a request field: it is the layout (under an `instance/` that is a
+    symlink out of the write root no DROP-IN is written; the fixed-path writers — the fleet file, a secret domain
+    — do not pass here and still write through the link) or a bug — and it is answered as such."""
     if not isinstance(rel_path, str) or not rel_path or os.path.isabs(rel_path) or "\x00" in rel_path:
-        raise RequestBoundaryError("path", "refusing to write outside the repository")
+        raise RepositoryDataError("path", _NOT_CONFINED)
     root = os.path.realpath(write_root())
     full = os.path.realpath(os.path.join(root, rel_path))
     if full != root and not full.startswith(root + os.sep):
-        raise RequestBoundaryError("path", "refusing to write outside the repository")
+        raise RepositoryDataError("path", _NOT_CONFINED)
     return full
 
 
@@ -305,7 +370,7 @@ def confined_file(rel_path):
     made inside another function (_overlay_file_present is the same idea for the overlay probe)."""
     try:
         confined(rel_path)
-    except ValueError:
+    except RepositoryDataError:
         return False
     root = os.path.realpath(write_root())
     full = os.path.realpath(os.path.join(root, rel_path))

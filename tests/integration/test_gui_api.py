@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 import app as gui          # gui/ is on sys.path (conftest); app.py is the GUI
-from kontroll import catalog, gitio, probe
+from kontroll import catalog, gitio, paths, probe
 
 pytestmark = pytest.mark.integration
 
@@ -1548,3 +1548,154 @@ def test_settings_domain_that_yaml_reads_as_another_type_is_a_422_on_propose_and
         r = client.post("/api/settings/domain", headers=_auth(), json=body)
         assert r.status_code == 422 and r.get_json()["error"] == "bad_value", (body, r.get_json())
     assert (settings_repo / "config" / "instance.yml").read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_gui_onboard_onto_a_damaged_class_is_a_409_before_any_write(client, onboard_env, monkeypatch, tmp_path,
+                                                                    apply):
+    """The GUI twin: a second device of a class whose module file holds a group Ansible reserves answers 409
+    `repository_data` with the file named — on the preview as on the apply — nothing is written or committed, and
+    the audit log holds `repository-refuse what=module file` and no refused REQUEST.
+
+    Guards the two apps drifting (a handler registered in one only is an uncaught exception, a bare 500, in the
+    other), a class on `all` taking a second host, and the audit log blaming the caller for a file's fault."""
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)        # rebuild against the temp path
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"acme.edgeos": "1.0.0"})
+    root = onboard_env.repo
+    (root / "modules" / "edgeos").mkdir(parents=True)
+    (root / "modules" / "edgeos" / "module.yml").write_text(yaml.safe_dump({
+        "key": "edgeos", "collections": [{"name": "acme.edgeos", "version": ">=1.0.0"}],
+        "role": "backend_netcommon_cli", "backend": "netcommon_cli", "inventory_group": "all",
+        "secrets_domain": "network"}), encoding="utf-8")
+    r = client.post("/api/onboard", headers=_auth(), json={
+        "collection": "acme.edgeos", "key": "edgeos", "group": "edge_router", "host": "192.0.2.50", "apply": apply})
+    assert r.status_code == 409, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["code"] == "repository_data" and "modules/edgeos/module.yml" in body["error"]
+    assert not (root / "ansible" / "inventory" / "onboarded-edgeos.yml").exists()
+    assert onboard_env.calls == []
+    audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
+    assert "repository-refuse" in audit and "what=module file" in audit
+    assert "request-refuse" not in audit and "onboard-refuse" not in audit
+
+
+def test_gui_commit_body_names_the_group_the_plan_adopted(client, onboard_env, monkeypatch):
+    """The GUI twin: a reuse-onboard that names another group than the class's own commits with the ADOPTED group
+    in its body. Guards a commit message that says a host is in a group it is not in."""
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"acme.edgeos": "1.0.0"})
+    root = onboard_env.repo
+    (root / "modules" / "edgeos").mkdir(parents=True)
+    (root / "modules" / "edgeos" / "module.yml").write_text(yaml.safe_dump({
+        "key": "edgeos", "collections": [{"name": "acme.edgeos", "version": ">=1.0.0"}],
+        "role": "backend_netcommon_cli", "backend": "netcommon_cli", "inventory_group": "edge_router",
+        "secrets_domain": "network"}), encoding="utf-8")
+    r = client.post("/api/onboard", headers=_auth(), json={
+        "collection": "acme.edgeos", "key": "edgeos", "group": "some_other_group", "host": "192.0.2.50",
+        "apply": True})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    commit = next(c for c in onboard_env.calls if c[:2] == ["git", "commit"])
+    assert any("in group edge_router" in word for word in commit)
+    assert not any("some_other_group" in word for word in commit)
+
+
+def test_gui_identity_refuses_a_reserved_group_as_bad_value(client, cap_class):
+    """`POST /api/identity/<key>` with `inventory_group: all` answers 422 `bad_value` and the module file is
+    unchanged. Guards the one request that could re-home an existing class onto every host."""
+    before = (cap_class / "modules" / "demo_sw" / "module.yml").read_text(encoding="utf-8")
+    r = client.post("/api/identity/demo_sw", headers=_auth(), json={"selection": {"values": {"inventory_group": "all"}}})
+    assert r.status_code == 422 and r.get_json()["error"] == "bad_value"
+    assert (cap_class / "modules" / "demo_sw" / "module.yml").read_text(encoding="utf-8") == before
+
+
+def test_gui_cred_fields_route_checks_the_domain_it_answers_with(client):
+    """The GUI's cred-fields route refuses a secrets domain that is not a name (422, the field's code). Guards the
+    same unread value as the API's route."""
+    r = client.get("/api/onboard/cred-fields?backend=netcommon_cli&secrets=../x", headers=_auth())
+    assert r.status_code == 422 and r.get_json()["code"] == "invalid_secrets_domain"
+
+
+@pytest.mark.parametrize("route,body", [
+    ("/api/capability/telemetry", {"key": "demo_sw", "selection": {"method": "host_node"}}),
+    ("/api/identity/demo_id", {"selection": {"values": dict(_IDENTITY_CUR, inventory_group="edge_firewall")}}),
+])
+@pytest.mark.parametrize("apply", [False, True], ids=["propose", "promote"])
+def test_gui_write_target_that_does_not_confine_is_a_409_on_every_reconfigure(client, cap_class, monkeypatch,
+                                                                              tmp_path, route, body, apply):
+    """The GUI twins: when the confinement refuses the module target, the capability and the identity routes
+    answer 409 `repository_data` on the propose and on the promote, the module files are unchanged, nothing is
+    committed, and the audit log holds `repository-refuse what=path` with the route.
+
+    Guards the next route-local `except` around a plan builder in the app that has several broad ones: the type
+    is mapped once, and none of them may turn it into a 500 carrying the sentence or into a refused field."""
+    calls = []
+    monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    _write_identity_module(cap_class)
+    if apply:
+        proposed = client.post(route, headers=_auth(), json=body)
+        assert proposed.status_code == 200, proposed.get_data(as_text=True)
+        body = dict(body, apply=True, token=proposed.get_json()["token"])
+    before = {p: p.read_text(encoding="utf-8") for p in (cap_class / "modules").rglob("module.yml")}
+
+    def refuse(rel_path):
+        raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
+    monkeypatch.setattr(paths, "confined", refuse)
+    r = client.post(route, headers=_auth(), json=body)
+    assert r.status_code == 409 and r.get_json()["code"] == "repository_data", r.get_data(as_text=True)
+    assert {p: p.read_text(encoding="utf-8") for p in (cap_class / "modules").rglob("module.yml")} == before
+    assert not any("commit" in c for c in calls)
+    audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
+    assert "repository-refuse" in audit and "what=path" in audit and "route=api_" in audit
+
+
+@pytest.mark.parametrize("word", ["localhost", "all", "127.0.0.1"])
+def test_gui_onboard_refuses_a_reserved_host_name(client, onboard_env, word):
+    """The GUI twin: `host_name` set to a name Ansible reserves — a loopback address is one — is a 422
+    `invalid_host_name`, and nothing is written or committed. Guards the two apps drifting on the field next to
+    the group."""
+    r = client.post("/api/onboard", headers=_auth(), json={
+        "collection": "acme.edgeos", "key": "edgeos", "group": "edge_router", "host": "192.0.2.50",
+        "host_name": word, "apply": True})
+    assert r.status_code == 422 and r.get_json()["code"] == "invalid_host_name", r.get_data(as_text=True)
+    assert not (onboard_env.repo / "modules" / "edgeos").exists() and onboard_env.calls == []
+
+
+@pytest.mark.parametrize("url,target", [
+    ("/api/classify?collection=acme.edgeos", "app.service_classify"),
+    ("/api/configurable?kind=module-identity&id=demo_sw", "kontroll.service.configurable.configurable_view"),
+    ("/api/capability/telemetry/suggest?key=demo_sw", "kontroll.service.capability.suggest_view"),
+    ("/api/units/acme.edgeos", "kontroll.service.units.service_units"),
+])
+def test_gui_read_route_answers_a_repository_refusal_as_one(client, monkeypatch, tmp_path, url, target):
+    """Each GUI read route that wraps its service call in a broad `except` answers a `RepositoryDataError` raised
+    below it as 409 `repository_data` — the app-wide handler's answer, with its audit line — and not as a
+    "failed" 500 that carries the exception's text.
+
+    Guards "mapped once per app" at the routes that could un-map it: no read path raises the type today, so only
+    this test notices when a re-raise is dropped and the `except Exception` that follows relabels the refusal."""
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+
+    def refuse(*args, **kwargs):
+        raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
+    monkeypatch.setattr(target, refuse)          # the name each route calls, where the route finds it
+    r = client.get(url, headers=_auth())
+    assert r.status_code == 409 and r.get_json()["code"] == "repository_data", r.get_data(as_text=True)
+    audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
+    assert "repository-refuse" in audit and "what=path" in audit
+
+
+def test_gui_identity_on_a_module_file_that_is_not_a_mapping_is_a_409(client, cap_class, monkeypatch, tmp_path):
+    """`POST /api/identity/<key>` for a class whose module file parses to a list answers 409 `repository_data`
+    with the file named and the audit line `repository-refuse what=module file`. Guards the 500 it was, and the
+    identity route answering a damaged file differently from the onboard route."""
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    (cap_class / "modules" / "demo_sw" / "module.yml").write_text("- key: demo_sw\n", encoding="utf-8")
+    r = client.post("/api/identity/demo_sw", headers=_auth(), json={"selection": {"values": {"role": "backend_x"}}})
+    assert r.status_code == 409 and r.get_json()["code"] == "repository_data", r.get_data(as_text=True)
+    assert "modules/demo_sw/module.yml" in r.get_json()["error"]
+    audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
+    assert "repository-refuse" in audit and "what=module file" in audit

@@ -71,8 +71,10 @@ def onboard(body: OnboardIn, request: Request,
             cat: Catalog = Depends(get_catalog)) -> dict:
     """Dry-run (default) returns the onboard PLAN; `apply: true` writes the module + drop-in host +
     fleet-enable + encrypts creds to SOPS, then commits + pushes the local canonical (audited).
-    404 if the collection isn't installed; 422 if no backend auto-matches. A re-onboard with no
-    change commits nothing. Bootstrap (install + live-verify) is a Semaphore task, not the API's."""
+    404 if the collection isn't installed; 422 if no backend auto-matches. A 409 is told apart by its `code`:
+    a drop-in that exists with different content (no `code`; retry with `overwrite`), or `repository_data` — the
+    repository's own data or layout stopped the request, and a retry will not help. A re-onboard with no change
+    commits nothing. Bootstrap (install + live-verify) is a Semaphore task, not the API's."""
     creds = body.creds
     if creds is None:   # legacy scalar caller — fold the four named creds into the F1 map (back-compat)
         creds = {f: v for f, v in (("username", body.username), ("password", body.password),
@@ -121,7 +123,7 @@ def onboard(body: OnboardIn, request: Request,
         applied["paths"],
         ["feat(onboard): %s -> %s via %s backend" % (body.collection, body.key, plan["backend"]),
          "Onboarded via the kontroll API (run_id %s). Host %s in group %s; staged — verify live." % (
-             principal.run_id, plan["host_name"], body.group)],
+             principal.run_id, plan["host_name"], plan["group"])],   # the plan's group: a reuse ADOPTS the class's
         push_origin=body.push, run_id=principal.run_id)   # staging network service ⇒ proposed/<run_id> (C10)
     if not git["committed"]:
         raise HTTPException(status_code=500, detail="commit failed; nothing pushed (repo may be dirty)")
@@ -148,6 +150,7 @@ def onboard_cred_fields(backend: str, secrets: str = "network", collection: Opti
     confined (MF-S1: only for a locally-installed collection; a Galaxy result is never introspected here) and
     fail-safe (MF-S6). Read-only, no creds: pure schema, auth-gated like the rest of this router; a read surface
     never gates onboarding (INVARIANT D*)."""
+    paths.component(secrets, "secrets domain")     # it is written into every descriptor this answers with
     bdef = next((b for b in cat.backends if b.get("name") == backend), {})
     module = catalog.module_for_collection(collection) if collection else None
     # TIER-B is worth the introspection only for an INSTALLED collection (MF-S1 also fail-closes inside authspec);

@@ -1412,7 +1412,7 @@ rewrote the item itself.
 `[a-z0-9][a-z0-9_-]{0,63}`), `paths.collection_fqcn()` (exactly `namespace.name`), `paths.hostname()` (an
 IP literal **without a zone id**, or an RFC-1123 hostname) — each a pattern that ends in `\Z` and is applied
 with `fullmatch()`, because `$` also matches before a final newline — called at the service seam
-(`build_onboard_plan`, and as the first statement of the telemetry, logging and backup plan builders, before
+(`build_onboard_plan`, `build_scaffold`, and first in the telemetry, logging and backup plan builders, before
 anything is read, probed or written) AND at every join (`paths.module_file`, the inventory drop-in path, the
 secret-domain path, the unit path, the probe's `ansible_collections/<ns>/<name>` walk and the `ansible-doc`
 argv word in `probe.deep_probe`), so a value that passed the seam is re-checked where it is used and a new
@@ -1460,14 +1460,44 @@ refuses, offline — also at the promote-time gate, which resolves without rende
 name is not `namespace.name` with each half starting with a letter or whose version holds anything but version
 characters, and a unit's trust statement whose signature policy is outside the closed set or whose digest is
 not one: the policy stands unquoted in the trust sidecar, where one with line breaks added an entry for another
-collection. A literal
-host var from a backend's or a class's `inline` credential field is a bool, an int or one plain word
-(`onboard._inline_literal`), because Ansible templates inventory variables; and a credential field's stem — for
-a field derived from an installed module's argument spec, an option name a third party published — is an
-identifier before it is formatted into the host var's lookup expression. A write of a drop-in file — a module
-file (at onboard and at each reconfigure), the inventory drop-in at onboard, a unit descriptor and its values —
-goes through `paths.confined()`, which resolves the target under `write_root()` and refuses an absolute path, a
-`..` that climbs out, a NUL or a symlink that points out. No other write a request reaches passes it. Written at a
+collection. A literal host var from a backend's or a class's `inline` credential field is a bool, an int or one
+plain word (`onboard._inline_literal`), because Ansible templates inventory variables; and a credential field's stem
+is an identifier before it is formatted into the host var's lookup expression — a field the backend registry or a
+class's module file declares with another name is refused once a value is given for it (as repository data, below),
+and an option of an installed module whose name is not an identifier is not offered as a field at all (`authspec`: a
+third party's spelling never refuses an onboard; where such an option is required or marked `no_log`, the module's
+set is not exact and is not used). Its `maps_to` — the NAME of the host var a value is written under — is an
+identifier too, wherever a value is written under it, and an `inline` field must name one (which host var is the
+declaring file's choice; see the limits below). The module-reuse path ADOPTS a class's group, secrets domain,
+backend and role from the module file already on disk; each one the plan takes is held, where it is taken and before
+anything is written, to the rule of the request field of the same meaning — for the role, which no request carries,
+the rule of a name (`onboard._adopted`): the adopted domain is formatted into that same lookup expression, the role
+is a host var Ansible templates, the group is the drop-in's top-level key. A module file that fails — or that is not
+a mapping at all — is not a request refusal (below). The role a class gets when its module file names none is the
+backend registry entry's own or, where that names none either, derived from the backend (`backend_<name>`); either
+is held to the same rule where it is taken, by the planner and by the scaffold (`onboard._role_of`) — a derived name
+that fails is a refusal of the `backend` field when the request sent that backend and repository data when a file
+did, as a registry role that is not a name is: what one request writes into a module file, the next one adopts. An
+inventory group a class is ATTACHED to — the onboard field, the identity knob, the scaffold's argument, a group
+adopted from a module file — is additionally none of `all`, `ungrouped`, `localhost` (`paths.inventory_group()`): a
+class's group is a play's pattern — `hosts:` in the logging wiring play and a unit's play, the limit of the backup
+schedule — where `all` addresses every host; and a group named `localhost` captures every play written for the
+control node (with such a group in the inventory, `hosts: localhost` addresses that group's hosts — measured). The
+NAME a request gives a host in the inventory is none of these either, nor `127.0.0.1` or `::1`, which are the same
+host to Ansible (`paths.inventory_host()`; the address is not a name of the inventory and is not held to this): an
+inventory host that carries one of Ansible's names for the control node replaces the implicit one, so every play
+written for the control node runs against it, and with a host named `all` the pattern `all` addresses that one host
+(each measured). A group merely read back is never refused by a generator or a play, and the identity dialog does
+not judge a value it reads back unchanged — only one that is chosen (a value the file holds as something other than
+a string — a number, a boolean — is read back as text and is judged). The identity knobs that hold a name are
+bounded in length like the join their value ends up in (sixty-four characters); their charset is narrower than the
+onboard field's (the limits below).
+A write of a drop-in file — a module file (at onboard, at each reconfigure and from the scaffold command), the
+inventory drop-in at onboard, a unit descriptor and its values — goes through `paths.confined()`, which resolves
+the target under `write_root()` and refuses an absolute path, a `..` that climbs out, a NUL or a symlink that
+points out (so in an `instance/` that is a symlink out of the write root the drop-in files — an inventory
+drop-in, a unit descriptor and its values — are refused, and the refusal says so; the files written at a fixed
+path, listed next, are written through it). No other write a request reaches passes it. Written at a
 fixed path: the fleet file, the instance file, the capture-exception file, the recipients file (`.sops.yaml`), the
 Homepage board's `services.yaml` and `settings.yaml`, the generated backup-schedule and Loki-retention files, and
 the git-ignored matrix cache. Written at a path whose one variable part is a name `paths.component()` has
@@ -1496,72 +1526,114 @@ one flattener (`kontroll/auditfmt.py`, shared by the API's writer and the GUI's)
 such a value cannot add a column or end the row early — a lone carriage return used to do the latter and hide
 the rest of the entry from the audit query. The Fleet index paints host names and addresses as text (the C19
 rule applied to inventory bytes).
-**Known gaps, each with a theme of its own:** `confined()` and the module-reuse path raise the same refusal
-for a value that is not a request field (a server-built path, a group adopted from a module file), which the
-handlers then answer as if a field had been refused — and the group, secrets domain, backend and role that path
-ADOPTS from an existing module file are not re-checked at all; `galaxy.py scaffold` (the CLI, no route) joins its
-`--key` into a path unvalidated; `gen-homepage.py` quotes a host name with its own escaping, which knows the
-newline and the carriage return and not the other line breaks, and `gen-logging.py` formats a host name and a
-class key into a string literal by hand — and nothing compiles the fragments that generator writes before Vector
-loads them: the gate checks them for freshness, and its `vector validate` reads the hand-written configuration
-only; a few other anchored patterns (the capture revision, the discovery tokens, several generators) are still
-applied with `match()`; the deploy-time generators — some of which also run inside the API and GUI workers after
-a capability change — and `bootstrap.yml` still join a raw `enabled_modules` entry into a path, and the Settings
-view lists the fleet as it is — it shows
-some malformed lines and cannot remove one that is not a string; a tree that ALREADY gives one board two names is
-fetched under the first only (a request can no longer create that); `validate_unit` does not look at a unit's
-collection or name, which are bounded where they are rendered rather than where the descriptor is validated; and
-`all`, which Ansible reserves, passes as an inventory group — as does NO group on a unit, which its play renders
-as `all`.
-**Limits written down here, not closed by this control's follow-up:** a lookup that finds nothing still quotes
-the unvalidated value it was asked for back to its sender (it belongs with the work on error bodies, which
-rewrites those answers). The Tier-cap compares group NAMES: a parent group an instance defines over
-`edge_firewall` or `core_switch` is neither name, and the play of a unit attached to it addresses them (C15-a,
-where the limit is written down with what would close it). In a hand-written descriptor a unit's `collection`
-need not be one that its `install.collections` pins, and a standalone unit's playbook path has no charset (both
-are C15-a's to close). `kontroll-init --fresh` writes `--mgmt-ip` and `--domain` as given into the instance file
-and into the Homepage board's `services.yaml` — at a shell, by the operator, into their own files — and
-`scripts/kontroll-promote.py`, when it is run by hand (as root, or as a member of the canonical's group), takes
-its `run_id` with no grammar at all — the promote play checks one before it calls the same script, with `match`,
-as the patterns above are. And `plain_scalar` is a rule about how YAML reads a word, not about how a person
-reads it: characters outside ASCII that format or space text — the bidirectional controls, a zero-width space,
-a no-break space — are plain words to it (the byte-order mark and the line and paragraph separators are not).
-No request field that is held to it admits a non-ASCII character today: every request charset is an ASCII
-class. Two sets are a descriptor author's to choose — a `text` knob's pattern and an `enum` knob's allow-list —
-and in Python `\w`, `\d`, `\S`, `.`, a negated class and a class under `(?i)` all reach beyond ASCII, so the
-rule is owed with the first knob that uses one. Free text that is serialized rather than formatted — a capture
-exception's subject and notes — is not held to the rule at all, and the serializer writes such a character as
-it is.
-**Proves:** `tests/unit/test_request_boundary.py` (every validator's accept/reject table including `..`,
-separators, NUL, a newline — also as the last character —, an IPv6 zone id, a 65th char and a 254-char
-hostname; `confined()` against `../`, absolute and climbing paths; the planner refusing before the probe is
-reached, also for a class key YAML reads as another type; `deep_probe` refusing before `ansible-doc` starts;
-the telemetry, logging, backup, identity, host-vars and suggest builders refusing before the filesystem is
-asked; a refusal's message never carrying the value; the enumerators skipping what is not a key; every onboard
-field that becomes a name refusing a keyword while a host name may be one; no boundary pattern accepting a
-trailing newline even with `match()`), `tests/unit/test_yamlscalar.py` (`plain_scalar`, `quoted` and `word`
-against every position a writer uses — exhaustively for short strings over the indicator alphabet, the
-line-break characters and the Unicode separators included), `tests/unit/test_validate.py` and
-`tests/unit/test_blockwrite.py` (the `text` and `hostname` knobs, the zone id on the address knobs, the writers
-failing closed on a keyword, a line break and a value that is not a scalar), `tests/unit/test_settings.py` and
-`tests/unit/test_identity.py` (a writer's refusal is `bad_value`, not an exception), `tests/unit/test_observe.py`
-and `tests/unit/test_fetch_dashboards.py` (the dashboards shape, including the name that rewrote a class's role
-with a newline and the one that rewrote the item with none, one name with two board ids, a board with two names,
-an existing file that is not the board, a damaged module file, and the fetch never writing over a file that is
-not the board it fetches), `tests/unit/test_gen_observability.py`, `tests/unit/test_gen_backup.py` and
-`tests/unit/test_actuation_service.py` (a group, host or key that is not a plain word is quoted and reads back
-as itself), `tests/unit/test_create_unit_service.py` and `tests/unit/test_actuation_registry.py` (the pin's
-charset and the digest; the rendered lockfile and sidecar reading back as what was resolved; a trust statement
-that cannot be rendered as itself, also at the promote gate; the keyring), `tests/unit/test_fleet.py` and
+A refusal that is not about anything the caller sent — a module file whose adopted name is not a name, or that is
+not a mapping (at the onboard and at an identity edit; the other readers of a module file — the capability dialogs,
+the Fleet index, classify, the cred-fields route — still answer 500 for such a file), a credential field that the
+backend registry or a module file declares with a name that is not one, a backend that names no role and has a name
+none can be derived from (or whose registry entry holds a role that is not a name), a write target that does not
+resolve under the write root — is a `RepositoryDataError`, deliberately NOT a `ValueError`, so a handler written for
+the planner's guards cannot answer it as a refused field. It is mapped once per app to **409** `repository_data`,
+with a sentence that says where to look — the class and its module file with the rule the value breaks, the class
+and the backend whose credential field it is, the class whose backend needs a `role:` or whose registry entry holds
+one to correct, or the layout — and never the value, and audited under an action of its own, `repository-refuse
+what=<kind> route=<route>` — never as a refused request (on the API an open route has no principal and writes no
+line, as for a field refusal; every GUI route is authenticated and writes one). `apply_onboard_plan` confines the
+drop-in targets it is going to write — the module file and the inventory drop-in of a new class, the inventory
+drop-in alone for a second device of an existing one — before its first write, so a drop-in the confinement refuses
+stops the apply with nothing written; the fixed-path writes that follow (the fleet file, a secret domain) are not
+confined; and nothing an apply has written — drop-in or fixed path — is rolled back when a later step fails. `POST
+/onboard` therefore has more than one 409, told apart by `code`: this one, and a drop-in that exists with different
+content (no `code`; the caller may retry with `overwrite`) — which, on an install whose write root is not its code
+root, includes a class the tool SHIPS under the same key for another collection: the apply asks the reader's view
+before its first write, because a module written there would shadow the shipped class for every reader.
+**Known gaps, each with a theme of its own:** `gen-homepage.py` quotes a host name with its own escaping, which
+knows the newline and the carriage return and not the other line breaks, and `gen-logging.py` formats a host name
+and a class key into a string literal by hand — and nothing compiles the fragments that generator writes before
+Vector loads them: the gate checks them for freshness, and its `vector validate` reads the hand-written
+configuration only; a few other anchored patterns (the capture revision, the discovery tokens, several generators)
+are still applied with `match()`; the deploy-time generators — some of which also run inside the API and GUI workers
+after a capability change — and `bootstrap.yml` still join a raw `enabled_modules` entry into a path, and the
+Settings view lists the fleet as it is — it shows some malformed lines and cannot remove one that is not a string; a
+tree that ALREADY gives one board two names is fetched under the first only (a request can no longer create that);
+`validate_unit` does not look at a unit's collection or name, which are bounded where they are rendered rather than
+where the descriptor is validated; and a UNIT may still target `all`, `ungrouped` or `localhost` (the class seams
+above refuse the names; the unit's validator does not look), or no group at all, which its play renders as `all`.
+**Limits written down here, not closed by this control's follow-up:** a lookup that finds nothing still quotes the
+unvalidated value it was asked for back to its sender (it belongs with the work on error bodies, which rewrites
+those answers). The Tier-cap compares group NAMES: a parent group an instance defines over `edge_firewall` or
+`core_switch` is neither name, and the play of a unit attached to it addresses them (C15-a, where the limit is
+written down with what would close it). In a hand-written descriptor a unit's `collection` need not be one that its
+`install.collections` pins, and a standalone unit's playbook path has no charset (both are C15-a's to close).
+`kontroll-init --fresh` writes `--mgmt-ip` and `--domain` as given into the instance file and into the Homepage
+board's `services.yaml` — at a shell, by the operator, into their own files — and `scripts/kontroll-promote.py`,
+when it is run by hand (as root, or as a member of the canonical's group), takes its `run_id` with no grammar at all
+— the promote play checks one before it calls the same script, with `match`, as the patterns above are. A credential
+field's `maps_to` is held to being a variable name, not to a set of variables: a module file's own `auth:` entry
+marked `inline` may write `ansible_connection`, `ansible_host` or any other host var of that class's hosts — a file
+an operator promotes, never a request. The class seams refuse the names a NAME can tell; a PARENT group the
+inventory defines (the example's `network_devices`, `compute`) is a group like any other to them, and a class
+attached to one addresses its children wherever the class's group is a pattern. The identity dialog's charset for a
+NEW value is narrower than the onboard field's — no hyphen, no leading digit: a class onboarded with such a group or
+domain keeps it and stays editable (a value read back unchanged is not judged), and the dialog cannot set one. The
+`backend` knob is bounded like a backend, not like the role derived from one: on a class whose module file names no
+`role:` — a hand-made file; the tool always writes one — a backend of fifty-seven to sixty-four characters is
+stored, and the next onboard answers 409, saying to give it a `role:`. A backend the classifier chooses is written
+into a new class's module file under the registry entry's own `name`, which nothing holds to the name rule: an entry
+named outside it yields a module file whose next onboard answers 409 (shipped data; a test holds every shipped
+entry's name). And `plain_scalar` is a rule about how YAML reads a word, not about how a person reads it: characters
+outside ASCII that format or space text — the bidirectional controls, a zero-width space, a no-break space — are
+plain words to it (the byte-order mark and the line and paragraph separators are not). No request field that is held
+to it admits a non-ASCII character today: every request charset is an ASCII class. Two sets are a descriptor
+author's to choose — a `text` knob's pattern and an `enum` knob's allow-list — and in Python `\w`, `\d`, `\S`, `.`,
+a negated class and a class under `(?i)` all reach beyond ASCII, so the rule is owed with the first knob that uses
+one. Free text that is serialized rather than formatted — a capture exception's subject and notes — is not held to
+the rule at all, and the serializer writes such a character as it is.
+**Proves:** `tests/unit/test_request_boundary.py` (every validator's accept/reject table including `..`, separators,
+NUL, a newline — also as the last character —, an IPv6 zone id, a 65th char and a 254-char hostname; `confined()`
+against `../`, absolute and climbing paths; the planner refusing before the probe is reached, also for a class key
+YAML reads as another type; `deep_probe` refusing before `ansible-doc` starts; the telemetry, logging, backup,
+identity, host-vars and suggest builders refusing before the filesystem is asked; a refusal's message never carrying
+the value; the enumerators skipping what is not a key; every onboard field that becomes a name refusing a keyword
+while a host name may be one; no boundary pattern accepting a trailing newline even with `match()`),
+`tests/unit/test_yamlscalar.py` (`plain_scalar`, `quoted` and `word` against every position a writer uses —
+exhaustively for short strings over the indicator alphabet, the line-break characters and the Unicode separators
+included), `tests/unit/test_validate.py` and `tests/unit/test_blockwrite.py` (the `text` and `hostname` knobs, the
+zone id on the address knobs, the identity names bounded like the join, the writers failing closed on a keyword, a
+line break and a value that is not a scalar), `tests/unit/test_settings.py` and `tests/unit/test_identity.py` (a
+writer's refusal is `bad_value`, not an exception; a value read back unchanged is not judged, one that is not a
+string still is; a module file that is not a mapping), `tests/unit/test_observe.py` and
+`tests/unit/test_fetch_dashboards.py` (the dashboards shape, including the name that rewrote a class's role with a
+newline and the one that rewrote the item with none, one name with two board ids, a board with two names, an
+existing file that is not the board, a damaged module file, and the fetch never writing over a file that is not the
+board it fetches), `tests/unit/test_gen_observability.py`, `tests/unit/test_gen_backup.py` and
+`tests/unit/test_actuation_service.py` (a group, host or key that is not a plain word is quoted and reads back as
+itself), `tests/unit/test_create_unit_service.py` and `tests/unit/test_actuation_registry.py` (the pin's charset and
+the digest; the rendered lockfile and sidecar reading back as what was resolved; a trust statement that cannot be
+rendered as itself, also at the promote gate; the keyring), `tests/unit/test_fleet.py` and
 `tests/unit/test_discovery.py` (the readers of a fleet file with a line that is not a key),
-`tests/unit/test_onboard_ssh_key.py` (the lookup
-expression, the inline literal at the planner's call site, the stem), the API pins in
-`tests/integration/test_api_onboard.py` (git never touched; the code in the body), `test_api.py` (the open
-routes, with no token and no audit line; a fleet line that is not a key) and `test_api_capability.py`, the GUI
-pins in `tests/integration/test_gui_api.py` (the capability, identity, host-vars, suggest and configurable
-routes), `tests/unit/test_api_audit.py` (one request value is one cell of one audit row, read back through the
-real file), `tests/unit/test_paths_overlay.py` (the overlay probe: a climbing path is absent, a symlinked
-overlay is found), and the C19 paint gate for the Fleet index.
+`tests/unit/test_onboard_ssh_key.py` (the lookup expression, the inline literal at the planner's call site, the
+stem), the API pins in `tests/integration/test_api_onboard.py` (git never touched; the code in the body),
+`test_api.py` (the open routes, with no token and no audit line; a fleet line that is not a key) and
+`test_api_capability.py`, the GUI pins in `tests/integration/test_gui_api.py` (the capability, identity, host-vars,
+suggest and configurable routes), `tests/unit/test_api_audit.py` (one request value is one cell of one audit row,
+read back through the real file), `tests/unit/test_paths_overlay.py` (the overlay probe: a climbing path is absent,
+a symlinked overlay is found), `tests/unit/test_repository_data.py` (each adopted name against the hostile table;
+the refusal naming the class, the file and the rule and never the value; a module file that is not a mapping; every
+shipped module and backend passing the adoption rule; a module file with a malformed block degrading, not crashing;
+a credential field's `maps_to`, and an inline field's host var; the role a class gets — the registry's own or the
+derived one — by whose fault, and that the role a new class's plan or the scaffold writes is one the next onboard
+adopts; that no word the identity knob accepts is refused by the adoption rule; the reserved names at every seam
+that chooses a group or names a host, the loopback addresses among the host's; the targets an apply asks about
+before its first write, and the apply not shadowing a class the code root ships; the scaffold refusing what the
+planner refuses, writing under the write root and not shadowing a shipped class; the recipe name; `confined()`'s
+type and the clean-up that must keep skipping what it cannot confine; the command line's one clean line, and the
+group and domain it names), `tests/unit/test_authspec.py` (an installed module's option whose name is not an
+identifier is not offered, and a module with a required or secret one is not used; a declared entry that is not
+well-formed is skipped), with the route pins in the integration files (409 `repository_data` on the preview and on
+the apply of both onboard routes; on the capability, identity, unit-create and unit-stage routes when a write target
+does not confine, and on the GUI's read routes: nothing written, the audit action and its kind; the identity route
+on a module file that is not a mapping; a reserved host name as a 422 on both apps), and the C19 paint gate for the
+Fleet index.
 
 ---
 ## Accepted risks / known limitations

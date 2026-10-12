@@ -17,6 +17,8 @@ import urllib.request
 
 import yaml
 
+from kontroll import paths
+
 BACKUP_PATH_RE = re.compile(r"/(backup|export|running.?config|saveconfig|config/(backup|save))\b", re.I)
 CHECK_PATH_RE = re.compile(r"/(status|health|healthz|ping|version|system(/status)?|api/v\d+/system)\b", re.I)
 
@@ -106,6 +108,8 @@ def build_openapi_recipe(spec, name=None, port=None):
     (title/version/port/base_path/auth/actuate/backup/check); text is the STAGED YAML to
     write. Heuristic (docs/capability-matrix.md §5.2): verify before relying on it."""
     info = spec.get("info") or {}
+    if name:
+        paths.component(name, "recipe name")     # it becomes a file name under the recipes directory
     name = name or re.sub(r"[^a-z0-9_]", "_", (info.get("title") or "api").lower())
     derived_port, base_path = derive_server(spec)
     if port:

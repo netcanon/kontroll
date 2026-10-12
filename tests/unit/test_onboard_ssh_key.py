@@ -216,17 +216,21 @@ def test_a_dotted_host_name_gets_a_lookup_that_resolves_one_key(monkeypatch):
 
 @pytest.mark.parametrize("stem", ["pw }} {{ lookup('pipe', 'id')", "pw']", "pw.x", "pw-x", "", "pw\n", None])
 def test_a_credential_field_whose_name_is_not_an_identifier_is_refused(monkeypatch, stem):
-    """A credential field's stem is formatted into the host var's lookup expression. For a field derived from an
-    installed module's argument_spec (F1 TIER-B) the stem is an option NAME a third party published — so it is an
-    identifier, or the onboard is refused before anything is rendered, with the field named and the name not echoed.
-    Guards a published option called `pw }} {{ … }}` becoming a Jinja expression in a host's inventory variables the
-    moment an operator fills that field in."""
+    """A credential field's stem is formatted into the host var's lookup expression, so it is an identifier or the
+    onboard is refused before anything is rendered — as REPOSITORY DATA (nothing the caller sent is wrong: the
+    backend registry or the class's module file declared the name; an installed module's option with such a name
+    is not offered as a field at all, tests/unit/test_authspec.py), saying where to look and not echoing the name.
+    Guards a declared field called `pw }} {{ … }}` becoming a Jinja expression in a host's inventory variables the
+    moment an operator fills that field in — and the refusal being answered as a field the operator got wrong."""
     monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"fields": [
         {"field": "password", "kind": "password", "label": "password", "maps_to": "ansible_password",
          "sops_stem": stem, "secret": True, "required": False}]})
-    with pytest.raises(ValueError) as e:
+    from kontroll import paths
+    with pytest.raises(paths.RepositoryDataError) as e:
         _plan(monkeypatch, password="pw")
-    assert getattr(e.value, "field", None) == "credential field" and "lookup" not in str(e.value)
+    assert e.value.what == "credential field" and "lookup" not in str(e.value)
+    assert "device class" in str(e.value) and "registry entry" in str(e.value)      # where to look
+    assert not isinstance(e.value, ValueError)
 
 
 def test_an_inline_credential_field_reaches_the_inventory_only_as_a_plain_word(monkeypatch):

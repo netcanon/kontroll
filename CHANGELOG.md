@@ -11,6 +11,114 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(service): a name the server takes on is held to its field's rule — and a file that fails is not a refused request (C22) (2026-10-12)
+
+Onboarding a second device of an existing class ADOPTS that class's inventory group, secrets domain, backend and
+role from its module file. The request's own fields were checked; the file's values that replaced them — and the
+role, which no request carries — were not. The adopted domain is formatted into a lookup expression in every
+credential host var, the role is a host var Ansible templates, the group is the drop-in's top-level key.
+
+- **Each adopted name the plan takes is held to the rule of the request field of the same meaning, where it is
+  taken** (`onboard._adopted`), at the plan and before any write. A credential field's `maps_to`, the NAME of
+  the host var a value is written under, is an identifier, so it cannot carry a brace, a space or a line break,
+  and an `inline` field must name one. WHICH host var a class's credential field writes is still the module
+  file's to choose (`ansible_connection` is an identifier).
+- **One request could store a name the next one refused.** The identity knobs that hold a name had no length
+  bound; the path join stops at sixty-four characters. An eighty-letter secrets domain was accepted and promoted,
+  and the next onboard of that class answered 422 `invalid_secret_domain` — a field the caller never sent —
+  **after** the inventory drop-in had been written. The knobs are bounded like the join now. So is the role an
+  onboard or the scaffold gives a new class — the backend registry entry's own, or the one derived from a
+  backend no entry names a role for (`backend_<name>`): a backend too long to derive a name from is refused as
+  the `backend` field when the request sent it, and as repository data when a file did. Tests hold both as
+  properties: no word the identity knobs accept is refused by the adoption rule, and the role a new class's plan
+  or the scaffold writes — the registry's own or a derived one — is a role the next onboard adopts.
+- **A file that fails is answered as a file that fails.** `paths.RepositoryDataError` — the repository's own data or
+  layout stopped the request: a module file's adopted name (or, at the onboard and at an identity edit, a module
+  file that is not a mapping, which was a 500 there — the other readers of a module file, the capability dialogs,
+  the Fleet index, classify and the cred-fields route among them, still answer 500 for such a file), a credential
+  field's declared name, a backend that names no role and has a name none can be derived from (or whose registry
+  entry holds a role that is not a name), a write target that does not resolve inside the repository. Both apps
+  answer **409** `repository_data` with a sentence that says where to look and which rule (never the value) and
+  audit `repository-refuse what=<kind> route=<route>`. Before, the ones that were refused at all — a write target, a
+  module file's domain when a credential was being stored, a credential field's name — were a 422 with a `code`
+  naming a field (`invalid_path`, `invalid_secret_domain`, `invalid_credential_field`) and an audit line recording a
+  refused request; an adopted group, backend or role was not looked at. `apply_onboard_plan` asks about the drop-in
+  targets it is going to write before its first write.
+- **`all`, `ungrouped` and `localhost` are refused as a device class's group** wherever one is chosen — the
+  onboard field, the identity knob (a GUI credential could re-home an existing class onto `all` with one staged
+  edit), the scaffold, an adopted group — **and, with `127.0.0.1` and `::1`, as the NAME a request gives a host
+  in the inventory** (`host_name`; the address is not a name). A class's group is a play's pattern: `hosts:` in
+  the logging wiring play and a unit's play, the limit of the backup schedule. Measured with throwaway
+  inventories and ansible-core: a group named `localhost` makes `hosts: localhost` address that group's hosts; an
+  inventory HOST named `localhost`, `127.0.0.1` or `::1` — Ansible's own names for the control node — replaces
+  the implicit one, so every play written for the control node runs against the device; and with a host named
+  `all` the pattern `all` addresses that one host. A group that is only read back — by a generator or a play —
+  is never refused.
+- **`galaxy.py scaffold`** holds `--key`, `--group`, `--secrets` and `--backend` to the planner's rules (a
+  `--key ../../x` used to write outside the repository), writes under the write root, not the code root, and
+  refuses a key whose class the code root ships (a stub in the write root would shadow it);
+  **`galaxy.py openapi --name`** is one path component. **The onboard's apply** gives the same answer where the
+  write root is not the code root and does not hold a class the code root ships (a clone older than its image):
+  under that class's key, for another collection, it is the write conflict it already was wherever the write root
+  holds the class, before anything is written (it used to write a module that shadowed the shipped class for
+  every reader; `overwrite` remains the deliberate way).
+- The cred-fields route of each app checks the secrets domain it answers with. A reuse-onboard's commit body —
+  on both routes and from `galaxy.py onboard` — names the group the plan ADOPTED, not the one the request sent,
+  and the command line prints the adopted secrets file. An option of an installed module whose name is not an
+  identifier is no longer offered as a credential field, and a module with a required or `no_log` option of that
+  kind is not used for the exact set at all (it used to refuse the onboard that asked for `deep`). A declared
+  `auth:` entry whose `field` or `kind` is not a string is skipped like any other malformed entry, one whose
+  `auth_set`, `group` or `help` is not a string is used without it, and — at the onboard — a `collections` block
+  that is not a list declares none (each was a 500 there; the cred-fields route still answers 500 for such a
+  block).
+
+**Before you upgrade — what an instance that already exists can meet.** Nothing below affects a deploy, a
+generator, a scheduled run or a capability dialog of a healthy tree: only an onboard, the identity dialog, the
+command-line verbs named last, and a client or a query that keyed on the old codes.
+
+- **A module file whose group, secrets domain, backend or role is not a name by the onboard's rule** — lower-case
+  letters, digits, `_` and `-`, at most sixty-four characters, starting with a letter or digit, and not a word
+  YAML reads as another type. A hand-edited `inventory_group: Core_Switch`, a group or a role with a dot: the
+  second onboard of such a class used to succeed and now answers 409 until the file is corrected; the answer
+  names the class, the key and the rule. Renaming a **group** re-homes the class: move its hosts under the new
+  key in `instance/inventory/onboarded-<key>.yml`, rename its `group_vars` file if it has one, regenerate
+  (`gen-observability.py`, `gen-logging.py`, `gen-backup.py`, `gen-homepage.py`) and dry-run the deploy.
+  Renaming a **role** means renaming the role directory too. An empty string, `0` or `false` used to mean "not
+  stated"; only an absent key or `null` does now. No shipped module file is affected.
+- **A class that already sits on `all`, `ungrouped` or `localhost`**, or whose file holds a name longer than the
+  bound, keeps deploying and keeps its dialogs: the identity dialog does not judge a value it reads back
+  unchanged, so its other keys stay editable. Its next onboard answers 409 until the file is corrected.
+- **Codes.** `invalid_path` and `invalid_credential_field` are no longer sent by anything. `invalid_secret_domain`
+  is still the 422 of the secrets routes' own `domain` field; an onboard no longer sends it. `POST /onboard` now
+  has more than one 409: a script that treats every 409 from it as "the file exists, retry with `overwrite`"
+  must look at `code` — `repository_data` is not a conflict and `overwrite` does not help. (The page keys on
+  `conflict`, not on the status.)
+- **Audit.** A query for `request-refuse` or `onboard-refuse` no longer returns these causes; they are
+  `repository-refuse what=module file|credential field|backend|path`. On an apply, an `onboard-apply` line can
+  now be followed by `repository-refuse` and no `onboard-result`: nothing was written.
+- **A tree whose `instance/` (or `modules/`) is a symlink out of the write root.** It is still read. An onboard
+  apply of a new class and an app-store unit were already refused there (422 `invalid_path`, after the module file
+  had been written); they answer 409 now, before anything is written. An onboard's preview still succeeds — its
+  refusal comes at apply; an identity or capability preview is refused already. The remedy is the layout: make the
+  directory a real directory of the write root (a bind mount is one; a symlink is not), or point
+  `KONTROLL_WRITE_ROOT` at the tree that really holds it.
+- **`galaxy.py scaffold --key/--group/--secrets/--backend` and `galaxy.py openapi --name`** refuse a capital
+  letter, a dot, a space and a leading underscore (`--name Radarr`, `--name radarr.v3`). A name derived from the
+  specification's title is unchanged. **`host_name: localhost`** (or `127.0.0.1`, `::1`, `all`, `ungrouped`) is
+  refused; a host that already has such a name in an inventory is not touched, but onboarding it again under
+  that name is refused — give it another name and remove the old entry by hand.
+- **An install whose write root is apart from its code root, where the write root lacks a class the image
+  ships** (the clone was made from a canonical older than the image, or the class's directory was removed from
+  it): an onboard under that class's key for another collection used to succeed and replace the class for every
+  reader; it is the 409 conflict now that it already was where the write root holds the class — the usual case,
+  since the clone is made from the canonical and the canonical carries `modules/`. If it happened on your
+  instance, `modules/<key>/module.yml` in the write root names another collection than the shipped file of that
+  key does.
+
+An unused helper, `onboard._existing_groups`, is removed. Still open and listed in C22: a unit may target a
+reserved name or no group (its own pull request); a parent group the inventory defines is a group like any other
+to the class seams; which host var a module file's credential field writes is the file's to choose.
+
 ### docs(security): C22 says which writes are confined, and its known gaps say what is true (2026-10-12)
 
 No behaviour changes. Control C22 of `SECURITY.md` ends with a list of its own known gaps; the design run for

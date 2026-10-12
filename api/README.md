@@ -54,18 +54,24 @@ Deploy: `ansible-playbook playbooks/deploy-stack.yml -e '{"stack_services":["api
 
 ## Auth (privileged routes)
 
-The privileged routes are **fail-closed**: they require a Bearer token matching `KONTROLL_API_TOKEN`
-(SOPS-backed at deploy, like the GUI's `GUI_PASSWORD`); **unset ⇒ those routes are disabled (503)**,
-never open. The token is compared constant-time. Every privileged call is **audited** — an
-append-only, size-rotated TSV line (`ts, user, ip, action, run_id, detail`, never a credential) at
-`KONTROLL_API_AUDIT_LOG` — and the audit write is **fail-closed**: a mutation that can't be audited is
-refused (503). Each request carries a `kontroll_run_id` (in the response + the audit line). C9 of
-[SECURITY.md](../SECURITY.md). A request field that is not a closed charset is answered **422** with a `code`
-derived from the field (`invalid_collection`, `invalid_device_class_key`, …) and a message that never quotes the
-value; a privileged refusal leaves a best-effort `request-refuse` line (nothing was mutated), an open route writes
-none (C22). On `POST /onboard` the line is `onboard-refuse`, with `reason=request-boundary field=<name>` for a
-refused field and `reason=planner-guard` (body `code: invalid_request`) for a planner refusal that is not about
-one field, such as a partially filled credential set.
+The privileged routes are **fail-closed**: they require a Bearer token matching `KONTROLL_API_TOKEN` (SOPS-backed at
+deploy, like the GUI's `GUI_PASSWORD`); **unset ⇒ those routes are disabled (503)**, never open. The token is
+compared constant-time. Every privileged call is **audited** — an append-only, size-rotated TSV line (`ts, user, ip,
+action, run_id, detail`, never a credential) at `KONTROLL_API_AUDIT_LOG` — and the audit write is **fail-closed**: a
+mutation that can't be audited is refused (503). Each request carries a `kontroll_run_id` (in the response + the
+audit line). C9 of [SECURITY.md](../SECURITY.md). A request field that is not a closed charset is answered **422**
+with a `code` derived from the field (`invalid_collection`, `invalid_device_class_key`, …) and a message that never
+quotes the value; a privileged refusal leaves a best-effort `request-refuse` line (nothing was mutated), an open
+route writes none (C22). On `POST /onboard` the line is `onboard-refuse`, with `reason=request-boundary
+field=<name>` for a refused field and `reason=planner-guard` (body `code: invalid_request`) for a planner refusal
+that is not about one field, such as a partially filled credential set. When what stops a request is the
+repository's own data or layout — a class's module file holds a group, domain, backend or role that is not a name; a
+credential field is declared with a name that is not one; a backend names no role and none can be derived from its
+name (or its registry entry holds a role that is not a name); a write target does not resolve inside the repository
+— the answer is **409** `repository_data` with a sentence that says where to look, and the audit action is
+`repository-refuse`: nothing in the request is wrong, and the remedy is the file or the layout. `POST /onboard`'s
+other 409 — a drop-in that exists with different content, answered without a `code` and retried with `overwrite` —
+is a different answer: key on `code`, not on the status.
 
 ```bash
 export KONTROLL_API_TOKEN=…          # at deploy, sourced from SOPS like GUI_PASSWORD
