@@ -305,8 +305,8 @@ def test_sidecar_defaults_every_module_collection_to_adaptive():
 
 def test_sidecar_attaches_a_unit_required_policy_and_sha256(tmp_path):
     """A unit declaring signature: required (+ an optional sha256) attaches that policy to ITS collection in the
-    sidecar; a module collection alongside stays adaptive. Guards the per-unit opt-in ratchet riding the generated
-    sidecar (never the lockfile, which stays policy-free)."""
+    sidecar; a module collection alongside stays adaptive. Guards the declared word reaching the generated sidecar
+    as itself (never the lockfile, which stays policy-free) — the sidecar is where the provenance view reads it."""
     digest = "a" * 64
     _write_unit(tmp_path, "u-req", install={"collections": [{"name": "cisco.ios", "version": "==8.0.4"}],
                 "provenance": {"source": "galaxy", "signature": "required", "sha256": digest}})

@@ -11,6 +11,36 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs(security): `signature: required` is a declaration — C15-a says what it does today, and a warning stops saying the opposite (2026-10-12)
+
+No install behaviour changes. Several texts said that a collection's `required` policy fails the install when no
+signature is served: C15-a ("`required` (fail-on-absence) is an opt-in ratchet"), the comment in the unit schema's
+example (which also said `none` drops the signature layer), and a warning `gen-requirements.py` prints for a
+fleet-wide `signature_policy: required` ("this FAILS every install"). None of that is so.
+`scripts/install-collections.py` builds one command line whatever the policy says — with a keyring file,
+`--required-valid-signature-count all` and the two ignored status codes, never the `+`-prefixed count that fails
+on absence; without one, a plain install. The policy is written into the trust sidecar, counted in the wrapper's
+summary line and shown by the provenance view; nothing else reads it. Found by the read of the previous entry's
+change, when its first fix leaned on the word.
+
+- **C15-a now says so**, and says what follows for the **Tier-cap**: "a unit aimed at the edge firewall or the
+  core switch must set `signature: required`" is a rule about what a descriptor *declares*, checked in
+  `tests/validate` and by the create route and not by bootstrap, deploy or promote. A unit written outside the
+  create route that declares it passes the cap, and its collection — unsigned, on public Galaxy — installs like
+  any other. The create route does not lean on the word: it takes no signature, writes `adaptive`, and refuses a
+  class on those two groups with 403. Also written down: the cap does not ask which collection a unit installs,
+  so a unit aimed elsewhere may pin one a guarded class uses. All of it is a known limit that nobody has accepted;
+  whether such a unit may reach those two groups before `required` is enforced is a decision still open.
+- **The provenance view paints `signed`** for a collection that is declared `required` while a keyring file is
+  held. It has not seen a signature. C15-a says that too; the view itself is not changed here.
+- **The signature layer is described as what it is: dormant.** No keyring is provisioned, so no install has run
+  with the signature flags; C15-a no longer says an unknown key is tolerated or that a keyring is auto-provisioned.
+- **The generator's warning** for a fleet-wide `required` now says what the setting does (it is recorded, not
+  enforced, and a keyring file turns the view green) instead of predicting a failure that does not happen. The
+  line is printed to stderr; nothing parses it.
+- The two "un-defer trigger" sentences say that the ratchet has to be built, and C15-a's residual no longer says
+  the Tier-cap keeps the edge firewall and the core switch out of it.
+
 ### fix(actuation): a unit descriptor's collection and name are checked where the descriptor is validated (C22) (2026-10-12)
 
 `validate_unit` asked of `unit.collection` and `unit.name` only that they be there. The create route checked its

@@ -27,7 +27,7 @@ INSTALLABLE = ("role", "collection_playbook")
 SOURCES = ("galaxy", "git")
 SIGNATURES = ("required", "adaptive", "none")   # adaptive = verify-if-served/pass-if-absent (the brick-proof default)
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-HIGH_BLAST_GROUPS = ("edge_firewall", "core_switch")   # the Tier-cap: unverified provenance may not reach these
+HIGH_BLAST_GROUPS = ("edge_firewall", "core_switch")   # the Tier-cap: a unit must DECLARE `required` to name these
 BLAST = ("this-device", "VLAN", "LAN", "WAN", "all")
 KEY_RE = re.compile(r"^[a-z][a-z0-9-]*\Z")
 # What a unit RUNS, by name: a playbook stem or a role name of its collection. One rule with two consumers — this

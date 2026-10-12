@@ -40,7 +40,8 @@ def _pin_kind(version):
 
 def fleet_provenance():
     """The fleet's per-collection install PROVENANCE (read-only, MF-5). Each collection is classified `signed`
-    (green — policy `required` AND a keyring is held, so a served signature is verified-or-fail) or `unsigned-pinned`
+    (green — its declared policy is `required` AND a keyring file is held; a declaration plus a file, not a
+    signature this view or any install has checked — SECURITY.md C15-a) or `unsigned-pinned`
     (amber — verified by the pin + sha256 checksum ONLY, no signature; the current 0-signature fleet);
     `digest_recorded` is whether L2b has TOFU-bound a sha256 for it. Returns `{available, default_policy,
     keyring_present, collections, summary}`; `available: false` when the trust sidecar isn't generated yet (a fresh
