@@ -152,7 +152,8 @@ def test_stage_is_503_when_no_token_configured(tmp_repo, monkeypatch):
 
 def test_stage_targets_proposed_ref_when_staging(act, monkeypatch):
     """With KONTROLL_STAGE_PUSHES set (the deployed staging posture), the push targets proposed/<run_id> — never
-    main (C10). Guards the load-bearing two-key property: a leaked token can only PARK a rejectable proposal."""
+    main (C10). Guards the load-bearing two-key property: a leaked token can only STAGE a proposal — it cannot
+    promote one."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     proposed = act.client.post("/actuation/backup-ios", headers=AUTH, json={"values": {"mode": "safe"}}).json()
     r = act.client.post("/actuation/backup-ios", headers=AUTH,

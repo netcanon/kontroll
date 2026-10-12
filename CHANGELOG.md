@@ -11,6 +11,43 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs: name the condition, not the default — the privileged tier's sentences say `api_privileged`, and one about the canonical's mount is corrected (2026-10-12)
+
+No behaviour changes: documents, comments and docstrings.
+
+Many sentences described the privileged tier by its **default** — "deployed read-only by default", "(default
+off)", "read-only until armed", "the flag default is false", C9's "Deployed read-only", the "(gated; default
+off)" in the headings of C10 and C11. A default is a fact about one `deploy-stack.yml`;
+the rule those sentences are about is a **condition**: without `api_privileged` no token is rendered, the content
+clones stay root-owned, the canonical is mounted `:ro`, and the privileged routes answer 503. They now name the
+condition, and the default is stated once — [privileged-mutation-enablement.md](docs/privileged-mutation-enablement.md)
+§3 says which value the public tree ships and names the `api_privileged:` line of the deploy play that sets it. A
+sentence written this way stays true on an edition whose deploy play ships another default, so where the
+permissive edition has nothing to add, it can carry the public line unchanged.
+
+- **Corrected, because it was not true:** [trust-mode.md](docs/trust-mode.md) and SECURITY.md C10 said that in
+  both postures "the canonical stays `:ro`" to the network service, and listed "the `:ro` RCE backstop on the
+  service side" among what bounds `solo`. Staging needs the privileged tier, and with it armed the canonical is
+  mounted `:rw` into the API, the GUI and the runner — what keeps the service's pushes off `main` is
+  `commit_and_push` and the canonical's `update` hook (it refuses a uid-1001 push to `main`), and C10's own
+  "Arming …" paragraph already said that neither binds a container RCE, which can then write the canonical
+  directly. Both places say so now; C8's "the runner mounts it read-only" gains its condition.
+- **"A leaked token can only park proposals you can reject"** is a statement about `separated`. What holds in
+  every posture is now said without a qualifier — a token can only *stage*, it cannot promote, and the API holds
+  no key to decrypt a secret with — and what `separated` adds (each proposal waits for you to reject or promote
+  it, so the token alone never rewrites the lab) is said as that, with a pointer at `docs/trust-mode.md` for
+  `solo`: in C10 (the rule, its residual, the `/actuation` paragraph, the accepted-risk row), on the enablement
+  page, in the install walkthrough, in the GUI's README, and in the docstrings that state the property
+  (`gitio._push_target` and the tests of the staging push).
+- The headings of C10 and C11 no longer carry "default off" (the one in-page link to C10 now carries the
+  heading's full fragment; the short one it had did not resolve), and the pointers at the
+  permissive edition's own records — in the decision-record index and on the review-process page — name its
+  tree instead of "there".
+
+Not changed, deliberately: the sentences that say **this** edition has no auto-promoter. They are written in the
+present tense and held by a test (`tests/unit/test_trust_mode.py`), and the page a `solo` operator reads must say
+what this tree does.
+
 ### fix(service): a name the server takes on is held to its field's rule — and a file that fails is not a refused request (C22) (2026-10-12)
 
 Onboarding a second device of an existing class ADOPTS that class's inventory group, secrets domain, backend and

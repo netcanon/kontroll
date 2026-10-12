@@ -178,7 +178,7 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 | Onboarding GUI (onboard-gui) | `https://${KONTROLL_MGMT_IP}:8443` — log in as `admin` / the `GUI_PASSWORD` kontroll-init showed |
 | Semaphore | `http://${KONTROLL_MGMT_IP}:3001` |
 | Grafana | `http://${KONTROLL_MGMT_IP}:3002` — `admin` / the Grafana password kontroll-init showed |
-| API | `https://${KONTROLL_MGMT_IP}:8444` (read-only until armed — see privileged-mutation-enablement.md) |
+| API | `https://${KONTROLL_MGMT_IP}:8444` (read-only without `api_privileged` — see privileged-mutation-enablement.md) |
 
 > **onboard-gui prerequisite:** deploy-stack provisions the GUI's repo clone and, in `self_signed` mode, mints its
 > TLS certificate if none is there (the modes: [frontend-exposure.md](frontend-exposure.md)). It never mints the

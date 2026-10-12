@@ -37,7 +37,7 @@ def test_direct_push_to_main_when_unstaged(rec, monkeypatch):
 def test_stages_a_proposed_ref_when_enabled(rec, monkeypatch):
     """With KONTROLL_STAGE_PUSHES=1 + a run_id, the push targets `proposed/<run_id>`, NEVER `main` — the
     network service can only PROPOSE (C10). Guards the core safety property: a staging service never writes
-    main, so a leaked token only parks a rejectable proposal."""
+    main, so a leaked token only stages a proposal."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     git = gitio.commit_and_push(["x"], ["msg"], run_id="run-42")
     assert git["staged"] is True and git["target_ref"] == "proposed/run-42"

@@ -206,7 +206,7 @@ loop; a rule that decided by path alone would send them all through the full one
 <!-- boundary-paths:end -->
 
 An edition that adds an automaton on the trusted side of the wall — the homelab edition's auto-promoter — lists
-its own paths in that edition's own repository.
+its own paths in its own tree (its `docs/homelab-edition.md`, "Boundary paths of this edition").
 
 **The full loop** is: the blackboard runner (seed → read-only research and design → an adversarial review → the
 main thread's synthesis), **then build, then run it** — a `--check --diff`, a fresh-node deploy, the browser

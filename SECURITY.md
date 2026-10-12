@@ -230,7 +230,9 @@ crown jewel — protect it where it lives, not at a remote.
   commits of the API and the GUI, are not re-read (C1, "Not covered"). The
   age key is on the VM + offline break-glass, never in any of those artifacts.
 - The local canonical (`/srv/kontroll.git`) is operator-owned; the runner mounts it
-  **read-only**; the secret captures (`/var/lib/kontroll/backups`) are `0700`/uid-1001.
+  **read-only** unless the privileged tier is armed (C10: `api_privileged` renders the mount `:rw`, which is what
+  lets the `promote-proposal` task fast-forward `main`); the secret captures (`/var/lib/kontroll/backups`) are
+  `0700`/uid-1001.
 - **Retention pruning stays inside this boundary (#125).** The capture-history prune (`backup-configs.yml`)
   rewrites the commit graph of the **same** `0700`/uid-1001 captures dir to enforce a finite
   `kontroll_backup_retention` window. It is **fail-closed**: it runs only when a finite window is set
@@ -504,9 +506,10 @@ the operator, and the honest `capability_gap` names an unresolved selector.
   open only on its own internal malfunction** — auth + audit stay fully fail-closed, so no path admits an
   unauthenticated or unaudited mutation. Limits are a deploy-time `KONTROLL_API_RATELIMIT` knob (not a
   secret); covering check: `tests/integration/test_api_ratelimit.py`.
-- **Deployed read-only / never WAN; frontend exposure is a per-instance mode.** A compose service
-  (`docker/services/api.yaml`) serves on the mgmt VLAN (`<mgmt-ip>:8444`) with the repo **read-only**
-  and **no token** — so only the inquiry routes serve and the privileged routes are fail-closed (503). The
+- **Read-only without `api_privileged` / never WAN; frontend exposure is a per-instance mode.** A compose service
+  (`docker/services/api.yaml`) serves on the mgmt VLAN (`<mgmt-ip>:8444`); without `api_privileged` its content
+  clone is root-owned and **no token** is set — so only the inquiry routes serve and the privileged routes are
+  fail-closed (503); C10 is what arming adds. The
   TLS posture is **config-as-data**: `instance/instance.yml` `frontend.tls_mode` (resolver
   `scripts/kontroll/frontend.py`, covering check `tests/unit/test_frontend.py`) selects `byo_proxy` (HTTP
   behind the operator's reverse proxy, which owns TLS — this instance: Nginx Proxy Manager), `self_signed`
@@ -553,7 +556,7 @@ as the GUI's C8 residual). Rate-limiting is now in place (above).
 Verified: no token → 503, bad/missing token → 401 (+ audited), audit-unwritable → mutation 503,
 over-limit → 429 (an audit-unwritable breach still 429, never 503).
 
-### C10 — Privileged-mutation enablement (the network service writes the canonical)  ✓ live-verified (gated; default off)
+### C10 — Privileged-mutation enablement (the network service writes the canonical)  ✓ live-verified (gated by `api_privileged`)
 
 Turning on live actuation from the deployed API/GUI (the C9 surface) crosses one trust boundary beyond C9's
 fail-closed token: an always-on, network-reachable service gains **write toward the local canonical**
@@ -570,21 +573,24 @@ declares intent to auto-promote). It is chosen explicitly at fresh-init and **ne
 posture is the one setting kontroll refuses to guess (defended at three layers: `kontroll-init --fresh` refuses
 without `--trust-mode`, the template ships it commented, and `deploy-stack.yml` hard-fails an unset/invalid value).
 This release ships the **flag only**: the GUI/API trust boundary below is **byte-identical in both modes** (still
-propose-only, still AST read-only-pinned, canonical `:ro`), so the posture adds **zero new residual**. The
+propose-only, still AST read-only-pinned; how the canonical is mounted is `api_privileged`'s to decide, never the
+posture's), so the posture adds **zero new residual**. The
 auto-promoter that gives `solo` its effect — and its honest residual (a GUI RCE → auto-promoted proposal) bounded by
 a blast-tier refusal / rate / diff-size guard set — is a **separate, gated rung** that this edition does not ship
 (it is the homelab (permissive) edition's control **C17** — see the note under C18); here `solo` behaves like
 `separated`.
 
-**Implements (flag-gated by `api_privileged`, default off — read-only stays the default):**
+**Implements (gated by `api_privileged`; a deploy without it is read-only):**
 - **The service only PROPOSES.** When it runs (`KONTROLL_STAGE_PUSHES=1`), `gitio.commit_and_push` pushes a
   **staging ref** `refs/heads/proposed/<run_id>`, never `main`; the operator's CLI (no such env) still pushes
   `main` directly (the trusted human). `kontroll promote <run_id>` fast-forwards `main` (FF-only; refuses
   otherwise). The in-GUI follow-on is now the **`promote-proposal` Semaphore task** (item C, 2026-06-15;
   `config/semaphore/templates/promote-proposal.yml` → `ansible/playbooks/promote.yml`) — a `run_id` survey var,
   FF-only, **reachable only by a Semaphore admin on the mgmt VLAN, never the API token** (the promote lives
-  outside the token's reach, so a leaked token can never self-promote). A leaked token can only **park proposals
-  you can reject**, never rewrite the lab. **A proposal is all of its paths or none:** `git add` exits
+  outside the token's reach, so a leaked token can never self-promote). A leaked token can only **stage
+  proposals**. Under `separated` each one waits for you to reject or promote it, so the token alone never
+  rewrites the lab ([docs/trust-mode.md](docs/trust-mode.md) says what `solo` changes). **A proposal is
+  all of its paths or none:** `git add` exits
   non-zero for a path a `.gitignore` rule ignores (having staged the others) and for one that is not there
   (having staged nothing); `commit_and_push` stops there, commits nothing, and the staging service rolls its
   clone back and removes the refused files — it used to commit the rest and report the proposal as staged. A
@@ -650,8 +656,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   (`instance/actuation/<key>/vars.yml`) to `proposed/<run_id>` via the SAME `commit_and_push(run_id=…)` — never
   `main`; the route NEVER imports `promote_ref` (the Semaphore-admin promote is the trusted second key). It rides a
   **dedicated privileged prefix** (`/actuation` — token + the fail-closed audit + the per-token rate budget,
-  distinct from the write-free `/units` inquiry reads), so a leaked token can only **park a rejectable proposal**,
-  never run a play (the API actuates NOTHING — the operator promotes, then runs the unit in Semaphore). **No secret
+  distinct from the write-free `/units` inquiry reads), so a leaked token can only **stage a proposal**,
+  never run a play (the API actuates NOTHING — a promote lands the unit, then the operator runs it in
+  Semaphore). **No secret
   rides here** (a unit may not declare a secret-typed var — SEC-2), and the `actuation-stage` audit carries
   names/counts/run_id only, never a value. The write verb is registered in `WRITE_VERBS` **same-commit** (P0b/#134)
   and `build_actuation_plan` stays `assert_read_only`-pinned, so the read-only-by-construction boundary holds.
@@ -737,8 +744,9 @@ staging (A2, 2026-06-15):** the GUI onboard route now also stages — it runs in
 CLI) and threads `run_id` through `commit_and_push`, pinned by `test_gui_api.py::test_onboard_apply_stages_when_armed`.
 So **every** network-surface canonical write (onboard + capability, API + GUI) proposes, with no shell-out hole.
 
-**Residual (tracked):** for the **API** (no key), a leaked token parks proposals (operator-rejectable) + cannot
-read a secret — the residual is proposal-spam (rate-limit bounds it) + denial-of-review-time. **onboard-gui is
+**Residual (tracked):** for the **API** (no key), a leaked token stages proposals and holds no key to decrypt a
+secret with. Under `separated` each proposal is operator-rejectable, and the residual is proposal-spam (rate-limit
+bounds it) + denial-of-review-time; [docs/trust-mode.md](docs/trust-mode.md) says what `solo` changes. **onboard-gui is
 the with-key exception:** it mounts the scoped age key for inline device-cred encryption (`sops_set` needs
 decrypt-to-add), so a compromise of *it* (behind its own fail-closed auth, mgmt-VLAN-only) can read the
 Semaphore-scoped secrets — a **pre-existing** exposure (the device-onboard alpha always held the key), now also
@@ -755,7 +763,7 @@ group-writable bare repo — so a **container RCE** (not a leaked token; the tok
 bounded by: the canonical is a **reconstructible cache** (the operator workstation + GitHub remain the source of
 truth — a rewritten canonical is re-pushed and the divergence is visible); the **dominant** residual (fleet root
 via the scoped age key onboard-gui/semaphore already hold) strictly dominates canonical-write; mgmt-VLAN +
-single-operator; and the **read-only deploy mounts `:ro` everywhere** (the default), so this exists only while
+single-operator; and a **deploy without `api_privileged` mounts `:ro` everywhere**, so this exists only while
 armed. The leaked-**token** path remains strictly propose-only (the API never calls `promote_ref` / a direct
 `main` push — the `from_env` + `_push_target` fail-closed coupling enforces it). Accepted as the cost of making
 the one manual security-boundary step (promote) a GUI action.
@@ -781,7 +789,7 @@ operator runs from the per-job clone can never be a *forked*, weakened copy of t
 canonical as inert (services run them only baked) — is a deferred finer strip, not a live exposure. The
 `:rw`-only-when-armed mount + the FF-only promote are unchanged either way (payload-independent).
 
-### C11 — Guided secret + key onboarding is no-leak by construction  ✓ implemented (gated; default off)
+### C11 — Guided secret + key onboarding is no-leak by construction  ✓ implemented (rides the C9/C10 gate)
 
 The guided **secret-entry** (`/secrets/{domain}`, `secret-forms/<domain>.yml`) and **key-generation**
 (`/keygen/{role}`, `key-roles/<role>.yml`) surfaces let the operator mint service secrets and age keys through
@@ -1651,7 +1659,7 @@ Fleet index.
 | Prometheus `--web.enable-lifecycle` (item F) | Anyone reaching `:9090` can `POST /-/reload` (benign) **or** `/-/quit` (stop Prometheus — a DoS) | Yes | Enables the no-docker-socket `reload-observability` enact task (HTTP reload, no host root). `:9090` is **mgmt-bound** (C3, never WAN) — the same boundary that already gates the whole control plane; `/-/quit` only stops a restart-`unless-stopped` container (no data loss). Net: a clean Tier-1 enact for a mgmt-only DoS surface. |
 | Device config captures are not encrypted at rest | A backup capability with `destination: offsite` would move secret-bearing captures (running-config hashes/PSKs) outside the local `0700`/uid-1001 store with no encryption-at-rest story | Yes (deferred) | The backup-capability ships `destination: local` only — captures stay `0700`, git **never pushed** (C8). The dialog now exposes a `destination` knob (#123) that **offers** `offsite` for discoverability but **refuses it at propose** (`backup.build_plan` → `bad_param`, fail-closed with the C8 reason), so no offsite copy can be promoted until an encryption-at-rest design closes this. `retention` is likewise declared/carried (`kontroll_backup_retention`) and its prune **enforcement** is now LIVE (#125 — a fail-closed, default-safe history rewrite of the local captures repo only; see C8). C1's `kontroll_backup_deploy` backs up the **encrypted repo**, not device captures. |
 | Captures are READABLE over the GUI backup viewer (C14) | An authenticated mgmt-VLAN operator — or a GUI-process compromise (which already holds the age key → fleet root, C10) — can read device running-configs (hashes/PSKs/communities) over HTTP, **redacted-by-default but best-effort** (a novel vendor token shape can leak into the view) | Yes (compensated; **gated ship** G1–G5 incl. human sign-off) | **`:ro` mount** (no write-back, compose-pinned on the `:ro` suffix), **read-only git only** (no actuation/rewrite — AST + argv pins), **rev/file validated before any `git show`** (traversal/injection closed), **redacted-by-default + redact-then-diff** (defense-in-depth, not the boundary), behind the GUI's **fail-closed auth + TLS + mgmt-VLAN bind** (C3), **every read audited NAMES-only**. The secret-densest vendor (FortiGate, history-excluded) is **listed but never rendered** (its on-disk blob stays off the wire). Captures stay `0700`/uid-1001 at rest, history **local-only, never pushed** (C8 unchanged). Marginal exposure dominated by the existing onboard-gui-with-key residual (C10). Raw download **deferred** (C2). See [C14](#c14--capture-read-over-the-gui-is-a-read-only-romounted-redacted-audited-surface). |
-| The network API/GUI becomes a canonical-writer (C10) | A compromised/leaked-token service could push to the source of truth every clone + deploy trusts | Yes (compensated) | **Propose-then-promote**: the service only pushes a `proposed/<run_id>` staging ref — a trusted promote step fast-forwards `main`, so a leaked token can only park rejectable proposals, never enact. **No age key** is mounted (no standing decrypt). `receive.denyNonFastForwards`/`denyDeletes` + a push-only clone + rate-limit + mgmt-VLAN-only (C3) bound it. **Corrected 2026-07-05:** the "only parks rejectable proposals" property held for `push:false` but was **breached by `push:true`** — the content clone's `origin` **is** the canonical, so `commit_and_push`'s optional `git push origin HEAD` advanced `main`. Closed by the `and not staging` guard (`gitio.py`) + a uid-1001 canonical `update` hook. The property is structurally true again (`docs/reviews/2026-07-05-c10-origin-push-breach/` — a design record kept in the private repository). See [C10](#c10--privileged-mutation-enablement-the-network-service-writes-the-canonical) + [docs/privileged-mutation-enablement.md](docs/privileged-mutation-enablement.md). |
+| The network API/GUI becomes a canonical-writer (C10) | A compromised/leaked-token service could push to the source of truth every clone + deploy trusts | Yes (compensated) | **Propose-then-promote**: the service only pushes a `proposed/<run_id>` staging ref — a trusted promote step fast-forwards `main`, so a leaked token can only stage a proposal: it cannot promote one, and nothing it stages reaches `main` — the only tree an enact reads — before a trusted promoter has landed it (under `separated`, a human who can reject it; [docs/trust-mode.md](docs/trust-mode.md) says what `solo` changes). **No age key** is mounted (no standing decrypt). `receive.denyNonFastForwards`/`denyDeletes` + a push-only clone + rate-limit + mgmt-VLAN-only (C3) bound it. **Corrected 2026-07-05:** the "only parks rejectable proposals" property held for `push:false` but was **breached by `push:true`** — the content clone's `origin` **is** the canonical, so `commit_and_push`'s optional `git push origin HEAD` advanced `main`. Closed by the `and not staging` guard (`gitio.py`) + a uid-1001 canonical `update` hook. That a staging service never advances `main` is structurally true again (`docs/reviews/2026-07-05-c10-origin-push-breach/` — a design record kept in the private repository). See [C10](#c10--privileged-mutation-enablement-the-network-service-writes-the-canonical---live-verified-gated-by-api_privileged) + [docs/privileged-mutation-enablement.md](docs/privileged-mutation-enablement.md). |
 | Arming (`api_privileged`) gives every network container `:rw` on the canonical (C10, item C) | A **container RCE** (api/onboard-gui/semaphore) can `update-ref`/rewrite/delete `main` **directly** — `update-ref` is not a push, so deny* + the FF-only gate (which bound the promote *playbook*) do **not** constrain it; a breach can non-FF/delete main, not just stage | Yes (compensated) | Gated on `api_privileged` — the **read-only deploy mounts `:ro` everywhere** (default), so this exists only when armed. The leaked-**token** path stays strictly propose-only (`from_env`+`_push_target` fail-closed coupling). Bounded: the canonical is a **reconstructible cache** (operator workstation + GitHub are truth — re-pushable, divergence visible), and the **dominant** residual (fleet root via the scoped age key onboard-gui/semaphore already hold) strictly dominates canonical-write; mgmt-VLAN + single-operator. The alternative (Semaphore SSH-to-host + sudo) is strictly worse (host root). **Narrowed 2026-07-05:** the C10 `update` hook now refuses a uid-1001 receive-pack **push** to `main`, so a container-RCE that shells a *push* to main is caught by the canonical. The residual is now specifically a uid-1001 RCE using `git update-ref`/`packed-refs` rewrite **directly** (not a push — the hook only fires on receive-pack) — unchanged, still bounded by the reconstructible-cache + offsite-mirror-fsck follow-on. |
 | Secret values + a minted private key cross the mgmt-side hop (C11) | A submitted secret / a show-once private key travels in the request/response body | Yes | TLS (GUI) or the operator's reverse proxy (`byo_proxy`, API) protects it; **mgmt-VLAN-only, never WAN** (C3), behind C9 fail-closed auth. Symmetric to the already-accepted secret-entry exposure. The private key is **show-once** and never persisted; `.sops.yaml` edits are additive + parse-verified. See [C11](#c11--guided-secret--key-onboarding-is-no-leak-by-construction). |
 | ~~Vector runs root with a `:ro` docker socket~~ → **HARDENED: non-root + socket-proxy** (C12) | A Vector RCE could `POST /containers/create` = host root (the raw socket is root-equivalent even `:ro`) | **No — closed (GATE A passed)** | Vector now runs **non-root** (uid 10002) and holds **no raw socket** — `docker_logs` targets a `docker-socket-proxy` (`POST=0`, GET/HEAD-only); journald via the discovered `systemd-journal` GID; audit dirs via `o+r` (never `group_add:1001` — it would leak the TLS keys). A Vector RCE is now an unprivileged log-reader. **GATE A dogfood (2026-06-18): PASSED** — non-root Vector shipped 1822 journald events + container logs through the proxy; `POST` → 403. **Promotion unblocked.** See [C12](#c12--the-logging-pipeline-is-a-secret-surface-collector-privilege-label-hygiene-mgmt-only). |

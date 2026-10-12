@@ -32,9 +32,9 @@ Pressing **Run** with *apply* ticked calls the onboard service **in-process** �
 | Install the collection + live-verify (bootstrap) | a Semaphore enact, **after** promote | automated (deferred) |
 
 **The deliberate trust boundary (surfaced, not relaxed):** when the deploy armed `KONTROLL_STAGE_PUSHES`
-(the C10 privileged-mutation enablement, default off), the GUI can only **PROPOSE** — it pushes a
+(the C10 privileged-mutation enablement, `api_privileged`), the GUI can only **PROPOSE** — it pushes a
 `proposed/<run_id>` staging ref, never `main`; a trusted `kontroll promote <run_id>` (FF-only) lands it. A
-leaked/abused GUI can only park a *rejectable* proposal, never rewrite the canonical. Bootstrap is **deferred**
+leaked/abused GUI login can only stage a proposal — it cannot promote one. Bootstrap is **deferred**
 to after promote — the network surface runs no Ansible, and a host that lives only in an un-promoted proposal
 can't be verified yet. See [SECURITY.md](../SECURITY.md) C10 +
 [docs/privileged-mutation-enablement.md](../docs/privileged-mutation-enablement.md).

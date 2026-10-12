@@ -27,8 +27,12 @@ auto-promoter does; the Status box below says what this edition does.
 
 On an edition that ships it, the **only** thing `trust_mode` controls is whether the auto-promoter is deployed;
 on this edition it controls nothing but the Settings row. It changes **no line** of the
-GUI/API trust boundary: in **both** modes the network service can only stage a proposal, is read-only-by-
-construction (`tests/unit/_readonly_pins.py`), and the canonical stays `:ro` to it. `solo` adds a tiny, separate,
+GUI/API trust boundary: in **both** modes the network service's own code can only stage a proposal and is
+read-only-by-construction (`tests/unit/_readonly_pins.py`); it never advances `main`. (The posture does not decide
+how the canonical is mounted: `:ro` without `api_privileged`, `:rw` with it. Armed, what keeps the service's
+pushes off `main` is `commit_and_push` — a staging service pushes `proposed/<run_id>` and nothing else — and the
+canonical's `update` hook, which refuses a uid-1001 push to `main`. Neither binds a container RCE, which can write
+the mounted repository directly: SECURITY.md C10, "Arming …".) `solo` adds a tiny, separate,
 token-less automaton on the **trusted** side of the wall that runs the **already-shipped** FF-only + never-brick
 (FIX-M9) promote — it drops the human keystroke, nothing else.
 
@@ -48,11 +52,13 @@ path below does not exist here: a staged proposal waits for a human in both mode
 
 > a GUI/API RCE stages a malicious proposal → the auto-promoter promotes it unattended → the next enact actuates it.
 
-It is bounded — even in `solo` — by the inherited spine (FF-only history; never-brick/FIX-M9; the `:ro` RCE backstop
-on the *service* side; enact is still a separate hand-off) and, on an edition that runs the auto-promoter, by its guards
+It is bounded — even in `solo` — by the inherited spine (FF-only history; never-brick/FIX-M9; a leaked token can
+only stage; enact is still a separate hand-off) and, on an edition that runs the auto-promoter, by its guards
 (a high-blast-tier refusal that keeps the **edge firewall + core switch human-gated even in solo**, a rate limit,
 and a diff-size ceiling — a refusal never deletes the staged ref, so it degrades exactly to `separated` for that
-proposal). But the irreducible cost is real: a small, in-tier, in-budget malicious change **is** auto-promoted in
+proposal). None of that bounds a container RCE on an armed box: the canonical is then `:rw` to the service
+containers, and an RCE can move `main` with no promoter at all, in either posture (SECURITY.md C10, "Arming …").
+And the irreducible cost of `solo` is real: a small, in-tier, in-budget malicious change **is** auto-promoted in
 `solo`. **`solo` is acceptable only for a homelab you fully control — single operator, mgmt-VLAN-only, never a
 multi-tenant or internet-adjacent deployment.** Prod uses `separated`.
 
