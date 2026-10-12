@@ -22,16 +22,16 @@ that adds a route, a request field, an outbound client, a container privilege, a
 rule; changes what reaches `main` without a human; or needs a `SECURITY.md` claim changed to stay true.
 **Everything else gets the light loop**: the pull request is the note, the change is built with its tests and
 run first, and a diff that touches a boundary file gets one independent read. A table of the files where a
-boundary lives is a prompt, not a test — a change to one says in a line why the three tests do not apply — and
-a check keeps every path in it real. Decisions get a home: `docs/adr/` holds the record template, the rule that
-a record is superseded and never edited, and an index that already lists the four decisions the 2026-10 review
-left open. `docs/reviews/README.md` gains the index of published runs, and no longer says that post-release
-dossiers "are published" there (none has been). The runner (`.claude/workflows/blackboard.js`) returns the text
-of the three things the main thread writes after a run — the synthesis's opening lines, a decision-record stub,
-the index row — takes an `effort` per phase and per agent, and logs one line when a run of several agents names
-no boundary; its header no longer contradicts its README about how it is invoked. The read-only contract it
-prepends to every agent is untouched, and pinned. The pull-request template asks which loop. Nothing at runtime
-changes. Proofs: `tests/unit/test_review_loop.py`.
+boundary lives is a prompt, not a test — a change to one says in a line why the tests do not apply — and a check
+keeps every path in it real. Decisions get a home: `docs/adr/` holds the record template, the rule that a record
+is superseded and never edited, and an index that already lists the decisions the 2026-10 review left open.
+`docs/reviews/README.md` gains the index of published runs, and no longer says that post-release dossiers "are
+published" there (none has been). The runner (`.claude/workflows/blackboard.js`) returns the texts the main
+thread writes after a run — the synthesis's opening lines, a decision-record stub, the index row — takes an
+`effort` per phase and per agent, and logs one line when a run of several agents names no boundary; its header
+no longer contradicts its README about how it is invoked. The read-only contract it prepends to every agent is
+untouched, and pinned byte for byte. The pull-request template asks which loop. Nothing at runtime changes.
+Proofs: `tests/unit/test_review_loop.py`.
 
 ### test(gates): the hygiene sweeps read every role, and the read-only pin follows what a view can reach (2026-10-12)
 

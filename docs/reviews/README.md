@@ -19,10 +19,11 @@ or hostname.
 
 ## Index
 
-One row per run, added by the main thread when it writes the run's synthesis
-([../agent-workflow.md](../agent-workflow.md)). The row is what makes a run findable and its
-decision supersedable; `tests/unit/test_review_loop.py` fails on a dated run folder that has
-none. This table lists **published** dossiers. An instance repository keeps its own index in
+One row per run, added by the main thread when it writes the run's seed and completed when it
+writes the synthesis ([../agent-workflow.md](../agent-workflow.md)). The row is what makes a
+run findable and its decision supersedable; `tests/unit/test_review_loop.py` fails on a run
+folder dated 2026-10-12 or later that has none (earlier runs are not backfilled). This table
+lists **published** dossiers. An instance repository keeps its own index in
 `docs/reviews/INDEX.md` — a file that never exists in the public tree — so that the two
 repositories never edit the same table.
 

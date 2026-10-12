@@ -16,10 +16,11 @@
 //   dir:     ABSOLUTE path of the run folder, e.g. "<repo>/docs/reviews/<UTC-date>-<slug>"  (REQUIRED)
 //   slug:    short topic label (for the progress narrator)                                   (optional)
 //   mission: one-line mission (logged at start)                                              (optional)
-//   boundary: which security boundary this run is about -- a FULL run is for a boundary change
-//             (docs/agent-workflow.md, "Which loop a change gets"); logged, never enforced      (optional)
+//   boundary: which security boundary this run is about -- a FULL run is for a boundary change -- or,
+//             for an audit or a planning round, its scope (docs/agent-workflow.md, "Which loop a
+//             change gets"); logged, never enforced                                          (optional)
 //   adr:     the next free decision-record number, e.g. "0006" (the caller lists docs/adr/);
-//             pre-fills the returned stub, default the placeholder "NNNN"                     (optional)
+//             pre-fills the returned stub (digits are padded to four), default "NNNN"         (optional)
 //   oversize_reason: why this run needs more agents than the guideline; logged               (optional)
 //   phases: [ {                                                                              (REQUIRED, >=1)
 //     title:      "Research" | "Design" | "Review" | ...  (progress group + the phase tag)
@@ -116,8 +117,9 @@ if (A.mission) log("blackboard [" + (A.slug || "run") + "]: " + A.mission);
 const AGENT_GUIDELINE = 4;
 const agentCount = phases.reduce((n, ph) => n + ph.agents.length, 0);
 if (agentCount > 1 && !A.boundary) {
-  log("blackboard: no args.boundary given -- a full run is for a security-boundary change "
-    + "(docs/agent-workflow.md, 'Which loop a change gets'). Say which boundary, or use the light loop.");
+  log("blackboard: no args.boundary given -- a run of several agents is for a security-boundary change, an "
+    + "audit or a planning round (docs/agent-workflow.md, 'Which loop a change gets'). Name the boundary or "
+    + "the scope in args.boundary, or use the light loop.");
 }
 if (agentCount > AGENT_GUIDELINE && !A.oversize_reason) {
   log("blackboard: " + agentCount + " agents and no args.oversize_reason -- keep a run to about "
@@ -171,9 +173,15 @@ const dm = /^(\d{4}-\d{2}-\d{2})(?:-(.+))?$/.exec(base);
 if (!dm) log("blackboard: run folder '" + base + "' is not <UTC-date>-<slug> -- the index row needs the date");
 const runDate = dm ? dm[1] : "<UTC-date>";
 const runSlug = String((dm && dm[2]) || A.slug || "run").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "run";
-const adrNo = String(A.adr || "NNNN");
-const verdicts = [].concat(out.review || []).map((r) => r && r.verdict).filter(Boolean).join(" / ") || "no review phase";
+const adrRaw = String(A.adr || "NNNN");
+const adrNo = /^\d+$/.test(adrRaw) ? adrRaw.padStart(4, "0") : adrRaw;     // 6 -> 0006: a record is NNNN-<slug>.md
+const hadReview = phases.some((ph) => ph.review);
+const verdicts = [].concat(out.review || []).map((r) => r && r.verdict).filter(Boolean).join(" / ")
+  || (hadReview ? "no verdict returned" : "no review phase");
 const adrPath = "docs/adr/" + adrNo + "-" + runSlug + ".md";
+// One agent is the light loop's single reader (or a one-agent note); several are a full run.
+const loop = agentCount > 1 ? "full" : "light";
+const opening = agentCount > 1 ? "99-synthesis.md" : "00-note.md";
 out.bookends = {
   synthesis: {
     file: pathFor("99-synthesis"),
@@ -194,7 +202,7 @@ out.bookends = {
       "**Status:** PROPOSED (" + runDate + ")",
       "**Decided by:** <the maintainer / the main thread>",
       "**Supersedes:** <ADR-NNNN, or nothing>",
-      "**Evidence:** docs/reviews/" + base + "/99-synthesis.md (review verdict: " + verdicts + ")",
+      "**Evidence:** docs/reviews/" + base + "/" + opening + " (review verdict: " + verdicts + ")  <or a pull request, a live run>",
       "",
       "## The question",
       "",
@@ -208,7 +216,7 @@ out.bookends = {
   },
   index_row: {
     file: "docs/reviews/README.md (a published dossier) or docs/reviews/INDEX.md (an instance repository)",
-    text: "| " + runDate + " | [" + base + "](" + base + "/99-synthesis.md) | full | <the decision, one line> | <ADR-" + adrNo + ", or none> |",
+    text: "| " + runDate + " | [" + base + "](" + base + "/" + opening + ") | " + loop + " | <the decision, one line> | <ADR-" + adrNo + ", or none> |",
   },
 };
 

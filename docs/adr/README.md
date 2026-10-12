@@ -18,12 +18,13 @@ ends in a decision gets one, and its synthesis names it.
   old record's status line says by which. A correction of fact is a dated note appended at the end.
 - **Status** is one of `PROPOSED`, `ACCEPTED` or `SUPERSEDED` (`SUPERSEDED by ADR-NNNN`), on a line that starts
   with `**Status:**`.
-- **Every record has a row in the index below.**
+- **Every record has a row in the index below**, and the row's status cell holds the record's status word.
 - A record quotes example data only — never an address, a host name or a domain of a deployment. The
   identifier gate scans this directory like any other.
 
-`tests/unit/test_review_loop.py` fails on a record without an index row, on two records with one number, and on a
-status line that holds none of the three words.
+`tests/unit/test_review_loop.py` fails on a file here that is not named `NNNN-<slug>.md`, on a record without
+an index row or with another status than its row says, on two records with one number, and on a status line that
+holds none of those words.
 
 ## The template
 
@@ -51,15 +52,16 @@ The blackboard runner returns this stub pre-filled for the run it just finished 
 
 | ADR | Decision | Status | Date | Rests on |
 |---|---|---|---|---|
-| 0001 | Reconcile status is shown on the object it belongs to, not in a separate "Installed" index | ACCEPTED | 2026-07-25 | recorded in the homelab edition, whose install-on-onboard flow it concerns — not a file in this tree |
+| 0001 | Reconcile status is shown on the object it belongs to, not in a separate "Installed" index | ACCEPTED | 2026-07-25 | recorded in the homelab edition (`docs/adr/0001-…` there), whose install-on-onboard flow it concerns |
 | 0002 | The composed-plane boundary: what kontroll builds itself, and what it leaves to the tools it composes | not yet written | — | awaits the maintainer's decision |
 | 0003 | How far the generic onboarding path goes: a service root, a module SDK, the kinds of actuation unit | not yet written | — | awaits the maintainer's decision, after the next full re-onboard of a real fleet |
 | 0004 | The default promotion posture of the homelab edition | not yet written | — | awaits the maintainer's decision; its subject is homelab-edition code, so the record will live there |
 | 0005 | The upgrade story: an in-place update, or rebuild only | not yet written | — | awaits the maintainer's decision |
 
-Numbers 0002 to 0005 are reserved for those four subjects. They are the open decisions the 2026-10 project
-review named; reserving the numbers lets another document point at a decision before it is written. A new
-decision takes the next number after them.
+Numbers 0002 to 0005 are reserved for those subjects. They are the open decisions the 2026-10 project review
+named; reserving the numbers lets another document point at a decision before it is written. A new decision
+takes the next number after them, and a record written for a reserved number replaces "not yet written" in its
+row with its status.
 
 ## See also
 - [../agent-workflow.md](../agent-workflow.md) — which review loop a change gets, and how a run's synthesis points at its record
