@@ -8,9 +8,17 @@ read-only contract. One robust seam, not three copy-pasted greps (M9 / review §
 
 Leading-underscore module name ⇒ pytest does not collect it as a test; it is imported by the `test_*` files.
 
-#134 / P0b — the COMPLETENESS closure. The per-function pins above fail OPEN: each checks a function's calls against
-`WRITE_VERBS`, so a mutator the registry doesn't KNOW about is invisible — a read view could call an unregistered
-writer and the pin would pass. `assert_write_verbs_complete` closes that hole: it AST-scans the pinned layer
+THE PIN IS TRANSITIVE (2026-10-12). `assert_read_only` used to read a function's DIRECT calls, so a read view whose
+write sat one helper away passed — a refactor that split a view into helpers silently un-pinned it. It now walks
+what the function can REACH by name (`write_paths`): helpers of the same module, called or handed on as a callback;
+functions of other modules of this repository reached through an import; and, in every function on the way, the
+write PRIMITIVES themselves (`_is_direct_mutator`), so a write the verb list does not name is seen too. A failure
+names the path from the view to the write.
+
+#134 / P0b — the COMPLETENESS closure. The NAME half of the per-function pins fails OPEN: it checks calls against
+`WRITE_VERBS`, so a mutator the registry doesn't KNOW about is invisible to it — a read view could call an
+unregistered writer by a path the closure cannot follow and the pin would pass. `assert_write_verbs_complete` closes
+that hole: it AST-scans the pinned layer
 (`scripts/kontroll/service/*.py` + `gitio.py`) for every DIRECT mutator (a write-mode `open`, a git-MUTATING argv,
 a SOPS write) and asserts each is registered in `WRITE_VERBS` — so a new writer that isn't registered breaks CI,
 making "add the verb in the same commit" an ENFORCED gate, not a convention. `assert_write_verbs_resolve` is the
@@ -119,20 +127,197 @@ def _called_names(func_node):
 
 def find_function(module_rel, func_name):
     """The `ast.FunctionDef` for func_name in the module at ROOT-relative module_rel (asserts if absent)."""
-    path = os.path.join(ROOT, module_rel)
-    tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
-    for node in ast.walk(tree):
+    for node in ast.walk(_tree(os.path.join(ROOT, module_rel))):
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
             return node
     raise AssertionError("function %s not found in %s" % (func_name, module_rel))
 
 
+# --- The transitive closure: what a function can REACH by name ------------------------------------------------- #
+# Everything below is static and NAME-based, like the rest of this module. It follows: a call or a bare reference
+# to a function of the same module (a reference, because a helper handed to map()/sorted()/a thread is reached
+# without being called here); an attribute CALL whose name is a function of the same module (`self.helper()`); and a
+# call or reference through an import that resolves to a module file of this repository (`alias.func`,
+# `pkg.mod.func`, or a `from module import func` name), at any import depth. It does NOT follow what no static
+# reading can: getattr() with a computed name, a function stored in a dict or passed in as an argument, a method
+# reached through an object of another module's class. Those stay with the reviewer — and with the name check, which
+# still fires on a registered verb however it is reached.
+_PARSED = {}
+_IMPORT_ROOTS = (os.path.join(ROOT, "scripts"), ROOT)    # where an ABSOLUTE import of repository code resolves
+
+
+def _tree(path):
+    """The parsed AST of the file at `path`, re-read when the file changes (the planted-module tests rewrite one)."""
+    st = os.stat(path)
+    key = (os.path.normpath(path), st.st_mtime_ns, st.st_size)
+    if key not in _PARSED:
+        with open(path, encoding="utf-8") as fh:
+            _PARSED[key] = ast.parse(fh.read(), filename=path)
+    return _PARSED[key]
+
+
+def _module_functions(path):
+    """{name: def} for the functions a call BY NAME can mean in the module file at `path`: its top-level functions
+    and the methods of its top-level classes (the first definition of a name wins)."""
+    out = {}
+    for n in _tree(path).body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.setdefault(n.name, n)
+        elif isinstance(n, ast.ClassDef):
+            for m in n.body:
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    out.setdefault(m.name, m)
+    return out
+
+
+def _module_file(base, parts):
+    """The file `base/<parts…>` names as a module (`x.py`) or a package (`x/__init__.py`), or None."""
+    cand = os.path.join(base, *parts)
+    for c in (cand + ".py", os.path.join(cand, "__init__.py")):
+        if os.path.isfile(c):
+            return os.path.normpath(c)
+    return None
+
+
+def _resolve_import(path, level, dotted):
+    """The repository file an import in the module at `path` names, or None when it is not one (the standard
+    library, a third-party package). `level` is the count of leading dots of a relative import."""
+    parts = dotted.split(".") if dotted else []
+    if level:
+        base = os.path.dirname(path)
+        for _ in range(level - 1):
+            base = os.path.dirname(base)
+        return _module_file(base, parts)
+    for root in _IMPORT_ROOTS:
+        found = _module_file(root, parts) if parts else None
+        if found:
+            return found
+    return None
+
+
+def _imports(path):
+    """({local name: module file}, {local name: (module file, function name)}) for every import statement in the
+    module at `path` — at any depth, so an import inside a function body counts. A plain `import a.b` is keyed by
+    its full dotted name, which is how its calls are spelled (`a.b.f()`)."""
+    mods, funcs = {}, {}
+    for n in ast.walk(_tree(path)):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                target = _resolve_import(path, 0, a.name)
+                if target:
+                    mods[a.asname or a.name] = target
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                sub = _resolve_import(path, n.level, ".".join(p for p in (n.module, a.name) if p))
+                if sub:                                              # `from package import module`
+                    mods[a.asname or a.name] = sub
+                    continue
+                target = _resolve_import(path, n.level, n.module or "")
+                if target:                                           # `from module import function`
+                    funcs[a.asname or a.name] = (target, a.name)
+    return mods, funcs
+
+
+def _dotted(node):
+    """`a.b.c` for a pure Name/Attribute chain, else None (a call result, a subscript — not a module)."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id] + parts[::-1])
+
+
+def _receiver_module(dotted, mods):
+    """The module file a dotted receiver names — an imported name, or a submodule under an imported package
+    (`pkg.mod` after `import pkg` / `from x import pkg`) — or None when the receiver is not an imported module."""
+    if dotted in mods:
+        return mods[dotted]
+    parts = dotted.split(".")
+    for i in range(len(parts) - 1, 0, -1):
+        head = mods.get(".".join(parts[:i]))
+        if head is not None:
+            return _module_file(os.path.dirname(head), parts[i:]) if os.path.basename(head) == "__init__.py" else None
+    return None
+
+
+def _reaches(path, node):
+    """The (module file, function name) pairs the function `node` of the module at `path` can hand control to."""
+    functions = _module_functions(path)
+    mods, funcs = _imports(path)
+    out = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            if n.id in functions:
+                out.add((path, n.id))                                # a same-module helper: called, or passed on
+            elif n.id in funcs:
+                out.add(funcs[n.id])                                 # a `from module import function` name
+        elif isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load):
+            receiver = _dotted(n.value)
+            target = _receiver_module(receiver, mods) if receiver else None
+            if target is not None:
+                out.add((target, n.attr))                            # alias.function — called, or passed on
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in functions:
+            receiver = _dotted(n.func.value)
+            if not (receiver and _receiver_module(receiver, mods)):
+                out.add((path, n.func.attr))                         # obj.helper() where helper is defined here
+    return out
+
+
+def _writes_directly(fn):
+    """True if fn — or a function or lambda nested in it — performs a write PRIMITIVE itself (a write-mode open in
+    either spelling, `write_text`, `os.replace`, a mutating git argv, a SOPS write: see `_is_direct_mutator`)."""
+    return any(_is_direct_mutator(scope) for scope in ast.walk(fn)
+               if scope is fn or isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)))
+
+
+def _closure(module_rel, func_name):
+    """`(module file, name, def, trail)` for every function the closure visits from func_name — the pinned function
+    first. The trail is the names from the pinned function to this one."""
+    start = os.path.normpath(os.path.join(ROOT, module_rel))       # an absolute module_rel (a planted tmp module)
+    seen = {(start, func_name)}                                    # passes through os.path.join unchanged
+    order = [(start, func_name, find_function(module_rel, func_name), [func_name])]
+    for path, _name, node, trail in order:                         # the list grows while it is walked
+        for target, name in sorted(_reaches(path, node)):
+            if (target, name) in seen:
+                continue
+            fn = _module_functions(target).get(name)
+            if fn is None:                                         # an imported name that is not a function
+                continue
+            seen.add((target, name))
+            label = name if target == start else "%s.%s" % (os.path.splitext(os.path.basename(target))[0], name)
+            order.append((target, name, fn, trail + [label]))
+    return order
+
+
+def reachable(module_rel, func_name):
+    """`(module file, name, trail)` for every function the pin's closure visits from func_name."""
+    return [(path, name, trail) for path, name, _node, trail in _closure(module_rel, func_name)]
+
+
+def write_paths(module_rel, func_name, forbidden=WRITE_VERBS):
+    """Every way func_name reaches a write: a list of trails, each `[func_name, helper, …, <the write>]`, where the
+    write is a `forbidden` verb called by name or `(a direct write)` for a write primitive. Empty for a function
+    that is read-only as far as its names can be followed."""
+    found = []
+    for _path, _name, node, trail in _closure(module_rel, func_name):
+        called = _called_names(node)
+        found += [trail + [verb] for verb in sorted(called & set(forbidden))]
+        if "open:w" in called or _writes_directly(node):
+            found.append(trail + ["(a direct write)"])
+    return found
+
+
 def assert_read_only(module_rel, func_name, forbidden=WRITE_VERBS):
-    """Assert func_name in module_rel calls none of the `forbidden` write/actuation verbs and opens no file for
-    writing. The read-only-by-construction guard: a read view must never gain an actuation path."""
-    called = _called_names(find_function(module_rel, func_name))
-    hits = sorted((called & set(forbidden)) | ({"open(write-mode)"} if "open:w" in called else set()))
-    assert not hits, "%s.%s must be read-only but calls write verb(s): %s" % (module_rel, func_name, ", ".join(hits))
+    """Assert func_name in module_rel reaches none of the `forbidden` write/actuation verbs and performs no write
+    primitive — in its own body, or in anything it can reach by name (`write_paths`). The read-only-by-construction
+    guard: a read view must never gain an actuation path, and splitting it into helpers, or moving the write into
+    another module, must not be a way to hide one (the pin used to read the function's DIRECT calls only). A hit is
+    fixed by not writing from a read view — never by trimming the closure."""
+    found = write_paths(module_rel, func_name, forbidden)
+    assert not found, "%s.%s must be read-only but reaches a write: %s" % (
+        module_rel, func_name, "; ".join(" -> ".join(p) for p in found))
 
 
 # git subcommands that MUTATE the repo / working tree (the conservative blacklist a `subprocess.run(["git", …])`
@@ -194,8 +379,9 @@ def assert_no_git_write(module_rel, chokepoint="_git", readonly=GIT_READONLY_VER
 
 
 # --- #134 / P0b: the fail-CLOSED completeness sweep -------------------------------------------------------------- #
-# assert_read_only / assert_no_git_write fail OPEN: a verb NOT in WRITE_VERBS is invisible to them, so a read view
-# that calls an UNREGISTERED mutator silently passes. assert_write_verbs_complete closes that hole — it is the
+# assert_no_git_write and the NAME half of assert_read_only fail OPEN: a verb NOT in WRITE_VERBS is invisible to
+# them, so a read view that reaches an UNREGISTERED mutator by a path the closure cannot follow silently passes.
+# assert_write_verbs_complete closes that hole — it is the
 # per-commit discipline (#134/P0b): if a new function in the pinned layer performs a direct write and is not
 # registered, CI fails here, forcing the same-commit WRITE_VERBS update that makes assert_read_only exhaustive.
 
