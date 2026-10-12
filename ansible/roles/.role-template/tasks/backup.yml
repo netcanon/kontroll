@@ -2,9 +2,8 @@
 # TEMPLATE — copy roles/.role-template to roles/<new-class> to add a device class.
 # Every device-class `backup` entrypoint follows this contract:
 #   1. record a skip if the class is not backup-capable (defaults/main.yml),
-#   2. skip device I/O under Molecule,
-#   3. capture read-only into {{ config_backup_dir }},
-#   4. record `kontroll_backup_result` for the backup-configs.yml summary,
+#   2. capture read-only into {{ config_backup_dir }},
+#   3. record `kontroll_backup_result` for the backup-configs.yml summary,
 #   5. carry an access-chain header; set no_log:true on any secret-bearing task.
 # See roles/cisco_ios/tasks/backup.yml for a worked example and
 # docs/engineering-standards.md §2b for the header contract.
@@ -26,7 +25,6 @@
 - name: Capture config for this device class
   when:
     - backup_capable | default(false) | bool
-    - not (molecule_test | default(false) | bool)
   block:
     # TODO: replace this debug with a real read-only capture that writes to
     # {{ config_backup_dir }}, then set backup_capable: true in defaults/main.yml.

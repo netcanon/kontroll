@@ -23,7 +23,6 @@
 - name: Capture OPNsense config.xml
   when:
     - backup_capable | default(true) | bool
-    - not (molecule_test | default(false) | bool)
   block:
     - name: Resolve capture filename
       ansible.builtin.set_fact:

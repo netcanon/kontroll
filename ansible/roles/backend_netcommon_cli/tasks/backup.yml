@@ -19,7 +19,6 @@
 - name: Capture config (network_cli, generic)
   when:
     - backup_capable | default(true) | bool
-    - not (molecule_test | default(false) | bool)
   block:
     - name: Resolve capture filename
       ansible.builtin.set_fact:

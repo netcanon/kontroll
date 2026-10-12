@@ -1,10 +1,8 @@
 ---
 # TEMPLATE check entrypoint — every device-class role MUST expose `check`, a
 # read-only liveness probe called by ping.yml via include_role(tasks_from: check).
-# Honor molecule_test so it is a no-op under containerized tests. See
-# roles/cisco_ios/tasks/check.yml or roles/proxmox/tasks/check.yml for worked forms.
+# See roles/cisco_ios/tasks/check.yml or roles/proxmox/tasks/check.yml for worked forms.
 
 - name: TODO liveness check for this device class
   ansible.builtin.debug:
     msg: "Implement liveness for {{ inventory_hostname }} ({{ device_role | default('?') }})"
-  when: not (molecule_test | default(false) | bool)

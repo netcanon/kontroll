@@ -19,7 +19,6 @@
 - name: Install + run node_exporter for this host's OS family
   ansible.builtin.include_tasks: "{{ ansible_os_family }}.yml"
   when:
-    - not (molecule_test | default(false) | bool)
     - ansible_os_family in ['Debian', 'Alpine']
 
 - name: Fail loudly on an unsupported OS family (never a silent skip)
@@ -28,5 +27,4 @@
       node_exporter supports Debian + Alpine; {{ inventory_hostname }} is {{ ansible_os_family }} —
       add roles/node_exporter/tasks/{{ ansible_os_family }}.yml.
   when:
-    - not (molecule_test | default(false) | bool)
     - ansible_os_family not in ['Debian', 'Alpine']

@@ -28,7 +28,7 @@ metrics, and encrypted secrets, each as an independently restartable component.
 | `ansible/` | Inventory (functional groups), one role per device class, thin playbooks (incl. `bootstrap.yml`), SOPS-encrypted secrets. |
 | `dashboards/` | Homepage config + Grafana dashboards-as-code. |
 | `prometheus/` | Scrape config + file-based service-discovery targets. |
-| `tests/` | The IaC test pyramid: `validate` (L1/L2), mock inventory, Molecule. |
+| `tests/` | The test pyramid: `validate` (L1/L2), the pytest and browser suites, the mock inventory. |
 | `docs/` | SETUP, engineering standards, VM-creation recipe. |
 
 ## Design rule (non-negotiable)

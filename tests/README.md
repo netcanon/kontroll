@@ -18,11 +18,11 @@ test-doc + data-testid + test-after-change discipline is
 | Layer | What | Tooling | When |
 |---|---|---|---|
 | **L1 lint** | YAML/Ansible/compose/Prometheus syntax + secret hygiene | `validate.ps1` / `validate.sh` | every commit (pre-commit + CI) |
-| **L2 validate** | playbooks parse against a mock inventory; role logic in containers | `--syntax-check`, Molecule | on change, CI |
+| **L2 validate** | playbooks parse against a mock inventory | `--syntax-check` | on change, CI |
 | **L2 pytest** | `galaxy.py` + GUI logic, shell-outs mocked (no lab) | `pytest` (`unit/` + `integration/`) | on change, CI |
 | **L3 GUI e2e** | the GUI in a headless browser over the real booted app | Playwright (`tests/e2e/`, `e2e` marker) | a dedicated CI job |
 | **L3 live smoke** | real fleet reachable; services respond | `playbooks/ping.yml`, post-deploy asserts | manual / Semaphore schedule |
-| **L4 idempotence** | second apply = `0 changed` | re-run the role; Molecule `idempotence` | per role |
+| **L4 idempotence** | second apply = `0 changed` | re-run the play against a scratch host (by hand — no automated harness) | per role |
 
 ## Running
 
@@ -37,9 +37,6 @@ bash tests/validate.sh --strict
 ```bash
 # L2 dry-run a playbook against fake hosts (no real device touched)
 ansible-playbook -i tests/mock-inventory.yml ../ansible/playbooks/backup-configs.yml --check --diff
-
-# L2 containerized role test (when molecule is installed)
-cd tests/molecule/default && molecule test
 ```
 
 ## Isolation (per layer)
@@ -49,7 +46,7 @@ cd tests/molecule/default && molecule test
 | L1 | none needed — pure static analysis of files |
 | L2 | `mock-inventory.yml` with `ansible_connection: local` + RFC-5737 doc IPs — the single seam for real↔fake (our `FakeCollector`) |
 | L3 | runs against the live fleet; read-only plays only unless gated |
-| L4 | a throwaway Molecule container, destroyed after |
+| L4 | a scratch host or VM, destroyed after |
 
 ## The single mock seam
 
@@ -64,8 +61,8 @@ real ↔ fake you change the inventory, nothing else.
 2. **L2 syntax**: a new playbook is picked up by `validate` automatically.
 3. **L2 pytest**: drop a `test_*.py` under `unit/` (pure logic) or `integration/`
    (a command driven as a black box). Mark it `@pytest.mark.unit`/`integration`.
-4. **L2 Molecule**: copy `molecule/default` to `molecule/<role>` and point it at
-   the role; assert converge + idempotence.
+4. **L2 check mode**: give the role's class a host in `mock-inventory.yml` and dry-run
+   the play against it (the `--check --diff` command above).
 5. **L3 smoke**: add a read-only assertion play (service responds / target `up`)
    under `ansible/playbooks/` and tag it `smoke`.
 

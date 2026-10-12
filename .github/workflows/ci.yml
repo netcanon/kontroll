@@ -1,7 +1,7 @@
 # CI — the OFFLINE correctness gate. Runs the exact same tests/validate.sh used locally
 # and on the control VM (single source of truth for "is it green"), hermetically: the
-# live lab is NEVER in CI (docs/qa-and-release-pipeline.md). pytest/molecule/gui-smoke
-# land here as the QA plan rolls out.
+# live lab is NEVER in CI (docs/qa-and-release-pipeline.md). A check-mode run of the plays
+# and the compose-up smoke land here as the QA plan rolls out.
 #
 # RUNNERS (public-split, 2026-10-08): every job's `runs-on` is the repository/organization variable
 # KONTROLL_RUNS_ON — a JSON string — and defaults to GitHub-hosted `ubuntu-latest` when the variable is unset.

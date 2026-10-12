@@ -4,4 +4,3 @@
 - name: Liveness check (stub)
   ansible.builtin.debug:
     msg: "TODO: implement RouterOS liveness for {{ inventory_hostname }}"
-  when: not (molecule_test | default(false) | bool)

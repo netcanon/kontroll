@@ -21,7 +21,6 @@ rules:
 
 ignore: |
   ansible/collections/
-  **/.molecule/
   ansible/backups/
   ansible/secrets/
   instance/secrets/

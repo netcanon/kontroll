@@ -11,6 +11,17 @@ NetConfig project.
 
 ## [Unreleased]
 
+### chore(tests): the Molecule scaffold is removed — it could not fail (2026-10-12)
+
+`tests/molecule/default` converged one role with `molecule_test: true`, and every role's `check` and `backup`
+entrypoint answered that flag by skipping its device tasks — so the converge ran nothing and its idempotence step
+could not fail. No gate ran it, yet the documents listed it as the L2/L4 role test. The scenario, its two lint
+exclusions and the `molecule_test` conditional in every role (and in the role template a new class is copied from)
+are gone; the flag was never set outside the deleted converge, so no run changes. The test documents now say what
+is true: playbooks are parsed against the mock inventory, nothing evaluates a role yet, and a check-mode run of the
+plays in CI is the open item. `tests/unit/test_roles_have_no_test_only_branch.py` keeps the branch from coming back
+with the next role copied from an old checkout.
+
 ### fix(gui): only literal markup reaches `innerHTML` — the paint rule becomes an allow-list (C19) (2026-10-12)
 
 The Pending panel painted a staged proposal's run id, commit subject and changed path names through `innerHTML`.

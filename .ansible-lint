@@ -6,7 +6,6 @@ profile: moderate
 
 exclude_paths:
   - ansible/collections/
-  - tests/molecule/
   - ansible/backups/
   - ansible/roles/.role-template/   # a copy-me template, not a real role
   - ansible/secrets/                # SOPS ciphertext — not human YAML, don't lint (legacy path, pre-move)
