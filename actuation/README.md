@@ -23,8 +23,9 @@ passes the PLAN.md §2.5 "add an X" test, exactly like `modules/` and `capabilit
 > **Never-brick provenance (C15-a).** `provenance.signature` defaults to **`adaptive`** when absent (verify a
 > signature where the source serves one, proceed where it doesn't, fail only on a signature that *fails to
 > verify*) — so a unit from an unsigned source (all of public Galaxy today) installs rather than bricks. A unit
-> with unverified provenance (`signature != required`) may **not** target `edge_firewall`/`core_switch` (the
-> Tier-cap, fail-closed at generate). Design of record:
+> that does not declare `signature: required` may **not** target `edge_firewall`/`core_switch` (the Tier-cap,
+> fail-closed in `gen-actuation.py --check`). The cap reads the declaration: no install step fails on an absent
+> signature yet, so `required` installs as `adaptive` does (SECURITY.md C15-a has the limit). Design of record:
 > [docs/reviews/2026-06-25-never-brick-supply-chain/](../docs/reviews/2026-06-25-never-brick-supply-chain/).
 
 The descriptor (`unit.yml`) is the **only** hand-authored/GUI-authored file; the generated artifacts are never
@@ -55,12 +56,14 @@ install:                          # ABSENT for kind: standalone (nothing to inst
       version: "==3.10.4"         # EXACT '==' pin (NOT a floor) — an app-store install pins a REVIEWED version
   provenance:                     # metadata the never-brick install step consumes — NEVER the lockfile (C15-a)
     source: galaxy                # galaxy | git   (MVP: galaxy only; git is rejected)
-    signature: adaptive           # required | adaptive | none  — ABSENT ⇒ adaptive (verify-if-served, pass-if-
-                                  #   absent, fail-on-invalid; the brick-proof default). 'required' = fail-on-absence
-                                  #   (Tier-cap REQUIRES it for edge_firewall/core_switch — which is why this
-                                  #   example targets a group that is neither). 'none' = drop L3.
-    keyring: null                 # OPTIONAL host path; null ⇒ the auto-provisioned default keyring (absence ≠ error)
-    sha256: null                  # OPTIONAL 64-hex L2b digest; null ⇒ the wrapper records it at first install
+    signature: adaptive           # required | adaptive | none  — ABSENT ⇒ adaptive. A DECLARATION: it is recorded
+                                  #   in the trust sidecar and no install step reads it yet — all three install
+                                  #   alike (SECURITY.md C15-a). 'required' is what the Tier-cap asks a unit aimed
+                                  #   at edge_firewall/core_switch to declare — which is why this example targets
+                                  #   a group that is neither.
+    keyring: null                 # OPTIONAL host path; shape-checked, not used yet (the install reads the fleet's)
+    sha256: null                  # OPTIONAL 64-hex digest; recorded in the sidecar, compared with nothing yet —
+                                  #   the wrapper keeps its own record of what it first installed (L2b)
     captured_at: "2026-06-24T00:00:00Z"
     captured_by_run: "a1b2c3d4e5f6"   # the kontroll_run_id that staged this unit (audit correlation)
 

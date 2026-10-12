@@ -3,7 +3,7 @@
 WHY (the failures these guard):
   * On the 0-signature fleet EVERY collection must classify `unsigned-pinned` (amber) — verified by pin + checksum
     ONLY — so a green "installed" never implies a signature was checked. A collection is `signed` (green) ONLY when
-    its policy is `required` AND a keyring is actually held (the one path where a served signature is verify-or-fail).
+    its policy is `required` AND a keyring is actually held (a declaration and a file: no install reads the policy).
   * `digest_recorded` must reflect the L2b TOFU lock; the read must degrade to `available:false` when the trust
     sidecar isn't generated yet (a fresh tree pre-bootstrap) — never raise (the in-process GUI must survive).
   * the read must NEVER gain a write/actuation path (read-only-by-construction; INVARIANT D*).

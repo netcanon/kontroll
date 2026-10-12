@@ -12,8 +12,8 @@ be caught BEFORE it unions a pin or anything installs it. This generator's R2 jo
   * `target.device_class` is an ENABLED module (instance/fleet.yml) — no orphaned install (report 21 §3),
   * closed blast-radius + provenance enums; `source: git` is rejected (MVP = galaxy only),
   * never-brick provenance (R5 PR-B): `signature` ∈ {required, adaptive, none} (absent ⇒ adaptive, the brick-proof
-    default), `keyring`/`sha256` shape-checked when present, and the Tier-cap — a unit with unverified provenance
-    (signature != required) may NOT target `edge_firewall`/`core_switch` (fail closed at generate). Design of record:
+    default), `keyring`/`sha256` shape-checked when present, and the Tier-cap — a unit that does not declare
+    `signature: required` may NOT target `edge_firewall`/`core_switch` (fail closed in --check). Design of record:
     docs/reviews/2026-06-25-never-brick-supply-chain/.
 
 The PUSH-stage artifacts (the generated Semaphore template + the role-wrapper play) are NOT emitted yet — they

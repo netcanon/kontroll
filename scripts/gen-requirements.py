@@ -267,14 +267,16 @@ def main():
     else:
         fleet = _load(paths.resolve("config/fleet.yml"))
         enabled = fleet.get("enabled_modules") or []
-        default_policy = fleet.get("signature_policy") or "adaptive"   # the instance-wide NB-5 ratchet (default adaptive)
+        default_policy = fleet.get("signature_policy") or "adaptive"   # the instance-wide default the sidecar records
         if default_policy not in SIG_POLICIES:
             raise SystemExit("instance signature_policy %r must be one of %s (fail closed)"
                              % (default_policy, list(SIG_POLICIES)))
-        if default_policy == "required":               # FIX-RATCHET: a fleet-wide strict on an unsigned source bricks
-            sys.stderr.write("WARNING: signature_policy: required is set fleet-wide — on a source that serves NO "
-                             "signatures (public Galaxy, every current fleet collection) this FAILS every install. Use "
-                             "only with a signing-enabled source (Automation Hub / a self-signed mirror).\n")
+        if default_policy == "required":               # say what the word does: it is recorded, not enforced
+            sys.stderr.write("WARNING: signature_policy: required is set fleet-wide, and no install step enforces it "
+                             "yet: every collection installs with the command line an `adaptive` one gets, and no "
+                             "install fails for a missing signature. The word is recorded in the trust sidecar, and "
+                             "the provenance view shows a collection as `signed` once a keyring file exists — "
+                             "without a signature having been checked. SECURITY.md C15-a.\n")
         keyring = fleet.get("keyring") or DEFAULT_KEYRING
 
     out, prov = compute(enabled, paths.resolve("actuation"))  # FIX-M9: resolve_pins fails closed on conflicting `==`
