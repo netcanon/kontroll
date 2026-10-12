@@ -95,6 +95,22 @@ def _overlay_of(rel):
     return None
 
 
+def _overlay_file_present(overlay):
+    """True when the instance-overlay FILE `overlay` (a write_root()-relative `instance/…` path) exists."""
+    return os.path.exists(os.path.join(write_root(), overlay))
+
+
+def _overlay_dir_present():
+    """True when this tree has an `instance/` overlay directory at all (a configured node), under write_root().
+
+    These two probes are the ONLY place the overlay's presence is decided — overlay_rel(), resolve() and
+    overlay_target() all ask them. The test suite makes itself hermetic through them (tests/conftest.py): at the
+    real checkout it answers "absent", so every test reads the shipped example whatever a private overlay holds.
+    There is no production switch for that, on purpose: a setting that makes a live node read the example is a
+    hazard."""
+    return os.path.isdir(os.path.join(write_root(), INSTANCE_DIR_NAME))
+
+
 def overlay_rel(rel):
     """Resolve a legacy ROOT-relative instance path to the overlay location when that file is present, else the
     legacy path — returned ROOT-relative (posix). The instance overlay lives in the WRITE root (the propose clone),
@@ -104,7 +120,7 @@ def overlay_rel(rel):
     constants (V1 §2.3 — the two seams are non-overlapping). Used for strings that must stay overlay-relative (e.g.
     the sops --filename-override that must match a .sops.yaml path_regex)."""
     overlay = _overlay_of(rel)
-    if overlay is not None and os.path.exists(os.path.join(write_root(), overlay)):
+    if overlay is not None and _overlay_file_present(overlay):
         return overlay
     return rel.replace(os.sep, "/")
 
@@ -138,7 +154,7 @@ def resolve(rel, write=False):
     if not write and r == rel.replace(os.sep, "/"):               # no overlay file shadows it
         example = _example_rel(rel)
         if (example is not None
-                and not os.path.isdir(os.path.join(write_root(), INSTANCE_DIR_NAME))   # an UNCONFIGURED tree only
+                and not _overlay_dir_present()                                         # an UNCONFIGURED tree only
                 and not os.path.exists(os.path.join(write_root(), r))                 # and no legacy file either
                 and os.path.exists(os.path.join(ROOT, example))):                      # and the example ships it
             return os.path.join(ROOT, example)
@@ -154,7 +170,7 @@ def overlay_target(rel):
     `write_root()` (the propose clone holds the overlay). With NO instance/ dir (today / WRITE_ROOT==ROOT) it is
     identical to legacy on every mapped path — the same zero-behavior-change guarantee as resolve()."""
     overlay = _overlay_of(rel)
-    if overlay is not None and os.path.isdir(os.path.join(write_root(), INSTANCE_DIR_NAME)):
+    if overlay is not None and _overlay_dir_present():
         return overlay
     return rel.replace(os.sep, "/")
 

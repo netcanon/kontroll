@@ -60,6 +60,14 @@ hand-written: the same "declare the class, the app configures itself" guarantee.
 (`gen-requirements.py`), the scrape targets (`gen-observability.py`), and the portal tiles (`gen-homepage.py`) are
 all generated from this one self-describing `module.yml` + the inventory.
 
+Every generator whose output is committed has the same three modes. The committed file is the public,
+example-derived reference: `--check` validates it against `instance.example/` and `--example` regenerates it from
+there, on any checkout. The bare run reads the instance overlay — it is what `deploy-stack` and the capability
+regen call on a node, and it writes that node's real file. (This holds for `gen-observability`, `gen-logging`,
+`gen-homepage`, `gen-backup`, `gen-prometheus-jobs`, `gen-exporters` and `gen-secret-env`.
+`gen-class-capabilities --check` reads the example fleet as well; it only checks. The collection lockfile is
+per-node and gitignored, so `gen-requirements` has no example mode.)
+
 ### Self-describing capability blocks
 
 Each capability is a drop-in `module.yml` block, turned into actuation config by a generator (none hand-written):

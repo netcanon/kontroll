@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(tests,generators): the suite and four product gates read the shipped example, never a private fleet (2026-10-12)
+
+`kontroll.paths` resolves instance config overlay-first, so on a tree that carries a real `instance/` — the
+maintainer's — the suite and four generators' `--check` (`gen-backup`, `gen-prometheus-jobs`, `gen-exporters`,
+`gen-secret-env`) compared committed, example-derived files with a private fleet. They were green only because
+that fleet enabled the same classes as `instance.example/`; the first real fleet edit would have turned named
+tests and the `gen-backup` gate red on that tree alone, with a "stale" committed file nobody could regenerate from
+a public clone. The four generators now do what the other four already did: `--check` validates against
+`instance.example/`, the new `--example` regenerates from it, and the bare run — what a deploy calls on a node —
+still reads that node's overlay (`gen-exporters` reads the example's `device_trust` under `--check` too, instead of
+a hard-coded `instance/instance.yml`). For the suite, the resolver's two overlay probes became functions and
+`tests/conftest.py` wraps them at import time so that, at the real checkout only, they answer "absent"
+(`tests/_hermetic.py`); a tmp root is untouched, and there is no production switch. **On a deployed node** whose
+fleet differs from the example, `tests/validate.sh` now reports these four files stale after a deploy rewrote
+them — as it already did for the other four; that is the node's own state, not a fault. Proofs:
+`tests/unit/test_suite_is_overlay_hermetic.py`, `tests/unit/test_generators_check_reads_the_example.py`.
+
 ### fix(collections): `community.docker` is a core collection — `deploy-stack` no longer depends on a device class (2026-10-12)
 
 `deploy-stack` builds the control image and its networks with `community.docker` on every fleet, but the only

@@ -25,14 +25,14 @@ def _gen():
     return mod
 
 
-def test_real_fleet_manifest_unifies_telemetry_and_logging_env_value_free():
-    """The real fleet's manifest carries BOTH the telemetry exporter env (proxmox declares `metrics: [pve]`, whose
+def test_example_fleet_manifest_unifies_telemetry_and_logging_env_value_free():
+    """The shipped example fleet's manifest carries BOTH the telemetry exporter env (proxmox declares `metrics: [pve]`, whose
     secret_env_map -> PVE_EXPORTER_*) AND the logging token (`logs: [proxmox_api]` -> KONTROLL_PVE_LOG_TOKEN), each
     keyed by env var with its secret_domain + a str.format template over SOPS field NAMES — and NO composed value /
     auth scheme (C12: names only). Guards (a) the telemetry env silently dropping out of the union (the smoking-gun
     gap this run closed), (b) the logging token going missing, (c) a credential leaking into the committed manifest."""
     gen = _gen()
-    man = gen.secret_env_files(gen._load(paths.resolve("config/fleet.yml")))[gen.MANIFEST_REL]
+    man = gen.secret_env_files(gen._load("instance.example/fleet.yml"))[gen.MANIFEST_REL]
     assert "PVE_EXPORTER_USER:" in man and "KONTROLL_PVE_LOG_TOKEN:" in man, "both axes in ONE manifest"
     assert "secret_domain: proxmox" in man and "{proxmox_api_user}" in man, "domain NAME + field-NAME template"
     assert "PVEAPIToken=" not in man and "root@pam" not in man, "NO composed token / auth scheme / value (C12)"
