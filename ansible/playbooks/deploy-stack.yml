@@ -192,7 +192,8 @@
     _tls_mode_raw: "{{ (_instance.frontend | default({})).tls_mode | default('') }}"
     # F3 — how this instance promotes a staged proposal (instance.yml top-level `trust_mode`). Read like
     # _tls_mode_raw; UNLIKE tls_mode it has NO safe default — an unset/garbage value HARD-FAILS the deploy below
-    # (kontroll never guesses a trust posture). 'separated' (human promote, prod) | 'solo' (auto-promote, homelab).
+    # (kontroll never guesses a trust posture). 'separated' (human promote, prod) | 'solo' (declares intent to
+    # auto-promote; this edition ships no auto-promoter — docs/trust-mode.md).
     _trust_mode: "{{ _instance.trust_mode | default('') }}"
     _acme_domain: "{{ (_instance.frontend | default({})).domain | default('') }}"
     _acme_email: "{{ (_instance.frontend | default({})).acme_email | default('') }}"
@@ -268,8 +269,8 @@
         that: _trust_mode in ['solo', 'separated']
         fail_msg: >-
           instance/instance.yml trust_mode is '{{ _trust_mode | default('unset', true) }}' — set it to 'separated'
-          (a human runs the promote-proposal Semaphore task; prod) or 'solo' (auto-promote; homelab — the
-          auto-promoter ships later). kontroll never picks your posture for you. See docs/trust-mode.md.
+          (a human runs the promote-proposal Semaphore task; prod) or 'solo' (declares intent to auto-promote;
+          docs/trust-mode.md says what that does on this edition). kontroll never picks your posture for you.
         quiet: true
       when: ('api' in stack_services) or ('onboard-gui' in stack_services)
 
@@ -969,12 +970,13 @@
             - {path: "{{ kontroll_api_dir }}/tls/api.key", mode: "0640"}
             - {path: "{{ kontroll_api_dir }}/tls/api.crt", mode: "0644"}
 
-    - name: Provision the onboard-gui host artifacts (RO content clone; age key + TLS stay host-provisioned)
+    - name: Provision the onboard-gui host artifacts (RO content clone; the age key stays host-provisioned)
       # Mirrors the API block: onboard-gui (Flask) is the SAME network-service trust tier — it serves the
       # capability dialog + device onboarding. Read-only by default (the clone is root-owned ⇒ uid-1001 reads but
       # cannot write/push); the gated privileged block makes it writable + adds a `local` remote so a
-      # capability-promote can only PROPOSE (push proposed/<run_id>). This block does NOT mint the age key or TLS
-      # — those stay host/GUI-provisioned (security boundary: never an agent, never committed). C10.
+      # capability-promote can only PROPOSE (push proposed/<run_id>). This block never mints the age key — that
+      # stays host/GUI-provisioned (security boundary: never an agent, never committed). The TLS certificate is
+      # generated further down, in self_signed mode, when none is there. C10.
       when: "'onboard-gui' in stack_services"
       block:
         - name: Ensure the onboard-gui host dirs exist

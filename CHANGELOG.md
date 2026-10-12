@@ -11,6 +11,38 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs: five things the documents said that the tree does not do — and one dead link fixed with them (2026-10-12)
+
+**One of these changes what an install renders.** The Grafana link in the GUI's Index panel
+(`config/services.yml`) and the Grafana tile every fresh install's Homepage starts with
+(`instance.example/dashboards/homepage/services.yaml`) said `https://<mgmt>:3002`. Grafana serves plain HTTP on
+that port — the capability dialog's deep-links have always been built on `http://` — so the link and the tile
+were dead on first boot, and a test pinned the wrong value. Both say `http://` now, and one test holds the Index
+link and the deep-link base together. **An existing instance's own
+`instance/dashboards/homepage/services.yaml` is not rewritten:** its Grafana tile keeps `https://` until you
+change it (the Homepage editor on `:8443`, or the file). The Index link follows on the next deploy.
+
+The rest is text. *"The auto-promoter ships in a later release"* stood in many places — two install
+documents, `trust-mode.md`, SECURITY.md (which also gave it the installer's control number), the example
+`instance.yml`, `kontroll-init`'s help and refusal, the deploy's assertion message, the Settings row. Nothing in
+this tree backs that forecast: the auto-promoter is the permissive edition's code and is kept on its own branch.
+The sentences this tree shares with that edition — the two install documents and the deploy's assertion message —
+now say only what `separated` does and send the reader to `trust-mode.md`; the rest say what is true here: this
+edition has no auto-promoter, and `solo` behaves like `separated`. `trust-mode.md` itself now says which of its
+sections describe an edition that runs one.
+*"Binds every privileged port to your `mgmt_ip` only (never 0.0.0.0)"* (SETUP.md) left out the two ports that
+are published on all interfaces on purpose, Homepage and Semaphore — and Semaphore is where a proposal is
+promoted; the sentence now names them, as SECURITY.md C3 already did, and says to firewall them on a
+multi-homed host. The promote step's Semaphore URL in `install-from-scratch.md` said `https://`; it is `http://`. SETUP.md
+now says which surfaces serve HTTPS in which `tls_mode`, and the arming runbook's verify command uses the scheme
+the default mode serves. `api/main.py` said routes are "drop-in routers — adding a domain = adding a file, never
+editing a hub" (registering one is an import and a tuple entry in that file), that the privileged onboard was
+"deliberately deferred" and the API "not deployed", and its served OpenAPI description promised mutation routes
+"in later workstreams"; all three describe what is there now, and a test fails for a route module that defines
+a router and is not registered. SETUP.md said the deploy "does NOT mint" the GUI's TLS certificate and told the
+operator to provision one; in `self_signed` mode the deploy mints it when none is there (the age key is the part
+that stays yours to provision — unchanged). No break-glass sentence is touched here.
+
 ### fix(security): the request boundary closes its leftovers — the probe's argv, zone ids, the plan builders, the dashboards selection (C22) (2026-10-12)
 
 C22 says every request field that becomes a path component, an inventory key or an argv word is a closed charset,

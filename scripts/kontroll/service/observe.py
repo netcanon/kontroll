@@ -178,7 +178,9 @@ def _foreign_dashboard_file(dashboards):
 def _grafana_base():
     """The Grafana base URL for the deploy, or None when it can't be resolved (no fabricated host). Prefers the
     by-IP form the operator reaches from the mgmt network (`http://<KONTROLL_MGMT_IP>:3002` — Grafana publishes
-    HTTP on :3002, matching the Homepage tile), falling back to the reverse-proxied domain form
+    HTTP on :3002; the Index link in config/services.yml carries the same URL and tests/unit/test_services.py
+    holds those two together; the shipped Homepage tile carries it too, pinned by
+    tests/unit/test_kontroll_init.py), falling back to the reverse-proxied domain form
     (`https://grafana.<KONTROLL_DOMAIN>`, GF_SERVER_ROOT_URL). Both come from the deploy `.env`; the onboard-gui
     container is passed KONTROLL_MGMT_IP/KONTROLL_DOMAIN so the link resolves there."""
     ip = os.environ.get("KONTROLL_MGMT_IP")

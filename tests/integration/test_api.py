@@ -4,6 +4,11 @@ read-only route's status + shape, that the typed `/openapi.json` emits, and that
 ingest its OWN spec (the dogfooding). The L2b route contract of docs/api-architecture.md §6;
 the API analogue of test_gui_api.py.
 """
+import importlib
+import os
+import pkgutil
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -252,3 +257,40 @@ def test_classify_survives_a_fleet_file_line_that_is_not_a_class_key(tmp_repo, m
         r = c.get("/classify/cisco.ios")
     assert r.status_code == 200, r.text
     assert "code" not in r.json()
+
+
+def test_every_route_module_is_mounted():
+    """Every module under `api/routes/` that defines a `router` has each of its routes — method and path — among
+    the app's mounted routes. A route file is registered by hand in `api/main.py` (an import and one entry in a tuple — the module
+    docstring used to say it was "a drop-in, never editing a hub", which invited exactly this): a file that is
+    written, tested against its own router and never registered would ship as dead code with green tests. It
+    passes on the tree as it is; it is a guard for the next route, not a test that was ever red."""
+    import api.routes
+
+    # the app's OpenAPI document, not `app.routes`: newer FastAPI keeps an included router there as one opaque entry
+    document = create_app(Settings(api_token=None, audit_log="unused")).openapi()["paths"]
+    mounted = {(method.upper(), path) for path, operations in document.items() for method in operations}
+    modules, unmounted = 0, []
+    for info in pkgutil.iter_modules(api.routes.__path__):
+        router = getattr(importlib.import_module("api.routes." + info.name), "router", None)
+        if router is None:
+            continue
+        modules += 1
+        unmounted += ["%s %s" % (method, route.path) for route in router.routes for method in sorted(route.methods)
+                      if (method, route.path) not in mounted]
+    assert modules >= 5, "the route modules were not found — this test has stopped reading anything"
+    assert unmounted == [], "routes of a module under api/routes/ that api/main.py does not register: %s" % unmounted
+
+
+def test_the_readme_lists_the_routes_the_app_mounts():
+    """`api/README.md`'s route table names every route the app mounts — method and path — and no route that is
+    not there (FastAPI's own `/openapi.json`, `/docs` and `/redoc` aside, which the table lists and the schema
+    does not). Guards a list in prose rotting the way a count does: the table had lost five routes — the
+    capability and secrets routers and one read — while the document beside it said it was the place to look."""
+    readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                               "api", "README.md"), encoding="utf-8").read()
+    listed = {(method, path) for method, path in re.findall(r"`(GET|POST|PUT|PATCH|DELETE) (/[^`?\s,]*)", readme)}
+    document = create_app(Settings(api_token=None, audit_log="unused")).openapi()["paths"]
+    mounted = {(method.upper(), path) for path, operations in document.items() for method in operations}
+    assert mounted - listed == set(), "mounted routes the README's table does not list"
+    assert listed - mounted == {("GET", "/openapi.json")}, "rows of the README's table for routes that are not mounted"

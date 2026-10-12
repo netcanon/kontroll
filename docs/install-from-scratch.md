@@ -64,9 +64,9 @@ private `instance/` overlay with your own keys — never the tool author's:
 python3 scripts/kontroll-init.py --fresh --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated
 ```
 
-> `--trust-mode` is **required** with `--fresh` — kontroll never silently picks your promote posture. `separated`
-> (a human promotes each staged proposal — recommended/prod) or `solo` (homelab auto-promote; the auto-promoter
-> ships in a later release, so for now it behaves like `separated`). See [trust-mode.md](trust-mode.md).
+> `--trust-mode separated` puts a human review gate on every staged proposal (the recommended posture). What
+> `solo` does, and what `--fresh` does when the flag is left out, depends on the edition you are installing — read
+> [trust-mode.md](trust-mode.md) before choosing anything else.
 
 `--fresh` copies `instance.example/` to `instance/` (your keys only — it never inherits
 another instance's recipients), mints your control age key, seeds `instance/.sops.yaml`,
@@ -234,7 +234,7 @@ for the full recipe; the itinerary:
 app, with a different login**, than the GUI that created it — so a leaked API token can only park rejectable
 proposals, never rewrite the canonical (SECURITY.md C10). To promote a `run_id`:
 
-1. Open Semaphore at **`https://${KONTROLL_MGMT_IP}:3001`** and log in **`admin` / `semaphore_admin_password`**
+1. Open Semaphore at **`http://${KONTROLL_MGMT_IP}:3001`** and log in **`admin` / `semaphore_admin_password`**
    — the §2 value, **not** the GUI's `gui_admin_password` (a deliberately separate credential).
 2. Open the **`promote-proposal`** template (registered by §6) → **Run** → in the survey, enter the **`run_id`**
    from the GUI's propose/onboard response → **Run**.
@@ -266,7 +266,8 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
 > **The GUI promote path** is served by **onboard-gui** (Flask) over the same `gitio` staging mechanism as the
 > API — §7's arm provisioned its writable clone identically (`user: "1001:1001"`, the `/srv/kontroll.git` mount,
 > chown to uid-1001, a `local` remote) — so a capability-promote from the GUI stages `proposed/<run_id>` (never
-> `main`), exactly like the API. The age key + TLS stay host/GUI-provisioned (the security boundary).
+> `main`), exactly like the API. The age key stays host/GUI-provisioned (the security boundary); the self-signed
+> certificate is minted by the deploy.
 > (**Live-verified 2026-06-15/18:** the gated deploy provisioned the clone; a `run_id` push staged
 > `proposed/<run_id>` with `main` untouched; the `promote-proposal` task FF-merged it onto `main`.)
 

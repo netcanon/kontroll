@@ -44,8 +44,8 @@ def _load_yaml(rel):
 def _identity():
     """Instance identity from instance/instance.yml — mgmt_ip / domain / tls_mode / trust_mode / source_of_truth.
     Non-secret config values, surfaced read-only. `trust_mode` (F3) is the chosen promote posture (separated|solo|
-    None-if-unset); surfaced READ-ONLY here (no edit knob — the auto-promoter that gives solo its effect is a later,
-    gated rung). {"error": ...} if instance.yml is unreadable."""
+    None-if-unset); surfaced READ-ONLY here (no edit knob; this edition has no auto-promoter).
+    {"error": ...} if instance.yml is unreadable."""
     inst = _load_yaml("config/instance.yml")
     if not inst:
         return {"error": "instance.yml not present or unreadable"}

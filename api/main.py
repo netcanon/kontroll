@@ -1,16 +1,19 @@
 """The FastAPI app factory.
 
 `create_app()` builds the app; the lifespan loads the drop-in capability catalog
-(vectors/overrides/backends) once into `app.state` (mirrors netcanon's one-time `create_app`
-load). Routes are included as drop-in routers from `api/routes/` — adding a domain = adding a
-file, never editing a hub (the same doctrine as inventory drop-ins, vectors, backends, services).
+(vectors/overrides/backends) once into `app.state`. Each domain is one router module under
+`api/routes/`; **registering it is an explicit edit here** — the import below and the tuple in
+`create_app()` — so the set of mounted routes is readable in one place and a file dropped into
+`api/routes/` is never mounted by accident (tests/integration/test_api.py fails for a module that
+defines a router and is not registered).
 
-Scope (docs/api-architecture.md §8): read-only inquiry (search/probe/classify/health) + the
-low-blast-radius privileged routes (POST /refresh, POST /capture-exceptions, GET /audit/log) behind
-Bearer-token auth + a fail-closed, run_id-correlated audit. The highest-blast-radius mutation
-(onboard --apply: repo write + canonical push over HTTP) is deliberately deferred. Privileged routes
-are fail-closed: no KONTROLL_API_TOKEN ⇒ 503. Still **not deployed** — mgmt-VLAN-only, never WAN
-(SECURITY.md C3/C9). Run locally for dev with: `uvicorn api.main:app --reload`.
+Scope: read-only inquiry (search / probe / classify / units / health) and the privileged routes
+(refresh, capture-exceptions, onboard, capability, secrets, actuation, audit log) behind Bearer-token
+auth and a fail-closed, run_id-correlated audit. Privileged routes are fail-closed: no
+KONTROLL_API_TOKEN ⇒ 503. Deployed read-only by default; under the gated `api_privileged` deploy a
+privileged write to the repository can only stage `proposed/<run_id>`, never `main` (SECURITY.md C9/C10) —
+`POST /refresh` rebuilds a git-ignored cache and stages nothing. Management network only, never WAN.
+Run locally for dev with: `uvicorn api.main:app --reload`.
 """
 from contextlib import asynccontextmanager
 
@@ -57,16 +60,16 @@ def _boundary_refused(request: Request, exc: paths.RequestBoundaryError) -> JSON
 
 def create_app(settings=None) -> FastAPI:
     """Build the FastAPI app. `settings` (defaults from the environment) carries the privileged-route
-    Bearer token + audit-log path + the rate-limit policy; the read-only routes ignore the token. Each
-    route group is a drop-in router — adding a domain = adding a file. The rate limiter is attached once
-    here (a single middleware, no per-route edits — api/ratelimit.py)."""
+    Bearer token + audit-log path + the rate-limit policy; the read-only routes ignore the token. Route
+    modules are registered explicitly in the loop below. The rate limiter is attached once here (a single
+    middleware, no per-route edits — api/ratelimit.py)."""
     app = FastAPI(
         title="kontroll onboarding API",
         version="0.1.0",
         summary="Capability-aware onboarding inquiry over Ansible Galaxy + local content.",
-        description="Read-only inquiry over the kontroll service layer (search / probe / classify). "
-                    "Mutation routes, token auth, and audit land in later workstreams "
-                    "(docs/api-architecture.md). Never WAN-exposed.",
+        description="Inquiry (search / probe / classify / units) and token-gated routes — audited writes that "
+                    "stage a proposal, and reads of the audit log and of field names — over the kontroll "
+                    "service layer (docs/api-architecture.md). Never WAN-exposed.",
         lifespan=lifespan,
     )
     app.state.settings = settings or from_env()

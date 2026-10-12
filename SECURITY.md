@@ -529,8 +529,9 @@ without `--trust-mode`, the template ships it commented, and `deploy-stack.yml` 
 This release ships the **flag only**: the GUI/API trust boundary below is **byte-identical in both modes** (still
 propose-only, still AST read-only-pinned, canonical `:ro`), so the posture adds **zero new residual**. The
 auto-promoter that gives `solo` its effect — and its honest residual (a GUI RCE → auto-promoted proposal) bounded by
-a blast-tier refusal / rate / diff-size guard set — is a **separate, gated rung** (will land as control **C16** with
-its own adversary pass); until then `solo` behaves like `separated`.
+a blast-tier refusal / rate / diff-size guard set — is a **separate, gated rung** that this edition does not ship
+(it is the homelab (permissive) edition's control **C17** — see the note under C18); here `solo` behaves like
+`separated`.
 
 **Implements (flag-gated by `api_privileged`, default off — read-only stays the default):**
 - **The service only PROPOSES.** When it runs (`KONTROLL_STAGE_PUSHES=1`), `gitio.commit_and_push` pushes a

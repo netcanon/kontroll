@@ -7,8 +7,9 @@
 source_of_truth: local
 
 # This node's management IP + base domain. deploy-stack renders them into docker/.env
-# as ${KONTROLL_MGMT_IP} / ${KONTROLL_DOMAIN}; the compose port binds use the IP so every
-# privileged service listens on the management interface ONLY (never 0.0.0.0 — SECURITY.md C3).
+# as ${KONTROLL_MGMT_IP} / ${KONTROLL_DOMAIN}; the compose port binds use the IP so the GUI, the API and
+# the metrics and log services listen on the management interface only. Homepage and Semaphore are published on
+# all interfaces, to sit behind your reverse proxy (SECURITY.md C3).
 # `kontroll-init --fresh --mgmt-ip X --domain Y` fills these in; otherwise edit them here.
 mgmt_ip: 192.0.2.10        # REPLACE — your control node's management IP (RFC 5737 placeholder)
 domain: example.com        # REPLACE — your base domain (placeholder ok for IP-only self_signed)
@@ -30,10 +31,10 @@ frontend:
 # trust posture). The template ships it COMMENTED so a copied-but-unedited overlay has no active value.
 #   separated  - PROD (recommended): a human runs the `promote-proposal` Semaphore task to fast-forward main. The
 #                whole of today's system. Every staged proposal is reviewed before it advances the source of truth.
-#   solo       - HOMELAB: declares intent to auto-promote (a separate kontroll-autopromoter runs the SAME FF-only/
-#                FIX-M9 promote on each staged proposal). NOTE: the auto-promoter SHIPS IN A LATER RELEASE — until
-#                then `solo` behaves like `separated` (proposals stay staged for manual promote). The GUI is propose
-#                -only + AST read-only-pinned in BOTH modes; trust_mode only ever drops the human review keystroke.
+#   solo       - declares intent to auto-promote (a separate auto-promoter would run the SAME FF-only/FIX-M9
+#                promote on each staged proposal). THIS EDITION HAS NO AUTO-PROMOTER: `solo` behaves like
+#                `separated` (proposals stay staged for a manual promote). The GUI is propose-only + AST
+#                read-only-pinned in BOTH modes; trust_mode only ever drops the human review keystroke.
 # `kontroll-init --fresh --trust-mode {separated|solo}` writes this; read docs/trust-mode.md before choosing.
 # trust_mode: separated
 

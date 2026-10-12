@@ -18,9 +18,9 @@ services:
     description: Ansible automation
   - name: Homepage
     url_template: https://control.${DOMAIN}
-    description: Portal — mgmt-bound, unauthenticated by design
+    description: Portal — unauthenticated by design; keep it on the management network
   - name: Grafana
-    url_template: https://${MGMT_IP}:3002
+    url_template: http://${MGMT_IP}:3002
     description: Metrics dashboards
   - name: Prometheus
     url_template: http://${MGMT_IP}:9090

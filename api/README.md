@@ -1,4 +1,4 @@
-# `api/` — the kontroll onboarding API (typed, read-only)
+# `api/` — the kontroll onboarding API (typed; read-only as deployed by default)
 
 A **thin typed FastAPI** over the [`scripts/kontroll/`](../scripts/README.md) service package. It
 carries no logic of its own: every route calls a `service_*` function that returns structured data,
@@ -9,8 +9,9 @@ layer the [galaxy.py refactor](../scripts/galaxy.py) extracted.
 
 ## Status & scope
 
-**Read-only inquiry** (open, cheap) **+ low-blast-radius privileged routes** (Bearer-token + audited),
-per §8 of the architecture:
+**Read-only inquiry** (open, cheap) **+ the privileged routes** (Bearer-token; every write audited), per §8 of
+the architecture. The table is held against the app: a test fails for a mounted route that is not in it, and
+for a row whose route is gone.
 
 | Method & path | Auth | Returns |
 |---|---|---|
@@ -24,6 +25,11 @@ per §8 of the architecture:
 | `POST /refresh` | token | rebuild the (gitignored) capability-matrix cache → `{count, run_id}` |
 | `POST /capture-exceptions` | token | add a capture-exception + commit + push the canonical → what changed |
 | `POST /onboard` | token | dry-run plan, or apply (module + drop-in host + fleet-enable + creds→SOPS + commit + push) |
+| `GET /onboard/cred-fields?backend=…&secrets=…&collection=…&deep=` | token | the credential fields a backend (or a curated class) asks for — names, kinds and labels, never values |
+| `GET /capability/{cap}/suggest?key=…` | token | **read-only**: whether capability `cap` (telemetry, logging, backup) fits onboarded class `key`, and with which methods |
+| `POST /capability/{cap}` | token | propose (a dry-run plan + an anti-drift token) or promote (apply — audited) a capability for a class; the write is staged, never pushed to `main`, under the gated deploy |
+| `GET /secrets/{domain}/fields` | token | **read-only**: a secret domain's form fields — their names and which are already set, never a value |
+| `POST /secrets/{domain}` | token | propose (dry-run) or apply (encrypt + stage — audited) a domain's secrets; values are never returned or logged |
 | `POST /actuation/create` | token | **author an app-store unit** from a searched collection: propose (the derived key + the unit.yml path + a token) or create (apply — audited) — renders + validates the `unit.yml` and stages it to `proposed/<run_id>` (never main). 422 bad inputs/no class; 409 collision/not-enabled; **403 the Tier-cap** (unsigned install onto edge_firewall/core_switch) |
 | `POST /actuation/{key}` | token | **the first app-store write verb**: propose (plan paths + an anti-drift token) or stage (apply — audited) a configured unit's non-secret values to `proposed/<run_id>` (never main; the operator promotes) |
 | `GET /audit/log?action=&user=&run_id=&since=` | token | query the audit log |
@@ -32,9 +38,10 @@ per §8 of the architecture:
 **Deployed read-only** ([api-architecture.md](../docs/api-architecture.md) §9): `docker/services/api.yaml`
 serves at `${KONTROLL_MGMT_IP}:8444`, the repo mounted **read-only**, with **no token** — the inquiry routes
 serve and the privileged routes are fail-closed (503). Per [SECURITY.md](../SECURITY.md) C3/C9 it is
-**mgmt-VLAN-only, never WAN**. Enabling the privileged mutations (token + a writable canonical clone + the
-age key) is a deliberate later step. (`onboard --apply` is built — dry-run by default, creds never
-returned/logged; bootstrap stays a Semaphore task.)
+**mgmt-VLAN-only, never WAN**. Enabling the privileged mutations is the gated `api_privileged` deploy (token +
+a writable content clone + a `local` remote; no age key) — a privileged write then stages `proposed/<run_id>`,
+never `main`: [docs/privileged-mutation-enablement.md](../docs/privileged-mutation-enablement.md).
+(`onboard --apply` is dry-run by default, creds never returned/logged; bootstrap stays a Semaphore task.)
 
 **Frontend exposure** is per-instance (`instance/instance.yml` `frontend.tls_mode`, resolved by
 [`scripts/kontroll/frontend.py`](../scripts/kontroll/frontend.py)): `byo_proxy` serves **HTTP** behind your

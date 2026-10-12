@@ -144,10 +144,10 @@ capability-promote path is live too, not just the API. The from-scratch recipe (
    Semaphore UI and enter the `run_id`. It fast-forwards `main` as gid-1001 (no host root — the
    `core.sharedRepository=group` + B group-write grant make the proposal refs/objects group-writable). CLI
    fallback: `sudo python3 scripts/kontroll-promote.py <run_id> --repo /srv/kontroll.git`.
-5. **Verify:** `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://<mgmt>:8444/audit/log`
+5. **Verify:** `curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" https://<mgmt>:8444/audit/log`
+   (`http://` under `frontend.tls_mode: byo_proxy` or `acme`, where the API serves plain HTTP to your proxy)
    → 200 (no token → 401); a capture-exception/capability promote returns `staged:true target_ref:proposed/<run_id>`
    with `main` unchanged; `sudo docker inspect kontroll-api` shows `/repo` rw + `/srv/kontroll.git` + **no** age key.
-   (This instance's frontend mode is `byo_proxy`, so the API serves **HTTP** on `:8444` behind NPM — curl `http://`.)
 
 ## 6. What's deferred (named, not silently dropped)
 

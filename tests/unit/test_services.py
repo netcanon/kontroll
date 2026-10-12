@@ -9,7 +9,7 @@ file), and the read-only-by-construction contract (the Index must never gain an 
 import pytest
 
 from _readonly_pins import assert_read_only
-from kontroll.service import fleet
+from kontroll.service import fleet, observe
 
 pytestmark = pytest.mark.unit
 
@@ -57,14 +57,19 @@ def test_list_services_missing_or_malformed_file_is_empty_never_raises(tmp_repo)
 
 def test_shipped_services_yml_lists_the_core_control_plane(monkeypatch):
     """The SHIPPED config/services.yml (the real tree — no tmp_repo) parses and lists the core control plane
-    (onboard-GUI, Semaphore, Grafana) with templated URLs. Guards the data file kontroll ships with being valid +
-    complete (an empty/typo'd shipped file would give every fresh install a blank services section)."""
+    (onboard-GUI, Semaphore, Grafana) with templated URLs, and the Grafana link is the URL the capability dialog's
+    deep-links are built on (`observe._grafana_base()`): plain HTTP on :3002, which is what Grafana serves.
+    Guards the data file kontroll ships with being valid + complete (an empty/typo'd shipped file would give every
+    fresh install a blank services section), and guards the two Grafana URLs drifting apart again — the Index
+    link said `https://` while the deep-link said `http://`, so one of the two was always dead."""
     monkeypatch.setenv("KONTROLL_MGMT_IP", "203.0.113.19")
     monkeypatch.setenv("KONTROLL_DOMAIN", "x.test")
     svcs = fleet.list_services()
     names = {s["name"] for s in svcs}
     assert {"Onboarding GUI", "Semaphore", "Grafana"} <= names
     assert any(s["url"] == "http://203.0.113.19:3001" for s in svcs)   # Semaphore templated from env
+    grafana = next(s["url"] for s in svcs if s["name"] == "Grafana")
+    assert grafana == "http://203.0.113.19:3002" == observe._grafana_base()
 
 
 def test_list_services_is_read_only_by_construction():
