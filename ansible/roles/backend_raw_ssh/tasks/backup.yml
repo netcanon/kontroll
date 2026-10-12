@@ -27,7 +27,6 @@
   when:
     - backup_capable | default(true) | bool
     - backend_backup_command is defined
-    - not (molecule_test | default(false) | bool)
   block:
     - name: Ensure the capture dir exists (backend is self-sufficient)
       ansible.builtin.file:

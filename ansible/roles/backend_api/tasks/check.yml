@@ -20,7 +20,6 @@
   when:
     - backend_api_recipe is defined
     - _api_recipe.check is defined
-    - not (molecule_test | default(false) | bool)
   block:
     - name: Resolve the auth token — the recipe's token_var, else the onboarded per-host convention
       # TWO names are tried because the repo has always had two, and they never met.

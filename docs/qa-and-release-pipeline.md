@@ -11,8 +11,8 @@ shapes everything:
 
 > **CI proves OFFLINE correctness; the live lab is never in CI.** Ansible runs that
 > touch real devices stay on the control VM / Semaphore (the "L3 live-verify gate").
-> CI covers lint, unit, integration-with-mocks, molecule (container driver), compose
-> validation, and security scans — everything that needs no real fleet.
+> CI covers lint, unit, integration-with-mocks, compose validation, and security
+> scans — everything that needs no real fleet.
 
 Status legend: ⬜ todo · 🟡 partial (exists, needs lift) · ✅ done.
 
@@ -23,25 +23,25 @@ Status legend: ⬜ todo · 🟡 partial (exists, needs lift) · ✅ done.
 | Layer | Today | File |
 |---|---|---|
 | 🟡 L1 lint/validate | yamllint + ansible-lint (`moderate`) + ansible syntax-check + `docker compose config` + promtool + **sops-encrypted check** + **secret-grep** | [tests/validate.sh](../tests/validate.sh) / `.ps1` |
-| 🟡 Role testing | molecule scaffold (default scenario) | [tests/molecule/](../tests/molecule/) |
+| ⬜ Role testing | none automated. Roles are parsed by `--syntax-check`; nothing evaluates them. The Molecule scaffold was removed on 2026-10-12: its converge set a flag that every role answered by skipping its device tasks, so its idempotence step could not fail | [tests/mock-inventory.yml](../tests/mock-inventory.yml) |
 | 🟡 Mock seam | `tests/mock-inventory.yml` (RFC-5737 IPs, `connection: local`) + `tests/e2e/` non-human onboarding fixture | [tests/](../tests/) |
 | ✅ pytest (code half) | `tests/{unit,integration}` over `galaxy.py` + the GUI, fully offline; in `validate` (L2) + a CI matrix job | [tests/README.md](../tests/README.md) |
 | ✅ GitHub Actions | `ci.yml` (validate + pytest **py3.11–3.14**) · `security.yml` (gitleaks history + pip-audit) · **`zizmor.yml` (GHA workflow audit)** · `dependabot.yml`; all checkouts `persist-credentials: false`, hybrid action-pinning policy (`.github/zizmor.yml`) | [../.github/](../.github/) |
 | ✅ Secret hygiene | SOPS+age per-domain, `no_log` convention, secrets gitignored, gitleaks gate | [SECURITY.md](../SECURITY.md) |
 
-The remaining gap vs netcanon: **Python static analysis (ruff/mypy/bandit), molecule-in-CI,
-trivy image scanning, and the signed-image release path.** This plan closes those.
+The remaining gap vs netcanon: **Python static analysis (ruff/mypy/bandit), a check-mode run of
+the plays in CI, trivy image scanning, and the signed-image release path.** This plan closes those.
 
 ---
 
-## 1. Test framework & layout (🟡 — landed for galaxy.py + gui; molecule/schema next)
+## 1. Test framework & layout (🟡 — landed for galaxy.py + gui; schema tests next)
 
 **pytest** is adopted with the netcanon layered layout, scoped to kontroll's real testable
 surfaces: `scripts/galaxy.py` (pure logic + subprocess orchestration) and `gui/` (Flask).
 The `unit/` + `integration/` layers below are **implemented and green** (fully offline —
 see [tests/README.md](../tests/README.md) "Code-half pytest"); **Playwright GUI e2e**
 (`tests/e2e/test_onboard_flow.py`, a dedicated CI job) is implemented + green too. The ⬜
-items (molecule-in-CI, recipe/vector schema tests) remain.
+items (a check-mode run of the plays in CI, recipe/vector schema tests) remain.
 
 ```
 tests/
@@ -74,10 +74,10 @@ tests/
   `--apply`/`enable_in_fleet`/`sops_set` never touch the real tree.
 
 **kontroll-specific additions:**
-- ⬜ **Molecule in CI** — run the existing `tests/molecule/default` under the **docker
-  driver** so role idempotence (`0 changed` on second converge) is asserted without the
-  lab. Add a scenario per generic backend (`backend_netcommon_cli`, `backend_raw_ssh`,
-  `backend_api`) using mocked endpoints.
+- ⬜ **The plays evaluated in CI** — `ansible-playbook --check` of the install playbooks on a
+  fresh checkout and of the fleet plays against `tests/mock-inventory.yml`, so templating,
+  role dispatch and `set_fact` logic are executed without the lab. Check mode takes the
+  role Molecule was scaffolded for (the scaffold never asserted anything and is gone).
 - ⬜ **Recipe/vector/backend schema tests** — assert every `vectors/*.yml`,
   `ansible/backends/*/backend.yml`, `backends/api/recipes/*.yml` parses and matches its
   contract (the extensibility seam — netcanon's "frozen pipeline signatures" analogue).
@@ -130,7 +130,7 @@ Mirror netcanon's dev loop, enforced locally + in CI:
 
 ---
 
-## 5. CI platform — GitHub Actions (🟡 — as built; molecule/gui-smoke still ⬜)
+## 5. CI platform — GitHub Actions (🟡 — as built; the check-mode run and gui-smoke still ⬜)
 
 Five workflows (`.github/workflows/`), the same files in the public repository and the private
 instance repository (docs/public-split.md). Every job's `runs-on` is
@@ -156,7 +156,7 @@ protection is one mis-click from a merge). A public repository has no such branc
 - **snmp-modules**: rebuild `modules.generated.yml` with the pinned CGO snmp_exporter generator
   and byte-compare (the no-bespoke gate for the SNMP module).
 - **e2e**: the Playwright suite against the in-process Flask app, headless chromium.
-- ⬜ still planned: **molecule** (role convergence + idempotence) and a **compose-up smoke** (boot
+- ⬜ still planned: a **check-mode run of the plays** (templating, role dispatch) and a **compose-up smoke** (boot
   the minimal stack, curl the API/GUI health, one onboard dry-run) — the layer the fault ledger
   says would have caught most live faults.
 
@@ -225,7 +225,7 @@ fronted by auth.
 5. 🟡 **`ci.yml`** — the `validate` gate runs hermetically in GitHub Actions (lint +
    secrets + compose-config + ansible-syntax; collections via `scripts/gen-requirements.py`)
    **+ a `tests` matrix job (py3.11–3.13) running the unit/integration pytest suite**.
-   *Next:* molecule + gui-smoke (build the image, curl `/`) as those land.
+   *Next:* the check-mode run + gui-smoke (build the image, curl `/`) as those land.
 6. 🟡 **`security.yml`** (gitleaks full-history + pip-audit) **+ `.github/dependabot.yml`**
    (pip + actions + docker) landed. *Next:* bandit + trivy as the GUI/images harden.
 7. ⬜ **ansible-lint `moderate`→`safety`** graduation (already-planned Phase-2 exit action).

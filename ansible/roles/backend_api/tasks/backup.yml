@@ -39,7 +39,6 @@
     - backup_capable | default(true) | bool
     - backend_api_recipe is defined
     - _api_recipe.backup is defined
-    - not (molecule_test | default(false) | bool)
   block:
     - name: Resolve the auth token — the recipe's token_var, else the onboarded per-host convention
       # Same two-name resolution and the same `default=''` reason as tasks/check.yml — see the long comment

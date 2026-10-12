@@ -3,4 +3,3 @@
 # include_role(tasks_from: check). Self-contained.
 - name: SSH liveness ping
   ansible.builtin.ping:
-  when: not (molecule_test | default(false) | bool)

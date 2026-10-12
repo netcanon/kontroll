@@ -21,12 +21,12 @@ kontroll is a *composed* control plane, so it has two test halves. Both are firs
 | Half | Layer | What it exercises | Tooling | When |
 |---|---|---|---|---|
 | IaC | **L1 lint** | YAML/Ansible/compose/Prometheus syntax + secret hygiene | `tests/validate.ps1` / `.sh` | every commit (pre-commit + CI) |
-| IaC | **L2 validate** | playbooks parse vs a mock inventory; role logic in containers | `--syntax-check`, Molecule | on change, CI |
+| IaC | **L2 validate** | playbooks parse vs a mock inventory | `--syntax-check` | on change, CI |
 | Code | **L2 pytest (unit)** | pure `dict→dict` logic + service layer in `scripts/kontroll/` | `pytest tests/unit` | on change, CI |
 | Code | **L2 pytest (integration)** | `galaxy.py` + `gui/app.py` as black boxes, shell-outs mocked | `pytest tests/integration` | on change, CI |
 | Code | **L3 GUI e2e** | the real booted Flask GUI in a headless browser | Playwright (`tests/e2e/`, `e2e` marker) | a dedicated CI job |
 | IaC | **L3 live smoke** | real fleet reachable; services respond | `playbooks/ping.yml` (the `run-smoke-gate.sh` wrapper) | manual / post-deploy |
-| IaC | **L4 idempotence** | second apply = `0 changed` | re-run role; Molecule `idempotence` | per role |
+| IaC | **L4 idempotence** | second apply = `0 changed` | re-run the play against a scratch host (by hand — no automated harness) | per role |
 
 The single mock seam (IaC: `tests/mock-inventory.yml` via `device_role`; code: the I/O seams in their
 home modules — `kontroll.probe.{_ad,deep_probe}`, `kontroll.catalog.{local_installed,galaxy_search}`,
@@ -110,7 +110,8 @@ Enforced locally (pre-commit) and in CI:
 2. **Document** the test you're about to add/adjust — intent first (§2).
 3. **Add/adjust** the test at the lowest layer that proves it: pure logic → `tests/unit`; a
    CLI/API black box → `tests/integration`; a UI flow → `tests/e2e` (+ a `data-testid` and its
-   inventory row, §3); a role → Molecule converge+idempotence.
+   inventory row, §3); a role → a `--check --diff` run against `tests/mock-inventory.yml`, then a second
+   apply on a scratch host (`0 changed`).
 4. **Run the hermetic gate:** `pytest -m "not e2e and not slow"` then `bash tests/validate.sh`.
 5. **For IaC actuation:** `--check --diff` before any state-changing play; a second apply reports
    `0 changed`.

@@ -14,7 +14,6 @@ roles/<class>/
 Contract (verified by the scaffolding audit):
 - Every role exposes **both** `check` (liveness, dispatched by `ping.yml`) and
   `backup` (capture, dispatched by `backup-configs.yml`) — both via `device_role`.
-- Both honor `molecule_test` (no device I/O under containerized tests).
 - `backup.yml` (state-touching captures) carries the four-line access-chain header
   (PLAN.md §9) and `no_log: true` on any task whose output could contain secrets.
 - Roles never reference each other. Optional `tasks/main.yml` (apply intended

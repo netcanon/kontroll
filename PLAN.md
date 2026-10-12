@@ -217,8 +217,7 @@ kontroll/
 ├─ tests/                       ← the IaC test pyramid (L1→L4)
 │  ├─ README.md                 ← pyramid, how to run, how to add
 │  ├─ validate.ps1 / validate.sh← L1+L2 gate (lint, syntax, secret hygiene)
-│  ├─ mock-inventory.yml        ← the single real↔fake seam for check-mode
-│  └─ molecule/                 ← containerized role tests (L2/L4)
+│  └─ mock-inventory.yml        ← the single real↔fake seam for check-mode
 ├─ docker/
 │  ├─ compose.yaml              ← composition only (include: per service)
 │  ├─ services/<name>.yaml      ← one file per service (Semaphore/Homepage/Prom/Grafana)

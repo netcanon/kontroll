@@ -6,4 +6,3 @@
   ansible.netcommon.cli_command:
     command: "{{ backend_liveness_command | default('show version') }}"
   changed_when: false
-  when: not (molecule_test | default(false) | bool)

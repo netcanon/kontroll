@@ -24,7 +24,7 @@ unit-test, but the *shape* maps directly onto infrastructure code:
 | NetConfig layer | kontroll layer | What runs | Speed / when |
 |---|---|---|---|
 | unit (pure, no I/O) | **L1 lint** | `yamllint`, `ansible-lint`, `--syntax-check`, `docker compose config`, `promtool check config`, `sops --verify` | sub-second; every commit (pre-commit + CI) |
-| integration (TestClient, mocked SSH) | **L2 validate** | role/playbook logic in `--check --diff` against a **mock inventory**; Molecule converge on a throwaway container | seconds–minutes; CI on change |
+| integration (TestClient, mocked SSH) | **L2 validate** | playbooks parsed against a **mock inventory** (`--syntax-check`); the pytest suite. Evaluating role/playbook logic with `--check --diff` in CI is the open item (docs/qa-and-release-pipeline.md §1) | seconds–minutes; CI on change |
 | e2e (live server, Playwright) | **L3 live smoke** | `ping.yml` reaches the real fleet; post-deploy asserts (service responds, Prometheus target `up`, Homepage 200) | live; manually / Semaphore schedule, never in blind CI |
 | desktop (mocked shell) | **L4 idempotence** | run the play **twice**; second run must report **0 changed** | per role; the IaC analog of determinism |
 
@@ -63,9 +63,7 @@ mature codebase that already paid that cost; we pay it as the roles land.
 tests/
 ├── README.md            this pyramid, how to run, how to add
 ├── mock-inventory.yml   fake hosts for L2 check-mode (no real IPs)
-├── validate.ps1 / .sh   L1+L2 runner (lint + syntax + config-validate)
-└── molecule/            optional containerized role tests (L2)
-    └── default/
+└── validate.ps1 / .sh   L1+L2 runner (lint + syntax + config-validate)
 ```
 
 ---
