@@ -623,9 +623,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   canonical `main`** (`_reset_content_clone_to_canonical`) so the read-back reflects the source of truth and each
   proposal is independent off `main` — a rejected proposal can't ride along in a later one (F1, dogfood
   2026-06-20; `tests/unit/test_staging_isolation.py`). **The promote now also runs a resolve gate (FIX-M9; it began as the pin-conflict gate):**
-  before the fast-forward, `kontroll-promote.py` extracts the prospective post-merge tree (`refs/heads/proposed/<run_id>` — the ref the fast-forward takes, by
+  before the fast-forward, `kontroll-promote.py` reads the prospective post-merge tree (`refs/heads/proposed/<run_id>` — the ref the fast-forward takes, by
   its full name: a tag, or a ref directly under `refs/`, that carries the same short name is not what it reads) and
-  runs the TRUSTED tree's `gen-requirements.py --conflict-check --root <extract>` over that tree's DATA — never the
+  runs the TRUSTED tree's `gen-requirements.py --conflict-check --root <copy>` over that tree's DATA — never the
   proposal's own copy of the script, which until 2026-10-09 executed unreviewed code as root on the `sudo` CLI or
   with `SOPS_AGE_KEY` in scope on the Semaphore path (2026-10-08 review, finding 3); the subprocess inherits a
   whitelisted minimal environment (`tests/unit/test_kontroll_promote.py`). If two app-store units would pin one collection to
@@ -637,17 +637,37 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   bootstrap or local-image deploy on it; and because it judges the whole tree, such a line already on `main`
   refuses EVERY proposal until one that removes it is promoted — the refusal then says that `main` itself is
   refused, and how to correct it there.
-  Read-only (extracts to a temp dir, never touches `main`); fails **open** on its own read error (the generate-time
-  fail-closed — and, for a fleet line, the check the bootstrap and every deploy run first — is the backstop: the
-  gate hardens, it must never block a promote whose tree resolves). **Limits of the gate as built, older than the
-  fleet rule and the next change to it:** it reads the proposal as `git archive` exports it, and an export obeys
-  the proposal's own `.gitattributes` — an `export-ignore` line can hide the instance overlay (the gate then reads
-  the shipped example fleet in its place), a unit, or all of `modules/` from the gate (which answers a tree with
-  no `modules/`, and one it cannot extract, with "nothing to check"; hiding the fleet file alone is refused, with
-  a traceback for its reason), and `export-subst` can rewrite a line for the gate alone; and it judges the
-  proposal by its ref NAME while the fast-forward resolves the name again, so a push to the same
-  `proposed/<run_id>` between the two is promoted unjudged — which also means the commit an operator reviewed is
-  not necessarily the commit promoted.
+  Read-only (copies to a temp dir, never touches `main`). **The gate judges the commit itself.** The proposal's
+  ref is read once, by its full name (`canon.read_ref`; a symbolic ref, or a ref that names no commit, is not a
+  proposal and is refused), and the tree that is judged is that commit's: `canon.read_tree_verified` asks one
+  `git cat-file --batch` for the commit, each tree and each blob, and **re-hashes every object against the id it
+  asked for** — git does not check that an object it reads is the object its name says. Trees are parsed from
+  their own bytes; regular files only. So the FILES the gate hands the generator are the commit's own, whatever
+  the proposal carries and whatever else the repository holds: not an attribute (`export-ignore` hid a path from the old gate, which judged `git archive`'s
+  export; `export-subst` rewrote a file for it), not a filter (a program the repository's config names — never
+  run), not `info/attributes`, a replace ref or a commit-graph, not an object file swapped under its name. A tree
+  that holds a **symbolic link, a submodule entry**, a name no checkout could take (a separator, a control byte,
+  `..`, any spelling of `.git` that git's own checkout refuses, a name longer than a file system takes) or one
+  name twice is **refused whole** — never skipped: a link in a promoted tree is a file some
+  later reader opens *through* — as is a tree over the reader's caps. `tests/validate` holds the shipped tree to
+  the same rule (no link, no submodule entry). `scripts/kontroll-export.py` is the same read for a play or a
+  script that needs a commit's files in a directory — in place of `git archive | tar`. **It fails closed.** Each way the old gate answered "nothing to
+  check" about a tree it had not read — the export failed, the unpack failed, no `modules/` came out, git or tar
+  was missing — was a way to switch it off. Now a tree the reader refuses is a refusal (exit 2); a proposal with
+  no `modules/` where `main` has one is a refusal (it would remove the device-class registry); and a gate that
+  **cannot run** — the repository cannot be read, this checkout has no generator, the generator does not start or
+  does not finish in its time limit — refuses with that sentence, which is a different one from "the tree is
+  refused". "Nothing to check" remains for one case, decided on trees that were read: neither the proposal nor
+  `main` has a registry. Two things that are not in the proposal's commit still take part, and each is refused
+  rather than believed: a `main` that is a symbolic ref or names no commit refuses every promote (there is nothing
+  to compare the proposal with, and nothing a promote should land on), and a tree with no fleet file of its own
+  where `main` has one is refused (the generator would read this checkout's shipped example in its place). When
+  the generator itself fails on a file of the proposal, its last lines are shown, bounded. `--skip-conflict-check` is the human's override for all of it — the never-brick path of a
+  node whose gate cannot run — and nothing automatic passes it. The argument itself must be a minted run id
+  (exit 1 otherwise), so nothing else is ever formatted into a ref name. **The limit that remains:** the gate
+  judges the commit the proposal's ref names when the gate reads it, and the fast-forward then resolves the name
+  again — a push to the same `proposed/<run_id>` between the two is promoted unjudged, which also means the
+  commit an operator reviewed is not necessarily the commit promoted. `tests/unit/test_canon_tree.py`,
   `tests/unit/test_kontroll_promote.py`.
 - **Every GUI write surface rides this propose-only staging — including the Homepage editor (#136).** The
   onboard/capability/secret/keygen writes and the new `:8443` **Homepage editor** (`POST /api/homepage` — rearrange
@@ -1638,8 +1658,8 @@ the service readers still read such a file as a fleet with no class, the checks 
 `gen-requirements.py` refuses a fleet whose `enabled_modules` is there and is not a list of class keys (an absent
 or empty list is a fleet with no class) — at bootstrap, at a deploy that builds its images locally and brings up
 the runner, the API or the GUI, and at the promote gate, where the refusal keeps the line out of `main` for every
-promote that is not run with `--skip-conflict-check` — within that gate's own limits (C10: it reads the proposal as
-an export). The gate judges the whole prospective tree: with such a
+promote that is not run with `--skip-conflict-check` — within that gate's own limit (C10: the fast-forward resolves the
+proposal's name again). The gate judges the whole prospective tree: with such a
 line already on `main` (a hand edit) it refuses every promote except the one that removes the line. The plays run
 that generator's `--fleet-check` before anything walks the list — one rule, in Python, not a copy of the charset
 in Jinja — and each STOPS on it: `bootstrap.yml` before its own lookup; a deploy in `local-canonical.yml`, before

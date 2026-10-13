@@ -125,6 +125,7 @@ tests/unit/          # pure functions, no I/O
   test_api_audit.py          # one request value is one cell of one audit row: the shared flattener, and the API writer read back through a real file
   test_repository_data.py    # C22: a name adopted from a module file, the reserved names at each seam, the scaffold's arguments, and the refusal that is the repository's own (409), never a field's
   test_yamlscalar.py         # may a string stand unquoted in a hand-formatted YAML line: every position a writer uses, exhaustively for short strings; the quoting fallback of the generators
+  test_canon_tree.py         # C10: one commit's tree read object by object and re-hashed — attributes, filters, a swapped object, a link, the caps; the export command
   test_canon.py              # C10: how the canonical is read — refs by full name, one canary test (with its control) per entry of the git environment a planted file can show, the whole entry list held by name, bytes to text, the seam pin
   test_fleet_line.py         # C22: a fleet line that is not a class key at every deploy-time reader — skipped and named by what renders, refused by what installs and by the promote gate, checked first by the plays
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
@@ -233,6 +234,10 @@ subject that no filesystem or porcelain of the host would take still gets in. On
 function per thing a writer of the repository can leave behind: the other meanings of the
 short names (a tag `main`, `refs/main`, a file `main`), a replace ref, a graft line, a
 `shallow` file, a commit-graph that lies about a parent or a tree, a `commondir`, a hook.
+`snapshot()` turns a flat `{path: bytes}` into a tree; `raw_tree()` writes a tree from raw
+`(mode, name, id)` triples — a link, a submodule entry, a name twice, whatever `mktree` would
+refuse; `swap_loose()` replaces an object FILE with a well-formed object of other content, which
+git reads back without complaint.
 The pattern of a test: plant one thing, show that the host's plain git **is** fooled (the
 control — a planted thing that fools nobody proves nothing), then ask the code under test
 what it would ask of a clean repository. `seam_without()` gives the seam's environment minus

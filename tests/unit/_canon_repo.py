@@ -17,6 +17,7 @@ tests are about.
 import os
 import struct
 import subprocess
+import zlib
 from types import SimpleNamespace
 
 from kontroll import canon
@@ -69,11 +70,41 @@ def commit(repo, tree_id, parents=(), subject=b"a commit", author=b"t", when=b"1
     return git(repo, "hash-object", "-t", "commit", "-w", "--stdin", stdin=body).decode("ascii")
 
 
+def snapshot(repo, files):
+    """A tree object for a whole directory tree given flat: `{b"modules/a/module.yml": b"...", ...}`. Returns the
+    root tree's id. Paths are split on `/`; every name goes in as its bytes."""
+    here, below = {}, {}
+    for path, body in files.items():
+        head, _, rest = path.partition(b"/")
+        if rest:
+            below.setdefault(head, {})[rest] = body
+        else:
+            here[head] = blob(repo, body)
+    for name, sub in below.items():
+        here[name] = ("tree", snapshot(repo, sub))
+    return tree(repo, here)
+
+
 def raw_tree(repo, entries):
     """A tree object from raw `(mode bytes, name bytes, object id)` triples, written as given — modes and names
     `mktree` would not take (a submodule entry, a link, a name twice, a name with a slash)."""
     body = b"".join(mode + b" " + name + b"\0" + bytes.fromhex(oid) for mode, name, oid in entries)
     return git(repo, "hash-object", "-t", "tree", "-w", "--stdin", "--literally", stdin=body).decode("ascii")
+
+
+def swap_loose(repo, oid, kind, body):
+    """Replace the loose object file of `oid` with a well-formed object file that holds OTHER content — what a
+    writer of the object store can do to an object after it was pushed. Git reads it back without complaint (it
+    does not re-hash a loose object on read); only `fsck`, or a reader that hashes, notices."""
+    path = os.path.join(str(repo), "objects", oid[:2], oid[2:])
+    os.chmod(path, 0o644)
+    with open(path, "wb") as fh:
+        fh.write(zlib.compress(kind + b" " + str(len(body)).encode("ascii") + b"\0" + body))
+
+
+def raw(repo, kind, oid):
+    """The bytes of an object as plain git returns them (no trailing-newline stripping)."""
+    return subprocess.run(["git", "-C", str(repo), "cat-file", kind, oid], capture_output=True, check=True).stdout
 
 
 def set_ref(repo, name, oid):

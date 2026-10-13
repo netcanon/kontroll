@@ -301,6 +301,19 @@ step snmp-config-untracked 0 bash -c '
     echo "  rendered snmp.yml is TRACKED (must be gitignored — it holds the SNMPv3 creds)"; exit 1; fi
   exit 0'
 
+# the shipped tree holds regular files only: no symbolic link (mode 120000) and no submodule entry (160000). The
+# promote gate refuses a proposal whose tree holds either (scripts/kontroll/canon.py: read_tree_verified) and it
+# judges the WHOLE tree — so one such entry on `main` would refuse every proposal. Nothing in this tree is one; this
+# keeps it so.
+step tree-holds-regular-files-only 0 bash -c '
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "  not a git work tree: the index could not be listed, so NOTHING was checked here"; exit 0; fi
+  bad="$(git ls-files -s | awk "\$1 == \"120000\" || \$1 == \"160000\" {print \"  \" \$0}")"
+  if [ -n "$bad" ]; then
+    echo "  the tree holds a symbolic link or a submodule entry (the promote gate would refuse every proposal):"
+    echo "$bad"; exit 1; fi
+  exit 0'
+
 echo "──────────────────────────────────────────"
 if [ "$fail" -ne 0 ]; then echo "VALIDATE: FAIL ($fail failed, $skip skipped)"; exit 1; fi
 echo "VALIDATE: PASS ($skip skipped)"

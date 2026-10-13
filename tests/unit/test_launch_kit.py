@@ -113,10 +113,11 @@ def test_make_launch_kit_strips_crlf_and_deploy_check_runs_digest_read():
 # The promote/FIX-M9/deploy-stack closure that runs from the CANONICAL CLONE (a non-baked path), so the kit must
 # KEEP it. The C10 promote slice + FIX-M9's generator; verified by the closure analysis
 # (docs/reviews/2026-06-29-phase-b-baked-code/99-synthesis.md §1). gen-requirements.py is the one the synthesis's
-# original "4-file slice" missed — kontroll-promote.py:_would_brick_generate execs the PROPOSED tree's copy of it,
-# and absent it the never-brick FIX-M9 gate fails OPEN.
+# original "4-file slice" missed — the promote gate runs THIS checkout's copy of it over the proposal's files, and
+# absent it the never-brick FIX-M9 gate cannot run (it refuses, and says so).
 _PROMOTE_SLICE = ("scripts/kontroll-promote.py", "scripts/gen-requirements.py",
                   "scripts/kontroll/__init__.py", "scripts/kontroll/paths.py", "scripts/kontroll/gitio.py",
+                  "scripts/kontroll/canon.py",          # the gate reads the proposal's commit through it
                   "scripts/kontroll/yamlscalar.py")     # imported by gen-requirements.py (the sidecar's keyring)
 
 

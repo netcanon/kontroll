@@ -85,6 +85,10 @@ WRITE_VERBS = frozenset({
     # view that ever calls it trips assert_read_only, and so the fail-closed completeness gate (which detects the
     # `update-ref` argv) is satisfied. C10-safe: un-stage != promote (it removes Key-1's own output, never advances main).
     "discard_proposal",
+    # canon.write_files / canon.export_commit write a commit's files into a directory the caller names (the promote
+    # gate's temporary root; an export a play asks for). Not a write of the canonical — and still nothing a read view
+    # may reach: a view that could export a tree could put a staged, unpromoted proposal's files on disk.
+    "write_files", "export_commit",
     # A staged write that cannot land (2026-10-12). `write_module` is the ONE place the module reconfigures write
     # `modules/<key>/module.yml` (each used to carry its own open:w inside an apply_* verb); `_drop_refused`
     # removes what an apply wrote and `git add` would not take (a `git clean` of files at the request's own paths,

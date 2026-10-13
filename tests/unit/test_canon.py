@@ -591,13 +591,13 @@ def test_show_calls_a_name_with_plain_spaces_exact(raw, text):
 
 def test_every_git_of_the_canonical_readers_runs_in_the_seam():
     """In `canon.py`, `service/pending.py` and `service/discard.py` every `subprocess` call is a git argv literal
-    that passes `**canon.git_kwargs(…)` — and its verb is one of the verbs THAT module runs today: `for-each-ref`
-    and `merge-base`; `merge-base` and `diff`; `update-ref`. Guards the seam being a convention — a new call that
+    that passes `**canon.git_kwargs(…)` — and its verb is one of the verbs THAT module runs today: `for-each-ref`,
+    `merge-base` and `cat-file` (the batch reader of one commit's objects); `merge-base` and `diff`; `update-ref`. Guards the seam being a convention — a new call that
     inherits `os.environ`, names the repository with `-C`, or builds its verb at run time would run git on the
     canonical outside it — and guards its reach: the seam is proven for these verbs and for no others, so a reader
     rewritten onto another verb fails here, in the commit that adds the call, which is the moment to ask what the
     seam does for that verb."""
-    assert_git_runs_in_the_seam("scripts/kontroll/canon.py", verbs={"for-each-ref", "merge-base"})
+    assert_git_runs_in_the_seam("scripts/kontroll/canon.py", verbs={"for-each-ref", "merge-base", "cat-file"})
     assert_git_runs_in_the_seam("scripts/kontroll/service/pending.py", verbs={"merge-base", "diff"})
     assert_git_runs_in_the_seam("scripts/kontroll/service/discard.py", verbs={"update-ref"})
 
