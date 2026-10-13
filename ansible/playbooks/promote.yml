@@ -34,10 +34,12 @@
       # (<YYYYMMDD>T<HHMMSS>Z-<6hex>, api/audit.py). This rejects typo'd/guessed branch names (main, HEAD, ...) at
       # the boundary, shrinking the trick-the-admin surface; the literal proposed/ prefix + existence check + the
       # FF gate are the deeper guards, and the command module (no shell) blocks injection.
+      # A FULL match, the same rule as kontroll.canon.valid_run_id (one test feeds both the same samples): `match`
+      # with `^…$` also accepts the id followed by a newline, because `$` matches before a final one.
       ansible.builtin.assert:
         that:
           - run_id is defined
-          - run_id is match('^([0-9a-f]{12}|[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6})$')
+          - run_id is regex('[0-9a-f]{12}|[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}', match_type='fullmatch')
         fail_msg: >-
           run_id must be a service-minted proposal id (12 hex, or <UTC-stamp>-<6hex>). Get the exact value from
           the onboard/capability/secret propose response, or
@@ -63,8 +65,10 @@
     - name: Preview the commits this approval will land (proposal not yet on main)  # noqa: command-instead-of-module
       # Read-only — records in the Semaphore job log exactly what is being approved (the audit trail). Never
       # fails the run; the promote step below enforces the FF gate + existence. Raw git: no module for log.
+      # Both ends are FULL names: beside a tag called `main`, the short name is the tag and the range is not
+      # the one being approved.
       ansible.builtin.command:
-        cmd: git -C {{ canonical }} log --oneline main..refs/heads/proposed/{{ run_id }}
+        cmd: git -C {{ canonical }} log --oneline refs/heads/main..refs/heads/proposed/{{ run_id }}
       register: _preview
       changed_when: false
       failed_when: false

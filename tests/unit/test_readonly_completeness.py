@@ -119,9 +119,26 @@ def test_gate_fires_on_an_unregistered_writer(monkeypatch, tmp_path):
     svc = tmp_path / "scripts" / "kontroll" / "service"
     svc.mkdir(parents=True)
     (svc.parent / "gitio.py").write_text("", encoding="utf-8")     # the gate also reads gitio.py; keep it empty
+    (svc.parent / "canon.py").write_text("", encoding="utf-8")     # … and canon.py (the readers of the canonical)
     (svc / "sneaky.py").write_text("def sneaky_write(p):\n    open(p, 'w').write('x')\n", encoding="utf-8")
     monkeypatch.setattr(_readonly_pins, "ROOT", str(tmp_path))
     with pytest.raises(AssertionError, match="sneaky_write"):
+        assert_write_verbs_complete()
+
+
+def test_gate_fires_on_a_writer_in_the_canonical_readers(monkeypatch, tmp_path):
+    """`scripts/kontroll/canon.py` is in the swept layer: an unregistered ref update planted in a throwaway copy of
+    it makes `assert_write_verbs_complete` fail, naming `canon.py:<function>`. Guards the first promise of that
+    module — it reads the canonical and holds no write verb — which is a sentence in a docstring unless the sweep
+    reads the file: a writer added there would be reachable from the read views that import it, unseen."""
+    pkg = tmp_path / "scripts" / "kontroll"
+    (pkg / "service").mkdir(parents=True)
+    (pkg / "gitio.py").write_text("", encoding="utf-8")
+    (pkg / "canon.py").write_text(
+        "import subprocess\n\n\ndef move_main(repo, oid):\n"
+        "    subprocess.run(['git', 'update-ref', 'refs/heads/main', oid])\n", encoding="utf-8")
+    monkeypatch.setattr(_readonly_pins, "ROOT", str(tmp_path))
+    with pytest.raises(AssertionError, match="canon.py:move_main"):
         assert_write_verbs_complete()
 
 

@@ -175,9 +175,20 @@ and vice-versa). Read-only, so it never gates onboarding (INVARIANT D*).
 
 A header button, **Pending**, opens a **read-only** list of every change STAGED as `proposed/<run_id>` and not yet
 promoted (`GET /api/pending` → `kontroll.service.pending.list_pending`, a pure read of the canonical bare repo via
-`git for-each-ref`). Each row shows the **run_id** (with a one-click **copy** affordance), the tip subject, the
-changed-path NAMES (never file contents), and a **static** instruction to run the Semaphore `promote-proposal`
-task. **The panel never promotes** — advancing `main` is the separate, admin-authed Semaphore app (C10 two-key);
+`git for-each-ref`, by full ref name and in the one environment `kontroll.canon` gives its git — SECURITY.md C10).
+Each row shows the **run_id** (with a one-click **copy** affordance), the proposal's full commit id, the tip
+subject, what it changes — one status letter and one NAME per file, each on its own line, never file contents; a
+file the proposal *moves* is two entries (`D` the old name, `A` the new one) — and a **static** instruction to
+run the Semaphore `promote-proposal` task. A file name that is not text (not UTF-8, or holding a character that
+does not print) is shown in an escaped spelling, and the row says so. A ref under `refs/heads/proposed/` that is
+**not** a proposal — a name the service does not mint, a symbolic ref, a ref that names no commit, or one git
+gives two values — is listed in a card of its own after the rows ("Not proposals"), with no control: the service
+stages none of these, so one of them is there by another hand. **What could not be read is said**, as a warning:
+a row whose change list could not be read says so and, like a row whose fast-forward question has no answer,
+carries no promote recipe; a `main` that is missing or is not an ordinary branch, a ref git left out, and a
+canonical that could not be read each get a line above the list. The response's fields are in
+`kontroll.service.pending.list_pending`'s docstring.
+**The panel never promotes** — advancing `main` is the separate, admin-authed Semaphore app (C10 two-key);
 there is deliberately no Promote/Approve/Reject control. It is the standing answer to "where do I get the run_id to
 promote?" once the propose dialog is gone. On an unarmed deploy (no canonical / commits-direct-to-main) it shows an
 honest empty state. A proposal `main` has advanced *past* (non-fast-forward — the FF-race) is badged **"stale —

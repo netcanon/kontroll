@@ -11,6 +11,69 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(pending): the Pending list and the discard read the canonical by full ref name, in one hardened git environment, and as bytes — a tag called `main`, a planted hook or graft, or a name that is not text no longer changes or breaks the list (2026-10-13)
+
+The Pending panel is what an operator reads before approving a change, and the Discard button deletes a ref in the
+instance's source of truth. Both asked git about the canonical the way one asks about one's own checkout: by short
+names, in the caller's environment, decoding what came back. The canonical is a repository the network service
+writes into, and each of those habits let something *in* the repository decide the answer.
+
+- **Refs are named in full, read once, and compared as ids** (new `scripts/kontroll/canon.py`: `read_ref`,
+  `proposals`, `is_ancestor`). Beside a tag called `main` the short name is the tag: the list compared each
+  proposal with the tag's commit, showed no change or another commit's, and printed `heads/proposed/<id>` as the
+  run id to paste. The list now carries the proposal's full ref name and full commit id.
+- **A proposal is an ordinary ref that names a commit.** Anything else under `refs/heads/proposed/` — a name the
+  service does not mint, a symbolic ref, a ref that names a tag, a name git gives two values — is listed **apart**
+  ("Not proposals") with no control. The discard refuses such a ref as "no such proposal" and deletes with
+  `--no-deref`: what is deleted is the ref of that name, never a ref it points at.
+- **Every git of the list and the discard runs in one environment** (`canon.git_kwargs`): the repository is named
+  outright, no other config scope is read, nothing of the caller's environment is inherited but the program path,
+  the temp directory and the locale, and no hook, replace ref, graft line, `shallow` file or commit-graph of the
+  repository is consulted. A repository that holds a `commondir` file, or whose `refs`, `packed-refs`, `logs`,
+  `objects`, `HEAD` or `config` is a symbolic link, is refused, and the panel says so: git reads refs through
+  them whatever the environment says.
+- **What git returns stays bytes until it is shown.** A file name, an author or a subject that is not UTF-8 raised
+  on the way to the panel and took the whole list with it. Each is now listed in an escaped spelling; a **file
+  name** that is not shown as written — not UTF-8, or holding a newline, an escape or a direction override — is
+  marked on the row (an author or a subject is escaped without a mark).
+- **A row says what the proposal changes:** one status and one name per file, each on a line of its own; a moved
+  file at both ends (`D` old, `A` new — the list used to show the new name alone); a changed submodule entry
+  whatever the repository's config says about ignoring them; and against the commit the proposal was staged on,
+  so a stale proposal no longer shows `main`'s later changes turned inside out.
+- **What could not be read is said.** A change list git could not print is flagged on the row ("could not be
+  read"), and that row — like one whose fast-forward question has no answer — gets no promote recipe. A `main`
+  that is missing or is not an ordinary branch, a ref git left out, and a canonical that could not be read are
+  each a warning in the panel, where they were an empty list or a row that looked fine.
+- **The discard gives up on a held lock by itself** (about a second) instead of being killed over it and leaving
+  the proposal's own lock file behind; its 409 says the canonical may be locked or not writable.
+- **Newest first is by the committer's clock**, not by the text of the date (two proposals staged from different
+  UTC offsets sorted wrongly).
+- **The promote play's run-id assert is a full match** (`regex(…, match_type='fullmatch')`), the same rule as the
+  Python validator: `match` with `^…$` also accepted the id followed by a newline. Its commit preview names
+  `refs/heads/main` in full.
+
+`GET /api/pending` gains, per proposal, `changes` (`[{status, path, exact}]`) and `changes_read`; and at the top
+`unrecognised` (`[{ref, sha, why}]`), `note_kind`, `main_note` and `skipped_note`. `ref` is the full name and
+`sha` the full id (they were `proposed/<id>` and an abbreviation); `paths` is still the list of names, now with
+both ends of a move. The discard's `ref` is the full name too.
+
+**Scope:** the Pending list and the discard, and the promote play's assert and preview named above. Needs git
+2.31 or later.
+
+**On a box that runs the previous build:** nothing to do. The Pending panel lists a moved file under both names
+and shows commit ids in full.
+
+**New here:** `tests/unit/test_canon.py` — the run-id rule's spellings fed the same samples; refs read by full
+name beside every short name that would win; a test with a control (the host's plain git IS fooled) for each entry
+of the environment a planted thing can be shown against, and one test of the list itself for the entries no verb
+used here can show; the refusals of the seam; bytes to text; and the new pin `assert_git_runs_in_the_seam`
+(`tests/unit/_readonly_pins.py`), proven against one planted call per way around it. `tests/unit/_canon_repo.py`
+— the throwaway canonical those tests plant things in (tests/README.md). In `test_pending.py`, `test_discard.py`,
+`tests/integration/test_gui_api.py` and `tests/e2e/test_pending_changes.py` — the list over names, authors and
+subjects that are not text, both ends of a move, a stale proposal's own change, refs listed apart, what could not
+be read said as such, a symbolic "proposal" refused with `main` intact, no hook and no stray lock on a discard, and
+the panel painting all of it as text.
+
 ### fix(capability): a planned module text must read back as the change that was asked for — a shape the line writer does not model is a refusal, not a quiet loss (2026-10-13)
 
 The capability dialogs edit a class's `module.yml` by line, so that a hand-written file keeps its comments. Twice

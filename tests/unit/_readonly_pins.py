@@ -384,6 +384,83 @@ def assert_no_git_write(module_rel, chokepoint="_git", readonly=GIT_READONLY_VER
     assert choke_sites, "%s: no %s(...) call sites found — wrong chokepoint name?" % (module_rel, chokepoint)
 
 
+# --- the seam: every git of a canonical-touching module runs in canon.git_kwargs ---------------------------------- #
+# The canonical is a repository the network service writes into, so a git that reads or writes it must not take its
+# orders from what is in it — nor from the caller's environment. `kontroll.canon.git_kwargs(<repo>)` is the one
+# environment such a git runs in. That is a convention until something holds every call to it; this is that pin.
+_SUBPROCESS_CALLS = frozenset({"run", "Popen", "call", "check_call", "check_output", "getoutput", "getstatusoutput"})
+_OS_PROCESS_CALLS = frozenset({"system", "popen", "startfile"})
+
+
+def assert_git_runs_in_the_seam(module_rel, verbs):
+    """Pin a module whose git runs on the CANONICAL: every process it starts is `subprocess.<call>(["git",
+    "<verb>", …], …, **canon.git_kwargs(<repo>))` — nothing else.
+
+      - the argv is ONE list literal (not a name, a concatenation or a shell string), so the verb can be read;
+      - its second element is the verb, a constant from `verbs`: no global option stands before it (`-C` would
+        name a repository and `-c` set a key beside the seam, which names the one and sets the others);
+      - the call passes `**canon.git_kwargs(...)` (inside `canon.py` itself, `**git_kwargs(...)`) and no `env`,
+        `cwd`, `shell` or `executable` of its own;
+      - the call carries a `timeout` (a `Popen` has none of its own: whoever writes one owns its deadline), one
+        positional argument — the argv — and no `**` but the seam's;
+      - the module reaches `subprocess` by that name only (no `from subprocess import run`, no alias) and starts
+        nothing through `os.system` / `os.popen` / `os.exec*` / `os.spawn*` / `os.posix_spawn` — a call this pin
+        could not see.
+
+    `verbs` is the set THIS module runs today, not the read-only list: the seam is proven for the verbs its
+    readers use, and a module that needs another one says so where it is pinned.
+
+    It complements the verb pins above: those say WHICH git a read view may run, this says IN WHAT."""
+    path = os.path.join(ROOT, module_rel)
+    tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+    in_canon = module_rel.replace("\\", "/").rsplit("/", 1)[-1] == "canon.py"
+    seam_names = {"git_kwargs"} if in_canon else {"canon.git_kwargs"}
+    imports_canon = in_canon
+    sites = 0
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            assert n.module != "subprocess", "%s:%d: import subprocess by its own name — a bare run() is not seen" % (
+                module_rel, n.lineno)
+            if n.module == "kontroll" and any(a.name == "canon" and a.asname is None for a in n.names):
+                imports_canon = True
+        if isinstance(n, ast.Import):
+            assert not any(a.name == "subprocess" and a.asname for a in n.names), (
+                "%s:%d: subprocess is imported under another name — its calls are not seen" % (module_rel, n.lineno))
+        if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Attribute):
+            continue
+        owner = n.func.value.id if isinstance(n.func.value, ast.Name) else None
+        where = "%s:%d" % (module_rel, n.lineno)
+        assert not (owner == "os" and (n.func.attr in _OS_PROCESS_CALLS
+                                       or n.func.attr.startswith(("exec", "spawn", "posix_spawn")))), (
+            "%s: os.%s starts a process outside the seam" % (where, n.func.attr))
+        if owner != "subprocess" or n.func.attr not in _SUBPROCESS_CALLS:
+            continue
+        sites += 1
+        argv = n.args[0] if n.args else None
+        assert isinstance(argv, ast.List), (
+            "%s: the argv of a process started here must be one list literal — not a name, a concatenation or a "
+            "shell string" % where)
+        elems = _list_str_elems(argv)
+        assert len(elems) > 1 and elems[0] == "git" and elems[1] is not None, (
+            "%s: the argv must open with a static ['git', '<verb>', …]" % where)
+        verb = elems[1]
+        assert not verb.startswith("-"), (
+            "%s: `%s` stands before the verb — the seam names the repository and sets every key" % (where, verb))
+        assert verb in verbs, "%s: `git %s` is not a verb this module may run on the canonical" % (where, verb)
+        seam = [k for k in n.keywords if k.arg is None and isinstance(k.value, ast.Call)
+                and _dotted(k.value.func) in seam_names]
+        assert len(seam) == 1, "%s: a git of the canonical must pass **canon.git_kwargs(<repo>)" % where
+        own = sorted(k.arg for k in n.keywords if k.arg in ("env", "cwd", "shell", "executable"))
+        assert not own, "%s: %s beside **canon.git_kwargs — the seam decides those" % (where, ", ".join(own))
+        assert len(n.args) == 1 and all(k.arg is not None or k in seam for k in n.keywords), (
+            "%s: one argv and the seam — no other positional argument and no second ** (either can carry an "
+            "executable, a cwd or a shell this pin would not read)" % where)
+        assert n.func.attr == "Popen" or any(k.arg == "timeout" for k in n.keywords), (
+            "%s: a git of the canonical carries a timeout — one that never answers would hold the worker" % where)
+    assert imports_canon, "%s: `from kontroll import canon` not found — whose git_kwargs is this?" % module_rel
+    assert sites, "%s: no subprocess call found — is this the module that runs git?" % module_rel
+
+
 # --- #134 / P0b: the fail-CLOSED completeness sweep -------------------------------------------------------------- #
 # assert_no_git_write and the NAME half of assert_read_only fail OPEN: a verb NOT in WRITE_VERBS is invisible to
 # them, so a read view that reaches an UNREGISTERED mutator by a path the closure cannot follow silently passes.
@@ -422,11 +499,12 @@ WRITE_COMPLETENESS_ALLOWLIST = frozenset({
 
 
 def _pinned_layer():
-    """The layer where mutators + read-views coexist and the read-only pins apply: the service modules + the gitio
-    I/O chokepoint. Routes (api/, gui/app.py) and CLIs orchestrate these and are NOT read-pinned ⇒ out of scope."""
+    """The layer where mutators + read-views coexist and the read-only pins apply: the service modules, the gitio
+    I/O chokepoint, and `canon` (the readers of the canonical — it holds no write verb, and the sweep is what keeps
+    it so). Routes (api/, gui/app.py) and CLIs orchestrate these and are NOT read-pinned ⇒ out of scope."""
     svc = sorted(os.path.relpath(p, ROOT).replace("\\", "/")
                  for p in glob.glob(os.path.join(ROOT, "scripts", "kontroll", "service", "*.py")))
-    return ["scripts/kontroll/gitio.py"] + svc
+    return ["scripts/kontroll/gitio.py", "scripts/kontroll/canon.py"] + svc
 
 
 def _static_list_prefix(node):
@@ -505,7 +583,7 @@ def _is_direct_mutator(fn):
 
 
 def assert_write_verbs_complete():
-    """Fail CLOSED: every DIRECT mutator in the pinned layer (service/*.py + gitio.py) MUST be named in WRITE_VERBS
+    """Fail CLOSED: every DIRECT mutator in the pinned layer (service/*.py, gitio.py, canon.py) MUST be in WRITE_VERBS
     (or the documented WRITE_COMPLETENESS_ALLOWLIST). assert_read_only/assert_no_git_write fail OPEN — a verb they
     don't know is invisible — so this is the same-commit discipline (#134/P0b) that keeps the read-only/C10
     guarantee from silently eroding: a new writer that isn't registered breaks CI here, naming the exact file:func.

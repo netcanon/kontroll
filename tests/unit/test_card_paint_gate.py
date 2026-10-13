@@ -123,7 +123,8 @@ MUST_USE_ET = {
     "suggested-backend-badge": "a rec.* field (locally derived, but the rule is mechanical)",
     "pending-head": "a staged proposal's run id (a git ref name), staged-at and sha",
     "pending-subject": "a staged proposal's commit subject",
-    "pending-paths": "a staged proposal's changed path names",
+    "pending-change": "one change of a staged proposal: its status letter and a path name",
+    "pending-unrecognised-row": "a ref beside the proposals that is not one — its name, id and the reason",
     "keygen-private": "a freshly minted private key (text, shown once)",
 }
 

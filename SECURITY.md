@@ -715,19 +715,61 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   removes Key-1's OWN output, so it **cannot advance `main`, enact anything, or grow the promotable set** (the GUI
   still has no promote path / never imports `promote_ref`). The write verb lives in its OWN module so `pending.py`
   stays `assert_read_only`-pinned, and is registered in `WRITE_VERBS` **same-commit** (P0b/#134 — the fail-closed
-  completeness gate fails CI until it is). **Three security properties are load-bearing:** (1) **SEC-B1** the
+  completeness gate fails CI until it is). **These security properties are load-bearing:** (1) **SEC-B1** the
   `run_id` validator accepts EXACTLY the two real minter shapes (`uuid4().hex[:12]`; the API
   `YYYYMMDDTHHMMSSZ-<6hex>`) and refuses a git flag / `../` traversal / branch name, and the ref is passed after
   `git update-ref -d --end-of-options` so a leading-`-` leaf can never be parsed as a flag; (2) **SEC-M1**
   compare-and-delete on the tip read first — a concurrent promote/rebase that moved the ref → **409**, a
   vanished/never-staged ref → **404**, a bad id → **400**, never a 500 or a blind unconditional delete; (3) **MF-4**
-  the delete argv is a single literal list so the completeness detector sees the `update-ref` write. Audited
+  the delete argv is a single literal list so the completeness detector sees the `update-ref` write; (4)
+  **what is deleted is the ref of that name, never what it points at** — a ref under a proposal's name that is a
+  symbolic ref, or names no commit, is refused as "no such proposal", and the delete passes `--no-deref`: what is
+  deleted is the ref of that name, never a ref it points at, also if the ref changes kind after it was read. Audited
   (`pending-discard`/`pending-discard-result`: action run_id + target run_id + sha, names/sha only). **Accepted
   residual (availability, not integrity):** an authed GUI user can delete a legit pending proposal — the SAME trust
   tier the propose surface already grants; the control is **stale-only** + a two-step confirm (default griefing
   target ∅), and recovery is from the **audited sha** (`git update-ref refs/heads/proposed/<id> <sha>` before gc),
   not the reflog (a bare canonical keeps none for a deleted branch). Covered by `tests/unit/test_discard.py` +
   `tests/integration/test_gui_api.py` + `tests/e2e/test_pending_discard.py`.
+- **The Pending list and the discard read the canonical by rules that are each one function of
+  `scripts/kontroll/canon.py`.** The canonical is a repository the network service writes into, so what is *in* it
+  is not something a reader may trust. (1) **A ref is named in full, read once, and is an id from then on**
+  (`canon.read_ref`, `canon.proposals`). A short name is looked up: beside a tag called `main` the name `main` is
+  the tag, and `proposed/<id>` is `refs/proposed/<id>` before it is the proposal — so the list compared, and
+  printed, something other than the branch. The read returns the ref's own value with its type and says when the
+  ref is a symbolic one; nothing is peeled and nothing is followed. A ref under `refs/heads/proposed/` that is not
+  a proposal (a name the service does not mint, a symbolic ref, a ref that names no commit, a name for which the
+  walk of the ref store and the look-up of that one name give different answers) is returned **apart** — shown in
+  the panel, offered no control. (2) **Every git of the list and the discard runs in `canon.git_kwargs(<repo>)`**:
+  one environment that names the repository outright, reads no other config scope, inherits nothing of the
+  caller's but the program path, the temp directory and the locale, and answers the files it names through which
+  a repository tells git what to run or what else to read: no hook, no replace ref, no graft line, no `shallow`
+  file, no commit-graph; the config keys through which the verbs used here could start a program are overridden,
+  and a write gives up on a held lock by itself instead of being killed over it. It does not answer the object
+  store itself (an alternates file, an object swapped under its name) or the ref files. A repository that holds a
+  `commondir` file is **refused**: `GIT_COMMON_DIR` keeps its config and objects its own, but git's ref store
+  follows that file whatever the environment says; so is one whose `refs`, `packed-refs`, `logs`, `objects`,
+  `HEAD` or `config` is a symbolic link. (3) **What git returns is bytes until it is shown** (`canon.show`): a
+  path, an author and a subject are whatever was committed; a name that is not UTF-8, or holds a character that
+  does not print (a newline, an escape, a direction override), is listed in an escaped spelling and marked, never
+  raised on and never dropped — and a moved file is listed at both ends (`--no-renames`), against the commit the
+  proposal was staged on. `exact` is about the bytes, not the look: a printable character can be invisible or
+  resemble another, and no mark says so. **What could not be read is said, never shown as nothing:** a change list
+  git could not print is flagged on its row and the row gets no promote recipe; a `main` that is missing or is not
+  an ordinary branch is announced above the list and no row is called promotable against it; a ref git left out,
+  and a canonical that could not be read at all, are each a warning in the panel. **Scope:** the Pending list and
+  the discard. **Not covered:** a ref git itself does not list — a file under the prefix that holds no object
+  name, a file whose name git does not accept as a ref name, a symbolic ref that points at nothing — is absent
+  from this listing too (for the first two git says so and the panel passes it on; for the third it says
+  nothing); one ref whose object git cannot read makes the whole list unreadable (the panel says the canonical
+  could not be read) rather than one row; and the `commondir` and symbolic-link checks are made before a process
+  starts — they catch a planted file, not a race. Needs git 2.31 or later (the overrides travel in
+  `GIT_CONFIG_COUNT`, which an older git ignores silently). Held by `tests/unit/test_canon.py` (a test with a
+  control — plain git IS fooled — for each entry a planted thing can be shown against: hooks, the replace ref, the
+  graft line, the `shallow` file, the commit-graph; one test of the list itself for the entries no verb used here
+  can show; and the run-id rule fed to the promote play's assert and to the validator alike), `test_pending.py`,
+  `test_discard.py`, and the pin `assert_git_runs_in_the_seam` (`tests/unit/_readonly_pins.py`): in those modules
+  every process is a git argv literal with an allowed verb that passes `**canon.git_kwargs(…)`.
 - **No decrypting age key in the service.** Capability promotes carry no creds (telemetry/backup are data-only).
   Onboard's `sops_set` cred-encryption is deferred to the promote step (out-of-band, a trusted runner holding
   the scoped key) — because age can't encrypt-without-decrypt (1b §4.3), so **zero standing decrypt** sits in a
@@ -1350,7 +1392,8 @@ The GUI paints values it did not author: **device** bytes (capture filenames and
 — C18), **third-party publisher** bytes (`scripts/kontroll/probe.py` copies a collection's `description` verbatim
 out of the public Ansible Galaxy API and `service_search` returns it to the browser), the bytes of a **staged,
 unpromoted proposal** (the Pending panel lists a `proposed/*` ref's name, its commit subject and its changed path
-names), **repository** bytes that a promote put on `main` (inventory, fleet, descriptors, settings), and every
+names — and, apart, any ref beside the proposals that the service did not stage), **repository** bytes that a
+promote put on `main` (inventory, fleet, descriptors, settings), and every
 route's **error string**, which can quote request input, a repository value or a remote response.
 
 **The rule is an allow-list: only literal markup written in `index.html` reaches `innerHTML`.** The template's DOM
