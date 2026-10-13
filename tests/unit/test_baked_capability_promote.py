@@ -227,10 +227,10 @@ def test_the_staged_proposal_contains_the_module_change(tmp_path, monkeypatch, h
     plan = service.build_plan(KEY, selection)
     assert plan["error"] is None, plan
     out = service.apply_plan(plan)
-    result = gitio.commit_and_push(out["paths"], ["reconfigure %s" % KEY], run_id="t04000000001")
+    result = gitio.commit_and_push(out["paths"], ["reconfigure %s" % KEY], run_id="004000000001")
     assert result["committed"] is True and result["staged"] is True and result["pushed_canonical"] is True
 
-    ref = "proposed/t04000000001"
+    ref = "proposed/004000000001"
     assert _git(canonical, "diff", "--name-only", "main", ref).split() == [REL]
     assert _git(canonical, "show", "%s:%s" % (ref, REL)) == plan["text_after"]
     assert shipped.read_bytes().decode("utf-8") == SHIPPED

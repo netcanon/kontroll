@@ -274,12 +274,12 @@ def test_the_promote_gate_refuses_a_bad_fleet_line_and_lets_its_removal_through(
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "main")
     # a proposal that adds the line
-    _git(repo, "checkout", "-q", "-b", "proposed/adds")
+    _git(repo, "checkout", "-q", "-b", "proposed/0000000000a1")
     _fleet(repo, "enabled_modules:\n  - docker_host\n  - %s/../x\n" % MARK)
     _git(repo, "commit", "-qam", "adds a line that is not a class key")
     _git(repo, "checkout", "-q", "main")
     head = sp.run(["git", "rev-parse", "main"], cwd=repo, capture_output=True, text=True).stdout
-    assert promote.main(["adds", "--repo", str(repo)]) == 2
+    assert promote.main(["0000000000a1", "--repo", str(repo)]) == 2
     err = capsys.readouterr().err
     assert "does not resolve" in err and "entry 2 " in err and "instance/fleet.yml" in err, err
     assert "on `main` already" not in err, err                 # `main` resolves: the line is the proposal's own
@@ -288,16 +288,16 @@ def test_the_promote_gate_refuses_a_bad_fleet_line_and_lets_its_removal_through(
     # the line is on main already (a hand edit); an unrelated proposal, and the one that removes it
     _fleet(repo, "enabled_modules:\n  - docker_host\n  - null\n")
     _git(repo, "commit", "-qam", "a hand edit put the line on main")
-    _git(repo, "checkout", "-q", "-b", "proposed/unrelated")
+    _git(repo, "checkout", "-q", "-b", "proposed/0000000000b2")
     (repo / "notes.txt").write_text("unrelated\n", encoding="utf-8")
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "unrelated")
-    _git(repo, "checkout", "-q", "-b", "proposed/removes", "main")
+    _git(repo, "commit", "-qm", "0000000000b2")
+    _git(repo, "checkout", "-q", "-b", "proposed/0000000000c3", "main")
     _fleet(repo, "enabled_modules:\n  - docker_host\n")
     _git(repo, "commit", "-qam", "removes the line")
     _git(repo, "checkout", "-q", "main")
-    assert "entry 2 " in (promote._would_brick_generate("unrelated", str(repo)) or "")
-    assert promote._would_brick_generate("removes", str(repo)) is None
+    assert "entry 2 " in (promote._would_brick_generate("0000000000b2", str(repo)) or "")
+    assert promote._would_brick_generate("0000000000c3", str(repo)) is None
 
 
 # --- the plays ----------------------------------------------------------------------------------------------------- #
@@ -493,27 +493,27 @@ def test_the_removal_promotes_end_to_end_on_a_bare_canonical(tmp_path, capsys):
     _git(work, "init", "-q", "-b", "main")
     _git(work, "add", "-A")
     _git(work, "commit", "-qm", "main, with a line that is not a class key")
-    _git(work, "checkout", "-q", "-b", "unrelated")
+    _git(work, "checkout", "-q", "-b", "0000000000b2")
     (work / "notes.txt").write_text("unrelated\n", encoding="utf-8")
     _git(work, "add", "-A")
-    _git(work, "commit", "-qm", "unrelated")
-    _git(work, "checkout", "-q", "-b", "removes", "main")
+    _git(work, "commit", "-qm", "0000000000b2")
+    _git(work, "checkout", "-q", "-b", "0000000000c3", "main")
     fleet.write_text("enabled_modules:\n  - docker_host\n", encoding="utf-8")
     _git(work, "commit", "-qam", "removes the line")
-    _git(work, "push", "-q", str(bare), "main", "unrelated:refs/heads/proposed/unrelated",
-         "removes:refs/heads/proposed/removes")
+    _git(work, "push", "-q", str(bare), "main", "0000000000b2:refs/heads/proposed/0000000000b2",
+         "0000000000c3:refs/heads/proposed/0000000000c3")
 
     def ref(name):
         return sp.run(["git", "rev-parse", "--verify", "--quiet", name], cwd=bare, env=ENV, capture_output=True,
                       text=True).stdout.strip()
 
-    main_was, removal = ref("refs/heads/main"), ref("refs/heads/proposed/removes")
-    assert promote.main(["unrelated", "--repo", str(bare)]) == 2
+    main_was, removal = ref("refs/heads/main"), ref("refs/heads/proposed/0000000000c3")
+    assert promote.main(["0000000000b2", "--repo", str(bare)]) == 2
     said = capsys.readouterr().err
     assert "entry 2 " in said and "on `main` already" in said, said        # also on a bare repository
-    assert ref("refs/heads/main") == main_was and ref("refs/heads/proposed/unrelated")
-    assert promote.main(["removes", "--repo", str(bare)]) == 0
-    assert ref("refs/heads/main") == removal != main_was and not ref("refs/heads/proposed/removes")
+    assert ref("refs/heads/main") == main_was and ref("refs/heads/proposed/0000000000b2")
+    assert promote.main(["0000000000c3", "--repo", str(bare)]) == 0
+    assert ref("refs/heads/main") == removal != main_was and not ref("refs/heads/proposed/0000000000c3")
 
 
 RENDERERS = ["gen-observability", "gen-logging", "gen-homepage", "gen-backup", "gen-prometheus-jobs", "gen-exporters",
@@ -595,12 +595,12 @@ def test_a_refusal_for_a_line_already_on_main_says_where_the_line_is(tmp_path, c
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "main, with a hand-edited line")
-    _git(repo, "checkout", "-q", "-b", "proposed/unrelated")
+    _git(repo, "checkout", "-q", "-b", "proposed/0000000000b2")
     (repo / "notes.txt").write_text("unrelated\n", encoding="utf-8")
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "unrelated")
+    _git(repo, "commit", "-qm", "0000000000b2")
     _git(repo, "checkout", "-q", "main")
-    assert promote.main(["unrelated", "--repo", str(repo)]) == 2
+    assert promote.main(["0000000000b2", "--repo", str(repo)]) == 2
     err = capsys.readouterr().err
     assert "entry 2 " in err and "`main` as it stands is refused as well" in err and "on `main` already" in err, err
 
@@ -685,18 +685,18 @@ def test_the_refusal_says_the_fault_is_on_main_exactly_when_main_itself_is_refus
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "main, with a hand-edited line")
-    _git(repo, "checkout", "-q", "-b", "proposed/onboard")
+    _git(repo, "checkout", "-q", "-b", "proposed/0000000000d4")
     _fleet(repo, "enabled_modules:\n  - docker_host\n  - null\n  - proxmox\n")       # the onboard's own line
     _git(repo, "commit", "-qam", "an onboard enables a class")
     _git(repo, "checkout", "-q", "main")
-    assert promote.main(["onboard", "--repo", str(repo)]) == 2
+    assert promote.main(["0000000000d4", "--repo", str(repo)]) == 2
     err = capsys.readouterr().err
     assert "entry 2 " in err and "on `main` already" in err, err
     repo = _tree(tmp_path / "main-resolves", "enabled_modules:\n  - docker_host\n")
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "main")
-    _git(repo, "checkout", "-q", "-b", "proposed/units")
+    _git(repo, "checkout", "-q", "-b", "proposed/0000000000e5")
     for key, version in (("dock_a", "==1.0.0"), ("dock_b", "==2.0.0")):
         unit = repo / "instance" / "actuation" / key
         unit.mkdir(parents=True)
@@ -709,7 +709,7 @@ def test_the_refusal_says_the_fault_is_on_main_exactly_when_main_itself_is_refus
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "two units that pin one collection differently")
     _git(repo, "checkout", "-q", "main")
-    assert promote.main(["units", "--repo", str(repo)]) == 2
+    assert promote.main(["0000000000e5", "--repo", str(repo)]) == 2
     err = capsys.readouterr().err
     assert "community.docker" in err and "on `main` already" not in err, err
 
@@ -727,11 +727,11 @@ def test_a_refusal_that_is_not_about_the_fleet_says_nothing_about_the_fleet(tmp_
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "main")
-    _git(repo, "branch", "proposed/pin")
+    _git(repo, "branch", "proposed/0000000000f6")
     monkeypatch.setattr(promote, "_would_brick_generate", lambda run_id, repo: (
         "requirements pin conflict: collection community.docker is pinned to both '==3.0.0' and '==4.0.0' by "
         "different actuation units — re-pin one (gen-requirements fails closed)."))
-    assert promote.main(["pin", "--repo", str(repo)]) == 2
+    assert promote.main(["0000000000f6", "--repo", str(repo)]) == 2
     err = capsys.readouterr().err
     assert "pin conflict" in err and "fleet file" not in err and "`main` already" not in err, err
 
