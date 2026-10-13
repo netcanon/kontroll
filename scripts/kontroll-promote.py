@@ -22,18 +22,23 @@ the proposal's DIFF against a `main` it read itself (which paths change — a cl
 list) approved a change RELATIVE to that commit, and this command reads `main` for itself, a moment later. Named,
 the commit it was judged against is the commit `main` is moved FROM, or nothing moves.
 
-Run it as ROOT (`sudo`) — or as a member of the canonical's owning group (gid 1001). It advances `main` and
-then deletes the staged proposal; the proposal ref is created by the container (uid 1001), so deleting it needs
-write to the group-1001 canonical (the FF of `main` itself works as the repo owner, but the proposal cleanup
-does not). Verified live 2026-06-15 (docs/privileged-mutation-enablement.md §5).
+AS WHOM. Run it with `sudo`. As root it does not run git as root: every git it starts in a repository the
+service can write runs as the SERVICE uid (`canon.git_kwargs`, rule 5 of `kontroll.canon`). When a deploy is armed
+the canonical's own files — a config line, a ref, a pack — are written by a network service, and whatever they
+can make a git do they then make it do as that service and no more. The Semaphore job and the containers already
+are the service uid, and run this as they are. Anybody else — a member of the canonical's group who is neither —
+is told to use `sudo`: run as themselves, git would open that same store with their account. (That last rule is
+a maintainer's call; letting group members through is the one refusal in `main` that says so, turned into a
+note.) What the gate then does with the commit's files — the collection generator over a copy of them — runs as
+the caller, on files the caller wrote: it starts no git.
 
 Usage:  sudo python3 scripts/kontroll-promote.py <run_id>@<commit_id> --repo /srv/kontroll.git
         sudo python3 scripts/kontroll-promote.py --list --repo /srv/kontroll.git
 
 Exit 0: promoted (or listed). Exit 1: nothing to promote as asked — not a run id, no such proposal, not the commit
-that was named, `main` not the commit named with `--onto`, not a fast-forward, the canonical unreadable, or
-`main` moved meanwhile. Exit 2: the gate refused
-the proposal's tree, or could not run (`--skip-conflict-check` is the override).
+that was named, `main` not the commit named with `--onto`, not a fast-forward, the canonical unreadable, a caller
+who is neither root nor the service uid, a root that cannot become the service uid, or `main` moved meanwhile.
+Exit 2: the gate refused the proposal's tree, or could not run (`--skip-conflict-check` is the override).
 """
 import argparse
 import os
@@ -239,6 +244,22 @@ def main(argv):
         return 1
     _streams_never_raise()
     gitdir = canon.git_dir(args.repo or ROOT)
+    if hasattr(os, "geteuid") and os.geteuid() not in (0, canon.SERVICE_UID) and canon.service_writable(gitdir):
+        # Root is made the service uid for every git (the seam); the service uid is it already. Anybody else
+        # would run git AS THEMSELVES in a store a network service writes — the listing too, which is why this
+        # stands before it. A repository of which nothing is the service's (the caller's own clone, every test
+        # repository) is not asked about. Maintainer's call (the module docstring): to let a member of the
+        # canonical's group through, print this sentence as a note and go on.
+        return _refuse(1, "run this with sudo. The repository is one the network service can write, and you are "
+                          "neither root nor that service: as root this command runs git as the service — not as "
+                          "you, and not as root. Nothing was read or changed.")
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and canon.service_writable(gitdir):
+        try:
+            canon.git_kwargs(gitdir)        # what every git below would be refused for is said here, once, first
+        except canon.Unreadable as e:
+            return _refuse(1, "the canonical could not be read (%s)." % e)
+        sys.stderr.write("kontroll-promote: git runs as the service uid (%d) in this repository, not as root\n"
+                         % canon.SERVICE_UID)
     if args.list:
         return _list(gitdir)
     if not args.target:

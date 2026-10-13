@@ -99,9 +99,11 @@ if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
     && echo "    added ${SUDO_USER} to the docker group (log out/in to take effect)."
 fi
 
-# The C10 canonical group (gid 1001): the operator must be a member to manage the uid-1001-pushed proposal refs
-# (kontroll-promote deletes the consumed proposed/<run_id>) — else promote fails 'Permission denied' (F-CANON,
-# task_51334deb). local-canonical.yml SKIPS this inside the installer container, so the host floor (here, as root)
+# The C10 canonical group (gid 1001): the operator must be a member to WRITE the canonical beside what uid 1001
+# wrote there (scripts/update.sh and an onboard from the CLI push `main` as the operator) — else that write fails
+# 'Permission denied' (F-CANON, task_51334deb). A promote is not the reason any more: `sudo kontroll-promote` runs
+# its git as the service uid.
+# local-canonical.yml SKIPS this inside the installer container, so the host floor (here, as root)
 # provisions it. Was a printed manual "step 1"; now an idempotent action. See scripts/lib/canonical-group.sh.
 echo "==> The C10 canonical group (gid 1001) + the operator's membership…"
 # shellcheck source=scripts/lib/canonical-group.sh

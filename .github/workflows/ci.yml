@@ -103,6 +103,9 @@ jobs:
         env:
           ANSIBLE_DEPRECATION_WARNINGS: "false"
           PYTHONWARNINGS: "ignore::DeprecationWarning"
+        # The gate's step `canon-drop-as-root` needs ROOT (it chowns a repository under /tmp and starts git as
+        # uid 1001): it runs through `sudo -n`, and under --strict a runner without passwordless sudo fails it.
+        # A run that is cancelled in that step can leave /tmp/kontroll-drop-* behind, owned by root.
         run: bash tests/validate.sh --strict
 
   tests:

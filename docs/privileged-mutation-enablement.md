@@ -153,7 +153,9 @@ capability-promote path is live too, not just the API. The from-scratch recipe (
    gid-1001 (no host root — the `core.sharedRepository=group` + B group-write grant make the proposal
    refs/objects group-writable). CLI fallback: `sudo python3 scripts/kontroll-promote.py --list --repo
    /srv/kontroll.git`, then `sudo python3 scripts/kontroll-promote.py <run_id>@<commit_id> --repo
-   /srv/kontroll.git`.
+   /srv/kontroll.git`. With `sudo` the command is root only until it starts git: every git it runs in the
+   canonical is the service uid (1001:1001), so it writes the same files, as the same owner, as the Semaphore job
+   does — and says so on stderr. Without `sudo`, an account that is neither root nor the service is refused.
 5. **Verify:** `curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" https://<mgmt>:8444/audit/log`
    (`http://` under `frontend.tls_mode: byo_proxy` or `acme`, where the API serves plain HTTP to your proxy)
    → 200 (no token → 401); a capture-exception/capability promote returns `staged:true target_ref:proposed/<run_id>`
@@ -183,6 +185,13 @@ another commit, so what was previewed, what was judged and what landed could be 
 - **Nobody is told to run git in the canonical by hand.** The play's raw `git` tasks and the messages that
   suggested `git -C /srv/kontroll.git …` are gone; `kontroll-promote.py --list` and the Pending panel answer the
   same questions through the tool's own reader.
+- **A promote by root does not run git as root** (the same day). A promote by `sudo` runs every git as the service
+  uid, because the files git reads there are ones a network service writes when the deploy is armed
+  (SECURITY.md C10). Who else may run it is the maintainer's call. Built: root and the service uid only, where
+  the repository is one the service can write; a member of the canonical's group who is neither is told to use
+  `sudo` — run as themselves, git would open that store with their account. Letting group members through is
+  the one refusal in `kontroll-promote.py` that says so, printed as a note instead, and the row of
+  `tests/unit/test_kontroll_promote.py` that holds it.
 
 ## 6. What's deferred (named, not silently dropped)
 

@@ -78,6 +78,29 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
     out="$(PYTEST_ADDOPTS= "$0" -m pytest tests/integration/test_plaintext_guard_sops.py -rs --color=no 2>&1)"; rc=$?
     printf "%s\n" "$out"
     [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
+  # the change of identity, with REAL uids (rule 5 of kontroll.canon). The rows of tests/integration/test_canon_drop.py
+  # chown a canonical to the play's layout and start git as the service, so they need root — and every one of them
+  # was SKIPPED in the suite above unless this gate itself runs as root. So: as root, directly; else through
+  # `sudo -n` (never a prompt) where that works; else the step is skipped, which --strict counts as a failure — a
+  # gate that cannot be root has not shown that root's git is the service's. No row may be skipped (as for the sops
+  # step), and nothing is written into the tree as root: no bytecode, no pytest cache.
+  as_root=""; how="as root"
+  if [ "$(id -u)" -eq 0 ]; then as_root="env"
+  elif have sudo && sudo -n true 2>/dev/null; then as_root="sudo -n env"; how="through sudo -n"; fi
+  if [ -z "$as_root" ]; then
+    # not `step`: its SKIP line says "not installed", and what is missing here is root
+    echo "SKIP  canon-drop-as-root (this gate is not root and has no sudo that needs no password)"; skip=$((skip+1))
+    [ "$STRICT" = "--strict" ] && fail=$((fail+1))
+  else
+    echo "      canon-drop-as-root runs $how: it chowns a repository under /tmp and starts git as uid 1001"
+    step canon-drop-as-root 0 bash -c '
+      # shellcheck disable=SC2086  # $1 is "env" or "sudo -n env": it must word-split
+      out="$($1 PYTEST_ADDOPTS= PATH="$PATH" HOME="$HOME" LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}" \
+             PYTHONPATH="${PYTHONPATH-}" PYTHONDONTWRITEBYTECODE=1 \
+             "$0" -B -m pytest tests/integration/test_canon_drop.py -p no:cacheprovider -rs --color=no 2>&1)"; rc=$?
+      printf "%s\n" "$out"
+      [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY" "$as_root"
+  fi
 else
   echo "SKIP  pytest (not installed)"; skip=$((skip+1))
   [ "$STRICT" = "--strict" ] && fail=$((fail+1))

@@ -11,6 +11,64 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(canonical): a root caller runs the canonical's git as the service uid — what the canonical's files can make a git do, they make it do as the service that wrote them (2026-10-13)
+
+When a deploy is armed the canonical's own files — its config, its refs, its packs — are written by a network
+service, and `sudo kontroll-promote` is root. The hardened environment every git of the canonical runs in
+(`canon.git_env`) answers each way a repository makes git run a program or read another store that somebody has
+listed. This is for everything else — the parser of a pack or of a ref file, and whatever else those files can
+make a git do: run by root, it was root that did it (measured).
+
+- **`canon.git_kwargs`: for a caller with effective uid 0, in a repository of which anything is the service's to
+  write, every git of the seam is started as uid:gid 1001 with no supplementary group** — in a session of its
+  own, with no standard input of the caller's unless the tool feeds it (so not holding the terminal root sits
+  at), and in `/` (the caller's own directory may be one the service cannot enter). The promote, the Pending
+  listing, the discard and the export all start git through it. The service's containers and the Semaphore job
+  are that uid already and are not touched; nor is a repository the service can write nothing of (root's own —
+  the unit suite's, run as root).
+- **`canon.service_writable` asks the whole repository**: the top directory, then every entry below it — its
+  owner, its group's write bit, everybody's, a symbolic link, and an access-control list where the group's write
+  bit shows one could grant something. Not one directory: with write on `refs/` the service can exchange
+  `refs/heads` for a link to a root-owned directory, for nothing, or — where one stands beside it — for a
+  directory of somebody else's with no group write bit, and a single look at it was talked out of its answer
+  each way.
+- **`kontroll-promote.py` — and its `--list` — refuse a caller who is neither root nor the service uid** on a
+  repository the service can write: "run this with sudo". Run as themselves, git would open that store with
+  their account. As root it says on stderr as whom git runs.
+- **A root that may not change identity is refused in one sentence** ("could not drop to the service uid") — a
+  container started without `CAP_SETUID`/`CAP_SETGID`, or in a user namespace that denies `setgroups`. Nothing
+  runs as root instead.
+
+**Covers:** the gits this tool starts through the seam. A git started any other way runs as its caller, as before.
+
+**On a box that runs the previous build:** nothing to do. `sudo kontroll-promote` works as before and is the
+supported form; it does not depend on where it is typed (git is started in `/`), and the files a promote leaves
+are now the service's (group-writable, as the Semaphore job's are), not root's. A promote run WITHOUT `sudo` by an
+account in the canonical's group is refused where it used to run.
+
+**A maintainer's call:** whether members of the canonical's group are refused or only told. Built: refused.
+Letting them through is the one refusal in `kontroll-promote.py`'s `main` that says so, printed as a note, and the
+row `test_who_may_run_the_promote_and_as_whom_it_says_git_runs`.
+
+**Corrected in passing:** SECURITY.md's `hooks/` paragraph; the sentence of C22's known gaps that named who runs
+the promote and said it takes its run id unchecked (false since the promote reads one id); the sentence that gave
+the CLI promote as a reason for the canonical's group; and the reason `scripts/lib/canonical-group.sh`, the two
+launchers and `scripts/install-prereqs.sh` give for that group (the operator's own pushes, not the promote).
+
+**New here:** `tests/integration/test_canon_drop.py` — as root, with real uids, on a canonical laid out as
+`local-canonical.yml` leaves one: a hook that writes down who it runs as writes uid, gid and groups 1001 during a
+promote by root (and 0 in a repository that is root's own — the control); the child holds neither root's terminal
+nor its standard input; the promote works from a directory the service may not enter; the listing, the promote,
+the tree read and the discard all work as the service with no `safe.directory` anywhere, and what they leave is
+the service's and group-writable; the exchanges of `refs/heads`; one thing of the service's deep below a closed
+top directory; the canonical reached through a link; a caller who is neither, patched and as a real third
+account; a root without the capability. `tests/validate.sh` runs the file as a step of its own — as root, or
+through `sudo -n`, and it says which — and a skipped row fails it (`--strict`: so does a gate that cannot be
+root). In `tests/unit/test_canon.py` and `tests/unit/test_kontroll_promote.py`: the decision itself, the numbers
+(1001, as the compose fragments and the play have them), and the sentences the troubleshooting table quotes, on
+any host. The seam pin (`tests/unit/_readonly_pins.py`) refuses a call site that passes an identity, a session or
+a descriptor keyword of its own beside the seam.
+
 ### feat(promote): `--onto <commit id>` — a judgement that depended on `main` names the commit it was made against (2026-10-13)
 
 The promote lands the commit that was judged — but "judged" can mean two things. The gate judges the proposal's
