@@ -49,6 +49,8 @@
            border-bottom:1px solid var(--line); }
   .capx { background:none; border:none; font-size:18px; color:var(--muted); cursor:pointer; }
   .capbody { padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+  /* the Pending panel paints names, subjects and ids somebody else wrote: a long one wraps, it does not widen the page */
+  [data-testid=pending-panel] .card { overflow-wrap:anywhere; }
   .capbody .row { display:flex; gap:8px; align-items:center; }
   .capbody label { font-size:12px; color:var(--muted); min-width:64px; }
   /* C14 backup viewer — single-config view + unified diff (structural coloring only; no syntax highlighter) */
@@ -1169,8 +1171,30 @@ async function openPendingPanel() {
   const body = dlg.querySelector('.capbody'); body.innerHTML = '';
   if (data.error){ body.appendChild(ET('div', 'warn', data.error, 'pending-error')); return; }
   const props = data.proposals || [];
-  if (!props.length){ body.appendChild(ET('div', 'meta', data.note || 'No proposals pending.', 'pending-empty')); return; }
+  const apart = data.unrecognised || [];
+  // Three sentences the server sends when the list is not the whole truth: `main` is not a branch to compare with,
+  // git left a ref out, the canonical could not be read. Each is a warning, never the quiet grey of "nothing here".
+  if (data.main_note) body.appendChild(ET('div', 'warn', data.main_note, 'pending-main-note'));
+  if (data.skipped_note) body.appendChild(ET('div', 'warn', data.skipped_note, 'pending-skipped-note'));
+  const quiet = data.note_kind !== 'unreadable' && !apart.length;
+  if (!props.length) body.appendChild(ET('div', quiet ? 'meta' : 'warn', data.note || 'No proposals pending.', 'pending-empty'));
   props.forEach(p => body.appendChild(pendingRow(p, data)));
+  if (apart.length) body.appendChild(pendingApart(apart));
+}
+// Refs under refs/heads/proposed/ that are NOT proposals: a name the service does not mint, a symbolic ref, a ref
+// that names no commit. The service stages none of these, so one of them is something written into the canonical
+// by another hand — it is shown so that it is seen, and it gets no copy, promote or discard control. Every field
+// is foreign and painted as text (C19); the name is the server's escaped spelling when it is not text.
+function pendingApart(apart) {
+  const box = E('div', 'card', null, 'pending-unrecognised');
+  box.appendChild(ET('h3', null, 'Not proposals'));
+  box.appendChild(ET('div', 'meta warn', 'These refs sit beside the proposals but the service did not stage them. '
+    + 'They cannot be promoted or discarded from here.'));
+  apart.forEach(a => {
+    const line = (a.ref || '?') + ' · ' + (a.sha || 'no object') + ' — ' + (a.why || 'not a proposal');
+    box.appendChild(ET('div', 'meta', line, 'pending-unrecognised-row'));
+  });
+  return box;
 }
 function pendingRow(p, data) {
   // stale = the FF-race: `main` advanced PAST this proposal (e.g. the auto-promoter promoted a later LOW-blast one),
@@ -1185,16 +1209,38 @@ function pendingRow(p, data) {
   if (stale) h.appendChild(ET('span', 'badge no', ' stale — re-propose', 'pending-stale'));   // red tag, no promote
   row.appendChild(h);
   if (p.subject) row.appendChild(ET('div', 'meta', p.subject, 'pending-subject'));                   // "what it changes" at a glance
-  if (p.paths && p.paths.length)
-    row.appendChild(ET('div', 'meta', 'changes: '+p.paths.join(', '), 'pending-paths'));   // NAMES only — no contents
+  // What it changes: one status letter and one NAME per file — never contents. A file the proposal moves is two
+  // entries (D the old name, A the new one): the old name is where something is taken away. A name that is not
+  // text arrives as the server's escaped spelling with exact:false, and the row says so rather than drop it.
+  // Each entry is an element of its own: joined into one line, a file NAMED `a.yml, D other.yml` would read as two.
+  const changes = p.changes || [];
+  if (p.changes_read === false)
+    row.appendChild(ET('div', 'meta warn', 'What this proposal changes could not be read. Do not approve it from '
+      + 'this row.', 'pending-changes-unread'));
+  if (changes.length) {
+    const list = E('div', 'meta', null, 'pending-paths');
+    list.appendChild(T('changes:'));
+    changes.forEach(c => list.appendChild(ET('div', null, c.status + ' ' + c.path, 'pending-change')));
+    row.appendChild(list);
+    if (changes.some(c => c.exact === false))
+      row.appendChild(ET('div', 'meta warn', 'A name above holds bytes that cannot be shown as written — it is '
+        + 'shown escaped.', 'pending-path-inexact'));
+  }
   const copy = E('button', 'mini', 'copy run_id', 'pending-copy-runid');         // the load-bearing affordance
   copy.onclick = () => copyRunId(copy, p.run_id);
   row.appendChild(copy);
   // A stale proposal can't be promoted — steer the operator to re-propose instead of the (would-be-refused) recipe.
-  row.appendChild(stale
-    ? ET('div', 'meta warn', 'main advanced past this — a promote would be refused (non-fast-forward). Re-run the '
-        + 'same onboard/capability dialog to stage a fresh proposal against current main.', 'pending-stale-hint')
-    : pendingPromoteHint(p, data));                                             // the static signpost (NOT a trigger)
+  // `promotable === null` (strictly: a payload without the key keeps the recipe) is "could not be told" — not
+  // stale, and not something to hand the promote recipe for either. Nor is a row whose changes could not be read:
+  // it already says so, and the recipe is for a proposal that has been looked at.
+  if (stale)
+    row.appendChild(ET('div', 'meta warn', 'main advanced past this — a promote would be refused (non-fast-forward). Re-run the '
+        + 'same onboard/capability dialog to stage a fresh proposal against current main.', 'pending-stale-hint'));
+  else if (p.promotable === null)
+    row.appendChild(ET('div', 'meta warn', 'Whether this is a fast-forward of main could not be told. Do not promote it '
+        + 'until the list reads cleanly.', 'pending-unknown-hint'));
+  else if (p.changes_read !== false)
+    row.appendChild(pendingPromoteHint(p, data));                               // the static signpost (NOT a trigger)
   // FF-race Move 1: for a STALE onboard proposal (repropose_hint — the class key the ref's path names yield), wire
   // the stale-hint prose to a button that re-runs the SAME onboard dialog. NOT an actuation — it navigates (no write
   // path; C10 intact). Only when the server gave a hint (an onboard shape); other stale kinds keep the prose only.

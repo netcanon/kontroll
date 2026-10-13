@@ -229,9 +229,12 @@ def api_services():
 @require_auth
 def api_pending():
     """The staged proposals awaiting promotion (C10) — read-only. Powers the Pending panel: lists the canonical's
-    proposed/<run_id> refs + what each changes, so the operator can copy a run_id into the Semaphore
-    promote-proposal task. Reads only the canonical bare repo; NEVER promotes (that is the separate, admin-authed
-    Semaphore app — the GUI cannot advance main; C10 two-key). A read-only surface never gates onboarding (D*)."""
+    proposed/<run_id> refs + what each changes (one status and one name per file, a moved file at both ends, a
+    name that is not text in an escaped spelling marked as such), so the operator can copy a run_id into the
+    Semaphore promote-proposal task; and, apart, any ref beside them that is not a proposal. Reads only the
+    canonical bare repo, by full ref name and in the one environment `kontroll.canon` gives its git; NEVER
+    promotes (that is the separate, admin-authed Semaphore app — the GUI cannot advance main; C10 two-key). A
+    read-only surface never gates onboarding (D*)."""
     from kontroll.service.pending import list_pending  # local import — read-only view, no per-request catalog
     try:
         return jsonify(list_pending())

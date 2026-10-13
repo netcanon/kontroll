@@ -49,28 +49,39 @@ def _assert_inert(page):
 
 
 def test_a_staged_proposal_is_painted_as_text(page):
-    """Every field of a staged proposal — the run id (a git ref name), staged-at, sha, the commit subject, the
-    changed path names — and the promote-task name render as literal text in the Pending panel, and so does the run
-    id in the select-to-copy fallback a plain-HTTP deploy takes. Guards the hole this rule closed: those bytes are
-    whatever the proposal's author committed, nobody has promoted them, and the panel is where an operator looks at
-    them, so markup there ran in the operator's session on opening the list."""
+    """Every field of a staged proposal — the run id (a git ref name), staged-at, sha, the commit subject, each
+    change's status and path name — the promote-task name, and every field of a ref listed apart as "not a
+    proposal" (its name, its id, the reason) render as literal text in the Pending panel, and so does the run id
+    in the select-to-copy fallback a plain-HTTP deploy takes. Guards the hole this rule closed: those bytes are
+    whatever somebody committed or wrote into the canonical, nobody has promoted them, and the panel is where an
+    operator looks at them, so markup there ran in the operator's session on opening the list."""
     _serve(page, "**/api/pending", {
         "proposals": [
-            {"run_id": P("rid"), "ref": "proposed/x", "sha": "deadbee", "staged_at": "2026-07-05T00:00:00+00:00",
-             "author": "kontroll", "subject": P("subject"), "paths": [P("path"), "instance/fleet.yml"],
+            {"run_id": P("rid"), "ref": "refs/heads/proposed/x", "sha": "deadbee",
+             "staged_at": "2026-07-05T00:00:00+00:00", "author": "kontroll", "subject": P("subject"),
+             "paths": [P("path"), "instance/fleet.yml"],
+             "changes": [{"status": P("st"), "path": P("path"), "exact": True},
+                         {"status": "M", "path": "instance/fleet.yml", "exact": True}],
              "promotable": True},
-            {"run_id": "abc123def456", "ref": "proposed/abc123def456", "sha": P("sha"), "staged_at": P("at"),
-             "author": "kontroll", "subject": "feat(onboard): stage cisco_ios", "paths": [], "promotable": True}],
+            {"run_id": "abc123def456", "ref": "refs/heads/proposed/abc123def456", "sha": P("sha"),
+             "staged_at": P("at"), "author": "kontroll", "subject": "feat(onboard): stage cisco_ios", "paths": [],
+             "changes": [], "promotable": True}],
+        "unrecognised": [{"ref": P("ref"), "sha": P("oid"), "why": P("why")}],
+        "main_note": P("main"), "skipped_note": P("skipped"),
         "canonical": "/srv/kontroll.git", "promote_task": P("task"), "note": None})
     page.goto("/")
     page.get_by_test_id("pending-open").click()
     row = page.get_by_test_id("pending-row").first
     expect(row.get_by_test_id("pending-head")).to_have_text(P("rid") + " staged 2026-07-05T00:00:00+00:00 · deadbee")
     expect(row.get_by_test_id("pending-subject")).to_have_text(P("subject"))
-    expect(row.get_by_test_id("pending-paths")).to_have_text("changes: " + P("path") + ", instance/fleet.yml")
+    expect(row.get_by_test_id("pending-change")).to_have_text([P("st") + " " + P("path"), "M instance/fleet.yml"])
     expect(row.get_by_test_id("pending-promote-hint")).to_contain_text(P("task"))
     second = page.get_by_test_id("pending-row").nth(1)
     expect(second.get_by_test_id("pending-head")).to_have_text("abc123def456 staged " + P("at") + " · " + P("sha"))
+    expect(page.get_by_test_id("pending-unrecognised-row")).to_have_text(
+        P("ref") + " · " + P("oid") + " — " + P("why"))
+    expect(page.get_by_test_id("pending-main-note")).to_have_text(P("main"))
+    expect(page.get_by_test_id("pending-skipped-note")).to_have_text(P("skipped"))
     _assert_inert(page)
     # the copy fallback: with no clipboard API the button is replaced by the run id as selectable text
     page.evaluate("Object.defineProperty(navigator, 'clipboard', {value: undefined, configurable: true})")

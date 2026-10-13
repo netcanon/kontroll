@@ -18,12 +18,15 @@ pytestmark = pytest.mark.e2e
 
 _STALE_ONBOARD = {
     "proposals": [{
-        "run_id": "abc123def456", "ref": "proposed/abc123def456", "sha": "deadbee",
+        "run_id": "abc123def456", "ref": "refs/heads/proposed/abc123def456", "sha": "de" * 20,
         "staged_at": "2026-07-05T00:00:00+00:00", "author": "kontroll",
         "subject": "feat(onboard): stage cisco_ios",
         "paths": ["instance/inventory/onboarded-cisco_ios.yml", "modules/cisco_ios/module.yml"],
+        "changes": [{"status": "A", "path": "instance/inventory/onboarded-cisco_ios.yml", "exact": True},
+                    {"status": "M", "path": "modules/cisco_ios/module.yml", "exact": True}],
         "promotable": False,                                   # the FF-race: main advanced past it
         "repropose_hint": {"kind": "onboard", "key": "cisco_ios"}}],
+    "unrecognised": [],
     "canonical": "/srv/kontroll.git", "promote_task": "promote-proposal", "note": None}
 
 

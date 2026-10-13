@@ -260,12 +260,30 @@ admin-authed Semaphore app (C10 two-key); there is deliberately no Promote/Appro
 | `pending-overlay` | the modal overlay (the dim backdrop) | one at a time; reopening removes the prior |
 | `pending-panel` | the panel root | |
 | `pending-close` | the × close control | removes `pending-overlay` |
-| `pending-body` | the panel body (one row per proposal) | |
+| `pending-body` | the panel body (one row per proposal, then `pending-unrecognised` when there is one) | |
 | `pending-error` | the error line (a git/read failure) | shown instead of the list; painted with `ET()` (C19) |
-| `pending-empty` | the "nothing pending" state | the informational `note` (unarmed deploy / no canonical) |
+| `pending-empty` | the "nothing pending" state | the server's `note` (unarmed deploy / no canonical / a canonical that could not be read — the note then says why); quiet grey only when that is all it is: painted as a warning when `note_kind` is `unreadable`, and when there are no proposals but there are refs under `pending-unrecognised` |
+| `pending-main-note` | a warning above the rows | present when `refs/heads/main` is missing or is not an ordinary branch (`main_note`): no row is called promotable against it |
+| `pending-skipped-note` | a warning above the rows | present when git said it left a ref under the prefix out of its listing (`skipped_note`) |
 | `pending-row` | a per-proposal row | `data-run-id` = the run_id |
-| `pending-head` | the row's `<h3>` — the run_id as text, with staged-at and sha as a child `<span class="meta">` | painted with `ET()`: the run_id is a git **ref name**, foreign and unpromoted (C19); `pending-stale` is appended here when stale |
-| `pending-subject` | the proposal's commit subject line (when present) | painted with `ET()` — whatever the proposal's author committed (C19) |
+| `pending-head` | the row's `<h3>` — the run_id as text, with staged-at and the proposal's **full** commit id as a child `<span class="meta">` | painted with `ET()`: the run_id is a git **ref name**, foreign and unpromoted (C19); `pending-stale` is appended here when stale |
+| `pending-subject` | the proposal's commit subject line (when present) | painted with `ET()` — whatever the proposal's author committed (C19); bytes that are not text arrive escaped |
+| `pending-unrecognised` | the "Not proposals" card after the rows | present only when the canonical holds a ref under `refs/heads/proposed/` that is not a proposal (a name the service does not mint, a symbolic ref, a ref that names no commit); **no** copy, promote or discard control inside |
+| `pending-unrecognised-row` | one such ref: its name, its object id and the reason | painted with `ET()` — a ref name written by another hand (C19) |
+| `pending-copy-runid` | the copy-run_id button inside a row | clipboard + a select-text fallback on plain-HTTP dev |
+| `pending-paths` | the container of what the proposal changes (when it changes anything) | holds one `pending-change` per file |
+| `pending-change` | one change: a status letter and one NAME | names only — never file contents (no C8 weight); a moved file is two entries (`D` old name, `A` new name); one element per entry, so a name cannot read as two entries; painted with `ET()` (C19) |
+| `pending-changes-unread` | the warning that the row's change list could not be read | present when `changes_read` is `false`; the row then carries no `pending-promote-hint` |
+| `pending-unknown-hint` | the warning in place of the recipe when `promotable` is `null` | "could not be told" is neither stale nor promotable |
+| `pending-path-inexact` | the note under `pending-paths` that a name is shown escaped | present only when an entry has `exact: false` (a name that is not UTF-8, or holds a character that does not print) |
+| `pending-promote-hint` | the static Semaphore `promote-proposal` instruction inside a row | a signpost, **never** a run trigger (C10); rendered only when `promotable` is `true` (or absent from the payload) and the row's changes were read |
+| `pending-stale` | a red "stale — re-propose" tag in the row `<h3>` | shown when `pending.promotable === false` (the proposal is non-FF: `main` advanced past it — the FF-race) |
+| `pending-stale-hint` | the re-propose guidance inside a stale row | replaces `pending-promote-hint` when stale (a promote would be refused non-fast-forward) |
+| `pending-re-propose` | the Re-propose button inside a stale row (FF-race Move 1) | shown only when stale **and** the proposal is an onboard (`repropose_hint`); `reproposeFromPending` closes the panel + navigates to the class's onboard dialog — a navigation affordance, **never** a promote/stage (C10) |
+| `pending-discard` | the Discard button inside a stale row (FF-race Move 2) | **stale-only**; opens a two-step confirm — a single click never deletes |
+| `pending-discard-confirm` | the confirm button of the two-step discard | POSTs `/api/pending/<run_id>/discard` → the server compare-and-deletes the ref (C10-safe un-stage, **never** a promote); on success the row is removed |
+| `pending-discard-cancel` | the cancel button of the two-step discard | restores the row to the un-confirmed Discard button |
+| `pending-discard-error` | the inline error after a refused discard | 400 (bad run_id) / 404 (no such proposal) / 409 (the ref moved) — the row is left intact |
 
 ## Discovery panel (standalone modal — opened from the header "Discovery" button) — discovery-inbox Rung 1b
 
@@ -311,16 +329,6 @@ dialog** section below (opened from the Index *Automations* section; a zero-knob
 |---|---|---|
 | `unit-config-fields` | the curated-knob GROUP container | filled by `renderKnobGroup` over the `unit` group (`source_kind: unit` → `renderKnob` per knob) — the configure form |
 | `knob-<key>` | one rendered knob row | **reused** (the existing per-knob testid); `[data-param]` widget inside, one per curated knob |
-| `pending-copy-runid` | the copy-run_id button inside a row | clipboard + a select-text fallback on plain-HTTP dev |
-| `pending-paths` | the changed-paths NAMES summary inside a row (when present) | names only — never file contents (no C8 weight); painted with `ET()` (C19) |
-| `pending-promote-hint` | the static Semaphore `promote-proposal` instruction inside a row | a signpost, **never** a run trigger (C10); rendered only when the proposal is a fast-forward (`promotable !== false`) |
-| `pending-stale` | a red "stale — re-propose" tag in the row `<h3>` | shown when `pending.promotable === false` (the proposal is non-FF: `main` advanced past it — the FF-race) |
-| `pending-stale-hint` | the re-propose guidance inside a stale row | replaces `pending-promote-hint` when stale (a promote would be refused non-fast-forward) |
-| `pending-re-propose` | the Re-propose button inside a stale row (FF-race Move 1) | shown only when stale **and** the proposal is an onboard (`repropose_hint`); `reproposeFromPending` closes the panel + navigates to the class's onboard dialog — a navigation affordance, **never** a promote/stage (C10) |
-| `pending-discard` | the Discard button inside a stale row (FF-race Move 2) | **stale-only**; opens a two-step confirm — a single click never deletes |
-| `pending-discard-confirm` | the confirm button of the two-step discard | POSTs `/api/pending/<run_id>/discard` → the server compare-and-deletes the ref (C10-safe un-stage, **never** a promote); on success the row is removed |
-| `pending-discard-cancel` | the cancel button of the two-step discard | restores the row to the un-confirmed Discard button |
-| `pending-discard-error` | the inline error after a refused discard | 400 (bad run_id) / 404 (no such proposal) / 409 (the ref moved) — the row is left intact |
 
 ## App-store / runnable-unit dialog — create-unit (standalone modal, opened from the `unit-badge`)
 

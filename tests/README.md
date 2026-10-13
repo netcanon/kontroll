@@ -125,6 +125,7 @@ tests/unit/          # pure functions, no I/O
   test_api_audit.py          # one request value is one cell of one audit row: the shared flattener, and the API writer read back through a real file
   test_repository_data.py    # C22: a name adopted from a module file, the reserved names at each seam, the scaffold's arguments, and the refusal that is the repository's own (409), never a field's
   test_yamlscalar.py         # may a string stand unquoted in a hand-formatted YAML line: every position a writer uses, exhaustively for short strings; the quoting fallback of the generators
+  test_canon.py              # C10: how the canonical is read — refs by full name, one canary test (with its control) per entry of the git environment a planted file can show, the whole entry list held by name, bytes to text, the seam pin
   test_fleet_line.py         # C22: a fleet line that is not a class key at every deploy-time reader — skipped and named by what renders, refused by what installs and by the promote gate, checked first by the plays
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
   test_onboard_dryrun.py     # dry-run plans nothing; --apply mutates tmp repo idempotently
@@ -211,6 +212,32 @@ and two calls away, a callback, a sibling module under each import spelling the 
 a primitive no verb names — plus a check on the real tree that the closure still resolves the
 GUI's and the service layer's imports. Add a new read view? Add its `assert_read_only` test.
 Add a new writer? CI tells you to register it.
+
+`assert_git_runs_in_the_seam` is the pin for a module whose git runs on the **canonical**
+(`scripts/kontroll/canon.py`, `service/pending.py`, `service/discard.py`): every process it
+starts is one git argv literal whose second element is an allowed verb — each module is given
+the verbs it runs today, not the read-only list, because the seam is proven for those verbs
+and no others — passing `**canon.git_kwargs(<repo>)`, a `timeout`, and no `env`, `cwd`, `shell`,
+`executable`, second positional argument or second `**` of its own; no `-C`, no `-c`, no verb
+built at run time, no `subprocess` under another name, no process through `os`. The verb pins
+say *which* git a read view may run; this one says *in what*. It is proven against one planted
+module per way around it (`test_canon.py`: the call-shaped ways, and the ways that are not a
+call).
+
+### The throwaway canonical (`tests/unit/_canon_repo.py`)
+
+The fixture seam for everything that reads the canonical. `build()` makes a bare repository
+shaped like a node's — `main`, a proposal that fast-forwards it, one it has moved past — out of
+objects written from **bytes** (`hash-object`, `mktree -z`), so a file name, an author or a
+subject that no filesystem or porcelain of the host would take still gets in. One `plant_*`
+function per thing a writer of the repository can leave behind: the other meanings of the
+short names (a tag `main`, `refs/main`, a file `main`), a replace ref, a graft line, a
+`shallow` file, a commit-graph that lies about a parent or a tree, a `commondir`, a hook.
+The pattern of a test: plant one thing, show that the host's plain git **is** fooled (the
+control — a planted thing that fools nobody proves nothing), then ask the code under test
+what it would ask of a clean repository. `seam_without()` gives the seam's environment minus
+named entries, for showing that one entry is the one that answers a planted thing. These
+tests run real git and take the suite's `isolated_git` fixture.
 
 ## Playbook and role hygiene sweeps
 

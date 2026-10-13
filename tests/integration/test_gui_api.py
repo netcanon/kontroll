@@ -8,6 +8,8 @@ or touches the repo/lab. The conftest sets GUI_PASSWORD before import (the GUI i
 import a usable app without it).
 """
 import base64
+import os
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -1374,6 +1376,46 @@ def test_discovery_read_failure_is_500_not_a_crash(client, monkeypatch):
     assert r.status_code == 500 and "discovery read failed" in r.get_json()["error"]
 
 
+# --- the Pending route over a real canonical (GET /api/pending) -------------------------------------------------- #
+def test_pending_route_serves_a_proposal_whose_names_are_not_text(client, monkeypatch, tmp_path, isolated_git):
+    """GET /api/pending over a REAL bare repository whose one proposal has a file name that is not UTF-8, a Latin-1
+    author and a subject with a stray byte answers 200 with JSON: the proposal by its run id, full ref name and
+    full commit id, the name in its escaped spelling with `exact` false, and an empty `unrecognised` list. Guards
+    the seam between the reader and the route: git hands those fields over as bytes, and one of them reaching
+    `jsonify` (or a decode that raises on the way) turned the whole panel into a 500 — one proposal hiding the
+    queue."""
+    bare = str(tmp_path / "canonical.git")
+    who = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.test"}
+
+    def git(*args, stdin=None):
+        return subprocess.run(["git", "-C", bare] + list(args), input=stdin, capture_output=True, check=True,
+                              env=dict(os.environ, **who)).stdout.strip().decode("ascii")
+
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True, capture_output=True)
+    blob = git("hash-object", "-w", "--stdin", stdin=b"x\n")
+    base_tree = git("mktree", "-z", stdin=b"100644 blob " + blob.encode() + b"\tseed.txt\0")
+    base = git("commit-tree", base_tree, "-m", "base")
+    tree = git("mktree", "-z", stdin=b"100644 blob " + blob.encode() + b"\tcaf\xe9.yml\0"
+               + b"100644 blob " + blob.encode() + b"\tseed.txt\0")
+    commit = git("hash-object", "-t", "commit", "-w", "--stdin", stdin=(
+        b"tree " + tree.encode() + b"\nparent " + base.encode() + b"\n"
+        b"author J\xf6rg <t@example.test> 1750000000 +0000\n"
+        b"committer t <t@example.test> 1750000000 +0000\n\nsubj \xff\n"))
+    git("update-ref", "refs/heads/main", base)
+    git("update-ref", "refs/heads/proposed/abc123def456", commit)
+    monkeypatch.setenv("KONTROLL_CANONICAL_GIT", bare)
+
+    r = client.get("/api/pending", headers=_auth())
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["unrecognised"] == [] and len(body["proposals"]) == 1
+    p = body["proposals"][0]
+    assert (p["run_id"], p["ref"], p["sha"]) == ("abc123def456", "refs/heads/proposed/abc123def456", commit)
+    assert p["changes"] == [{"status": "A", "path": "caf\\xe9.yml", "exact": False}] and p["promotable"] is True
+    assert p["author"] == "J\\xf6rg" and p["subject"] == "subj \\xff"
+
+
 # --- FF-race Move 2: the discard route (POST /api/pending/<run_id>/discard) ------------------------------------- #
 
 def test_discard_no_auth_is_401(client):
@@ -1389,13 +1431,13 @@ def test_discard_success_passes_the_run_id_and_maps_the_result(client, monkeypat
     seen = {}
     def _fake(run_id, canonical=None):
         seen["run_id"] = run_id
-        return {"ok": True, "run_id": run_id, "ref": "proposed/%s" % run_id, "sha": "deadbeef" * 5}
+        return {"ok": True, "run_id": run_id, "ref": "refs/heads/proposed/%s" % run_id, "sha": "deadbeef" * 5}
     monkeypatch.setattr("kontroll.service.discard.discard_proposal", _fake)
     r = client.post("/api/pending/abc123def456/discard", headers=_auth())
     assert r.status_code == 200
     body = r.get_json()
     assert seen["run_id"] == "abc123def456"                    # the URL id reached the service verb
-    assert body["discarded"] is True and body["ref"] == "proposed/abc123def456" and body["sha"]
+    assert body["discarded"] is True and body["ref"] == "refs/heads/proposed/abc123def456" and body["sha"]
 
 
 @pytest.mark.parametrize("code,err", [(400, "invalid run_id"), (404, "no such proposal"), (409, "moved or vanished")])

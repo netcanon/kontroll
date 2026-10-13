@@ -97,7 +97,8 @@ def isolated_git(tmp_path_factory, monkeypatch):
     `GIT_CONFIG_GLOBAL` names an empty file, the system file is switched off, `XDG_CONFIG_HOME` is a directory with
     nothing in it — a global hooks path, excludes file, `core.safecrlf` or signing setting must not decide a test.
     And no variable points it at a REPOSITORY: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`
-    and `GIT_COMMON_DIR` are removed. A suite started from a git hook inherits them, and a test's
+    and `GIT_COMMON_DIR` are removed — nor does a key or a switch handed down by a parent git reach it
+    (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`, `GIT_NO_REPLACE_OBJECTS`, `GIT_DEFAULT_HASH`). A suite started from a git hook inherits them, and a test's
     `git -C <scratch> init`, `config` and `add -A` would then act on the DEVELOPER's repository instead of the
     scratch one. For tests that run the real git (name it in `pytest.mark.usefixtures`, and as a parameter of any
     fixture that copies `os.environ`)."""
@@ -106,7 +107,8 @@ def isolated_git(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
-    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"):
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+                 "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_NO_REPLACE_OBJECTS", "GIT_DEFAULT_HASH"):
         monkeypatch.delenv(name, raising=False)
 
 
