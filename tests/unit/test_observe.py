@@ -331,3 +331,23 @@ def test_the_dashboard_name_check_knows_the_name_goes_into_a_flow_mapping(tmp_re
         assert cleaned is None and bad.startswith("dashboards[0].name"), name
     assert observe._clean_dashboards([{"gnet": 5, "name": "plain_name"}], {}) == \
         ([{"gnet": 5, "name": "plain_name"}], None)
+
+
+def test_a_reconfigure_of_the_shipped_docker_host_class_keeps_its_other_method(tmp_repo):
+    """Planning a changed `blackbox` probe for the shipped `docker_host` class — whose `metrics:` line carries a
+    comment — gives a module text that YAML reads with BOTH of the class's methods, the changed one changed, under
+    one `metrics:` key.
+
+    Guards the planner end of the block writer's fix on the real file: this plan used to append a second
+    `metrics:` block holding only `blackbox`, and the class's `host_node` target then disappeared from the next
+    regeneration while the proposal's diff showed an added block and nothing removed."""
+    real = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                        "modules", "docker_host", "module.yml")
+    with open(real, encoding="utf-8") as fh:
+        _write_module(tmp_repo, "docker_host", fh.read())
+    plan = observe.build_telemetry_plan("docker_host", "blackbox", params={"probe": "tcp_connect"}, methods=METHODS)
+    assert plan["error"] is None and plan["changes"], plan.get("detail")
+    after = yaml.safe_load(plan["text_after"])
+    assert [m["method"] for m in after["metrics"]] == ["blackbox", "host_node"]
+    assert after["metrics"][0]["params"] == {"probe": "tcp_connect"}
+    assert sum(1 for ln in plan["text_after"].splitlines() if ln.startswith("metrics:")) == 1

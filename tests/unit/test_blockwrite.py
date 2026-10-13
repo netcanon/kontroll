@@ -3,8 +3,13 @@ out of observe.py so observe (telemetry) and logsvc (logging) write the same way
 CLOSED allow-list. These pin the shared helpers directly so a future refactor can't silently re-diverge the two
 instances (V1 must-fix #13).
 """
-import pytest
+import glob
+import os
 
+import pytest
+import yaml
+
+from kontroll import paths
 from kontroll.service._blockwrite import (disable_in_fleet, insert_into_block, set_list_block,
                                           set_nested_scalar, upsert_into_block, upsert_top_level_key,
                                           validate_params)
@@ -272,3 +277,173 @@ def test_the_scalar_writers_refuse_a_value_that_would_not_read_back():
             upsert_top_level_key(text, "ratio", unreadable)
     assert "enabled: True\n" in upsert_top_level_key(text, "enabled", True)
     assert "  - offsite\n" in set_list_block(text, "backup_remotes", ["offsite"])
+
+
+# --- the line that opens a block: with a comment, with a value on it, written twice ----------------------------- #
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_SHIPPED_MODULES = sorted(glob.glob(os.path.join(ROOT, "modules", "*", "module.yml")))
+
+# The shape of one shipped class's file: the list's key line carries a comment.
+_KEY_LINE_WITH_A_COMMENT = """key: demo
+metrics:                       # ORDER = [blackbox, host_node]
+  - {method: blackbox, params: {probe: icmp}}    # reachability
+  - {method: host_node}                          # host metrics
+dashboards:
+  - {gnet: 1, name: a}
+"""
+
+
+def _key_lines(text, key):
+    """The top-level lines of `text` that open `key` — one, in a file YAML reads as written."""
+    return [ln for ln in text.splitlines() if ln.startswith(key + ":")]
+
+
+def test_a_key_line_that_carries_a_comment_opens_the_block():
+    """A list whose key line has a trailing comment (`metrics:   # ...`) is found by both list writers: an upsert
+    replaces the named entry in place and an insert lands inside the block, the key line stands once and unchanged,
+    and YAML reads every entry that was there.
+
+    Guards the loss this fixes: the writers looked for the bare `key:` line, did not find a commented one, and
+    appended a SECOND top-level block at the end of the file — YAML reads the last of two, so the class's other
+    methods were gone from every generated file while the module file still showed them."""
+    out = upsert_into_block(_KEY_LINE_WITH_A_COMMENT, "metrics", "blackbox",
+                            ["  - {method: blackbox, params: {probe: tcp_connect}}"])
+    assert _key_lines(out, "metrics") == ["metrics:                       # ORDER = [blackbox, host_node]"]
+    read = yaml.safe_load(out)
+    assert [m["method"] for m in read["metrics"]] == ["blackbox", "host_node"]
+    assert read["metrics"][0]["params"] == {"probe": "tcp_connect"} and read["dashboards"] == [{"gnet": 1, "name": "a"}]
+    assert "# host metrics" in out                                    # the sibling's comment survives
+    out = insert_into_block(_KEY_LINE_WITH_A_COMMENT, "metrics", ["  - {method: snmp}"])
+    assert len(_key_lines(out, "metrics")) == 1
+    assert [m["method"] for m in yaml.safe_load(out)["metrics"]] == ["blackbox", "host_node", "snmp"]
+    assert out.index("method: snmp") < out.index("dashboards:")       # inside the block, not at the end of the file
+
+
+def test_a_mapping_block_under_a_commented_key_line_is_replaced_in_place_and_the_comment_stays():
+    """The mapping writer (`list_block=False`, the backup block) replaces a block whose key line carries a comment
+    where it stands, and keeps that key line — comment included — in front of the new body.
+
+    Guards the same second block for the mapping form, and the writer dropping an operator's note from the one
+    line it would otherwise have rewritten: "comment-preserving" is what this module promises."""
+    text = "key: demo\nbackup:      # nightly; see the runbook\n  method: old\n  keep: 3\nrole: r\n"
+    out = upsert_into_block(text, "backup", "x", ["backup:", "  method: new"], list_block=False)
+    assert _key_lines(out, "backup") == ["backup:      # nightly; see the runbook"]
+    assert yaml.safe_load(out) == {"key": "demo", "backup": {"method": "new"}, "role": "r"}
+
+
+@pytest.mark.parametrize("write", [
+    lambda text: insert_into_block(text, "metrics", ["  - {method: c}"]),
+    lambda text: upsert_into_block(text, "metrics", "a", ["  - {method: a}"]),
+    lambda text: upsert_into_block(text, "metrics", "x", ["metrics:", "  m: 1"], list_block=False),
+], ids=["insert", "upsert-list", "upsert-mapping"])
+@pytest.mark.parametrize("text,says", [
+    ("key: demo\nmetrics: []\n", "own line"),
+    ("key: demo\nmetrics: [{method: a}]   # inline\n", "own line"),
+    ("key: demo\nmetrics:\n  - {method: a}\nrole: r\nmetrics:\n  - {method: b}\n", "twice"),
+    ("key: demo\nmetrics:   # one\n  - {method: a}\nrole: r\nmetrics:   # two\n  - {method: b}\n", "twice"),
+], ids=["an-empty-flow-list", "a-flow-list", "the-key-twice", "the-key-twice-with-comments"])
+def test_a_value_on_the_key_line_and_a_key_written_twice_are_refused_not_written_beside(text, says, write):
+    """A key whose value is on its own line (`metrics: []`, a flow list) and a file that holds the key twice are
+    refused by every block writer as the repository's own data (409 `repository_data`), with a sentence that
+    names the key and the rule and carries nothing of the file.
+
+    Guards the two shapes for which "append a block" is still a second top-level key: an inline list beside a new
+    block, and a third block beside the two a file damaged by the old behaviour already holds — where YAML reads
+    only the last, and a human has to merge them."""
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        write(text)
+    message = str(refused.value)
+    assert refused.value.status == 409 and refused.value.code == "repository_data"
+    assert "`metrics`" in message and says in message and "nothing was written" in message
+    assert "demo" not in message and "{" not in message and "method" not in message
+
+
+@pytest.mark.parametrize("path", _SHIPPED_MODULES, ids=lambda p: os.path.basename(os.path.dirname(p)))
+def test_every_shipped_module_keeps_every_entry_through_a_reconfigure(path):
+    """For each shipped class file: every `metrics` and `logs` entry rewritten in place, an entry added to each
+    list block the file declares (`metrics`, `logs`, `dashboards` — an empty one included), and the `backup`
+    mapping replaced, leave the key line standing once and everything else as YAML read it before.
+
+    Guards the writers against the files this repository actually ships — a key line with a comment was in one of
+    them for as long as the writers could not see it — and tells whoever adds a class file in a shape the writers
+    refuse (a value on the key's line) at the gate, not at an operator's first reconfigure."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    doc = yaml.safe_load(text) or {}
+    for block, ident in (("metrics", "method"), ("logs", "method"), ("dashboards", "name")):
+        if block not in doc:
+            continue
+        entries = doc[block] or []                                  # a key with nothing under it is still a key
+        ids = [e[ident] for e in entries]
+        if ident == "method":
+            for method in ids:
+                out = upsert_into_block(text, block, method, ["  - {method: %s}" % method])
+                assert len(_key_lines(out, block)) == 1, (block, method)
+                assert [e["method"] for e in yaml.safe_load(out)[block]] == ids, (block, method)
+        out = insert_into_block(text, block, ["  - {%s: zz_new}" % ident])
+        assert len(_key_lines(out, block)) == 1, block
+        assert [e[ident] for e in yaml.safe_load(out)[block]] == ids + ["zz_new"], block
+    if "backup" in doc:
+        out = upsert_into_block(text, "backup", "backup", ["backup:", "  capable: true"], list_block=False)
+        read = yaml.safe_load(out)
+        assert len(_key_lines(out, "backup")) == 1 and read["backup"] == {"capable": True}
+        assert {k: v for k, v in read.items() if k != "backup"} == {k: v for k, v in doc.items() if k != "backup"}
+
+
+def test_only_the_key_itself_at_column_zero_opens_the_block():
+    """A nested key of the same name, a longer key that begins with it and a commented-out line are not the
+    block: with only those in the file a fresh block is appended and they stand untouched; with the real key
+    beside them, the real one is edited.
+
+    Guards the match from loosening in either direction — an indented `metrics:` taken for the top-level key puts
+    the entry inside another mapping, and `metrics_extra:` taken for `metrics:` edits or refuses the wrong key."""
+    others = "key: demo\nouter:\n  metrics:\n    - {method: q}\nmetrics_extra: [x]\n# metrics: was here\nrole: r\n"
+    kept = {"key": "demo", "outer": {"metrics": [{"method": "q"}]}, "metrics_extra": ["x"], "role": "r"}
+    out = insert_into_block(others, "metrics", ["  - {method: a}"])
+    assert yaml.safe_load(out) == dict(kept, metrics=[{"method": "a"}])
+    assert out.startswith(others)                                   # appended at the end; nothing above it moved
+    both = others + "metrics:   # the real one\n  - {method: a}\n"
+    out = upsert_into_block(both, "metrics", "a", ["  - {method: a, params: {p: 1}}"])
+    assert yaml.safe_load(out) == dict(kept, metrics=[{"method": "a", "params": {"p": 1}}])
+
+
+_AS_AN_ONBOARD_WRITES_IT = yaml.safe_dump(
+    {"key": "demo", "role": "r",
+     "metrics": [{"method": "blackbox", "params": {"probe": "icmp"}, "derived": True},
+                 {"method": "host_node", "derived": True}],
+     "logs": [{"method": "journald", "derived": True}], "derived": True}, sort_keys=False)
+
+
+@pytest.mark.parametrize("text,indent", [
+    (_AS_AN_ONBOARD_WRITES_IT, ""),
+    ("key: demo\nmetrics:\n    - {method: blackbox, params: {probe: icmp}}\n    - method: host_node\n"
+     "logs:\n    - {method: journald}\n", "    "),
+], ids=["items-at-the-keys-column", "items-four-spaces-in"])
+def test_a_list_whose_items_are_not_two_spaces_in_is_edited_at_its_own_indent(text, indent):
+    """A list written at the key's own column — what yaml.safe_dump writes, so what an onboard writes — or four
+    spaces in is edited at THAT indent: an upsert replaces the entry, an insert lands after the last item and
+    before the next key, and YAML reads every entry of this block and of the next.
+
+    Guards the writers against the tool's own module files: the block was taken to end at the first column-0
+    item, the new two-space item was put above the list, and the planner returned a text that is not YAML."""
+    assert ("\nmetrics:\n%s- " % indent) in text                    # the shape under test is the one written
+    out = upsert_into_block(text, "metrics", "blackbox", ["  - {method: blackbox, params: {probe: tcp_connect}}"])
+    read = yaml.safe_load(out)
+    assert [m["method"] for m in read["metrics"]] == ["blackbox", "host_node"]
+    assert read["metrics"][0]["params"] == {"probe": "tcp_connect"}
+    assert [m["method"] for m in read["logs"]] == ["journald"]
+    assert ("\n%s- {method: blackbox, params: {probe: tcp_connect}}\n" % indent) in out
+    out = upsert_into_block(text, "metrics", "host_node", ["  - {method: host_node}"])
+    assert [m["method"] for m in yaml.safe_load(out)["metrics"]] == ["blackbox", "host_node"]
+    out = insert_into_block(text, "metrics", ["  - {method: snmp}"])
+    read = yaml.safe_load(out)
+    assert [m["method"] for m in read["metrics"]] == ["blackbox", "host_node", "snmp"]
+    assert [m["method"] for m in read["logs"]] == ["journald"] and out.index("method: snmp") < out.index("logs:")
+
+
+def test_set_list_block_replaces_a_list_written_at_the_keys_column():
+    """`set_list_block` replaces a list whose items sit at the key's column, whole.
+
+    Guards the shared block bound: the column-0 items were left behind under the new list, which is not YAML."""
+    out = set_list_block("a: 1\nbackup_remotes:\n- x\n- y\nb: 2\n", "backup_remotes", ["new"])
+    assert yaml.safe_load(out) == {"a": 1, "backup_remotes": ["new"], "b": 2}

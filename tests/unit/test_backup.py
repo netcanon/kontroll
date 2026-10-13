@@ -11,8 +11,9 @@ backup with no new test code (see tests/unit/test_invariant_d.py — parametrize
 import os
 
 import pytest
+import yaml
 
-from kontroll import catalog, probe
+from kontroll import catalog, paths, probe
 from kontroll.service import backup, capability, classify, promote
 
 pytestmark = pytest.mark.unit
@@ -178,3 +179,37 @@ def test_suggest_view_offers_backup_for_an_onboarded_class(tmp_repo, monkeypatch
     view = capability.suggest_view("backup", "demo_bk", caps=CAPS)
     assert view["error"] is None
     assert [m["name"] for m in view["offerable_methods"]] == ["backup"]
+
+
+@pytest.mark.parametrize("key_line", ["backup:", "backup:      # pick a schedule"], ids=["bare", "with-a-comment"])
+def test_a_backup_key_with_nothing_under_it_is_filled_where_it_stands(tmp_repo, key_line):
+    """A class whose module file holds the `backup:` key with nothing under it gets its block under THAT key line
+    — once, comment kept — and the next change of the block is planned, not refused.
+
+    Guards the planner's first-declare branch: an empty key reads as "not declared", and appending the block as
+    text wrote the key a second time; the block writer then refuses the file it was handed by the tool itself."""
+    d = tmp_repo / "modules" / "demo_bk"
+    d.mkdir(parents=True)
+    (d / "module.yml").write_text("key: demo_bk\nrole: cisco_ios\n%s\ninventory_group: core_switch\n" % key_line,
+                                  encoding="utf-8")
+    plan = backup.build_plan("demo_bk", {"method": "backup", "params": {"schedule": "0 2 * * *"}})
+    assert plan["error"] is None, plan.get("detail")
+    after = plan["text_after"]
+    assert [ln for ln in after.splitlines() if ln.startswith("backup:")] == [key_line]
+    read = yaml.safe_load(after)
+    assert read["backup"]["schedule"] == "0 2 * * *" and read["inventory_group"] == "core_switch"
+    (d / "module.yml").write_text(after, encoding="utf-8")          # what an apply writes
+    again = backup.build_plan("demo_bk", {"method": "backup", "params": {"schedule": "0 2 * * *", "retention": "90d"}})
+    assert again["error"] is None and yaml.safe_load(again["text_after"])["backup"]["retention"] == "90d"
+
+
+def test_a_backup_key_with_an_empty_flow_mapping_is_refused(tmp_repo):
+    """`backup: {}` is refused at the first declare as the repository's own data, naming the key and the rule.
+
+    Guards the same branch from the other side: a text append beside `backup: {}` is a second top-level key."""
+    d = tmp_repo / "modules" / "demo_bk"
+    d.mkdir(parents=True)
+    (d / "module.yml").write_text("key: demo_bk\nrole: cisco_ios\nbackup: {}\n", encoding="utf-8")
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        backup.build_plan("demo_bk", {"method": "backup", "params": {"schedule": "0 2 * * *"}})
+    assert "`backup`" in str(refused.value) and "own line" in str(refused.value)

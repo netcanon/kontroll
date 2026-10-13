@@ -237,27 +237,79 @@ def disable_in_fleet(text, module):
     raise ValueError("fleet.yml: %r is not an active enabled_modules entry" % module)
 
 
+def _block_start(lines, block_key):
+    """The index of the top-level line that OPENS the block `block_key` — the key at column 0, its colon, and then
+    nothing but blanks or a comment — or None when the file has no such key.
+
+    A key line may carry a comment (`metrics:      # ORDER = …`, as one shipped class's does). The writers used to
+    look for the bare `key:` line only: such a line was not found, the new entry was appended as a SECOND top-level
+    block at the end of the file, and YAML reads the last of two — so every other entry of the class was gone from
+    what the generators render, while the file still showed them. Two shapes are refused instead of written
+    beside, as the repository's own data (409 `repository_data`, never the request's fault), naming the key and
+    the rule: a key whose value is on its own line (`metrics: []`, a flow list — not a block this writer can
+    edit), and a file that already holds the key twice (what the old behaviour left behind: YAML reads only the
+    last block there, and a human has to merge the two)."""
+    head = "%s:" % block_key
+    found = None
+    for i, ln in enumerate(lines):
+        if not ln.startswith(head):
+            continue
+        value, _comment = _split_inline_comment(ln[len(head):])
+        if value:
+            raise paths.RepositoryDataError(
+                "module file", "this class's module.yml writes `%s` with a value on the key's own line; the "
+                               "writer edits a block — the key alone on its line, its entries on the lines below. "
+                               "Rewrite it as a block first; nothing was written" % block_key)
+        if found is not None:
+            raise paths.RepositoryDataError(
+                "module file", "this class's module.yml holds the top-level key `%s` twice; YAML reads only the "
+                               "last, so the entries of the first are not in effect. Merge the two blocks by hand "
+                               "first; nothing was written" % block_key)
+        found = i
+    return found
+
+
 def insert_into_block(text, block_key, new_lines):
     """Return `text` with `new_lines` appended to the top-level `block_key:` list (preserving comments + the
     rest of the file). If the block exists, insert after its last (indented/blank) line; else append a fresh
     `block_key:` block at EOF. The comment-preserving analogue of onboard.enable_in_fleet — never a safe_dump
     round-trip (which would strip a hand-written module's comments)."""
     lines = text.rstrip("\n").splitlines()
-    start = next((i for i, ln in enumerate(lines) if ln.rstrip() == "%s:" % block_key), None)
+    start = _block_start(lines, block_key)                   # a key line with a comment IS the block's start
     if start is None:
         return "\n".join(lines + ["%s:" % block_key] + new_lines) + "\n"
     end = _block_end(lines, start)
-    return "\n".join(lines[:end] + new_lines + lines[end:]) + "\n"
+    return "\n".join(lines[:end] + _at_item_indent(lines, start, end, new_lines) + lines[end:]) + "\n"
 
 
 def _block_end(lines, start):
     """The index ONE PAST the last line of the block that opens at `lines[start]` (`block_key:`) — the first
-    dedented non-blank line after it, or EOF. Shared by insert/upsert so both bound a block identically."""
+    dedented non-blank line after it, or EOF. Shared by insert/upsert so both bound a block identically. A list
+    item at the key's own column is part of the block: `metrics:` / `- a` is how yaml.safe_dump writes a list, and
+    so how an onboard writes one."""
     for i in range(start + 1, len(lines)):
         ln = lines[i]
-        if ln.strip() and not ln.startswith((" ", "\t")):   # a dedented non-blank line — block ended
+        if ln.strip() and not ln.startswith((" ", "\t")):   # a dedented non-blank line — block ended…
+            if ln == "-" or ln.startswith("- "):             # …unless it is an item at the key's own column
+                continue
             return i
     return len(lines)
+
+
+def _at_item_indent(lines, start, end, new_lines):
+    """`new_lines` — rendered by the planners with a two-space item indent — moved to the indent the block's own
+    items have. YAML reads one sequence only when its items share a column: a list written at the key's column
+    (`metrics:` / `- a`, what yaml.safe_dump writes and so what an onboard writes) or four spaces in would
+    otherwise be given an item at a column of its own, and the file would stop being YAML."""
+    first = next((lines[i] for i in range(start + 1, end) if lines[i].lstrip().startswith("- ")), None)
+    given = [ln for ln in new_lines if ln.strip()]
+    if first is None or not given:
+        return list(new_lines)
+    have = len(first) - len(first.lstrip())
+    lead = min(len(ln) - len(ln.lstrip()) for ln in given)
+    if have == lead:
+        return list(new_lines)
+    return [(" " * have + ln[lead:]) if ln.strip() else ln for ln in new_lines]
 
 
 _METHOD_RE = re.compile(r"\bmethod:\s*([A-Za-z0-9_.-]+)")
@@ -281,10 +333,12 @@ def upsert_into_block(text, block_key, entry_id, new_lines, list_block=True):
     values reach `new_lines`, so the upsert can't inject (the config-injection guard survives the reconfigure
     path). The reconfigure G1 writer (design 22 §5.1)."""
     lines = text.rstrip("\n").splitlines()
-    start = next((i for i, ln in enumerate(lines) if ln.rstrip() == "%s:" % block_key), None)
+    start = _block_start(lines, block_key)                   # a key line with a comment IS the block's start
     if not list_block:                                       # MAPPING block — replace `block_key:` + body, or append
         if start is None:
             return "\n".join(lines + new_lines) + "\n"
+        if new_lines and new_lines[0].rstrip() == "%s:" % block_key:
+            new_lines = [lines[start]] + list(new_lines[1:])  # the key line as it stands: its comment stays
         return "\n".join(lines[:start] + new_lines + lines[_block_end(lines, start):]) + "\n"
     if start is None:
         return insert_into_block(text, block_key, new_lines)
@@ -300,5 +354,5 @@ def upsert_into_block(text, block_key, entry_id, new_lines, list_block=True):
     for idx, i in enumerate(item_starts):
         span_end = item_starts[idx + 1] if idx + 1 < len(item_starts) else end
         if _entry_method(lines[i:span_end]) == entry_id:     # found the declared entry — swap its full span in place
-            return "\n".join(lines[:i] + new_lines + lines[span_end:]) + "\n"
+            return "\n".join(lines[:i] + _at_item_indent(lines, start, end, new_lines) + lines[span_end:]) + "\n"
     return insert_into_block(text, block_key, new_lines)      # not declared — append (the add path)
