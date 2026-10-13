@@ -367,7 +367,8 @@ def test_the_list_is_newest_first_by_when_each_proposal_was_committed(tmp_path):
     out = pending.list_pending(canonical=r.bare)["proposals"]
     assert [p["run_id"] for p in out][:3] == ["00000000000c", "00000000000b", "00000000000a"]
     assert {p["run_id"] for p in out[3:]} == {R.STALE, R.FF}
-    assert out[0]["staged_at"] == "2025-06-15T15:11:40Z"
+    # one instant, in UTC, as git prints it: `…Z` in a newer git, `…+00:00` in an older one
+    assert out[0]["staged_at"] in ("2025-06-15T15:11:40Z", "2025-06-15T15:11:40+00:00")
     assert all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(Z|[+-]\d\d:\d\d)", p["staged_at"]) for p in out)
 
 
