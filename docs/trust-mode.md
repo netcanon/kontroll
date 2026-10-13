@@ -31,7 +31,7 @@ GUI/API trust boundary: in **both** modes the network service's own code can onl
 read-only-by-construction (`tests/unit/_readonly_pins.py`); it never advances `main`. (The posture does not decide
 how the canonical is mounted: `:ro` without `api_privileged`, `:rw` with it. Armed, what keeps the service's
 pushes off `main` is `commit_and_push` — a staging service pushes `proposed/<run_id>` and nothing else — and the
-canonical's `update` hook, which refuses a uid-1001 push to `main`. Neither binds a container RCE, which can write
+canonical's `update` hook, which lets a uid-1001 push create a proposal and nothing else. Neither binds a container RCE, which can write
 the mounted repository directly: SECURITY.md C10, "Arming …".) `solo` adds a tiny, separate,
 token-less automaton on the **trusted** side of the wall that runs the **already-shipped** FF-only + never-brick
 (FIX-M9) promote — it drops the human keystroke, nothing else.
@@ -69,7 +69,7 @@ multi-tenant or internet-adjacent deployment.** Prod uses `separated`.
 > edge-firewall/core-switch change could auto-land ungated. The fix (`and not staging` in `gitio.commit_and_push`)
 > routes **every** `main` advance on `solo` back through `promote_ref` (and thus the blast gate) — restoring the
 > residual to exactly what this section describes; the fix makes `solo` *strictly more correct*. **Fork note:** the
-> canonical `update` hook refuses any uid-1001 receive-pack push to `main`, so the homelab auto-promoter MUST keep
+> canonical `update` hook refuses every uid-1001 push but the creation of a proposal (so: any push to `main`), so the homelab auto-promoter MUST keep
 > advancing `main` via `promote_ref`/`update-ref` (it does — `update-ref` is not receive-pack, so the hook never
 > fires on it); never switch the auto-promoter to a raw `git push …:main`.
 

@@ -288,53 +288,182 @@ _HOOK_SRC = os.path.join(ROOT, "ansible", "playbooks", "files", "canonical-updat
 def _fake_id_bin(tmp_path):
     """A tmp dir holding an `id` executable that prints $FAKE_UID — PATH-shadowed so the REAL hook's unspoofable
     `$(id -u)` resolves to a uid the test controls (a unit test can't actually be uid 1001, and the production hook
-    intentionally has NO env override an attacker could set)."""
+    intentionally has NO variable of its own that changes the answer). With FAKE_UID empty it fails, as an `id`
+    that cannot be run does; with FAKE_ID_RC set it prints the uid and exits with that status."""
     d = tmp_path / "fakebin"
     d.mkdir()
     idf = d / "id"
-    idf.write_text('#!/bin/sh\necho "${FAKE_UID:-0}"\n', encoding="utf-8")
+    idf.write_text('#!/bin/sh\n[ -n "$FAKE_UID" ] || exit 1\necho "$FAKE_UID"\nexit "${FAKE_ID_RC:-0}"\n',
+                   encoding="utf-8")
     idf.chmod(0o755)
     return d
 
 
-def test_canonical_update_hook_refuses_uid1001_push_to_main_but_allows_proposals_and_promote(tmp_path):
-    """Defence-in-depth (C10 origin-push hook): the canonical's `update` hook REFUSES a receive-pack push to
-    `refs/heads/main` from the network-service uid (1001) — the origin-push breach's landing ref — while ALLOWING a
-    push to `refs/heads/proposed/*` and a push to main from any OTHER uid (the mirror, C1), and never interfering with
-    `promote_ref` (which advances main via `git update-ref`, NOT receive-pack — C2).
+_Z, _A, _B = "0" * 40, "1" * 40, "2" * 40
+_P = "refs/heads/proposed/"
+# (uid, ref, old, new, allowed) — old all zeros: the ref does not exist; new all zeros: a delete.
+_HOOK_TABLE = [
+    # uid 1001 — the network service: CREATE a proposal, nothing else
+    ("1001", _P + "abc123def456", _Z, _A, True),
+    ("1001", _P + "20260705T101112Z-abcdef", _Z, _A, True),
+    ("1001", _P + "abc123def456", _A, _B, False),                  # a proposal that exists is not moved
+    ("1001", _P + "abc123def456", _A, _Z, False),                  # … nor deleted
+    ("1001", "refs/heads/main", _A, _B, False),
+    ("1001", "refs/heads/main", _Z, _A, False),
+    ("1001", "refs/tags/main", _Z, _A, False),                     # a tag named like the branch
+    ("1001", "refs/tags/proposed/abc123def456", _Z, _A, False),
+    ("1001", "refs/proposed/abc123def456", _Z, _A, False),
+    ("1001", "refs/replace/" + _A, _Z, _B, False),
+    ("1001", "refs/heads/mainx", _Z, _A, False),
+    ("1001", "refs/heads/proposed", _Z, _A, False),
+    ("1001", _P + "abc123def456/x", _Z, _A, False),
+    ("1001", _P + "*", _Z, _A, False),                             # a ref name that is itself a pattern
+    ("1001", _P + "????????????", _Z, _A, False),
+    ("1001", _P + "[0-9a-f]" * 1 + "bc123def456", _Z, _A, False),
+    # any other uid — the operator's mirror, root in the installer: main and proposals, nothing else
+    ("1000", "refs/heads/main", _A, _B, True),
+    ("0", "refs/heads/main", _Z, _A, True),
+    ("1000", _P + "abc123def456", _Z, _A, True),
+    ("1000", _P + "abc123def456", _A, _B, True),
+    ("1000", "refs/heads/main", _A, _Z, False),                    # a push never deletes
+    ("1000", "refs/tags/v1", _Z, _A, False),
+    ("1000", "refs/heads/feature", _Z, _A, False),
+    ("0", "refs/replace/" + _A, _Z, _B, False),
+    ("1000", _P + "run1", _Z, _A, False),
+    # a uid that cannot be read: nothing
+    ("", "refs/heads/main", _A, _B, False),
+    ("", _P + "abc123def456", _Z, _A, False),
+    # arguments that are not two object ids: nothing (an empty "new" must not read as "not a delete")
+    ("1001", _P + "abc123def456", _Z, "", False),
+    ("1001", _P + "abc123def456", "", _A, False),
+    ("1000", "refs/heads/main", _A, "1" * 39, False),
+    ("1000", "refs/heads/main", "refs/heads/main", _B, False),
+    ("1000", "refs/heads/main", "a" * 64, "b" * 64, True),          # a sha256 repository's ids
+    ("1000", "refs/heads/main", _A, "A" * 40, False),               # an id is LOWER-case hex
+    ("1000", "refs/heads/main", _A, "1" * 41, False),               # forty or sixty-four digits, nothing between
+    ("1000", "refs/heads/main", "1" * 63, _B, False),
+    # the names and the uid are compared whole
+    ("1000", "refs/heads/mainx", _Z, _A, False),
+    ("1000", "refs/heads/main/x", _Z, _A, False),
+    ("10010", "refs/heads/main", _A, _B, True),                     # not uid 1001: the other list
+    ("01001", "refs/heads/main", _A, _B, True),
+    # a delete, whoever asks and whatever it names (git's own receive.denyDeletes answers first on a node)
+    ("1000", _P + "abc123def456", _A, _Z, False),
+    ("1001", _P + "abc123def456", _Z, _Z, False),                   # … of a ref that is not there
+    ("0", "refs/tags/v1", _A, _Z, False),
+]
 
-    WHY (the failure this guards): even if the gitio `and not staging` code guard regressed, a uid-1001 network
-    service's `git push …:main` must be rejected AT the canonical, and the ONLY legitimate main-advances (the
-    operator/deploy mirror — a DIFFERENT uid — and the promote) must keep working (C1/C2). This exercises the EXACT
-    committed artifact (ansible/playbooks/files/canonical-update-hook.sh — the one the playbook installs), driving the
-    real `$(id -u)` through a PATH-shadowed fake `id`, so a typo/shebang/argv bug in the shipped hook FAILS the test
-    (MF-1: no hand-copied twin). The static half (file present, shebang, playbook installs THIS file) runs
-    everywhere; the real-git execution half needs POSIX sh (skipped on win32)."""
-    # (static, portable) the artifact exists, is a POSIX sh script, and the playbook installs THIS file (no twin drift)
+
+def _needs_sh():
+    if sys.platform == "win32" or not shutil.which("sh"):
+        pytest.skip("the hook-execution legs need POSIX sh (CI runs on Linux; live-verified on the armed VM too)")
+
+
+def _shells(tmp_path):
+    """The POSIX shells on this machine that a node may have as `/bin/sh`: `sh` itself, and — where installed —
+    dash (Debian, the installer image), bash in POSIX mode (a Fedora / Arch / openSUSE host) and busybox `sh`
+    (Alpine: the image the network service pushes from, so the one that runs the uid-1001 half on a node) — each
+    kept only if the `id` it runs is the one found on the PATH. These tests say who is pushing by putting an `id`
+    of their own first on the PATH; a busybox built to run its own applets before the PATH (Debian's and Ubuntu's
+    is; Alpine's is not) runs its own `id` whatever the PATH says, so under it the table's uid column would be
+    the uid of whoever runs the tests. Such a shell is left out, and `sh` itself must not be one."""
+    fakebin = tmp_path / "fakebin" if (tmp_path / "fakebin").exists() else _fake_id_bin(tmp_path)
+    env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", ""), "FAKE_UID": "424242",
+           "FAKE_ID_RC": "0"}
+
+    def runs_the_shadow(shell):
+        p = subprocess.run(list(shell) + ["-c", "id -u"], env=env, capture_output=True, text=True)
+        return p.stdout.strip() == "424242"
+
+    found = [["sh"]] + [c for c in (["dash"], ["bash", "--posix"], ["busybox", "sh"]) if shutil.which(c[0])]
+    kept = [shell for shell in found if runs_the_shadow(shell)]
+    assert ["sh"] in kept, "`sh` on this machine does not run the `id` found on the PATH: these tests cannot say who pushes"
+    return kept
+
+
+def _run_hook(tmp_path, uid, ref, old, new, shell=("sh",), id_rc="0"):
+    fakebin = _fake_id_bin(tmp_path) if not (tmp_path / "fakebin").exists() else tmp_path / "fakebin"
+    env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", ""), "FAKE_UID": uid,
+           "FAKE_ID_RC": id_rc}
+    return subprocess.run(list(shell) + [_HOOK_SRC, ref, old, new], env=env, capture_output=True, text=True)
+
+
+def test_the_committed_hook_is_the_one_the_play_installs():
+    """The hook artifact exists, opens with a POSIX `sh` shebang, is keyed on `id -u`, and the canonical play
+    copies THIS file to `<canonical>/hooks/update`. Portable (no shell needed). Guards the artifact the other hook
+    tests execute being a twin of what a node runs: a hook that opens with another interpreter's name is run by a
+    shell none of these tests ran it under (and one that is not executable is ignored by git, which is what
+    `test_local_canonical.py` pins — as it pins that the play installs this file on every run)."""
     assert os.path.isfile(_HOOK_SRC), "the committed C10 update-hook is missing"
     body = open(_HOOK_SRC, encoding="utf-8").read()
-    assert body.startswith("#!/bin/sh"), "the hook must have a POSIX sh shebang (a missing one fails OPEN)"
-    assert 'id -u' in body and 'refs/heads/main' in body     # keyed on the unspoofable uid + the guarded ref
+    assert body.startswith("#!/bin/sh"), "the hook must open with #!/bin/sh — the shell every test here runs it under"
+    assert "id -u" in body and "refs/heads/main" in body and "refs/heads/proposed/" in body
     playbook = open(os.path.join(ROOT, "ansible", "playbooks", "local-canonical.yml"), encoding="utf-8").read()
     assert "src: files/canonical-update-hook.sh" in playbook, "the playbook must install the committed hook file"
     assert 'dest: "{{ bare }}/hooks/update"' in playbook
 
-    if sys.platform == "win32" or not shutil.which("sh"):
-        pytest.skip("the hook-execution legs need POSIX sh (CI runs on Linux; live-verified on the armed VM too)")
 
+def test_the_hook_is_an_allow_list(tmp_path):
+    """The committed hook, run over a table of pushes with a PATH-shadowed `id`: as uid 1001 it allows the CREATION
+    of `refs/heads/proposed/<run id>` (either minted shape) and nothing else — not `main`, not a tag, not
+    `refs/replace/*`, not `refs/proposed/…`, not a ref name that is itself a pattern, not a move or a delete of a
+    proposal that exists; as any other uid it allows `refs/heads/main` and a proposal and nothing else; a delete
+    is refused from everyone; and when the uid cannot be read, or the hook is not handed two object ids, nothing is
+    allowed — under every POSIX shell installed here in which the tests' own `id` is the one that runs (`_shells`);
+    and an `id` that prints a uid and fails has not said who is pushing. Every refusal names the ref and the rule on stderr.
+
+    WHY: the hook used to refuse ONE thing — uid 1001 pushing `refs/heads/main` — so the service's uid could push
+    a tag called `main`, a replace ref, or the same proposal name a second time, and each of those changed what a
+    later reader or the promote saw under a name a human had already looked at. A deny-list of one name is a list
+    of everything else that is allowed. (What the hook does NOT stop is said in its own header: a write that is
+    not a push runs no hook.)"""
+    _needs_sh()
+    wrong = []
+    for shell in _shells(tmp_path):
+        for uid, ref, old, new, allowed in _HOOK_TABLE:
+            p = _run_hook(tmp_path, uid, ref, old, new, shell=shell)
+            if p.returncode != (0 if allowed else 1):          # exactly 1: a shell that cannot parse the file exits 2
+                wrong.append((shell, uid, ref, old[:4], new[:4], p.returncode, p.stderr.strip()))
+            if not allowed:
+                assert p.stderr.startswith("C10: refused " + ref + " "), (shell, uid, ref, p.stderr)
+        # an `id` that prints a uid and FAILS has not said who is pushing: nothing is allowed
+        p = _run_hook(tmp_path, "0", "refs/heads/main", _A, _B, shell=shell, id_rc="1")
+        assert p.returncode == 1 and "could not be read" in p.stderr, (shell, p.returncode, p.stderr)
+    assert wrong == []
+
+
+def test_the_hook_takes_exactly_the_run_ids_the_validator_takes(tmp_path):
+    """For every sample the Python rule (`canon.valid_run_id`) accepts or refuses, the hook — asked as uid 1001 to
+    create `refs/heads/proposed/<sample>` — answers the same. Samples that cannot be a ref name at all (a newline,
+    a space) are refused by both. Guards the third spelling of the run-id rule: the hook's two glob patterns are
+    written by hand, and one character class too wide would let the service stage a ref the listing then calls
+    "not a proposal" — or one too narrow would refuse every proposal of a minter."""
+    _needs_sh()
+    from kontroll import canon
+    samples = ["abc123def456", "0" * 12, "20260705T101112Z-abcdef", "abc123def45", "abc123def4567", "ABC123DEF456",
+               "20260705T101112Z-xyz", "20260705T101112Z-ABCDEF", "20260705t101112z-abcdef", "2026070T101112Z-abcdef",
+               "20260705t101112Z-abcdef", "20260705T101112z-abcdef", "20260705T101112Z_abcdef",
+               "20260705T101112Z-abcde", "20260705T101112Z-abcdef0", "main", "run1", "abc123def456/x", "-d",
+               "abc123def456 ", " abc123def456", "abc123def456\n", "g" * 12, "abc123def45g", "",
+               "2026070aT101112Z-abcdef", "202607050T101112Z-abcdef", "20260705T1011120Z-abcdef",
+               "20260705T10111aZ-abcdef", "20260705T101112Z-abcdeg", "00000000T000000Z-000000"]
+    for sample in samples:
+        got = _run_hook(tmp_path, "1001", _P + sample, _Z, _A).returncode == 0
+        assert got == canon.valid_run_id(sample), "the hook and the validator differ on %r" % sample
+
+
+def test_a_real_push_meets_the_hook(tmp_path):
+    """Installed in a bare repository and reached through real pushes: a non-1001 push seeds `main`; as uid 1001 a
+    push to `main` is refused and `main` does not move, a NEW proposal is accepted, a second push to the SAME
+    proposal name is refused and the proposal keeps its first commit, a tag called `main` and a `refs/replace/*`
+    are refused; one push that carries a new proposal AND a tag lands the proposal and not the tag; a non-1001
+    push advances `main`. Guards what the argument table cannot show — that git calls the hook with the arguments
+    the table assumes, once per ref, and that a refusal leaves every ref as it was (the objects of a refused push
+    stay in the object store, unreachable). The second-push row is the one the promote relies on: a proposal a human has read cannot be
+    re-pointed by the service through a push."""
+    _needs_sh()
     fakebin = _fake_id_bin(tmp_path)
     env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", "")}
-
-    def run_hook(refname, uid):
-        return subprocess.run(["sh", _HOOK_SRC, refname, "0" * 40, "1" * 40],
-                              env={**env, "FAKE_UID": str(uid)}, capture_output=True, text=True).returncode
-
-    # (a) REFUSE: uid 1001 pushing main is rejected; (b) ALLOW proposals even as 1001; (c) ALLOW main from a non-1001 uid
-    assert run_hook("refs/heads/main", 1001) != 0, "the hook must REFUSE a uid-1001 update of refs/heads/main"
-    assert run_hook("refs/heads/proposed/0123456789ab", 1001) == 0, "the hook must ALLOW a proposed/<run_id> staging push"
-    assert run_hook("refs/heads/main", 1000) == 0, "the hook must ALLOW the non-1001 operator/deploy mirror (C1)"
-
-    # (real git) install the SAME artifact into a bare canonical; a real receive-pack push exercises git's invocation
     canonical = tmp_path / "canonical.git"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(canonical)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(canonical), "config", "receive.denyNonFastForwards", "true"],
@@ -355,30 +484,50 @@ def test_canonical_update_hook_refuses_uid1001_push_to_main_but_allows_proposals
         return subprocess.run(["git", "-C", str(clone), "push", "origin", refspec],
                               env={**env, "FAKE_UID": str(uid)}, capture_output=True, text=True)
 
-    # seed canonical `main` via a NON-1001 push (the hook allows it AND it lands the objects in the bare — an
-    # `update-ref` to a still-unpushed object would fail); the uid the hook sees comes from FAKE_UID, not the runner.
-    assert push("HEAD:refs/heads/main", 1000).returncode == 0, "a non-1001 push must seed main (C1 mirror)"
-    seed = _git(canonical, "rev-parse", "refs/heads/main", capture=True)
+    def at(ref):
+        p = subprocess.run(["git", "-C", str(canonical), "for-each-ref", "--format=%(objectname)", ref],
+                           capture_output=True, text=True)
+        return p.stdout.strip() or None
+
+    assert push("HEAD:refs/heads/main", 1000).returncode == 0, "a non-1001 push must seed main (the mirror)"
+    seed = at("refs/heads/main")
     (clone / "f").write_text("2\n", encoding="utf-8")
     _git(clone, "add", "-A")
     _git(clone, "commit", "-m", "next")
-    next_tip = _git(clone, "rev-parse", "HEAD", capture=True)
+    first = _git(clone, "rev-parse", "HEAD", capture=True)
 
-    # git INVOKES the hook: a uid-1001 push to main is REJECTED and main stays at seed; a proposed/* push is accepted;
-    # a non-1001 push to main is accepted (the C1 mirror) and advances main.
-    assert push("HEAD:refs/heads/main", 1001).returncode != 0, "git must reject the uid-1001 push to main (hook fires)"
-    assert _git(canonical, "rev-parse", "refs/heads/main", capture=True) == seed, "main unchanged after the refusal"
-    assert push("HEAD:refs/heads/proposed/0123456789ab", 1001).returncode == 0, "a uid-1001 proposed/* push is accepted"
-    assert push("HEAD:refs/heads/main", 1000).returncode == 0, "the non-1001 (mirror) push to main is accepted (C1)"
-    assert _git(canonical, "rev-parse", "refs/heads/main", capture=True) == next_tip
+    assert push("HEAD:refs/heads/main", 1001).returncode != 0, "git must reject the uid-1001 push to main"
+    assert at("refs/heads/main") == seed, "main unchanged after the refusal"
+    assert push("HEAD:refs/heads/proposed/0123456789ab", 1001).returncode == 0, "a new proposal is accepted"
+    assert at(_P + "0123456789ab") == first
 
-    # (C2) promote_ref advances main via update-ref (NOT receive-pack) → the hook never fires on it. Stage a FF
-    # proposal ahead of main, then promote it and assert main advanced (the promote is not blocked by the hook).
     (clone / "f").write_text("3\n", encoding="utf-8")
     _git(clone, "add", "-A")
+    _git(clone, "commit", "-m", "again")
+    again = push("HEAD:refs/heads/proposed/0123456789ab", 1001)
+    assert again.returncode != 0 and "created once" in again.stderr, again.stderr
+    assert at(_P + "0123456789ab") == first, "a proposal that exists was moved by a push"
+
+    for refspec in ("HEAD:refs/tags/main", "HEAD:refs/replace/" + seed, "HEAD:refs/heads/proposed/run1",
+                    "HEAD:refs/proposed/0123456789ab"):
+        assert push(refspec, 1001).returncode != 0, "uid 1001 pushed %s" % refspec
+    assert push("HEAD:refs/tags/v1", 1000).returncode != 0, "a tag was pushed to the canonical"
+    # one push, two refs: the hook is asked once for each — the proposal lands, the tag does not
+    both = subprocess.run(["git", "-C", str(clone), "push", "origin", "HEAD:refs/heads/proposed/0123456789cd",
+                           "HEAD:refs/tags/v2"], env={**env, "FAKE_UID": "1001"}, capture_output=True, text=True)
+    assert both.returncode != 0 and at(_P + "0123456789cd") is not None and at("refs/tags/v2") is None
+    refs = subprocess.run(["git", "-C", str(canonical), "for-each-ref", "--format=%(refname)"],
+                          capture_output=True, text=True).stdout.split()
+    assert sorted(refs) == ["refs/heads/main", _P + "0123456789ab", _P + "0123456789cd"]
+
+    assert push("HEAD:refs/heads/main", 1000).returncode == 0, "the non-1001 (mirror) push to main is accepted"
+    assert at("refs/heads/main") != seed
+
+    # The promote is a ref update, not a push: the hook is not what bounds it, and does not stand in its way.
+    (clone / "f").write_text("4\n", encoding="utf-8")
+    _git(clone, "add", "-A")
     _git(clone, "commit", "-m", "0000000000c0")
-    third = _git(clone, "rev-parse", "HEAD", capture=True)
-    assert push("HEAD:refs/heads/proposed/0000000000c0", 1000).returncode == 0     # stage the FF proposal
-    assert gitio.promote_ref("0000000000c0", cwd=str(canonical)) is True, \
-        "promote_ref (update-ref, not receive-pack) must advance main — the update hook never fires on it (C2)"
-    assert _git(canonical, "rev-parse", "refs/heads/main", capture=True) == third, "promote advanced main via update-ref"
+    fourth = _git(clone, "rev-parse", "HEAD", capture=True)
+    assert push("HEAD:refs/heads/proposed/0000000000c0", 1001).returncode == 0
+    assert gitio.promote_ref("0000000000c0", cwd=str(canonical)) is True
+    assert at("refs/heads/main") == fourth

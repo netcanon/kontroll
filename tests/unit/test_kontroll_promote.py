@@ -165,8 +165,9 @@ def test_the_gate_judges_the_ref_the_fast_forward_takes(tmp_path, other):
     without the conflict.
 
     Guards the gate and the fast-forward reading two different refs. Git resolves a short name to
-    `refs/<name>` and `refs/tags/<name>` before `refs/heads/<name>`, and the canonical's update hook refuses the
-    network service nothing but `main` — so one extra ref beside a proposal made the gate pass a clean tree while
+    `refs/<name>` and `refs/tags/<name>` before `refs/heads/<name>`, and when this was found the canonical's update
+    hook refused the network service nothing but `main` (an allow-list since 2026-10-13: the pushed way in is
+    closed, a direct write is not) — so one extra ref beside a proposal made the gate pass a clean tree while
     `main` took the other one, with no race and no `.gitattributes`."""
     repo = tmp_path / "repo"
     _fake_proposal(repo, conflict=True, canary=tmp_path / "canary.txt")     # refs/heads/proposed/0000000000b1: a real conflict

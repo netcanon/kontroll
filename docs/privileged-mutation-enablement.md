@@ -80,8 +80,9 @@ hook, set by `local-canonical.yml` on every install) and the operator's CLI prom
    `origin` at all (`and not staging`): the content clone's `origin` is the canonical itself (a `file://` clone),
    so `git push origin HEAD` there would fast-forward `main` — a network-service direct-main write, the exact thing
    this posture forbids (closed 2026-07-05, dogfood VM 144; `tests/unit/test_staging_isolation.py`
-   `test_staging_push_origin_never_advances_canonical_main`). A uid-1001 canonical `update` hook
-   (`ansible/playbooks/files/canonical-update-hook.sh`) refuses such a push at the canonical as belt-and-braces.
+   `test_staging_push_origin_never_advances_canonical_main`). The canonical's `update` hook
+   (`ansible/playbooks/files/canonical-update-hook.sh`) refuses such a push at the canonical as belt-and-braces:
+   it is an allow-list — as uid 1001 a push may create `refs/heads/proposed/<run id>` and nothing else.
 4. **The promote action** — `kontroll-promote.py <run_id>@<commit_id>` (CLI verb, operator-run = trusted)
    fast-forwards `main ← proposed/<run_id>` **only if it is a fast-forward** and **only if the proposal is still
    the commit named** (else it refuses), then deletes the proposal — see "The promote lands one commit" below.
@@ -196,7 +197,9 @@ another commit, so what was previewed, what was judged and what landed could be 
   integrity check on the canonical) would make a silent rewrite detectable. **Update 2026-07-05:** a uid-1001
   `update` hook on the canonical (`ansible/playbooks/files/canonical-update-hook.sh`, installed by
   `local-canonical.yml`) now refuses a receive-pack **push** to `main`, so the container-RCE-does-a-*push* case is
-  caught. The remaining residual is specifically a direct `update-ref`/`packed-refs` rewrite (not a push — the hook
+  caught. **Update 2026-10-13:** the hook is an allow-list — as uid 1001 a push may create a proposal and nothing
+  else (no tag, no `refs/replace/*`, no second push to a proposal that exists); from any other uid, `main` and a
+  proposal. The remaining residual is specifically a direct `update-ref`/`packed-refs` rewrite (not a push — the hook
   fires only on receive-pack, the same reason it never blocks a legit `promote_ref` update-ref), which the
   offsite-mirror-fsck check would make detectable. (H2 — converting the deploy mirror to `update-ref` so the hook
   can be unconditional rather than uid-scoped — is a tracked follow-on; not in this change.)
