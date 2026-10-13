@@ -359,11 +359,26 @@ def _needs_sh():
         pytest.skip("the hook-execution legs need POSIX sh (CI runs on Linux; live-verified on the armed VM too)")
 
 
-def _shells():
+def _shells(tmp_path):
     """The POSIX shells on this machine that a node may have as `/bin/sh`: `sh` itself, and — where installed —
     dash (Debian, the installer image), bash in POSIX mode (a Fedora / Arch / openSUSE host) and busybox `sh`
-    (Alpine: the image the network service pushes from, so the one that runs the uid-1001 half on a node)."""
-    return [["sh"]] + [c for c in (["dash"], ["bash", "--posix"], ["busybox", "sh"]) if shutil.which(c[0])]
+    (Alpine: the image the network service pushes from, so the one that runs the uid-1001 half on a node) — each
+    kept only if the `id` it runs is the one found on the PATH. These tests say who is pushing by putting an `id`
+    of their own first on the PATH; a busybox built to run its own applets before the PATH (Debian's and Ubuntu's
+    is; Alpine's is not) runs its own `id` whatever the PATH says, so under it the table's uid column would be
+    the uid of whoever runs the tests. Such a shell is left out, and `sh` itself must not be one."""
+    fakebin = tmp_path / "fakebin" if (tmp_path / "fakebin").exists() else _fake_id_bin(tmp_path)
+    env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", ""), "FAKE_UID": "424242",
+           "FAKE_ID_RC": "0"}
+
+    def runs_the_shadow(shell):
+        p = subprocess.run(list(shell) + ["-c", "id -u"], env=env, capture_output=True, text=True)
+        return p.stdout.strip() == "424242"
+
+    found = [["sh"]] + [c for c in (["dash"], ["bash", "--posix"], ["busybox", "sh"]) if shutil.which(c[0])]
+    kept = [shell for shell in found if runs_the_shadow(shell)]
+    assert ["sh"] in kept, "`sh` on this machine does not run the `id` found on the PATH: these tests cannot say who pushes"
+    return kept
 
 
 def _run_hook(tmp_path, uid, ref, old, new, shell=("sh",), id_rc="0"):
@@ -394,8 +409,8 @@ def test_the_hook_is_an_allow_list(tmp_path):
     `refs/replace/*`, not `refs/proposed/…`, not a ref name that is itself a pattern, not a move or a delete of a
     proposal that exists; as any other uid it allows `refs/heads/main` and a proposal and nothing else; a delete
     is refused from everyone; and when the uid cannot be read, or the hook is not handed two object ids, nothing is
-    allowed — under every POSIX shell installed here; and an `id` that prints a uid and fails has not said who is
-    pushing. Every refusal names the ref and the rule on stderr.
+    allowed — under every POSIX shell installed here in which the tests' own `id` is the one that runs (`_shells`);
+    and an `id` that prints a uid and fails has not said who is pushing. Every refusal names the ref and the rule on stderr.
 
     WHY: the hook used to refuse ONE thing — uid 1001 pushing `refs/heads/main` — so the service's uid could push
     a tag called `main`, a replace ref, or the same proposal name a second time, and each of those changed what a
@@ -404,7 +419,7 @@ def test_the_hook_is_an_allow_list(tmp_path):
     not a push runs no hook.)"""
     _needs_sh()
     wrong = []
-    for shell in _shells():
+    for shell in _shells(tmp_path):
         for uid, ref, old, new, allowed in _HOOK_TABLE:
             p = _run_hook(tmp_path, uid, ref, old, new, shell=shell)
             if p.returncode != (0 if allowed else 1):          # exactly 1: a shell that cannot parse the file exits 2
