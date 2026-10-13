@@ -36,6 +36,20 @@ def _commit(r, files, parent=None):
     return R.commit(r.bare, R.snapshot(r.bare, files), [parent or r.main])
 
 
+def _in_gits_place(script, real_popen=subprocess.Popen):
+    """A `Popen` to put where the reader starts git: it starts this interpreter on `script` instead, with the
+    pipes the reader asked for — in the TEST's own environment, not the seam's. The seam hands a child where
+    programs are and little else; an interpreter that finds its own libraries through a variable the seam does not
+    pass (a tool-cache Python on a CI runner) then never starts, and a stand-in that never starts "ended before it
+    answered" — which is what several rows expect, so they passed without their stand-in having run. The row that
+    expects an ANSWER from its stand-in (`test_the_bytes_cap_is_applied_to_the_size_git_announces_before_a_body_is_read`)
+    is the control that these do start."""
+    def popen(argv, **kw):
+        kw.pop("env", None)
+        return real_popen([sys.executable, "-c", script], **kw)
+    return popen
+
+
 def test_a_commit_reads_as_the_files_it_holds(tmp_path):
     """Every regular file of a commit comes back under its full path with the bytes that were committed — nested
     directories, an executable file, an empty file, a name that is not ASCII — and nothing else does. The baseline:
@@ -337,10 +351,9 @@ def test_the_bytes_cap_is_applied_to_the_size_git_announces_before_a_body_is_rea
     (the row above cannot tell the two orders apart: a real git's objects are small either way)."""
     import time
     r = R.build(tmp_path)
-    real_popen = canon.subprocess.Popen
     script = ("import sys, time\nsys.stdin.buffer.readline()\n"
               "sys.stdout.buffer.write(b'%s commit 100000000000' + bytes([10]))\nsys.stdout.buffer.flush()\ntime.sleep(60)\n" % r.ff)
-    monkeypatch.setattr(canon.subprocess, "Popen", lambda argv, **kw: real_popen([sys.executable, "-c", script], **kw))
+    monkeypatch.setattr(canon.subprocess, "Popen", _in_gits_place(script))
     started = time.monotonic()
     with pytest.raises(canon.TreeRefused, match="larger than"):
         canon.read_tree_verified(r.bare, r.ff, timeout=30)
@@ -367,7 +380,6 @@ def test_a_git_that_cannot_run_or_stops_answering_is_not_a_verdict_on_the_tree(t
     difference the gate's two sentences rest on — "the tree is refused" (the proposal's fault) and "the gate could
     not run" (ours) — and that a reader whose git hangs does not hang the promote with it."""
     r = R.build(tmp_path)
-    real_popen = canon.subprocess.Popen
 
     def absent(*a, **kw):
         raise FileNotFoundError("git")
@@ -376,9 +388,7 @@ def test_a_git_that_cannot_run_or_stops_answering_is_not_a_verdict_on_the_tree(t
         canon.read_tree_verified(r.bare, r.ff)
     assert not isinstance(ei.value, canon.TreeRefused)
 
-    def silent(argv, **kw):
-        return real_popen([sys.executable, "-c", "import time; time.sleep(60)"], **kw)
-    monkeypatch.setattr(canon.subprocess, "Popen", silent)
+    monkeypatch.setattr(canon.subprocess, "Popen", _in_gits_place("import time; time.sleep(60)"))
     started = time.monotonic()
     with pytest.raises(canon.Unreadable) as ei:
         canon.read_tree_verified(r.bare, r.ff, timeout=1)
@@ -392,12 +402,10 @@ def test_a_git_that_ends_in_the_middle_of_an_answer_is_not_a_verdict_on_the_tree
     the read of a header: a reader that took the short body, or called a git that was killed a verdict on the
     proposal, would have the promote say "the tree is refused" about a tree nobody read."""
     r = R.build(tmp_path)
-    real_popen = canon.subprocess.Popen
     script = ("import sys, time\nsys.stdin.buffer.readline()\n"
               "sys.stdout.buffer.write(b'%s commit 1000' + bytes([10]) + b'tree 01234')\nsys.stdout.buffer.flush()\n%s\n")
     for then, timeout in (("sys.exit(0)", 30), ("time.sleep(60)", 1)):
-        monkeypatch.setattr(canon.subprocess, "Popen",
-                            lambda argv, _then=then, **kw: real_popen([sys.executable, "-c", script % (r.ff, _then)], **kw))
+        monkeypatch.setattr(canon.subprocess, "Popen", _in_gits_place(script % (r.ff, then)))
         with pytest.raises(canon.Unreadable) as ei:
             canon.read_tree_verified(r.bare, r.ff, timeout=timeout)
         assert not isinstance(ei.value, canon.TreeRefused)
@@ -422,9 +430,8 @@ def test_a_git_that_dies_on_one_object_refuses_the_tree_and_a_cut_answer_does_no
     with pytest.raises(canon.TreeRefused, match="cannot read"):
         canon.read_tree_verified(r.bare, commit)
 
-    real_popen = canon.subprocess.Popen
     cut = ("import sys\nsys.stdin.buffer.readline()\nsys.stdout.buffer.write(b'%s commit 2')\nsys.stdout.buffer.flush()\n" % r.ff)
-    monkeypatch.setattr(canon.subprocess, "Popen", lambda argv, **kw: real_popen([sys.executable, "-c", cut], **kw))
+    monkeypatch.setattr(canon.subprocess, "Popen", _in_gits_place(cut))
     with pytest.raises(canon.Unreadable) as ei:
         canon.read_tree_verified(r.bare, r.ff)
     assert not isinstance(ei.value, canon.TreeRefused)
@@ -436,10 +443,10 @@ def test_a_git_that_is_gone_before_it_is_asked_is_unreadable(tmp_path, monkeypat
     the catch, a git that dies at start-up (a repository format it does not know) is a traceback through the
     promote instead of "the gate could not run"."""
     r = R.build(tmp_path)
-    real_popen = canon.subprocess.Popen
+    start = _in_gits_place("pass")
 
     def gone(argv, **kw):
-        proc = real_popen([sys.executable, "-c", "pass"], **kw)
+        proc = start(argv, **kw)
         proc.wait()
         return proc
     monkeypatch.setattr(canon.subprocess, "Popen", gone)
