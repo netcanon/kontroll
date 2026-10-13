@@ -20,6 +20,7 @@ test-doc + data-testid + test-after-change discipline is
 | **L1 lint** | YAML/Ansible/compose/Prometheus syntax + secret hygiene | `validate.ps1` / `validate.sh` | every commit (pre-commit + CI) |
 | **L2 validate** | playbooks parse against a mock inventory | `--syntax-check` | on change, CI |
 | **L2 pytest** | `galaxy.py` + GUI logic, shell-outs mocked (no lab) | `pytest` (`unit/` + `integration/`) | on change, CI |
+| **L2 as root** | the canonical's git as the service uid, with real uids on a canonical laid out as the play leaves one (`integration/test_canon_drop.py`; skipped unless root on Linux) | `validate.sh` step `canon-drop-as-root` (directly as root, or through `sudo -n`; a skipped row fails it) | CI (`validate --strict`), the gate container |
 | **L3 GUI e2e** | the GUI in a headless browser over the real booted app | Playwright (`tests/e2e/`, `e2e` marker) | a dedicated CI job |
 | **L3 live smoke** | real fleet reachable; services respond | `playbooks/ping.yml`, post-deploy asserts | manual / Semaphore schedule |
 | **L4 idempotence** | second apply = `0 changed` | re-run the play against a scratch host (by hand — no automated harness) | per role |
@@ -34,6 +35,8 @@ pwsh tests/validate.ps1                 # Windows: a shim over validate.sh (Git 
 # Linux control VM / CI (use --strict so missing tools fail the run)
 bash tests/validate.sh --strict
 ```
+`validate.sh` runs one step as root — `canon-drop-as-root` — directly when it is root, else through `sudo -n`
+when that needs no password (it says which); with neither it is a SKIP, which `--strict` counts as a failure.
 ```bash
 # L2 dry-run a playbook against fake hosts (no real device touched)
 ansible-playbook -i tests/mock-inventory.yml ../ansible/playbooks/backup-configs.yml --check --diff

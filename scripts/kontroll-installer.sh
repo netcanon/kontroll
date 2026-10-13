@@ -36,8 +36,10 @@ mkdir -p "$HOME/.config/sops/age" "$HOME/.ssh" "$HOME/.config/semaphore"
 chmod 0700 "$HOME/.config/sops/age" "$HOME/.ssh" 2>/dev/null || true
 
 # The C10 canonical group (gid 1001): the in-container deploy (KONTROLL_IN_CONTAINER=1) SKIPS provisioning it, so
-# without this the operator can't later manage uid-1001-pushed proposal refs and promote fails 'Permission denied'
-# (F-CANON, task_51334deb). Ensure it here (sudo if available) or print the exact one-liner; never fatal.
+# without this a later push of the operator's own into the canonical (scripts/update.sh, an onboard from the CLI)
+# fails 'Permission denied' beside what uid 1001 wrote there (F-CANON, task_51334deb). A promote is not the
+# reason any more: `sudo kontroll-promote` runs its git as the service uid. Ensure it here (sudo if available) or
+# print the exact one-liner; never fatal.
 if [ -f "$REPO_ROOT/scripts/lib/canonical-group.sh" ]; then
   # shellcheck source=scripts/lib/canonical-group.sh
   . "$REPO_ROOT/scripts/lib/canonical-group.sh"

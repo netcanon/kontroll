@@ -477,7 +477,9 @@ def assert_git_runs_in_the_seam(module_rel, verbs, functions=None):
         seam = [k for k in n.keywords if k.arg is None and isinstance(k.value, ast.Call)
                 and _dotted(k.value.func) in seam_names]
         assert len(seam) == 1, "%s: a git of the canonical must pass **canon.git_kwargs(<repo>)" % where
-        own = sorted(k.arg for k in n.keywords if k.arg in ("env", "cwd", "shell", "executable"))
+        own = sorted(k.arg for k in n.keywords if k.arg in (
+            "env", "cwd", "shell", "executable", "user", "group", "extra_groups", "umask", "preexec_fn",
+            "start_new_session", "process_group", "pass_fds", "close_fds"))
         assert not own, "%s: %s beside **canon.git_kwargs — the seam decides those" % (where, ", ".join(own))
         assert len(n.args) == 1 and all(k.arg is not None or k in seam for k in n.keywords), (
             "%s: one argv and the seam — no other positional argument and no second ** (either can carry an "

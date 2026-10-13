@@ -28,6 +28,15 @@ so that each is one function with one test file (tests/unit/test_canon.py) and n
      own attribute files, the repository's filters and its replacement refs make it. A gate that judges a commit
      must judge THAT commit: the tree its bytes name, the files those trees name, regular files only.
 
+  5. ROOT DOES NOT RUN GIT IN A REPOSITORY THE SERVICE CAN WRITE. The environment of rule 2 answers the ways a
+     repository makes git run a program or read another store THAT SOMEBODY HAS LISTED. What nobody has listed —
+     the parser of a pack, of a ref file, of a config line, and whatever else those files can make a git do — is
+     reached by whoever git runs as. So a caller with effective uid 0 runs every git of the seam as the SERVICE
+     uid (`SERVICE_UID`:`SERVICE_GID`, no supplementary group, in a session of its own, started in `/`) whenever
+     anything in the repository is the service's to write (`service_writable`): whatever a writer of the
+     canonical can then make that git do, it does as the service's uid and not as root. A repository the service
+     can write nothing of — root's own — is one root may run git in.
+
 Needs git 2.31 or later: the config overrides travel in `GIT_CONFIG_COUNT`, which an older git ignores without a
 word (every hook would run). `GIT_NO_LAZY_FETCH` is honoured by git 2.45 and later; before it `protocol.allow=never`
 is what stops a promisor remote.
@@ -36,14 +45,22 @@ Nothing here writes the CANONICAL (the module is in the pinned layer, so the com
 that did). `export_commit` writes a commit's files into a directory the caller names; it is a registered write
 verb for that reason, so no read view can reach it.
 """
+import errno
 import hashlib
 import os
 import re
+import stat
 import subprocess
 import threading
 
 MAIN = "refs/heads/main"
 PROPOSED = "refs/heads/proposed/"
+
+# The uid and gid the network service runs as (`user: "1001:1001"` in docker/services/) and the canonical's group
+# grant names (`local-canonical.yml`: `<operator>:1001`, `2775`, `core.sharedRepository=group`). Numbers, not
+# names: the canonical is reached from containers that have no user database in common.
+SERVICE_UID = 1001
+SERVICE_GID = 1001
 
 # The ONLY two run-id shapes the service mints: `uuid4().hex[:12]` (the GUI) is twelve lower-case hex digits;
 # `api.audit.mint_run_id` is a UTC stamp `YYYYMMDDTHHMMSSZ`, a hyphen and six hex digits. Matched with fullmatch —
@@ -160,9 +177,10 @@ def git_dir(path):
     return dot if os.path.isdir(dot) else path
 
 
-def git_kwargs(repo):
+def git_kwargs(repo, fed=False):
     """The keyword arguments of every `subprocess` call that runs git on the canonical: `**git_kwargs(repo)`. One
-    function, so that what such a process runs in — and whether it runs at all — is decided in one place.
+    function, so that what such a process runs in — and whether it runs at all — is decided in one place. A call
+    that FEEDS git (an `input=`, a `stdin=subprocess.PIPE` of its own) says so: `git_kwargs(repo, fed=True)`.
 
     It REFUSES (Unreadable) a repository that holds a `commondir` file. That file hands the repository's config,
     hooks, objects and refs to the directory it names; `GIT_COMMON_DIR` takes the first three back, but git's ref
@@ -171,7 +189,15 @@ def git_kwargs(repo):
     `config` is a symbolic link: git reads refs through the first two as it does through `commondir`, and a delete
     rewrites `packed-refs` and removes a file under `logs` *through* the link. No canonical of ours has either, so
     one that does is not read and not written. This is a check before the process starts, not a lock: it catches a
-    planted file, not a race."""
+    planted file, not a race.
+
+    And it decides AS WHOM (rule 5 of the module): for a caller with effective uid 0, in a repository of which
+    anything is the service's to write, the keywords carry `user`, `group` and an empty `extra_groups` — the
+    child is the service uid before git starts. A root that cannot change identity is refused (Unreadable)
+    rather than left to run git as itself. The identity comes with a SESSION of the child's own
+    (`start_new_session`) and, unless the caller feeds git, a standard input that is nothing: the service's git
+    is given the service's uid and nothing of the caller's session — not the terminal the caller sits at — and
+    with a working directory of `/`: the caller's own may be one the service cannot enter."""
     if os.path.lexists(os.path.join(repo, "commondir")):
         raise Unreadable("the canonical holds a `commondir` file, which would have its refs read from another "
                          "directory; nothing was read")
@@ -179,7 +205,118 @@ def git_kwargs(repo):
         if os.path.islink(os.path.join(repo, part)):
             raise Unreadable("the canonical's `%s` is a symbolic link, so git would read or write somewhere "
                              "else; nothing was read" % part)
-    return {"env": git_env(repo)}
+    kw = {"env": git_env(repo)}
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and service_writable(repo):
+        # Rule 5. `subprocess` does it in the child, between fork and exec: setgroups([]), setgid, setuid — in
+        # that order, so nothing of root's is left when git starts.
+        if not _can_drop():
+            raise Unreadable("could not drop to the service uid; nothing was read or changed")
+        kw.update(user=SERVICE_UID, group=SERVICE_GID, extra_groups=[], start_new_session=True)
+        if not fed:
+            kw["stdin"] = subprocess.DEVNULL
+        # And it starts in `/`, with the repository named by its full path. The child would otherwise keep the
+        # CALLER'S working directory while giving up the caller's identity: git takes that directory for a work
+        # tree (GIT_COMMON_DIR is set), `rev-list <id>` asks whether `<id>` is also a file there, and in a
+        # directory the service uid may not search — the operator's home, root's — that question is refused.
+        kw.update(env=git_env(os.path.abspath(repo)), cwd=os.sep)
+    return kw
+
+
+def _theirs(st):
+    """Is the thing this `stat` describes the service's to write? Its own; or its group's, with the group's
+    write bit; or anybody's."""
+    return (st.st_uid == SERVICE_UID or (st.st_gid == SERVICE_GID and bool(st.st_mode & 0o020))
+            or bool(st.st_mode & 0o002))
+
+
+def _listed(path, st):
+    """Does an access-control list stand on `path` that could give the service write where the mode names
+    another group? A list's grants are capped by its mask, and the mask is what the GROUP's bits of the mode
+    show: without the group's write bit no entry of a list writes anything. With it, a list on the entry is
+    taken for a grant — it is not parsed. A file system that keeps no such lists has none; a list that cannot
+    be asked for is one."""
+    if not st.st_mode & 0o020 or not hasattr(os, "listxattr"):
+        return False
+    try:
+        return "system.posix_acl_access" in os.listxattr(path, follow_symlinks=False)
+    except OSError as e:
+        return e.errno not in (errno.ENOTSUP, errno.ENODATA)
+
+
+def service_writable(repo):
+    """True unless the service uid can write NOTHING of the repository at `repo`, as far as owner, group and
+    mode say: its top directory and every file, directory and link below it belong to somebody else, with no
+    write bit for the service's group or for everybody, and none of them is a symbolic link. (An access-control
+    list is not parsed: on an entry that shows a group write bit, one that is there is taken for a grant —
+    `_listed`.) The play's layout answers True at the first look (the top directory is the service group's to
+    write); a repository root made for itself answers False.
+
+    The WHOLE repository is asked, not one directory of it, because one directory is something the service can
+    exchange: with write on `refs/` it renames `refs/heads` away and puts a LINK to a root-owned directory in
+    its place, or — where one stands beside it — a directory of somebody else's that has no group write bit: a
+    single `stat` of `refs/heads` then said "not the service's", and root went on running git in it (measured). What
+    the service cannot exchange is the top directory itself (that takes write on its PARENT), and nothing at all
+    in a repository of which nothing is its own.
+
+    Fails toward True: a part that cannot be looked at, or that goes away while it is looked at, is a part
+    somebody is writing. A path that is not there, or is not a directory, answers False — there is no
+    repository for a git to run in, as anybody."""
+    try:
+        top = os.stat(repo)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    if not stat.S_ISDIR(top.st_mode):
+        return False
+    if _theirs(top) or _listed(repo, top):
+        return True
+    pending = [repo]
+    while pending:
+        here = pending.pop()
+        try:
+            with os.scandir(here) as entries:
+                for entry in entries:
+                    st = entry.stat(follow_symlinks=False)
+                    if stat.S_ISLNK(st.st_mode) or _theirs(st) or _listed(entry.path, st):
+                        return True
+                    if stat.S_ISDIR(st.st_mode):
+                        pending.append(entry.path)
+        except OSError:
+            return True
+    return False
+
+
+_DROP = []          # the answer of `_can_drop`, once asked: a process's capabilities do not change under it
+
+
+def _can_drop():
+    """Can this process — effective uid 0 — start a child as the service uid? Read once, from what the kernel
+    says of the process (Linux): its effective capability set must hold CAP_SETGID and CAP_SETUID, and its user
+    namespace must not deny `setgroups`. A root without them (a container started with the capability dropped,
+    a user namespace that denies `setgroups`) would have every git of the seam fail at the change of identity,
+    before git starts;
+    this is asked first so that the caller is told THAT, in one sentence, instead of "git could not be run" at
+    whichever call came first. It decides a sentence and nothing else: where the kernel does not say (no
+    `/proc`), or says yes and the change is refused all the same, the child still never becomes git as root —
+    `subprocess` changes identity before it executes anything, and a failed change is a failed start."""
+    if not _DROP:
+        able = True
+        try:
+            with open("/proc/self/status", encoding="ascii", errors="replace") as fh:
+                for line in fh:
+                    if line.startswith("CapEff:"):
+                        held = int(line.split()[1], 16)
+                        able = bool(held >> 6 & 1) and bool(held >> 7 & 1)      # CAP_SETGID is 6, CAP_SETUID is 7
+        except (OSError, ValueError, IndexError):
+            pass
+        try:
+            with open("/proc/self/setgroups", encoding="ascii", errors="replace") as fh:
+                able = able and fh.read().strip() != "deny"
+        except OSError:
+            pass
+        _DROP.append(able)
+    return _DROP[0]
 
 
 _REF_FMT = "%(refname)%00%(objectname)%00%(objecttype)%00%(symref)"
@@ -432,7 +569,7 @@ def read_tree_verified(repo, commit_id, max_entries=MAX_TREE_ENTRIES, max_bytes=
     raw_len = len(commit_id) // 2
     try:
         proc = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, **git_kwargs(repo))
+                                stderr=subprocess.DEVNULL, **git_kwargs(repo, fed=True))
     except OSError:
         raise Unreadable("git could not be run on the canonical") from None
     timed_out = threading.Event()

@@ -472,7 +472,7 @@ def promote_commit(run_id, oid, main_id, repo):
            "prepare\ncommit\n" % (ref, oid, canon.MAIN, oid, main_id)).encode("ascii")
     try:
         p = subprocess.run(["git", "update-ref", "--stdin"], input=txn, capture_output=True, timeout=30,
-                           **canon.git_kwargs(repo))
+                           **canon.git_kwargs(repo, fed=True))
     except (OSError, subprocess.SubprocessError, canon.Unreadable):
         # git did not start, was refused the repository, or was stopped at its time limit. Only the last can have
         # moved anything, and a git that is stopped leaves its lock files: say what `main` IS, from a fresh read.

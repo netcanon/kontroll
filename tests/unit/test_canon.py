@@ -12,6 +12,8 @@ The seam's entries that a planted file can show are tested one at a time, for th
 one at a time in `canon.git_env`: a later edit that drops one must fail the test that names it, not pass because
 another entry happens to cover the case today. The rest are held by name in one structural test.
 """
+import errno
+import io
 import os
 import re
 import shutil
@@ -647,6 +649,9 @@ def test_every_git_of_the_canonical_readers_runs_in_the_seam():
     ("own env", "subprocess.run(['git', 'for-each-ref'], env=os.environ)", "git_kwargs"),
     ("seam and an env", "subprocess.run(['git', 'for-each-ref'], env=os.environ, **canon.git_kwargs(repo))", "env beside"),
     ("seam and a cwd", "subprocess.run(['git', 'for-each-ref'], cwd=repo, **canon.git_kwargs(repo))", "cwd beside"),
+    ("seam and a uid", "subprocess.run(['git', 'for-each-ref'], user=0, **canon.git_kwargs(repo))", "user beside"),
+    ("seam and open descriptors", "subprocess.run(['git', 'for-each-ref'], close_fds=False, **canon.git_kwargs(repo))",
+     "close_fds beside"),
     ("seam and -C", "subprocess.run(['git', '-C', repo, 'for-each-ref'], **canon.git_kwargs(repo))", "`-C`"),
     ("seam and -c", "subprocess.run(['git', '-c', 'x=y', 'for-each-ref'], **canon.git_kwargs(repo))", "`-c`"),
     ("a write verb", "subprocess.run(['git', 'update-ref', ref, oid], **canon.git_kwargs(repo))", "update-ref"),
@@ -866,3 +871,377 @@ def test_a_listing_that_is_not_in_the_form_asked_for_is_unreadable(tmp_path, mon
     monkeypatch.setattr(canon.subprocess, "run", fake(listing))
     with pytest.raises(canon.Unreadable):
         canon.commits_between(r.bare, r.base, a)
+
+
+# --- rule 5: as whom a git of the canonical runs ----------------------------------------------------------------- #
+# The real uids — a hook that writes down who it runs as, on a canonical laid out as the play leaves one — are
+# tests/integration/test_canon_drop.py's, which needs root. These rows hold the decision itself, on any host.
+
+_AS_THE_SERVICE = {"user": canon.SERVICE_UID, "group": canon.SERVICE_GID, "extra_groups": [],
+                   "start_new_session": True, "stdin": subprocess.DEVNULL, "cwd": os.sep}
+
+
+@pytest.mark.parametrize("uid, theirs, becomes_the_service", [
+    (0, True, True), (0, False, False), (canon.SERVICE_UID, True, False), (1000, True, False)],
+    ids=["root-where-the-service-writes", "root-in-its-own", "the-service-itself", "anybody-else"])
+def test_only_root_in_a_repository_the_service_can_write_is_made_the_service(tmp_path, monkeypatch, uid, theirs,
+                                                                           becomes_the_service):
+    """`git_kwargs` for a caller whose effective uid is 0, in a repository of which something is the service's to
+    write, carries `user`, `group` and an EMPTY `extra_groups` beside the environment; for root in a repository
+    that is its own, for the service uid itself and for anybody else it carries the environment and nothing
+    more — and on a host that has no effective uid at all, nothing is even asked. With the identity come a
+    session of the child's own, a standard input that is nothing and a working directory of `/`; a call that
+    feeds git (`fed=True`) keeps its own standard input and still gets the session.
+
+    Guards who is given another identity: root, and only where it matters — and that the identity is not
+    handed over together with the caller's session (its terminal). An empty `extra_groups` is part of
+    it — without the keyword the child keeps root's supplementary groups, which is most of root on a machine
+    with a `docker` group. And nobody else is touched: the service's own git and a developer's are not root's
+    to rearrange (a `user=` handed to `subprocess` by a caller that is not root is an error at every call)."""
+    r = R.build(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: uid, raising=False)
+    monkeypatch.setattr(canon, "service_writable", lambda repo: theirs)
+    monkeypatch.setattr(canon, "_can_drop", lambda: True)
+    kw = canon.git_kwargs(r.bare)
+    assert kw.pop("env") == canon.git_env(r.bare)
+    assert kw == (_AS_THE_SERVICE if becomes_the_service else {})
+    fed = canon.git_kwargs(r.bare, fed=True)
+    assert "stdin" not in fed and fed.get("start_new_session") is (True if becomes_the_service else None)
+
+    def never(*_a):
+        raise AssertionError("asked on a host that has no effective uid")
+    monkeypatch.delattr(os, "geteuid")
+    monkeypatch.setattr(canon, "service_writable", never)
+    assert sorted(canon.git_kwargs(r.bare)) == ["env"]
+
+
+def test_a_root_that_cannot_change_identity_gets_no_keywords_at_all(tmp_path, monkeypatch):
+    """Root, in a repository the service can write, in a process the kernel will not let change uid:
+    `git_kwargs` raises `Unreadable` with "could not drop to the service uid" — it does not hand back an
+    environment to run git in as root. A repository refused for its SHAPE is still refused for that first.
+
+    Guards the one way the rule could quietly not apply: handing the caller keywords without an identity when
+    the identity cannot be had. Every reader already treats `Unreadable` as "nothing was read"."""
+    r = R.build(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(canon, "service_writable", lambda repo: True)
+    monkeypatch.setattr(canon, "_can_drop", lambda: False)
+    with pytest.raises(canon.Unreadable, match="could not drop to the service uid"):
+        canon.git_kwargs(r.bare)
+    R.plant_commondir(r, str(tmp_path / "elsewhere"))
+    with pytest.raises(canon.Unreadable, match="commondir"):
+        canon.git_kwargs(r.bare)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owners and write bits are POSIX's; the rule is not asked elsewhere")
+def test_an_access_list_under_another_groups_write_bit_is_taken_for_the_services(tmp_path, monkeypatch):
+    """One directory three levels down carries an access-control list (the file system's answer is stood in
+    for: `os.listxattr` names `system.posix_acl_access` for that one path). With another group's write bit on
+    it — the bit a list's mask shows through — `service_writable` answers True; without that bit the list is
+    not even asked for and the answer is False; a file system that keeps no lists (`ENOTSUP`) answers False;
+    a list that cannot be asked for answers True.
+
+    Guards the one grant the mode bits do not name. A list gives a uid write on an entry whose owner and
+    group are somebody else's, and the only trace in the mode is a group write bit that reads as that other
+    group's. Asked of the bits alone, a top directory closed by hand over a store opened to the service by a
+    list is "root's own"."""
+    r = R.build(tmp_path)
+    for here, _dirs, files in os.walk(r.bare):
+        for path in [here] + [os.path.join(here, name) for name in files]:
+            os.chmod(path, os.stat(path).st_mode & 0o7755)
+    top = os.stat(r.bare)
+    monkeypatch.setattr(canon, "SERVICE_UID", top.st_uid + 1)
+    monkeypatch.setattr(canon, "SERVICE_GID", top.st_gid + 1)
+    deep = os.path.join(r.bare, "refs", "heads", "proposed")
+    asked = []
+
+    def lists(path, follow_symlinks=True):
+        asked.append(path)
+        return ["system.posix_acl_access"] if path == deep else []
+    monkeypatch.setattr(os, "listxattr", lists, raising=False)
+    assert canon.service_writable(r.bare) is False and asked == [], "no group write bit anywhere: nothing to ask"
+    os.chmod(deep, (os.stat(deep).st_mode & 0o7777) | 0o020)
+    assert canon.service_writable(r.bare) is True and asked[-1] == deep
+
+    def none_kept(path, follow_symlinks=True):
+        raise OSError(errno.ENOTSUP, "no lists here")
+    monkeypatch.setattr(os, "listxattr", none_kept, raising=False)
+    assert canon.service_writable(r.bare) is False
+
+    def cannot_ask(path, follow_symlinks=True):
+        raise PermissionError(errno.EACCES, "no")
+    monkeypatch.setattr(os, "listxattr", cannot_ask, raising=False)
+    assert canon.service_writable(r.bare) is True
+
+
+_HELD = "CapEff:\t000001ffffffffff\n"                        # every capability
+_DOCKER = "CapEff:\t00000000a80425fb\n"                      # a container's default set: both are in it
+
+
+@pytest.mark.parametrize("status, setgroups, able", [
+    (_HELD, "allow\n", True),
+    (_DOCKER, "allow\n", True),
+    ("CapEff:\t00000000a804257b\n", "allow\n", False),      # without CAP_SETUID (bit 7)
+    ("CapEff:\t00000000a80425bb\n", "allow\n", False),      # without CAP_SETGID (bit 6)
+    ("CapEff:\t0000000000000000\n", "allow\n", False),
+    (_HELD, "deny\n", False),                                # a user namespace that denies setgroups
+    (_HELD, None, True),                                     # a kernel with no such file
+    ("Name:\tpython3\n", "allow\n", True),                  # a status that does not say
+    ("CapEff:\tnot-a-number\n", "allow\n", True),
+    (None, None, True)],                                     # no /proc at all
+    ids=["all", "a-containers-default", "no-setuid", "no-setgid", "none", "setgroups-denied", "no-setgroups-file",
+         "status-does-not-say", "not-a-number", "no-proc"])
+def test_whether_root_can_change_identity_is_what_the_kernel_says_read_once(monkeypatch, status, setgroups, able):
+    """`_can_drop` reads the process's effective capabilities and its namespace's `setgroups` switch: False
+    without CAP_SETUID, without CAP_SETGID, or where `setgroups` is denied; True with both — and True wherever
+    the kernel does not say (no `/proc`, no such line, a line that is not a number). The answer is read ONCE.
+
+    Guards the sentence a caller gets, in both directions: a "no" where the change would have worked refuses
+    every promote on that machine for nothing, so only what the kernel states outright is a "no"; and a "yes"
+    that is wrong costs nothing but the sentence — the child fails at the change of identity before it executes
+    git."""
+    files = {"/proc/self/status": status, "/proc/self/setgroups": setgroups}
+    opened = []
+
+    def read(path, *_a, **_k):
+        opened.append(path)
+        if files.get(path) is None:
+            raise FileNotFoundError(path)
+        return io.StringIO(files[path])
+    monkeypatch.setattr(canon, "open", read, raising=False)
+    monkeypatch.setattr(canon, "_DROP", [])
+    assert canon._can_drop() is able
+    files.update({"/proc/self/status": "CapEff:\t0000000000000000\n" if able else _HELD,
+                  "/proc/self/setgroups": "allow\n"})
+    assert canon._can_drop() is able and len(opened) == 2, "asked of the kernel a second time"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owners and write bits are POSIX's; the rule is not asked elsewhere")
+def test_what_the_service_can_write_is_asked_of_every_entry_of_the_repository(tmp_path, monkeypatch):
+    """With the service answered as a uid and a gid that own nothing here, a freshly built repository is not the
+    service's (`service_writable` False). It becomes so — and stops being so when the change is undone — through
+    ONE entry three levels down: a directory anybody may write; a directory the service's GROUP may write (its
+    group WITHOUT the write bit is not enough, and neither is another group's write bit); a symbolic link; and,
+    for a caller that is not root, a directory that cannot be looked into. It is the service's when the service
+    owns it. A path that is not there, and a path that is a file, are no repository: False.
+
+    Guards the two directions of the question. Toward "not the service's": that answer lets root run git as
+    root, so one entry that says otherwise, anywhere, must be enough (the top directory alone can be closed by
+    hand over a store the service still writes). Toward "the service's": a repository the caller made for
+    itself must not be taken for the canonical, or root could not run the suite and a developer could not
+    promote in a clone."""
+    r = R.build(tmp_path)
+    for here, _dirs, files in os.walk(r.bare):               # whatever this host's umask gave: no write bit but the owner's
+        for path in [here] + [os.path.join(here, name) for name in files]:
+            os.chmod(path, os.stat(path).st_mode & 0o7755)
+    top = os.stat(r.bare)
+    monkeypatch.setattr(canon, "SERVICE_UID", top.st_uid + 1)
+    monkeypatch.setattr(canon, "SERVICE_GID", top.st_gid + 1)
+    assert canon.service_writable(r.bare) is False
+    deep = os.path.join(r.bare, "refs", "heads", "proposed")
+    was = os.stat(deep)
+    monkeypatch.setattr(canon, "SERVICE_GID", was.st_gid)
+    assert canon.service_writable(r.bare) is False, "the service's group, with no write bit anywhere"
+    monkeypatch.setattr(canon, "SERVICE_GID", top.st_gid + 1)
+    if os.geteuid() != 0:                                    # root looks into anything
+        os.chmod(deep, 0)
+        try:
+            assert canon.service_writable(r.bare) is True, "a part that cannot be looked at"
+        finally:
+            os.chmod(deep, was.st_mode & 0o7777)
+        assert canon.service_writable(r.bare) is False
+    os.chmod(deep, was.st_mode | 0o002)
+    assert canon.service_writable(r.bare) is True
+    os.chmod(deep, (was.st_mode & 0o7777) | 0o020)
+    assert canon.service_writable(r.bare) is False, "another group's write bit is not the service's"
+    monkeypatch.setattr(canon, "SERVICE_GID", was.st_gid)
+    assert canon.service_writable(r.bare) is True
+    os.chmod(deep, was.st_mode & 0o7755)
+    monkeypatch.setattr(canon, "SERVICE_GID", top.st_gid + 1)
+    assert canon.service_writable(r.bare) is False
+    link = os.path.join(deep, "a-link")
+    os.symlink("nowhere", link)
+    assert canon.service_writable(r.bare) is True
+    os.unlink(link)
+    assert canon.service_writable(r.bare) is False
+    monkeypatch.setattr(canon, "SERVICE_UID", top.st_uid)
+    assert canon.service_writable(r.bare) is True
+    assert canon.service_writable(str(tmp_path / "not-there")) is False
+    assert canon.service_writable(os.path.join(r.bare, "HEAD")) is False
+
+
+def test_the_service_identity_is_the_number_the_containers_and_the_play_use():
+    """`SERVICE_UID` and `SERVICE_GID` are 1001 — the `user: "1001:1001"` of the three network services' compose
+    fragments and the group of the play's grant on the canonical — and `git_kwargs` hands `subprocess` the uid as
+    the user and the gid as the group, not one of them twice.
+
+    Guards the numbers themselves. Every other row builds its layout AND its expectation from these two
+    constants, so a constant that is wrong agrees with itself everywhere: with the gid 0, root's git became uid
+    1001 in ROOT's group and every row passed. A change of the service's uid has to be made in the compose
+    fragments, in the play and here, and this is the row that says so."""
+    assert (canon.SERVICE_UID, canon.SERVICE_GID) == (1001, 1001)
+    for name in ("api", "onboard-gui", "semaphore"):
+        with open(os.path.join(ROOT, "docker", "services", name + ".yaml"), encoding="utf-8") as fh:
+            assert re.search(r'^\s+user: "1001:1001"', fh.read(), re.M), name
+    with open(os.path.join(ROOT, "ansible", "playbooks", "local-canonical.yml"), encoding="utf-8") as fh:
+        assert 'group: "1001"' in fh.read()
+
+
+def test_the_childs_user_is_the_uid_and_its_group_the_gid(tmp_path, monkeypatch):
+    """With the two constants answered as DIFFERENT numbers, `git_kwargs` for root in a repository the service
+    can write carries the uid as `user` and the gid as `group`.
+
+    Guards a swap that equal numbers hide: `group=SERVICE_UID` is the same child today and another one the day
+    the service's gid is not its uid."""
+    r = R.build(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(canon, "service_writable", lambda repo: True)
+    monkeypatch.setattr(canon, "_can_drop", lambda: True)
+    monkeypatch.setattr(canon, "SERVICE_UID", 4001)
+    monkeypatch.setattr(canon, "SERVICE_GID", 4002)
+    kw = canon.git_kwargs(r.bare)
+    assert (kw["user"], kw["group"], kw["extra_groups"]) == (4001, 4002, [])
+
+
+def _nothing_of_the_services(tmp_path, monkeypatch):
+    """A freshly built repository with no write bit but its owner's, and the service answered as a uid and a gid
+    that own nothing in it: `service_writable` is False until a row changes one thing."""
+    r = R.build(tmp_path)
+    for here, _dirs, files in os.walk(r.bare):
+        for path in [here] + [os.path.join(here, name) for name in files]:
+            os.chmod(path, os.stat(path).st_mode & 0o7755)
+    top = os.stat(r.bare)
+    monkeypatch.setattr(canon, "SERVICE_UID", top.st_uid + 1)
+    monkeypatch.setattr(canon, "SERVICE_GID", top.st_gid + 1)
+    assert canon.service_writable(r.bare) is False, "control"
+    return r
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owners, write bits and links are POSIX's")
+def test_a_link_to_the_repository_is_followed_and_a_link_inside_it_is_not(tmp_path, monkeypatch):
+    """Asked through a symbolic link that NAMES the repository, `service_writable` answers for the directory the
+    link names (True when its owner is the service; False when nothing of it is). A link found INSIDE the
+    repository is the service's whatever it points at — a file of somebody else's that exists included.
+
+    Guards both ends of a link. A canonical reached through one (`/srv/kontroll.git` moved to another disk and
+    linked back) is still the canonical: read without following, the path "is not a directory", the answer was
+    False and root ran git in it as root. And an entry read THROUGH a link shows the closed file it points at,
+    not the link the service put there — which is how one look at `refs/heads` was talked out of its answer."""
+    r = _nothing_of_the_services(tmp_path, monkeypatch)
+    by_link = str(tmp_path / "by-a-link.git")
+    os.symlink(r.bare, by_link)
+    assert canon.service_writable(by_link) is False, "nothing of it is the service's, through the link too"
+    monkeypatch.setattr(canon, "SERVICE_UID", os.stat(r.bare).st_uid)
+    assert canon.service_writable(by_link) is True
+    monkeypatch.setattr(canon, "SERVICE_UID", os.stat(r.bare).st_uid + 1)
+    inside = os.path.join(r.bare, "refs", "heads", "a-link-to-a-closed-file")
+    os.symlink(os.path.join(r.bare, "HEAD"), inside)
+    assert canon.service_writable(r.bare) is True
+    os.unlink(inside)
+    assert canon.service_writable(r.bare) is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owners and write bits are POSIX's")
+def test_what_cannot_be_looked_at_is_the_services_and_what_is_not_a_directory_is_no_repository(tmp_path, monkeypatch):
+    """A directory of the repository that goes away while it is being read: True. A repository under a directory
+    the caller may not search (asked by a caller that is not root): True. A path BELOW a file: False, as for a
+    path that is not there.
+
+    Guards the direction each failure falls in. "Not the service's" lets root run git as root, so only what was
+    looked at and found closed may answer it; a part that vanished under the reader, or that the reader was
+    refused, is a part somebody is writing. And a path that cannot be a repository at all is not "cannot be
+    looked at" — nothing would run there as anybody."""
+    r = _nothing_of_the_services(tmp_path, monkeypatch)
+    assert canon.service_writable(os.path.join(r.bare, "HEAD", "below-a-file")) is False
+    real = os.scandir
+
+    def gone(path):
+        if os.path.basename(os.fspath(path)) == "heads":
+            raise FileNotFoundError(path)
+        return real(path)
+    with monkeypatch.context() as inner:
+        inner.setattr(os, "scandir", gone)
+        assert canon.service_writable(r.bare) is True, "a part that went away while it was read"
+    assert canon.service_writable(r.bare) is False
+    if os.geteuid() != 0:                                    # root looks into anything
+        os.chmod(str(tmp_path), 0)
+        try:
+            assert canon.service_writable(r.bare) is True, "a top directory that cannot be looked at"
+        finally:
+            os.chmod(str(tmp_path), 0o700)
+
+
+def test_a_capability_line_with_nothing_after_it_does_not_say(monkeypatch):
+    """A `CapEff:` line that holds no mask: `_can_drop` answers True (the kernel did not say), not a traceback.
+
+    Guards the third way a status can fail to say — the other two (no such line, a mask that is not a number)
+    are rows of the table above; this one raised IndexError out of every `git_kwargs` of a root caller."""
+    files = {"/proc/self/status": "CapEff:\n", "/proc/self/setgroups": "allow\n"}
+    monkeypatch.setattr(canon, "open", lambda path, *_a, **_k: io.StringIO(files[path]), raising=False)
+    monkeypatch.setattr(canon, "_DROP", [])
+    assert canon._can_drop() is True
+
+
+def test_the_sentence_of_a_root_that_cannot_change_identity_is_the_one_the_documents_quote(tmp_path, monkeypatch):
+    """`git_kwargs` for a root that cannot change identity raises `Unreadable` with exactly "could not drop to
+    the service uid; nothing was read or changed" — and docs/troubleshooting.md quotes that sentence whole.
+
+    Guards the row an operator searches for: the table quotes the sentence inside the promote's own ("the
+    canonical could not be read (…)"), so a sentence reworded here leaves the table describing a message the
+    command no longer prints."""
+    r = R.build(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(canon, "service_writable", lambda repo: True)
+    monkeypatch.setattr(canon, "_can_drop", lambda: False)
+    with pytest.raises(canon.Unreadable) as refused:
+        canon.git_kwargs(r.bare)
+    assert str(refused.value) == "could not drop to the service uid; nothing was read or changed"
+    with open(os.path.join(ROOT, "docs", "troubleshooting.md"), encoding="utf-8") as fh:
+        assert "the canonical could not be read (%s)" % refused.value in fh.read()
+
+
+def test_the_services_git_is_handed_the_repository_by_its_full_path(tmp_path, monkeypatch):
+    """`git_kwargs` for root in a repository the service can write, handed a RELATIVE path: the environment
+    names the repository by its full path and the working directory is `/`. For a caller whose identity is not
+    changed, the path is handed on as it was given and no working directory is set.
+
+    Guards the two halves of one correction against each other. The service's git is started in `/` because the
+    caller's own directory may be one it cannot enter; a repository named relative to where the caller STOOD is
+    then a path below `/` that does not exist — `--repo kontroll.git` typed in `/srv` would read nothing."""
+    r = R.build(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    relative = os.path.basename(r.bare)
+    assert not os.path.isabs(relative) and os.path.isdir(relative), "control"
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(canon, "service_writable", lambda repo: True)
+    monkeypatch.setattr(canon, "_can_drop", lambda: True)
+    kw = canon.git_kwargs(relative)
+    assert kw["cwd"] == os.sep
+    assert kw["env"] == canon.git_env(os.path.abspath(relative)) and os.path.isabs(kw["env"]["GIT_DIR"])
+    monkeypatch.setattr(canon, "service_writable", lambda repo: False)
+    kw = canon.git_kwargs(relative)
+    assert "cwd" not in kw and kw["env"]["GIT_DIR"] == relative
+
+
+@pytest.mark.skipif(os.name != "posix", reason="owners and write bits are POSIX's; the rule is not asked elsewhere")
+def test_an_access_list_on_the_top_directory_itself_is_asked_for(tmp_path, monkeypatch):
+    """The TOP directory of a repository carries an access-control list (stood in for: `os.listxattr` names
+    `system.posix_acl_access` for that one path) and nothing below it does. Without a group write bit on it the
+    answer is False; with another group's write bit — the bit a list's mask shows through — it is True.
+
+    Guards the first look of the rule. Whoever may write the top directory may replace every entry of it, so a
+    top opened to the service by a list alone is the whole repository opened; the look at the entries below
+    does not see it — they are closed."""
+    r = R.build(tmp_path)
+    for here, _dirs, files in os.walk(r.bare):
+        for path in [here] + [os.path.join(here, name) for name in files]:
+            os.chmod(path, os.stat(path).st_mode & 0o7755)
+    top = os.stat(r.bare)
+    monkeypatch.setattr(canon, "SERVICE_UID", top.st_uid + 1)
+    monkeypatch.setattr(canon, "SERVICE_GID", top.st_gid + 1)
+    monkeypatch.setattr(os, "listxattr",
+                        lambda path, follow_symlinks=True: ["system.posix_acl_access"] if path == r.bare else [],
+                        raising=False)
+    assert canon.service_writable(r.bare) is False, "no group write bit on the top: the list is not asked for"
+    os.chmod(r.bare, (top.st_mode & 0o7777) | 0o020)
+    assert canon.service_writable(r.bare) is True

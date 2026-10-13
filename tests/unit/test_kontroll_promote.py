@@ -977,3 +977,108 @@ def test_with_onto_the_transaction_moves_main_from_that_commit_or_not_at_all(tmp
     monkeypatch.setattr(promote.gitio, "promote_commit", another_promote_lands_first)
     assert promote.main(["%s@%s" % (RID, r.second), "--onto", r.main, "--repo", r.bare]) == 1
     assert _main_of(r.bare) == r.first and "main moved" in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("isolated_git")
+@pytest.mark.parametrize("uid, theirs, turned_away", [
+    (1000, True, True), (1000, False, False), (canon.SERVICE_UID, True, False), (0, True, False)],
+    ids=["a-group-member-on-the-canonical", "anybody-in-their-own-repository", "the-service", "root"])
+def test_who_may_run_the_promote_and_as_whom_it_says_git_runs(tmp_path, monkeypatch, capsys, uid, theirs,
+                                                            turned_away):
+    """`--list`, for four callers. One who is neither root nor the service, in a repository the service can
+    write: exit 1, a sentence that says `sudo`, nothing listed and nothing read. The same caller in a repository
+    of which nothing is the service's, the service itself, and root: the proposals are listed — and for root,
+    where the service can write, stderr first says that git runs as the service uid.
+
+    Guards who opens the canonical's store with their own account (the listing is a read of that store too,
+    which is why the rule stands before it), without turning away the two callers that run this every day —
+    the Semaphore job, which is the service, and `sudo`. The line on stderr is the record of as whom."""
+    r = R.build(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: uid, raising=False)
+    monkeypatch.setattr(canon, "service_writable", lambda repo: theirs)
+    monkeypatch.setattr(canon, "git_kwargs", lambda repo, fed=False: {"env": canon.git_env(repo)})   # no uid is changed here
+    read = []
+    real = canon.proposals
+    monkeypatch.setattr(canon, "proposals", lambda *a, **k: read.append(a) or real(*a, **k))
+    rc = promote.main(["--list", "--repo", r.bare])
+    said = capsys.readouterr()
+    if turned_away:
+        assert rc == 1 and "sudo" in said.err and said.out == "" and read == []
+        return
+    assert rc == 0 and "%s@%s" % (R.FF, r.ff) in said.out
+    assert ("as the service uid (%d)" % canon.SERVICE_UID in said.err) is (uid == 0)
+
+
+@pytest.mark.usefixtures("isolated_git")
+def test_the_two_sentences_about_who_runs_git_are_the_ones_the_documents_quote(tmp_path, monkeypatch, capsys):
+    """A caller who is neither root nor the service is refused with a line that OPENS "REFUSED: run this with
+    sudo. The repository is one the network service can write, and you are neither root nor that service"; root
+    is told, in one whole line, "kontroll-promote: git runs as the service uid (1001) in this repository, not as
+    root". docs/troubleshooting.md §7 quotes both, and the two are found there as printed.
+
+    Guards the table an operator searches with the text on their screen: both rows quote the command, so a
+    sentence reworded in `main` and not in the table leaves a row nobody can find."""
+    r = R.build(tmp_path)
+    monkeypatch.setattr(canon, "service_writable", lambda repo: True)
+    monkeypatch.setattr(canon, "git_kwargs", lambda repo, fed=False: {"env": canon.git_env(repo)})   # no uid is changed here
+    with open(os.path.join(ROOT, "docs", "troubleshooting.md"), encoding="utf-8") as fh:
+        table = fh.read()
+    monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
+    assert promote.main(["--list", "--repo", r.bare]) == 1
+    opening = ("REFUSED: run this with sudo. The repository is one the network service can write, and you are "
+               "neither root nor that service")
+    assert capsys.readouterr().err.startswith(opening + ": ") and "`%s …`" % opening in table
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    assert promote.main(["--list", "--repo", r.bare]) == 0
+    line = "kontroll-promote: git runs as the service uid (1001) in this repository, not as root"
+    assert capsys.readouterr().err.splitlines()[0] == line and "`%s`" % line in table
+
+
+@pytest.mark.usefixtures("isolated_git")
+def test_on_a_host_with_no_effective_uid_nobody_is_asked_who_they_are(tmp_path, monkeypatch, capsys):
+    """Where `os.geteuid` does not exist (Windows), `--list` lists the proposals: nobody is turned away, nothing
+    is said about as whom git runs, and `service_writable` is never asked.
+
+    Guards the developer's host. Both rules in `main` are behind `hasattr(os, "geteuid")`; without it every
+    promote on Windows ends in an AttributeError — which only a run ON Windows showed, and the gate runs on
+    Linux."""
+    r = R.build(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.delattr(os, "geteuid")
+
+    def never(*_a):
+        raise AssertionError("asked on a host that has no effective uid")
+    monkeypatch.setattr(canon, "service_writable", never)
+    assert promote.main(["--list", "--repo", r.bare]) == 0
+    said = capsys.readouterr()
+    assert "%s@%s" % (R.FF, r.ff) in said.out and "service uid" not in said.err
+
+
+@pytest.mark.usefixtures("isolated_git")
+@pytest.mark.skipif(os.name != "posix", reason="a symbolic link in a work tree; owners and write bits are POSIX's")
+def test_a_clone_is_asked_about_its_git_directory_not_its_work_tree(tmp_path, monkeypatch, capsys):
+    """A caller who is neither root nor the service, in a CLONE whose work tree holds a symbolic link and a
+    directory anybody may write, and whose `.git` holds neither: `--list --repo <the clone>` lists (exit 0).
+
+    Guards a developer's own checkout. The rule is about the repository git runs in — the git directory. Asked
+    of the path as given, it would look through the whole work tree, where a link is an ordinary thing to find
+    (and one is "the service's" by the rule), and every promote in a clone would be answered "run this with
+    sudo"."""
+    r = R.build(tmp_path)
+    clone = str(tmp_path / "clone")
+    sp.run(["git", "clone", "-q", r.bare, clone], check=True, capture_output=True)
+    R.git(clone, "fetch", "-q", "origin", "+refs/heads/proposed/*:refs/heads/proposed/*")
+    gitdir = os.path.join(clone, ".git")
+    for here, _dirs, files in os.walk(gitdir):               # whatever this host's umask gave: owner's write bit only
+        for path in [here] + [os.path.join(here, name) for name in files]:
+            os.chmod(path, os.stat(path).st_mode & 0o7755)
+    top = os.stat(gitdir)
+    monkeypatch.setattr(canon, "SERVICE_UID", top.st_uid + 1)
+    monkeypatch.setattr(canon, "SERVICE_GID", top.st_gid + 1)
+    os.symlink("seed.txt", os.path.join(clone, "a-link"))
+    os.mkdir(os.path.join(clone, "open"))
+    os.chmod(os.path.join(clone, "open"), 0o777)
+    assert canon.service_writable(gitdir) is False and canon.service_writable(clone) is True, "control"
+    monkeypatch.setattr(os, "geteuid", lambda: top.st_uid + 2)
+    assert promote.main(["--list", "--repo", clone]) == 0
+    assert "%s@%s" % (R.FF, r.ff) in capsys.readouterr().out
