@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from kontroll import paths
-from kontroll.service._blockwrite import (disable_in_fleet, insert_into_block, set_list_block,
+from kontroll.service._blockwrite import (disable_in_fleet, insert_into_block, require_reads_back, set_list_block,
                                           set_nested_scalar, upsert_into_block, upsert_top_level_key,
                                           validate_params)
 
@@ -447,3 +447,157 @@ def test_set_list_block_replaces_a_list_written_at_the_keys_column():
     Guards the shared block bound: the column-0 items were left behind under the new list, which is not YAML."""
     out = set_list_block("a: 1\nbackup_remotes:\n- x\n- y\nb: 2\n", "backup_remotes", ["new"])
     assert yaml.safe_load(out) == {"a": 1, "backup_remotes": ["new"], "b": 2}
+
+
+# --- the post-condition: what a writer returns must READ BACK as the change that was planned ---------------------- #
+def _plan(text, block, entry_id, new_lines):
+    """What a planner does: replace the entry when YAML reads one of that id, append when it reads none."""
+    declared = [e.get("method") for e in (yaml.safe_load(text) or {}).get(block) or [] if isinstance(e, dict)]
+    return (upsert_into_block if entry_id in declared else insert_into_block)(
+        *((text, block, entry_id, new_lines) if entry_id in declared else (text, block, new_lines)))
+
+
+@pytest.mark.parametrize("path", _SHIPPED_MODULES, ids=lambda p: os.path.basename(os.path.dirname(p)))
+def test_what_the_writers_write_for_every_shipped_module_reads_back(path):
+    """For each shipped class file, every edit the capability dialogs can make — an entry of `metrics` or `logs`
+    rewritten, an entry added to `metrics`, `logs` and `dashboards`, the `backup` block replaced — passes the
+    read-back, whether the file declares the block or not: a block the file does not hold is appended at the end
+    of the file, which is what a first declare from a dialog is.
+
+    Guards the post-condition against the tool's own files: it is asked on every plan, so a shape of a shipped
+    class file it refused would turn that class's dialogs off."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    doc = yaml.safe_load(text) or {}
+    for block, ident in (("metrics", "method"), ("logs", "method"), ("dashboards", "name")):
+        for entry in (doc.get(block) or []) if ident == "method" else []:
+            line = ["  - {method: %s, params: {zz: 1}}" % entry["method"]]
+            out = upsert_into_block(text, block, entry["method"], line)
+            require_reads_back(text, out, block, line, entry_id=entry["method"])
+        line = ["  - {%s: zz_new}" % ident]
+        require_reads_back(text, insert_into_block(text, block, line), block, line,
+                           entry_id="zz_new" if ident == "method" else None, ident=ident)
+    block_lines = ["backup:", "  capable: true", '  schedule: "0 2 * * *"']
+    out = upsert_into_block(text, "backup", "backup", block_lines, list_block=False)
+    require_reads_back(text, out, "backup", block_lines, mapping=True)
+
+
+def test_what_the_writers_write_for_a_file_an_onboard_wrote_reads_back():
+    """Over a class file as an onboard writes it (yaml.safe_dump: lists at the key's own column, `derived` marks):
+    a `metrics` entry rewritten and one added, a `logs` entry rewritten and one added, a first `dashboards` block,
+    a first `backup` block and that block replaced again — each passes the read-back.
+
+    Guards the commonest file an operator has: one the tool wrote itself."""
+    text = _AS_AN_ONBOARD_WRITES_IT
+    for block, method, line in (("metrics", "blackbox", ["  - {method: blackbox, params: {probe: tcp_connect}}"]),
+                                ("metrics", "snmp", ["  - {method: snmp}"]),
+                                ("logs", "journald", ["  - {method: journald, params: {retention: 7d}}"]),
+                                ("logs", "file_tail", ["  - {method: file_tail}"])):
+        require_reads_back(text, _plan(text, block, method, line), block, line, entry_id=method)
+    line = ["  - {gnet: 1860, name: node}"]
+    require_reads_back(text, insert_into_block(text, "dashboards", line), "dashboards", line, ident="name")
+    first = ["backup:", "  capable: true", '  schedule: "0 2 * * *"']
+    with_backup = upsert_into_block(text, "backup", "backup", first, list_block=False)
+    require_reads_back(text, with_backup, "backup", first, mapping=True)
+    second = ["backup:", "  capable: true", '  schedule: "0 3 * * *"']
+    require_reads_back(with_backup, upsert_into_block(with_backup, "backup", "backup", second, list_block=False),
+                       "backup", second, mapping=True)
+
+
+@pytest.mark.parametrize("text,entry_id", [
+    ("key: demo\nmetrics:\n  - {method: a}\n# a note at the left margin\n  - {method: b, params: {p: 1}}\nrole: r\n", "b"),
+    ("key: demo\nmetrics:\n# a note at the left margin\n  - {method: a}\n  - {method: b, params: {p: 1}}\n", "b"),
+    ("key: demo\nmetrics:\n  - {method: 'b', params: {p: 1}}\nrole: r\n", "b"),
+    ('key: demo\n"metrics":\n  - {method: a}\nrole: r\n', "c"),
+    ("key: demo\nmetrics :\n  - {method: a}\nrole: r\n", "c"),
+    ("\ufeffmetrics:\n  - {method: a}\nrole: r\n", "c"),
+], ids=["a-comment-at-the-margin-between-two-entries", "a-comment-at-the-margin-under-the-key", "a-quoted-method",
+        "a-quoted-key", "a-space-before-the-colon", "a-byte-order-mark-before-the-key"])
+def test_a_shape_the_writers_do_not_model_is_refused_not_written(text, entry_id):
+    """For each shape of a hand-written list the line writers still get wrong — a comment line at the left margin
+    inside the list, a quoted method or key, a space before the colon, a byte-order mark in front of a first-line
+    key — the text a writer returns does NOT read back as the planned change (an entry is there twice, or the key
+    is), and the read-back refuses it as the repository's own data, naming the block and nothing of the file.
+
+    Guards the quiet losses that are left after the two the writers were taught: without the read-back each of
+    these plans answered "applied" for a file that held the entry twice or the block twice — YAML reads the last
+    block only — while the structural no-drop check, which compares the plan, saw nothing."""
+    line = ["  - {method: %s, params: {p: 2}}" % entry_id]
+    out = _plan(text, "metrics", entry_id, line)
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        require_reads_back(text, out, "metrics", line, entry_id=entry_id)
+    message = str(refused.value)
+    assert refused.value.status == 409 and "`metrics`" in message and "nothing was written" in message
+    assert "demo" not in message and "{" not in message
+
+
+def test_the_read_back_holds_the_rest_of_the_file_and_the_block_once():
+    """Asked directly: an unchanged text passes; a text in which another key reads differently, in which the
+    block's key is there twice although YAML's last-one-wins reading IS the plan, whose mapping block is not the
+    rendered one, or that YAML cannot read at all, is refused.
+
+    Guards each clause of the post-condition on its own — "changes nothing else", "the key once", "the block as
+    rendered", "readable" — so that loosening one of them fails a row here and not only in a planner."""
+    before = "key: demo\nrole: r\nbackup:\n  capable: true\n  schedule: old\n"
+    block = ["backup:", "  capable: true", "  schedule: new"]
+    good = "key: demo\nrole: r\nbackup:\n  capable: true\n  schedule: new\n"
+    require_reads_back(before, before, "backup", block, mapping=True)            # nothing changed: nothing to ask
+    require_reads_back(before, good, "backup", block, mapping=True)
+    for bad in (good.replace("role: r", "role: other"),                           # another key reads differently
+                before + "backup:\n  capable: true\n  schedule: new\n",          # the key twice; the last IS the plan
+                good.replace("schedule: new", "schedule: newer"),                 # not the rendered block
+                good + "  - not: [yaml\n"):                                       # not YAML
+        with pytest.raises(paths.RepositoryDataError):
+            require_reads_back(before, bad, "backup", block, mapping=True)
+
+
+def test_the_read_back_compares_what_yaml_reads_by_type_and_a_list_in_its_order():
+    """A file that holds `.nan` — in another key and inside the edited list — passes the read-back for a correct
+    edit; a text in which another key's `1` has become `true` is refused, and so is one whose list holds the
+    planned entries in another ORDER.
+
+    Guards the comparison itself: Python holds `1`, `1.0` and `True` equal, so a plain `==` would pass a writer
+    that changed a number into a keyword; and the order of a list is part of its reading (the generators render
+    the entries in it), so a comparison that sorted it away would pass a writer that moved an entry."""
+    before = "key: demo\nweight: .nan\nport: 1\nmetrics:\n  - {method: a, params: {p: .nan}}\n  - {method: b}\n"
+    line = ["  - {method: b, params: {p: 2}}"]
+    good = upsert_into_block(before, "metrics", "b", line)
+    require_reads_back(before, good, "metrics", line, entry_id="b")
+    moved = good.replace("  - {method: a, params: {p: .nan}}\n  - {method: b, params: {p: 2}}\n",
+                         "  - {method: b, params: {p: 2}}\n  - {method: a, params: {p: .nan}}\n")
+    assert moved != good
+    for bad in (good.replace("port: 1", "port: true"), moved):
+        with pytest.raises(paths.RepositoryDataError):
+            require_reads_back(before, bad, "metrics", line, entry_id="b")
+
+
+def test_a_module_file_with_no_document_reads_back_as_no_keys():
+    """An empty module file, and one that holds only a comment, pass the read-back for a first `metrics` entry and
+    a first `backup` block: what YAML reads from them is nothing, and the planners take that for a class with no
+    keys.
+
+    Guards a false refusal: the read-back asked for a mapping BEFORE the edit, so a plan the writers handle — the
+    block appended to a file with nothing in it — was answered 409 with a sentence about how the block is
+    written."""
+    for before in ("", "# a class with nothing in it yet\n"):
+        line = ["  - {method: a}"]
+        require_reads_back(before, insert_into_block(before, "metrics", line), "metrics", line, entry_id="a")
+        block = ["backup:", "  capable: true"]
+        require_reads_back(before, upsert_into_block(before, "backup", "backup", block, list_block=False),
+                           "backup", block, mapping=True)
+
+
+def test_an_entry_the_list_holds_twice_is_refused_not_half_edited():
+    """A `metrics` list that holds one method twice: rewriting that method is refused, and adding another method
+    to the same file still passes.
+
+    Guards the plan against the writer's choice of entry: the dialog shows the LAST entry of a method (the
+    planner's reading is a mapping by method) and the line writer replaces the FIRST, so the plan said one value
+    changed while the file kept it — and the same change was offered again on the next propose."""
+    before = ("key: demo\nmetrics:\n  - {method: a, params: {p: 1}}\n  - {method: b}\n"
+              "  - {method: a, params: {p: 2}}\n")
+    line = ["  - {method: a, params: {p: 3}}"]
+    with pytest.raises(paths.RepositoryDataError):
+        require_reads_back(before, upsert_into_block(before, "metrics", "a", line), "metrics", line, entry_id="a")
+    other = ["  - {method: c}"]
+    require_reads_back(before, insert_into_block(before, "metrics", other), "metrics", other, entry_id="c")
