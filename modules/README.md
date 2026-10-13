@@ -19,6 +19,10 @@ A **fleet profile** (`instance/fleet.yml`) lists the modules you actually run. T
 3. installs the toolchain, sets up the age key, and reports which secrets domains
    the enabled modules require.
 
+Before any of that it checks that every entry of the list is a device-class key
+(`scripts/gen-requirements.py --fleet-check`) and stops, naming the entry by its place in the list, on one that is
+not — the rule of the `key` row below.
+
 So a different person with different gear edits **one file** (`instance/fleet.yml`)
 and runs **one command** (`ansible-playbook playbooks/bootstrap.yml`). They never touch a hardcoded list.
 
@@ -43,7 +47,9 @@ and runs **one command** (`ansible-playbook playbooks/bootstrap.yml`). They neve
 
 ## Adding support for new hardware (the "add a module" test)
 
-1. `mkdir modules/<key>/` and write `module.yml` (copy an existing one).
+1. `mkdir modules/<key>/` — `<key>` as the `key` row above says: a directory whose name has a capital letter or a
+   dot is not a class to the bootstrap, the promote gate or any generator — and write `module.yml` (copy an
+   existing one).
 2. Add `ansible/roles/<role>/` (copy `roles/.role-template/`).
 3. Reference `<key>` in `instance/fleet.yml`.
 4. `ansible-playbook playbooks/bootstrap.yml` — its collection installs, its role activates.

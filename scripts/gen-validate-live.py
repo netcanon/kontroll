@@ -452,7 +452,7 @@ def collect(fleet, inv, only_key=None, target_host=None, logging_by=None, telem_
     telem_by = telem_by if telem_by is not None else {m["name"]: m for m in catalog.load_telemetry()}
     instance_trust = instance_trust if instance_trust is not None else (
         _load_optional("instance/instance.yml").get("device_trust") or {})
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         if only_key and key != only_key:
             continue
         mp = os.path.join(paths.MODULES_DIR, key, "module.yml")
@@ -474,6 +474,8 @@ def run(only_key=None, target_host=None, only_check=None, fetchers=None, audit_p
     fetchers = fetchers or LiveFetchers()
     audit_path = audit_path or _audit_path()
     fleet = _load(paths.resolve("config/fleet.yml"))
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-validate-live: ignoring: instance/fleet.yml: %s\n" % problem)
     inv = inventory.merged_inventory(paths.resolve("ansible/inventory/hosts.yml"))
     run_id = mint_run_id()
     verdicts = []

@@ -77,7 +77,9 @@
 
     - name: Promote the proposal to main (fast-forward only; refuses a non-FF)
       # Reuses the single tested promote (gitio.promote_ref via scripts/kontroll-promote.py) so the FF gate and
-      # the ref surgery live in ONE place. Non-zero exit (missing proposal / not a fast-forward) fails the job.
+      # the ref surgery live in ONE place. Non-zero exit fails the job: 1 = no such proposal or not a fast-forward;
+      # 2 = the resolve gate (two conflicting pins, a fleet line that is not a class key) — its sentence is in the
+      # job log.
       ansible.builtin.command:
         cmd: python3 {{ repo_root }}/scripts/kontroll-promote.py {{ run_id }} --repo {{ canonical }}
       register: _promote

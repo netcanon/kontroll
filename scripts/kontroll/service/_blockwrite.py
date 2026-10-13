@@ -13,6 +13,7 @@ import re
 
 import yaml
 
+from kontroll import paths
 from kontroll.service._validate import plain_scalar, validate_value
 from kontroll.yamlscalar import LINE_BREAKS
 
@@ -59,6 +60,26 @@ def write_module(plan):
     with open(target, "w", encoding="utf-8", newline="\n") as out:
         out.write(plan["text_after"])
     return True
+
+
+def require_fleet_list():
+    """Refuse — BEFORE a module reconfigure writes anything — when the fleet file holds no list of classes (the
+    file is not a mapping, or `enabled_modules` is there and is not a list). Each generator renders nothing and
+    prunes nothing for such a file and RETURNS non-zero; a caller that then lists the files on disk would stage
+    the module change beside its old generated files and answer "applied". The fault is the repository's, not the
+    request's (RepositoryDataError: 409 `repository_data`, an audit line of its own), and the sentence names the
+    file and the rule, never a value. A fleet file that cannot be opened or parsed is not this guard's: the
+    generator stops on that, loudly, as it always did."""
+    try:
+        with open(paths.resolve("config/fleet.yml"), encoding="utf-8") as fh:
+            fleet = yaml.safe_load(fh) or {}
+    except (OSError, ValueError, LookupError, AttributeError, TypeError, RecursionError, yaml.YAMLError):
+        return
+    if paths.fleet_list_unreadable(fleet):
+        raise paths.RepositoryDataError(
+            "fleet file", "instance/fleet.yml holds no list of classes (the file is not a mapping, or "
+                          "enabled_modules is not a list), so nothing can be regenerated from it — correct the "
+                          "file first; nothing was written")
 
 
 def staged_paths(plan, regen):

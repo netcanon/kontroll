@@ -48,7 +48,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _enabled_modules():
     try:
         with open(paths.resolve("config/fleet.yml"), encoding="utf-8") as fh:
-            return (yaml.safe_load(fh) or {}).get("enabled_modules") or []
+            return paths.enabled_keys(yaml.safe_load(fh))    # class keys only: a line that is not one is no class
     except (OSError, yaml.YAMLError):
         return []
 

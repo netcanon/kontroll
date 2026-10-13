@@ -93,9 +93,30 @@ The audit log has `repository-refuse what=<kind> route=<route>` for it — not `
 the caller got wrong (422). `POST /onboard` has another 409, without a `code`: a drop-in that exists with
 different content; that one is retried with `overwrite`.
 
+## 6. A fleet line that is not a device-class key
+
+`instance/fleet.yml`'s `enabled_modules` is a list of device-class keys. A line that is not one is skipped by
+everything that renders and refused by what installs, and the bootstrap, a deploy and a promote each stop on it.
+Every message names the ENTRY by its place among the list's entries, counted from one — comment lines, blank
+lines and commented-out entries are not counted — and never repeats the line.
+
+| What you read | Where | What it means | What to do |
+|---|---|---|---|
+| the task `Check that every enabled_modules entry is a device-class key (…)` fails with `gen-requirements: instance/fleet.yml: enabled_modules entry N is not a device-class key …` | the bootstrap; a deploy started part-way through its stack play (`--start-at-task`) | the play stops before anything walks the list; no generated file was rewritten | correct entry N in the node's checkout: a key is lowercase letters, digits, `_` and `-`, starting with a letter or digit. An unquoted `no`, `on`, `off`, `yes`, `~`, a number or a date is another type to YAML — the message then says "YAML does not read it as text": quote it, or rename the class. Then run the play again |
+| `local-canonical: REFUSING to commit — gen-requirements: instance/fleet.yml: …` | a deploy (its canonical play, before the stack play), also the dry-run | the deploy's own commit-and-mirror would have put the line on the canonical's `main`, where it refuses every promote; nothing was committed or pushed to the canonical | the same; then deploy again |
+| `REFUSED: promoting proposed/<run_id> — the proposal's tree does not resolve …`, and under it the generator's sentence, `gen-requirements: refusing to resolve the collection set — instance/fleet.yml: enabled_modules entry N …` | the `promote-proposal` job, or `kontroll-promote.py` | the tree the promote would make `main` holds such a line. If the message adds that `main` as it stands is refused as well, the line is on `main` already — and then EVERY proposal is refused, whatever it changes | if the line is in the node's checkout (a hand edit there is how it usually reached `main`): correct it there and deploy — the deploy's commit-and-mirror takes the correction to `main`. Otherwise promote a proposal that removes or corrects it: the Settings view's `disable` control stages the removal of a line that is plain, unquoted text; for any other line (`no`, `~`, a number, a quoted name, one with a slash) make the proposal by hand — in a clone of the canonical correct `instance/fleet.yml`, commit, `git push <canonical> HEAD:refs/heads/proposed/<twelve lowercase hex digits>` as the operator, and promote that id; then bring the node's checkout forward (`git fetch local && git rebase local/main`) before the next deploy. A proposal staged before the correction still carries the old line and is refused with the same sentence: discard it and propose again |
+| `<generator>: ignoring: instance/fleet.yml: enabled_modules entry N …` | a generator's stderr: the `kontroll-api` or `onboard-gui` container's log (the `internal` stream) after a capability change; a generator run by hand | that generator skipped the line and rendered the rest | as above |
+| `<generator>: not rendering: instance/fleet.yml holds no list of classes …`; from the API or the GUI, a 409 `repository_data` that says `instance/fleet.yml holds no list of classes …` | a generator run by hand; a capability change (telemetry, logging, backup) | the file is not a mapping, or `enabled_modules` is not a list: nothing was written and nothing was pruned, and the capability change was refused before it wrote the module file | restore the file's shape: one `enabled_modules:` key over a list; then make the capability change again |
+| `gen-requirements: instance/fleet.yml is not YAML this tool can read` — with `(line L, column C)` when the parser gives a place — or `gen-requirements: instance/fleet.yml cannot be opened (…)` | a deploy, a promote (at the bootstrap its own `Load fleet profile` task fails first, with Ansible's message) | the file does not parse, or is not there to read | correct the file — at that place, when one is given |
+
+A line that IS a class key and has no directory under `modules/` is none of these: the bootstrap stops on it
+(its own lookup) and nothing else says a word (SECURITY.md C22, the limits).
+
 ## See also
 - [logging-architecture.md](logging-architecture.md) — the layered design + the degrade-path source of truth
-- [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, and the refusal that is the repository's own
+- [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, the refusal that is the repository's own, and a
+  fleet line that is not a class key
+- [SETUP.md](SETUP.md) §3 — the fleet file
 - [observability/logging-capability-vector.md](observability/logging-capability-vector.md) — the logging capability
 - [../SECURITY.md](../SECURITY.md) **C12** — logs are a secret surface (label hygiene, mgmt-only, at-rest)
 - `dashboards/grafana/dashboards/logs.json` — the same signals as a Grafana pane

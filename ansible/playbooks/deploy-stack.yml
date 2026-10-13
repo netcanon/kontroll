@@ -490,6 +490,24 @@
       when: use_published_images
       no_log: true
 
+    # One check of the fleet list, before any generator below reads it — and it STOPS the play. A generator that
+    # RENDERS skips a line that is not a device-class key (some of them also run inside the API and the GUI, where
+    # stopping would end a worker mid-request), so a deploy that went on would drop that class's scrape targets, log
+    # drop-ins and portal tiles from files the running stack reads — and on a node that builds its images it would
+    # then stop anyway, at the collection lockfile, with those files already rewritten. Stopping here, before the
+    # first generator runs, is the careful default (docker/.env and .env.homepage are rendered above, from the SOPS
+    # domains and not from the fleet; nothing reads them before `up`); whether a deploy should instead warn and go
+    # on is the operator's to change (SECURITY.md C22). The canonical's commit-and-mirror (local-canonical.yml,
+    # imported above) asks the same check before it commits, so a run from the first task stops there; this one is
+    # for a run started with --start-at-task at a task of this play up to here. A run started below it meets none.
+    - name: Check that every enabled_modules entry is a device-class key (scripts/gen-requirements.py --fleet-check)
+      ansible.builtin.command:
+        cmd: python3 -B scripts/gen-requirements.py --fleet-check   # -B: a read leaves no __pycache__ behind
+        chdir: "{{ playbook_dir }}/../.."
+      become: false
+      changed_when: false
+      check_mode: false            # a read; a --check run must stop on the same fleet
+
     - name: Regenerate the observability scrape targets from the modules + inventory (config-as-data)
       # The metrics analogue of gen-requirements.py: prometheus/targets/<job>/<key>.generated.yml are
       # derived from each enabled module's metrics: block x the inventory, so the deployed scrape set always

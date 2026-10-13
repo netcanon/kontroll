@@ -101,7 +101,9 @@ Prometheus/API — not the TEST-NET stubs), and mints the bootstrap logins.
 
 Then declare your hardware in the overlay **under `instance/`** (not `config/` or `instance.example/`):
 
-- `instance/fleet.yml` — for each "pick ONE" group, keep exactly one module enabled.
+- `instance/fleet.yml` — for each "pick ONE" group, keep exactly one module enabled. Every line of the list is a
+  device-class key; the bootstrap checks that first and stops on one that is not
+  ([troubleshooting.md](troubleshooting.md) §6).
 - `instance/inventory/hosts.yml` — real mgmt IPs, **or leave the `192.0.2.x` placeholders for now** and add real
   devices later via GUI onboarding (§8); the stack still comes up device-less.
 
@@ -261,7 +263,10 @@ token can only park rejectable proposals, never rewrite the canonical (SECURITY.
 2. Open the **`promote-proposal`** template (registered by §6) → **Run** → in the survey, enter the **`run_id`**
    from the GUI's propose/onboard response → **Run**.
 3. It **fast-forward-merges** `proposed/<run_id>` into `main` (FF-only — a proposal can never rewrite history) and
-   deletes the proposal. *CLI fallback:* `sudo python3 scripts/kontroll-promote.py <run_id> --repo /srv/kontroll.git`.
+   deletes the proposal. Before that it resolves the tree the promote would make `main`: one the collection
+   generator refuses — two units pinning one collection differently, a fleet line that is not a class key — is
+   refused (exit 2) with a sentence that says what to correct. *CLI fallback:* `sudo python3
+   scripts/kontroll-promote.py <run_id> --repo /srv/kontroll.git`.
    The promote is reachable only by a Semaphore admin on the mgmt VLAN — **never the API token**.
 
 ## 8. Use it — onboarding + capabilities (the guided flow)
@@ -339,7 +344,8 @@ set this for you (a forced default would override a correct config and could clo
 **Symptom:** `local-canonical.yml` (every deploy runs it) fails with
 `local-canonical: REFUSING to commit — plaintext-guard: REFUSED <path> — <rule>`, or the launch-kit launcher prints
 `plaintext-guard: REFUSED <path> — <rule>` and `kontroll: refusing to capture the tree`. That run staged, committed
-and pushed nothing.
+and pushed nothing. (The same lead followed by `gen-requirements: instance/fleet.yml: …` is the other check in
+front of that commit — a fleet line that is not a device-class key: [troubleshooting.md](troubleshooting.md) §6.)
 
 **Cause:** the deploy commits your whole working tree into the local canonical, and the launcher captures the kit
 tree the same way. Just before either, `scripts/lib/plaintext-guard.sh` reads what would be committed and refuses a

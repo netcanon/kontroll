@@ -622,16 +622,33 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   **After each staged push the service resets its content clone to the
   canonical `main`** (`_reset_content_clone_to_canonical`) so the read-back reflects the source of truth and each
   proposal is independent off `main` — a rejected proposal can't ride along in a later one (F1, dogfood
-  2026-06-20; `tests/unit/test_staging_isolation.py`). **The promote now also runs a pin-conflict gate (FIX-M9):**
-  before the fast-forward, `kontroll-promote.py` extracts the prospective post-merge tree (`proposed/<run_id>`) and
+  2026-06-20; `tests/unit/test_staging_isolation.py`). **The promote now also runs a resolve gate (FIX-M9; it began as the pin-conflict gate):**
+  before the fast-forward, `kontroll-promote.py` extracts the prospective post-merge tree (`refs/heads/proposed/<run_id>` — the ref the fast-forward takes, by
+  its full name: a tag, or a ref directly under `refs/`, that carries the same short name is not what it reads) and
   runs the TRUSTED tree's `gen-requirements.py --conflict-check --root <extract>` over that tree's DATA — never the
   proposal's own copy of the script, which until 2026-10-09 executed unreviewed code as root on the `sudo` CLI or
   with `SOPS_AGE_KEY` in scope on the Semaphore path (2026-10-08 review, finding 3); the subprocess inherits a
   whitelisted minimal environment (`tests/unit/test_kontroll_promote.py`). If two app-store units would pin one collection to
   conflicting `==` versions (which would make the NEXT deploy's `gen-requirements` fail closed, halting the image
-  build far from the cause), it **refuses the promote** (exit 2; `--skip-conflict-check` is the documented override).
+  build far from the cause), it **refuses the promote** (exit 2; `--skip-conflict-check` is the documented
+  override). The same gate refuses a tree whose fleet holds a line that is not a device-class key, with the
+  generator's own
+  sentence — the entry's place in the list, never the entry (C22) — because that generator would stop the next
+  bootstrap or local-image deploy on it; and because it judges the whole tree, such a line already on `main`
+  refuses EVERY proposal until one that removes it is promoted — the refusal then says that `main` itself is
+  refused, and how to correct it there.
   Read-only (extracts to a temp dir, never touches `main`); fails **open** on its own read error (the generate-time
-  fail-closed is the backstop — the gate hardens, it must never block a clean promote). `tests/unit/test_kontroll_promote.py`.
+  fail-closed — and, for a fleet line, the check the bootstrap and every deploy run first — is the backstop: the
+  gate hardens, it must never block a promote whose tree resolves). **Limits of the gate as built, older than the
+  fleet rule and the next change to it:** it reads the proposal as `git archive` exports it, and an export obeys
+  the proposal's own `.gitattributes` — an `export-ignore` line can hide the instance overlay (the gate then reads
+  the shipped example fleet in its place), a unit, or all of `modules/` from the gate (which answers a tree with
+  no `modules/`, and one it cannot extract, with "nothing to check"; hiding the fleet file alone is refused, with
+  a traceback for its reason), and `export-subst` can rewrite a line for the gate alone; and it judges the
+  proposal by its ref NAME while the fast-forward resolves the name again, so a push to the same
+  `proposed/<run_id>` between the two is promoted unjudged — which also means the commit an operator reviewed is
+  not necessarily the commit promoted.
+  `tests/unit/test_kontroll_promote.py`.
 - **Every GUI write surface rides this propose-only staging — including the Homepage editor (#136).** The
   onboard/capability/secret/keygen writes and the new `:8443` **Homepage editor** (`POST /api/homepage` — rearrange
   the portal tiles) all go through `gitio.commit_and_push(run_id=…)` → `proposed/<run_id>`; **none imports
@@ -779,7 +796,7 @@ code is now read from the digest-pinned image too, and its audit log moved off t
 `reset --hard`. **Rung 3 (the launch-kit / canonical shrink) realizes the next step:** the minimized kit that seeds the canonical
 drops the **baked service code** (`api/ gui/`), so an armed-RCE canonical/clone rewrite has no `api`/`gui` source to
 corrupt — the services run that code only from the digest-pinned image. The shrink is **conservative** (it keeps
-`scripts/` whole, because the deploy-stack generators + the C10 promote slice + the **FIX-M9** pin-conflict gate's
+`scripts/` whole, because the deploy-stack generators + the C10 promote slice + the **FIX-M9** resolve gate's
 `gen-requirements.py` genuinely run *from the canonical clone* — dropping them would silently fail-open a never-brick
 gate; closure adversarially verified, design-of-record §1). **M8a** (a MUST gate): the promote slice
 (`kontroll/{__init__,gitio,paths}.py` + `kontroll-promote.py` + `gen-requirements.py`) is baked into the runner image
@@ -1462,13 +1479,29 @@ writer's refusal as `bad_value`. A HOST name is not held to it (`123` and `true`
 is serialized, and a generator that renders a name it merely read back — a group or a host into the Prometheus
 targets, a group or a class key into the backup schedules, a unit's group and collection into the play preview,
 the instance keyring into the trust sidecar — writes it through `yamlscalar.word()`, bare when it is a plain
-word and double-quoted when it is not. No NAME is refused at deploy time — a generator quotes what it cannot
-write bare — and no shipped generated file changes by a byte. (Two generators do fail closed at deploy time, on
-values no request can store: `gen-requirements.py` on a collection entry or a trust statement it could not render
-as itself — below — and `gen-homepage.py` on a tile field that holds a line break or a Homepage substitution
-marker, which Homepage replaces in the raw text before any parser runs. The second one also refused any name
-containing the word `password`, which a request CAN store; it no longer does, and an exhaustive test over the
-request charsets holds that.) The check ANSWERS every
+word and double-quoted when it is not. No NAME a generator **renders** is refused at deploy time — it quotes what it
+cannot write bare — and no shipped
+generated file changes by a byte. A fleet line is first of all a selector: it names a directory, and there is no
+quoted form of a path. Every Python reader that resolves a class through a path takes its class keys from
+`paths.enabled_keys` (the Settings view, which lists the fleet as it is, apart — the known gaps below), and
+`bootstrap.yml`, which loops over the list itself, runs the same rule as a check first and stops on it; the
+services, the checks and the generators that render skip a line that is not a key, and the generators say which
+entry — its place among the list's entries, counted from one; comment and blank lines are not counted
+(`paths.fleet_problems`: the place and the rule, never the entry — what an operator reads in each seat, and what
+to do, is [docs/troubleshooting.md](docs/troubleshooting.md) §6); `gen-requirements.py` — the reader that decides
+what is INSTALLED — refuses the fleet, at the promote gate too. Of a NAME or a fleet line the deploy-time
+refusals are therefore these and no others: `gen-requirements.py` on a fleet line that is not a class key and on
+a collection entry or a trust statement it could not render as itself — below — and `gen-homepage.py` on a tile
+field that holds a line break or a Homepage substitution marker, which Homepage replaces in the raw text before
+any parser runs. No value a request can store meets any of them: the one request writer of the fleet list holds
+its key to the same rule (`onboard.enable_in_fleet`). The generators also fail closed on a module file or a
+registry entry whose SHAPE they cannot render — a method the registry does not hold, a parameter outside its
+allow-list, two entries for one job — and `gen-requirements.py` on two units that pin one collection differently
+and on a fleet-wide `signature_policy` outside the closed set; and on a fleet FILE that holds no list of classes
+— which no renderer renders either, and over which a capability change is refused — or that does not parse:
+refusals of structure, which this control does not list.
+(`gen-homepage.py` also refused any name containing the word `password`, which a request CAN store; it no
+longer does, and an exhaustive test over the request charsets holds that.) The check ANSWERS every
 string: a word PyYAML resolves to a type and then cannot build — a date that does not exist, a hex number with no
 digits — is "not plain", never an exception, because the same check runs inside those generators and inside the
 validator that the discovery inbox applies to names a DHCP client chose. (A YAML 1.2 reader differs from PyYAML
@@ -1536,16 +1569,44 @@ path, listed next, are written through it). No other write a request reaches pas
 fixed path: the fleet file, the instance file, the capture-exception file, the recipients file (`.sops.yaml`), the
 Homepage board's `services.yaml` and `settings.yaml`, the generated backup-schedule and Loki-retention files, and
 the git-ignored matrix cache. Written at a path whose one variable part is a name `paths.component()` has
-checked: a host-vars edit and a secret domain. Written at a path that is checked nowhere: the Prometheus target
-files and the Vector fragments that a telemetry or logging change regenerates inside the worker (and whose
-orphans it deletes) — each is named after a method of the registry and a line of the fleet file as it stands,
-which is the raw `enabled_modules` join of the known gaps below. The audit logs are written where the
+checked: a host-vars edit and a secret domain. Written at a path whose variable parts are a registry's own word and
+a class key: the Prometheus target files and
+the Vector fragments that a telemetry or logging change regenerates inside the worker (and whose orphans it
+deletes) — each is named after a method of the registry (the telemetry method's `job`, the logging method's
+`name`: repository data, held to no charset where the path is built) and a class key of the fleet file
+(`paths.enabled_keys`: a line that is not a key never reaches the join). The audit logs are written where the
 deployment's environment points them. The instance-overlay existence probe applies `confined()`'s rule to its
 own join, for a READ (`paths._overlay_file_present`: a mapped path that climbs out is "absent"; a symlinked
-`instance/` is followed, on purpose). The service readers that ENUMERATE classes — classify, the Fleet index,
-the audit, the discovery sweep — and `fetch-dashboards.py` skip an entry that is not a class key
-(`paths.enabled_keys`, `paths.module_keys`) instead of refusing: such an entry is data read back from a file,
-not a request field.
+`instance/` is followed, on purpose). Every Python reader that RESOLVES a class through a path takes its keys from
+`paths.enabled_keys` /
+`paths.module_keys` — the Settings view apart — so an entry that is not a class key is never joined into a path
+by a service or a generator; `bootstrap.yml` loops over the list itself and is held by the check below. The
+service readers (classify, the Fleet index, the audit, the discovery sweep), the checks and the generators that
+RENDER (targets, drop-ins, tiles, schedules, jobs, exporters, the secret-env manifest) skip such an entry — it is
+data read back from a file, not a request field, and some of those generators run inside the API and the GUI,
+where stopping would end a worker after a module file was written — and each generator says on stderr which
+entry it skipped (`fetch-dashboards.py` and the discovery sweep skip without a line). A file that holds no list
+at all — it is not a mapping, or `enabled_modules` is not a list — is not an empty fleet to a renderer: it
+renders nothing and prunes nothing, says so on stderr and returns non-zero. A deploy does not get that far (the
+check below stops it first); a capability change made through the API or the GUI is refused before it writes
+anything (`_blockwrite.require_fleet_list`: 409 `repository_data`, with its audit line), because the regeneration
+that would follow it would render nothing. The checks (`gen-class-capabilities.py`, `gen-validate-live.py`) and
+the service readers still read such a file as a fleet with no class, the checks with an `ignoring:` line. The one that decides what is installed does not skip:
+`gen-requirements.py` refuses a fleet whose `enabled_modules` is there and is not a list of class keys (an absent
+or empty list is a fleet with no class) — at bootstrap, at a deploy that builds its images locally and brings up
+the runner, the API or the GUI, and at the promote gate, where the refusal keeps the line out of `main` for every
+promote that is not run with `--skip-conflict-check` — within that gate's own limits (C10: it reads the proposal as
+an export). The gate judges the whole prospective tree: with such a
+line already on `main` (a hand edit) it refuses every promote except the one that removes the line. The plays run
+that generator's `--fleet-check` before anything walks the list — one rule, in Python, not a copy of the charset
+in Jinja — and each STOPS on it: `bootstrap.yml` before its own lookup; a deploy in `local-canonical.yml`, before
+the blanket commit and the mirror that take the operator's worktree into the canonical's `main` with no promote
+and so no promote gate — which is where an ordinary deploy stops — and again in `deploy-stack.yml`, before the
+first generator rewrites a file the running stack reads, for a run that starts later in the play. That a deploy
+stops is the careful default, not a decision the operator has taken: one that only warned would drop the class's
+targets, drop-ins and tiles, would put a hand-edited line on `main` — on every node whose overlay git tracks,
+which `kontroll-init --fresh` sees to — where it refuses every promote, and on a node that builds its images
+would stop anyway, at the collection lockfile, after those files were rewritten.
 A refusal is a `RequestBoundaryError` whose message names the field and the rule and **never the value**. It is
 mapped **once per app** — `api/main.py` and `gui/app.py` both answer **422** with a `code` derived from the
 field, before any write, so a route with no `try`, or a new one, cannot turn it into a 500 (the two onboard
@@ -1586,13 +1647,28 @@ knows the newline and the carriage return and not the other line breaks, and `ge
 and a class key into a string literal by hand — and nothing compiles the fragments that generator writes before
 Vector loads them: the gate checks them for freshness, and its `vector validate` reads the hand-written
 configuration only; a few other anchored patterns (the capture revision, the discovery tokens, several generators)
-are still applied with `match()`; the deploy-time generators — some of which also run inside the API and GUI workers
-after a capability change — and `bootstrap.yml` still join a raw `enabled_modules` entry into a path, and the
-Settings view lists the fleet as it is — it shows some malformed lines and cannot remove one that is not a string; a
+are still applied with `match()`; the Settings view lists the fleet as it is — it shows some malformed lines and
+cannot remove one that is not a string; a
 tree that ALREADY gives one board two names is fetched under the first only (a request can no longer create that);
 and a UNIT may still target `all`, `ungrouped` or `localhost` (the class seams above refuse the names; the unit's
 validator does not look), or no group at all, which its play renders as `all`.
-**Limits written down here, not closed by this control's follow-up:** a lookup that finds nothing still quotes the
+**Limits written down here, not closed by this control's follow-up:** a fleet line that IS a class key and has no
+class directory is skipped by every generator without a word (`bootstrap.yml`'s own lookup stops on it; a deploy and
+the promote gate do not: on an install whose code root is
+not its write root a class file has two homes — a reader looks in the write root and then in the code root,
+`paths.module_file` — and a generator looks under one root only, so "no directory here" is not a fault it can
+tell). An EMPTY fleet file — no bytes, comments only, `~`, `[]` — is a fleet with no class to every reader: it
+passes the check and the promote gate, and every renderer then prunes what it generated, without a word ("a file
+with no list" above stops one shape short of a truncated file; whether an absent `enabled_modules` key should
+count as no list is a rule of its own, not built). The plays' check is the fleet LIST's rule and no more: a
+fleet-wide `signature_policy` outside the closed set, or two units that pin one collection differently, pass it,
+are committed and mirrored by a deploy, and are then refused by every promote.
+The deploy's commit-and-mirror is not the only push into the canonical's `main` that passes no promote gate, and
+it is the only one that asks the fleet check: `scripts/update.sh` and `scripts/update-from-bundle.sh` push the
+checkout's HEAD after a code update, and the operator CLI's onboard (`scripts/galaxy.py onboard --apply
+--commit`) commits the fleet file as it stands and pushes it; on the launch kit the launcher commits the kit
+tree — a hand-edited line included — into the kit's own repository before the play refuses to mirror it. A line
+that reaches `main` one of those ways is met by the next deploy's check and by every promote. A lookup that finds nothing still quotes the
 unvalidated value it was asked for back to its sender (it belongs with the work on error bodies, which rewrites
 those answers). The Tier-cap compares group NAMES: a parent group an instance defines over `edge_firewall` or
 `core_switch` is neither name, and the play of a unit attached to it addresses them (C15-a, where the limit is
@@ -1653,8 +1729,18 @@ the digest; a unit's collection and name against the hostile table, at the valid
 reads the validator's own pattern; a derived key too long for one path component answered before the class is
 looked up; the page's example unit passing the validator; the rendered lockfile and sidecar reading back as what
 was resolved; a trust statement that cannot be rendered as itself, also at the promote gate; the keyring),
-`tests/unit/test_fleet.py` and
-`tests/unit/test_discovery.py` (the readers of a fleet file with a line that is not a key),
+`tests/unit/test_fleet.py` and `tests/unit/test_discovery.py` (the service readers of a fleet file with a line
+that is not a key), `tests/unit/test_fleet_line.py` (the same line at every deploy-time reader: the classifier's
+places and its silence about the entry; no generator asking the filesystem about it, each saying which entry it
+skipped, the in-process regenerations returning; a file with no list rendered and pruned by no renderer, and a
+capability change over it refused before it writes; the collection generator refusing in each of its seats — a
+line, a file with no list, a file the parser gives up on, a file that cannot be opened — and passing a key with
+no directory; the plays' check writing nothing, and refusing to ride with another mode; the promote gate refusing
+the line and every proposal behind it, saying when the fault is on `main`, and the removal promoting on a bare
+canonical; the check task of the bootstrap, of the deploy and of the canonical's commit-and-mirror, by position,
+each stopping its play, each running under `--check` and leaving no bytecode behind) and
+`tests/unit/test_deploy_stack_check_mode.py` (no generator that writes runs under `--check`; `--fleet-check` is
+a read-only mode there only with the script that implements it),
 `tests/unit/test_onboard_ssh_key.py` (the lookup expression, the inline literal at the planner's call site, the
 stem), the API pins in `tests/integration/test_api_onboard.py` (git never touched; the code in the body),
 `test_api.py` (the open routes, with no token and no audit line; a fleet line that is not a key) and

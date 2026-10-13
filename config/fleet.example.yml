@@ -5,6 +5,7 @@
 # To support hardware not listed here: add a modules/<key>/ directory with a
 # module.yml (see modules/README.md) and reference <key> here. No other file
 # changes — that is the actuateable-modularity contract.
+# (<key>: lowercase letters, digits, `_`, `-`; quote one that YAML would read as another type.)
 
 enabled_modules:
   # --- compute (stable across any edge) ---

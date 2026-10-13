@@ -86,7 +86,7 @@ def fleet_rows(fleet, inv):
     inventory JOIN, keyed on `module.inventory_group` (the one dispatch seam). An optional `homepage:` block in
     the module supplies a non-default scheme/port/icon (fanned like `metrics:`); absent -> https/no-port/no-icon."""
     rows = []
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
@@ -199,6 +199,12 @@ def main(argv):
         fleet = _load(paths.resolve("config/fleet.yml"))
         inv = inventory.merged_inventory(paths.resolve("ansible/inventory/hosts.yml"))
         target = os.path.join(paths.ROOT, "instance", "dashboards", "homepage", "services.yaml")
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-homepage: ignoring: instance/fleet.yml: %s\n" % problem)
+    if paths.fleet_list_unreadable(fleet):                   # not an EMPTY fleet: render nothing, prune nothing
+        sys.stderr.write("gen-homepage: not rendering: instance/fleet.yml holds no list of classes — nothing is written "
+                         "and nothing is pruned until the file is corrected\n")
+        return 1
     current = _read_text(target)
     want, rows = services_after(current, fleet, inv)
     rel = os.path.relpath(target, ROOT)
