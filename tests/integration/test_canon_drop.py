@@ -235,14 +235,11 @@ def test_the_listing_the_promote_the_discard_and_the_tree_read_all_work_as_the_s
     assert canon.read_ref(r.bare, canon.PROPOSED + R.STALE) is None
 
 
-_TERMINAL_PROBE = ("import os, sys\n"
-                   "said = ['stdin-is-a-terminal' if os.isatty(0) else 'stdin-is-not']\n"
-                   "try:\n"
-                   "    os.close(os.open('/dev/tty', os.O_RDWR))\n"
-                   "    said.append('has-a-controlling-terminal')\n"
-                   "except OSError:\n"
-                   "    said.append('has-none')\n"
-                   "sys.stdout.write(' '.join(said))\n")
+# Asked of `sh`, not of the interpreter this suite runs under: the child is the SERVICE uid, and that interpreter
+# may live where only its owner goes (a runner's tool cache under its own home) — the child would never start.
+_TERMINAL_PROBE = ('if [ -t 0 ]; then a=stdin-is-a-terminal; else a=stdin-is-not; fi; '
+                   'if ( : < /dev/tty ) 2>/dev/null; then b=has-a-controlling-terminal; else b=has-none; fi; '
+                   'printf "%s %s" "$a" "$b"')
 
 
 def _on_a_terminal(world, keywords):
@@ -254,10 +251,13 @@ def _on_a_terminal(world, keywords):
     pid, master = pty.fork()
     if pid == 0:
         try:
-            p = subprocess.run([sys.executable, "-c", _TERMINAL_PROBE], stdout=subprocess.PIPE,
-                               stderr=subprocess.DEVNULL, **keywords())
+            try:
+                said = subprocess.run(["sh", "-c", _TERMINAL_PROBE], stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, **keywords()).stdout
+            except BaseException as exc:                  # a child that could not start is an answer too
+                said = ("the child did not start: %s" % type(exc).__name__).encode()
             with open(answer, "wb") as fh:
-                fh.write(p.stdout)
+                fh.write(said)
         finally:
             os._exit(0)
     try:
@@ -628,11 +628,38 @@ def test_the_identity_git_runs_under_is_the_services_uid_gid_and_no_other_group(
         assert lines and set(lines) == {"0:0:0" if own else "1001:1001:1001"}, lines
 
 
+def _interpreter_env(home):
+    """What a child needs in order to BE this interpreter: where programs are, a home, and the paths a relocated
+    Python finds itself by (a runner's tool cache). Paths, nothing else of the caller's environment."""
+    env = {"PATH": os.environ["PATH"], "HOME": home}
+    for name in ("LD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME", "pythonLocation"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    return env
+
+
+def _a_third_account(home):
+    """A uid that is neither root nor the service and CAN start the interpreter this suite runs under: the
+    operator's (1000) where that works, else the account the interpreter belongs to (a runner's tool cache lives
+    under the runner's own home, which nobody else may enter)."""
+    for uid in (OPERATOR, os.lstat(sys.executable).st_uid, os.stat(ROOT).st_uid):
+        if uid in (0, canon.SERVICE_UID):
+            continue
+        try:
+            started = subprocess.run([sys.executable, "-c", "pass"], capture_output=True, env=_interpreter_env(home),
+                                     cwd=home, user=uid, group=uid, extra_groups=[])
+        except OSError:
+            continue
+        if started.returncode == 0:
+            return uid
+    pytest.fail("no account that is neither root nor the service can start %s — this row needs one" % sys.executable)
+
+
 def test_a_member_of_the_canonicals_group_under_its_own_uid_is_turned_away_and_starts_no_git(world):
-    """The promote's `--list`, started as a REAL third account — uid 1000, with the canonical's group (1001) as a
-    supplementary group, from a copy of the tool that account can read — on the play's layout: exit 1, the
-    sentence that says `sudo`, nothing listed. The control is the same account on a repository of which
-    nothing is the service's: exit 0, the proposals listed.
+    """The promote's `--list`, started as a REAL third account — neither root nor the service, with the
+    canonical's group (1001) as a supplementary group, from a copy of the tool that account can read — on the
+    play's layout: exit 1, the sentence that says `sudo`, nothing listed. The control is the same account on a
+    repository of which nothing is the service's: exit 0, the proposals listed.
 
     Guards what a stubbed uid cannot show: the row that answers `os.geteuid` as 1000 inside a process that is
     still root holds the comparison, not the account — a rule that let a member of the group through (asked of
@@ -645,11 +672,12 @@ def test_a_member_of_the_canonicals_group_under_its_own_uid_is_turned_away_and_s
     oid = _stage_as_the_service(laid_out)
     own = _build(world, name="own")
 
+    third = _a_third_account(world)
+
     def a_member(repo):
         return subprocess.run([sys.executable, "-B", os.path.join(tool, "kontroll-promote.py"), "--list", "--repo",
-                               repo], capture_output=True, text=True, cwd=world,
-                              env={"PATH": os.environ["PATH"], "HOME": world},
-                              user=OPERATOR, group=OPERATOR, extra_groups=[canon.SERVICE_GID])
+                               repo], capture_output=True, text=True, cwd=world, env=_interpreter_env(world),
+                              user=third, group=third, extra_groups=[canon.SERVICE_GID])
     away = a_member(laid_out.bare)
     assert away.returncode == 1 and "sudo" in away.stderr and oid not in away.stdout, (away.stdout, away.stderr)
     home = a_member(own.bare)
