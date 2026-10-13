@@ -228,3 +228,25 @@ def test_the_installer_image_lets_git_read_the_operators_worktree():
     run, and — because a gate that cannot run refuses — every containerised deploy stops at the commit."""
     dockerfile = open(os.path.join(ROOT, "docker", "installer", "Dockerfile"), encoding="utf-8").read()
     assert "git config --system --add safe.directory '*'" in dockerfile
+
+
+def test_the_update_hook_is_installed_by_every_run_from_the_committed_file():
+    """Exactly one task copies a file to `<canonical>/hooks/update`; its source is the committed
+    `files/canonical-update-hook.sh`, it runs with become, and it carries no condition — no `when`, no
+    `check_mode`, no tag of its own — so every run of this play (deploy-stack.yml imports it: every deploy, armed
+    or not, in the installer container and host-direct) replaces the hook. Guards a play that installs another
+    file, or installs the hook on some nodes only: the hook's own tests execute the committed file and would stay
+    green, and the CHANGELOG's "the hook file is replaced at the next deploy" would be false. Read from the parsed
+    task, not from the play's text: a comment is not a task."""
+    tasks = _tasks()
+    install = [t for t in tasks if (m := _mod(t, "ansible.builtin.copy", "copy"))
+               and str(m.get("dest", "")) == "{{ bare }}/hooks/update"]
+    assert len(install) == 1, "exactly one task installs the update hook"
+    task = install[0]
+    m = _mod(task, "ansible.builtin.copy", "copy")
+    assert m.get("src") == "files/canonical-update-hook.sh" and "content" not in m
+    assert os.path.isfile(os.path.join(os.path.dirname(PLAYBOOK), m["src"]))
+    assert task.get("become") is True, "hooks/ is root's: the copy needs become"
+    for key in ("when", "check_mode", "tags", "delegate_to", "ignore_errors", "failed_when"):
+        assert key not in task, "the hook's install carries %r — it must run on every run of the play" % key
+

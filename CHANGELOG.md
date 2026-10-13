@@ -11,6 +11,33 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(canonical): the canonical's `update` hook is an allow-list — the network service's uid may create a proposal by push, and nothing else (2026-10-13)
+
+The hook on the canonical refused one thing: a push to `refs/heads/main` from the network service's uid (1001).
+Everything else was allowed — so that uid could push a tag called `main` (which a short name finds before the
+branch), a `refs/replace/*`, or the same `proposed/<run id>` a second time, re-pointing a proposal after a human
+had read it. A deny-list of one name is a list of everything else that is allowed.
+
+- **As uid 1001**, a push may **create** `refs/heads/proposed/<run id>` — a minted run id, either shape — and
+  nothing else: not `main`, not a tag, not `refs/replace/*`, not `refs/proposed/…`, and not a move or a delete of
+  a proposal that exists ("a proposal is created once; stage a new run id").
+- **As any other uid** (the deploy's mirror, the installer): `refs/heads/main` and a proposal, and nothing else —
+  a release tag or another branch pushed to the canonical is refused.
+- A delete is refused from everyone; so is every push when the pusher's uid cannot be read.
+- The hook says on stderr which ref it refused and by which rule.
+
+What it does not stop is unchanged and is said in the hook's header: a write that is not a push runs no hook.
+
+**On a box that runs the previous build:** the hook file is replaced at the next deploy. From then on a tag, or
+any branch other than `main`, pushed to the canonical is refused; a proposal staged before is unaffected and
+promotes as it is. A ref that is already in the canonical is not removed: a tag or a branch pushed there by an
+earlier build stays until someone removes it on the box.
+
+**New here:** in `tests/unit/test_staging_isolation.py` — the committed hook run over a table of pushes (both
+uids, every ref kind, a uid that cannot be read), the run-id samples fed to the hook and to
+`canon.valid_run_id` alike, and real pushes into a repository that carries the hook (a second push to a proposal
+is refused and the proposal keeps its first commit; the promote is not a push and is not in its way).
+
 ### fix(promote): what is judged is what is promoted — the promote reads the proposal once, lands that commit in one ref transaction, and an approval names the commit (`<run id>@<commit id>`) (2026-10-13)
 
 A promote was a sequence of steps — a preview, the resolve gate, a fast-forward check, the move of `main`, the

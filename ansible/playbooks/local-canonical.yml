@@ -109,17 +109,18 @@
         - {key: core.sharedRepository, value: "group"}
       changed_when: false
 
-    - name: Install the C10 update-hook — the network service (uid 1001) may not receive-pack main (defence-in-depth)
+    - name: Install the C10 update-hook — an allow-list of what a push may do to the canonical (defence-in-depth)
       become: true
-      # Belt-and-braces with gitio.commit_and_push's `and not staging` guard (the code boundary): even a compromised
-      # uid-1001 container that shells a raw `git push local HEAD:main` is refused HERE, by the canonical itself.
-      # Scoped to uid 1001 so the legit Mirror push below (uid 0 in the installer container, or the operator uid on a
-      # host-direct run — NEVER 1001) and a human promote (promote_ref = update-ref, NOT receive-pack — C2) are
-      # untouched. The hook body is the committed files/canonical-update-hook.sh (one source of truth the tests read
-      # too — no twin drift). Idempotent (fixed file). Inert unless something pushes main AS uid 1001, which a
-      # read-only deploy never does. Runs in BOTH container + host modes (a canonical-config gesture, not a host
-      # gesture — no KONTROLL_IN_CONTAINER skip). Closes the dogfood VM-144 breach's push half.
-      # SECURITY.md C10 / docs/privileged-mutation-enablement.md.
+      # Belt-and-braces with gitio.commit_and_push's `and not staging` guard (the code boundary): what a PUSH may do
+      # to the canonical is decided HERE, by the canonical itself, and it is an allow-list. As uid 1001 (the network
+      # service): create refs/heads/proposed/<run id>, and nothing else — not main, not a tag, not refs/replace/*,
+      # not a second push to a proposal that exists. As any other uid (the Mirror push below: uid 0 in the installer
+      # container, or the operator uid on a host-direct run — NEVER 1001): refs/heads/main and a proposal, and
+      # nothing else. A delete is refused from everyone. A human promote is a ref update, not a push (C2): the hook
+      # is not what bounds it. The hook body is the committed files/canonical-update-hook.sh (one source of truth
+      # the tests read too — no twin drift). Idempotent (fixed file). Runs in BOTH container + host modes (a
+      # canonical-config gesture, not a host gesture — no KONTROLL_IN_CONTAINER skip). Closes the dogfood VM-144
+      # breach's push half. SECURITY.md C10 / docs/privileged-mutation-enablement.md.
       ansible.builtin.copy:
         src: files/canonical-update-hook.sh
         dest: "{{ bare }}/hooks/update"
