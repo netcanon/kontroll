@@ -133,16 +133,16 @@ def test_a_unit_staged_on_a_scaffolded_instance_reaches_its_proposal(tmp_path, m
     unit_rel, vars_rel = actuation._unit_rel("demo"), actuation._vars_rel("demo")
     assert unit_rel == "instance/actuation/demo/unit.yml"
     out = actuation.apply_create_unit({"key": "demo", "unit_rel": unit_rel, "unit_content": "key: demo\n"})
-    done = gitio.commit_and_push(out["paths"], ["create the unit"], run_id="x10000000001")
+    done = gitio.commit_and_push(out["paths"], ["create the unit"], run_id="010000000001")
     assert done["committed"] is True and done["staged"] is True and "add_rc" not in done
-    tree = _git(canonical, "ls-tree", "-r", "--name-only", "proposed/x10000000001").stdout.split()
+    tree = _git(canonical, "ls-tree", "-r", "--name-only", "proposed/010000000001").stdout.split()
     assert unit_rel in tree
     assert _git(clone, "status", "--porcelain", "--ignored").stdout == "" and not (clone / unit_rel).exists()
 
     out = actuation.apply_actuation_plan({"key": "demo", "vars_rel": vars_rel, "vars_content": "x: 1\n"})
-    done = gitio.commit_and_push(out["paths"], ["configure the unit"], run_id="x10000000002")
+    done = gitio.commit_and_push(out["paths"], ["configure the unit"], run_id="010000000002")
     assert done["committed"] is True
-    assert vars_rel in _git(canonical, "ls-tree", "-r", "--name-only", "proposed/x10000000002").stdout.split()
+    assert vars_rel in _git(canonical, "ls-tree", "-r", "--name-only", "proposed/010000000002").stdout.split()
 
 
 def _before_this_change():
@@ -165,13 +165,13 @@ def test_a_path_git_refuses_fails_the_whole_stage_and_leaves_nothing_behind(tmp_
     assert _ignored(clone, unit_rel), "the fixture is not the instance it claims to be"
 
     actuation.apply_create_unit({"key": "demo", "unit_rel": unit_rel, "unit_content": "key: demo\n"})
-    alone = gitio.commit_and_push([unit_rel], ["create the unit"], run_id="x10000000003")
+    alone = gitio.commit_and_push([unit_rel], ["create the unit"], run_id="010000000003")
     assert alone["committed"] is False and alone["staged"] is False and alone["add_rc"] != 0
     assert not (clone / unit_rel).exists(), "a refused write was left in the clone, where the registry reads it"
 
     (clone / "instance" / "fleet.yml").write_bytes(b"enabled_modules: [demo]\n")
     actuation.apply_actuation_plan({"key": "demo", "vars_rel": vars_rel, "vars_content": "x: 1\n"})
-    both = gitio.commit_and_push(["instance/fleet.yml", vars_rel], ["enable and configure"], run_id="x10000000004")
+    both = gitio.commit_and_push(["instance/fleet.yml", vars_rel], ["enable and configure"], run_id="010000000004")
     assert both["committed"] is False and both["pushed_canonical"] is False and both["add_rc"] != 0
     refs = _git(canonical, "for-each-ref", "--format=%(refname)").stdout.split()
     assert refs == ["refs/heads/main"], "a part of the change was published: %s" % refs
@@ -219,13 +219,13 @@ def test_a_refused_add_commits_nothing_and_only_the_staging_clone_is_rolled_back
     calls = _seam_with(monkeypatch, tmp_path, failing={"add"})
 
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
-    out = gitio.commit_and_push([UNIT, "instance/secrets", "../outside.yml"], ["m"], run_id="x10000000005")
+    out = gitio.commit_and_push([UNIT, "instance/secrets", "../outside.yml"], ["m"], run_id="010000000005")
     assert out == {"committed": False, "pushed_canonical": False, "pushed_origin": False, "commit_rc": None,
                    "add_rc": 1, "target_ref": None, "staged": False}
     assert [_verb(c) for c in calls] == ["add", "fetch", "reset", "clean"], calls
     assert calls[-1] == ["git", "--literal-pathspecs", "clean", "-f", "-x", "-q", "--", UNIT]
     said = capsys.readouterr().out
-    assert "git add refused a path" in said and "(run_id x10000000005)" in said and "could not remove" not in said
+    assert "git add refused a path" in said and "(run_id 010000000005)" in said and "could not remove" not in said
 
     calls.clear()
     monkeypatch.delenv("KONTROLL_STAGE_PUSHES", raising=False)
@@ -241,9 +241,9 @@ def test_a_refused_file_that_cannot_be_removed_is_said_so(tmp_path, monkeypatch,
     that could not be removed would stay listed as registered with no line of the service's to say why."""
     _seam_with(monkeypatch, tmp_path, failing={"add", "clean"})
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
-    gitio.commit_and_push([UNIT], ["m"], run_id="x10000000006")
+    gitio.commit_and_push([UNIT], ["m"], run_id="010000000006")
     said = capsys.readouterr().out
-    assert "could not remove a file git refused" in said and said.count("(run_id x10000000006)") == 2
+    assert "could not remove a file git refused" in said and said.count("(run_id 010000000006)") == 2
 
 
 def test_a_failed_commit_leaves_no_part_of_the_request_staged(tmp_path, monkeypatch, capsys):
@@ -257,7 +257,7 @@ def test_a_failed_commit_leaves_no_part_of_the_request_staged(tmp_path, monkeypa
     calls = _seam_with(monkeypatch, tmp_path, failing={"commit"})
 
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
-    out = gitio.commit_and_push([UNIT], ["m"], run_id="x10000000007")
+    out = gitio.commit_and_push([UNIT], ["m"], run_id="010000000007")
     assert out["committed"] is False and out["commit_rc"] == 1 and "add_rc" not in out
     assert [_verb(c) for c in calls] == ["add", "commit", "fetch", "reset"], calls
     assert calls[-1] == ["git", "reset", "--hard", "local/main"]

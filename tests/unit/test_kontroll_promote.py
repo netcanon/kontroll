@@ -90,13 +90,13 @@ def test_would_brick_generate_detects_a_real_conflict(tmp_path):
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
     for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "one"],
-                ["git", "branch", "proposed/clean"]):
+                ["git", "branch", "proposed/00000000c1ea"]):
         sp.run(cmd, cwd=repo, env=env, check=True)
-    assert promote._would_brick_generate("clean", str(repo)) is None        # one unit → no conflict → proceed
+    assert promote._would_brick_generate("00000000c1ea", str(repo)) is None        # one unit → no conflict → proceed
     _unit(repo, "dock_b", "==2.0.0")                                        # a second, conflicting `==` pin
-    for cmd in (["git", "add", "-A"], ["git", "commit", "-qm", "two"], ["git", "branch", "proposed/conflict"]):
+    for cmd in (["git", "add", "-A"], ["git", "commit", "-qm", "two"], ["git", "branch", "proposed/000000c0f11c"]):
         sp.run(cmd, cwd=repo, env=env, check=True)
-    msg = promote._would_brick_generate("conflict", str(repo))
+    msg = promote._would_brick_generate("000000c0f11c", str(repo))
     assert msg and "community.docker" in msg and "conflict" in msg.lower()  # the gate would REFUSE this promote
 
 
@@ -119,7 +119,7 @@ def _fake_proposal(repo, conflict, canary):
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
     for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "proposal"],
-                ["git", "branch", "proposed/p1"]):
+                ["git", "branch", "proposed/0000000000b1"]):
         sp.run(cmd, cwd=repo, env=env, check=True)
 
 
@@ -131,7 +131,7 @@ def test_the_gate_runs_the_trusted_generator_never_the_proposals_own(tmp_path):
     canary = tmp_path / "canary.txt"
     repo = tmp_path / "repo"
     _fake_proposal(repo, conflict=True, canary=canary)
-    msg = promote._would_brick_generate("p1", str(repo))
+    msg = promote._would_brick_generate("0000000000b1", str(repo))
     assert msg and "acme.appliance" in msg and "conflict" in msg.lower(), "the trusted generator must see the data conflict"
     assert not canary.exists(), "the proposal's own gen-requirements.py must NEVER execute"
 
@@ -155,7 +155,7 @@ def test_the_gate_passes_only_the_whitelisted_environment_and_the_trusted_script
         return real_run(cmd, *a, **kw)
 
     monkeypatch.setattr(promote.subprocess, "run", spy)
-    assert promote._would_brick_generate("p1", str(repo)) is None
+    assert promote._would_brick_generate("0000000000b1", str(repo)) is None
     assert not canary.exists()
     assert seen["cmd"][1:3] == ["-B", os.path.join(promote.ROOT, "scripts", "gen-requirements.py")], (
         "the trusted checkout's generator, never the extract's — and with -B, so that a promote run with sudo from "
@@ -170,7 +170,7 @@ def test_the_gate_passes_only_the_whitelisted_environment_and_the_trusted_script
         "otherwise cannot import yaml in the child (the first private sync found exactly that)"
 
 
-@pytest.mark.parametrize("other", ["refs/tags/proposed/p1", "refs/proposed/p1"], ids=["a-tag", "a-ref-under-refs"])
+@pytest.mark.parametrize("other", ["refs/tags/proposed/0000000000b1", "refs/proposed/0000000000b1"], ids=["a-tag", "a-ref-under-refs"])
 def test_the_gate_judges_the_ref_the_fast_forward_takes(tmp_path, other):
     """The gate extracts `refs/heads/proposed/<id>` — the ref `promote_ref` fast-forwards — also when another ref
     answers to the short name `proposed/<id>` first: a tag, or a ref directly under `refs/`, that points at a tree
@@ -181,7 +181,7 @@ def test_the_gate_judges_the_ref_the_fast_forward_takes(tmp_path, other):
     network service nothing but `main` — so one extra ref beside a proposal made the gate pass a clean tree while
     `main` took the other one, with no race and no `.gitattributes`."""
     repo = tmp_path / "repo"
-    _fake_proposal(repo, conflict=True, canary=tmp_path / "canary.txt")     # refs/heads/proposed/p1: a real conflict
+    _fake_proposal(repo, conflict=True, canary=tmp_path / "canary.txt")     # refs/heads/proposed/0000000000b1: a real conflict
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
     (repo / "modules" / "beta" / "module.yml").write_text(
@@ -189,5 +189,5 @@ def test_the_gate_judges_the_ref_the_fast_forward_takes(tmp_path, other):
     for cmd in (["git", "commit", "-qam", "the same tree without the conflict"], ["git", "update-ref", other, "HEAD"],
                 ["git", "reset", "-q", "--hard", "HEAD~1"]):
         sp.run(cmd, cwd=repo, env=env, check=True)
-    msg = promote._would_brick_generate("p1", str(repo))
+    msg = promote._would_brick_generate("0000000000b1", str(repo))
     assert msg and "acme.appliance" in msg and "conflict" in msg.lower(), "the gate judged %s, not the branch" % other

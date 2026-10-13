@@ -29,7 +29,7 @@ def test_direct_push_to_main_when_unstaged(rec, monkeypatch):
     """With KONTROLL_STAGE_PUSHES unset, the canonical push targets `main` (the operator-CLI / non-staging
     deploy path, unchanged even if a run_id is passed). Guards a regression that stages when it shouldn't."""
     monkeypatch.delenv("KONTROLL_STAGE_PUSHES", raising=False)
-    git = gitio.commit_and_push(["x"], ["msg"], run_id="abc123")
+    git = gitio.commit_and_push(["x"], ["msg"], run_id="000000abc123")
     assert git["target_ref"] == "main" and git["staged"] is False
     assert _push_refspec(rec) == "HEAD:refs/heads/main"
 
@@ -39,9 +39,9 @@ def test_stages_a_proposed_ref_when_enabled(rec, monkeypatch):
     network service can only PROPOSE (C10). Guards the core safety property: a staging service never writes
     main, so a leaked token only stages a proposal."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
-    git = gitio.commit_and_push(["x"], ["msg"], run_id="run-42")
-    assert git["staged"] is True and git["target_ref"] == "proposed/run-42"
-    assert _push_refspec(rec) == "HEAD:refs/heads/proposed/run-42"
+    git = gitio.commit_and_push(["x"], ["msg"], run_id="000000000042")
+    assert git["staged"] is True and git["target_ref"] == "proposed/000000000042"
+    assert _push_refspec(rec) == "HEAD:refs/heads/proposed/000000000042"
     assert all("refs/heads/main" not in c[-1] for c in rec if c[:3] == ["git", "push", "local"])
 
 
@@ -62,12 +62,12 @@ def test_promote_fast_forwards_only(monkeypatch):
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
     monkeypatch.setattr(gitio, "_out", lambda cmd, cwd=None: (0, "a" * 40))     # main's object id before the check
-    assert gitio.promote_ref("run-7") is True
+    assert gitio.promote_ref("000000000007") is True
     joined = [" ".join(c) for c in calls]
-    assert any("merge-base --is-ancestor refs/heads/main refs/heads/proposed/run-7" in j for j in joined)
-    assert any("update-ref refs/heads/main refs/heads/proposed/run-7 " + "a" * 40 in j for j in joined), \
+    assert any("merge-base --is-ancestor refs/heads/main refs/heads/proposed/000000000007" in j for j in joined)
+    assert any("update-ref refs/heads/main refs/heads/proposed/000000000007 " + "a" * 40 in j for j in joined), \
         "the update-ref must carry main's old object id (compare-and-swap, finding 9)"
-    assert any("update-ref -d refs/heads/proposed/run-7" in j for j in joined)
+    assert any("update-ref -d refs/heads/proposed/000000000007" in j for j in joined)
 
 
 def test_promote_refuses_a_non_fast_forward(monkeypatch):
@@ -83,7 +83,7 @@ def test_promote_refuses_a_non_fast_forward(monkeypatch):
         return 0
     monkeypatch.setattr(gitio, "_run", fake)
     monkeypatch.setattr(gitio, "_out", lambda cmd, cwd=None: (0, "a" * 40))
-    assert gitio.promote_ref("run-9") is False
+    assert gitio.promote_ref("000000000009") is False
     assert not updated                            # main was never advanced
 
 
@@ -96,8 +96,8 @@ def test_promote_reports_success_even_if_proposal_cleanup_fails(monkeypatch, cap
         return 1 if cmd[:2] == ["git", "update-ref"] and cmd[2] == "-d" else 0
     monkeypatch.setattr(gitio, "_run", fake)
     monkeypatch.setattr(gitio, "_out", lambda cmd, cwd=None: (0, "a" * 40))
-    assert gitio.promote_ref("run-5") is True
-    assert "could not delete proposed/run-5" in capsys.readouterr().out
+    assert gitio.promote_ref("000000000005") is True
+    assert "could not delete proposed/000000000005" in capsys.readouterr().out
 
 
 def test_from_env_refuses_a_token_without_staging(monkeypatch):

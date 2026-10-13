@@ -331,7 +331,7 @@ def test_canonical_update_hook_refuses_uid1001_push_to_main_but_allows_proposals
 
     # (a) REFUSE: uid 1001 pushing main is rejected; (b) ALLOW proposals even as 1001; (c) ALLOW main from a non-1001 uid
     assert run_hook("refs/heads/main", 1001) != 0, "the hook must REFUSE a uid-1001 update of refs/heads/main"
-    assert run_hook("refs/heads/proposed/run1", 1001) == 0, "the hook must ALLOW a proposed/<run_id> staging push"
+    assert run_hook("refs/heads/proposed/0123456789ab", 1001) == 0, "the hook must ALLOW a proposed/<run_id> staging push"
     assert run_hook("refs/heads/main", 1000) == 0, "the hook must ALLOW the non-1001 operator/deploy mirror (C1)"
 
     # (real git) install the SAME artifact into a bare canonical; a real receive-pack push exercises git's invocation
@@ -368,7 +368,7 @@ def test_canonical_update_hook_refuses_uid1001_push_to_main_but_allows_proposals
     # a non-1001 push to main is accepted (the C1 mirror) and advances main.
     assert push("HEAD:refs/heads/main", 1001).returncode != 0, "git must reject the uid-1001 push to main (hook fires)"
     assert _git(canonical, "rev-parse", "refs/heads/main", capture=True) == seed, "main unchanged after the refusal"
-    assert push("HEAD:refs/heads/proposed/run1", 1001).returncode == 0, "a uid-1001 proposed/* push is accepted"
+    assert push("HEAD:refs/heads/proposed/0123456789ab", 1001).returncode == 0, "a uid-1001 proposed/* push is accepted"
     assert push("HEAD:refs/heads/main", 1000).returncode == 0, "the non-1001 (mirror) push to main is accepted (C1)"
     assert _git(canonical, "rev-parse", "refs/heads/main", capture=True) == next_tip
 
@@ -376,9 +376,9 @@ def test_canonical_update_hook_refuses_uid1001_push_to_main_but_allows_proposals
     # proposal ahead of main, then promote it and assert main advanced (the promote is not blocked by the hook).
     (clone / "f").write_text("3\n", encoding="utf-8")
     _git(clone, "add", "-A")
-    _git(clone, "commit", "-m", "promoteme")
+    _git(clone, "commit", "-m", "0000000000c0")
     third = _git(clone, "rev-parse", "HEAD", capture=True)
-    assert push("HEAD:refs/heads/proposed/promoteme", 1000).returncode == 0     # stage the FF proposal
-    assert gitio.promote_ref("promoteme", cwd=str(canonical)) is True, \
+    assert push("HEAD:refs/heads/proposed/0000000000c0", 1000).returncode == 0     # stage the FF proposal
+    assert gitio.promote_ref("0000000000c0", cwd=str(canonical)) is True, \
         "promote_ref (update-ref, not receive-pack) must advance main — the update hook never fires on it (C2)"
     assert _git(canonical, "rev-parse", "refs/heads/main", capture=True) == third, "promote advanced main via update-ref"
