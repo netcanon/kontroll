@@ -11,6 +11,60 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(promote): the promote gate judges the proposal's commit itself — read object by object, every object re-hashed — and fails closed (2026-10-13)
+
+Before a promote fast-forwards `main`, a gate hands the proposal's tree to the collection generator and refuses
+what the generator would refuse. It read that tree as `git archive` exports it. An export is the commit as its own
+`.gitattributes` make it: one `export-ignore` line took a conflicting unit, the instance overlay, or all of
+`modules/` out of what was judged — and to a tree with no `modules/`, or one it could not unpack, the gate
+answered "nothing to check". SECURITY.md C10 named these as limits of the gate as built; this closes them.
+
+- **The gate reads the commit** (`canon.read_tree_verified`): one `git cat-file --batch` answers for the commit,
+  each tree and each blob, and every object is **re-hashed against the id it was asked for** — git does not check
+  that an object it reads is what its name says, so an object file swapped under its name was judged as if it
+  were the committed one. Trees are parsed from their own bytes. No attribute, filter, `info/attributes`, replace
+  ref or commit-graph has a say; no program of the repository's runs.
+- **Regular files only.** A proposal whose tree holds a symbolic link, a submodule entry, a name no checkout could
+  take (a separator, a control byte, `..`, a spelling of `.git` that git's own checkout refuses — `git~1`, `.git`
+  with trailing dots or spaces or a `:stream` — or a name longer than a file system takes), or one name twice in a
+  directory, is refused whole (exit 2). The old gate unpacked the export with `tar`, which created the link.
+- **It fails closed.** A tree the reader refuses is a refusal; a proposal with no `modules/` where `main` has one
+  is a refusal; and a gate that cannot run — the repository cannot be read, the checkout has no
+  `scripts/gen-requirements.py`, the generator does not start or does not finish — refuses with its own sentence
+  ("the gate could not run … was not judged"). "Nothing to check" is left for a repository in which neither `main`
+  nor the proposal has a `modules/`. `--skip-conflict-check` is still the human's override.
+- **Two things outside the proposal's commit are refused rather than believed.** A `main` that is a symbolic ref or
+  names no commit refuses every promote. A proposal that deletes the fleet file where `main` has one is refused:
+  the generator would have judged this checkout's shipped example in its place.
+- **Whose fault a failure is.** An object file git cannot read, and a name no file system takes, are refusals of
+  the tree — not "the gate could not run", the sentence that names the override. When the generator fails on a
+  file of the proposal, its last lines are shown and the rest are counted.
+- **The run id must be a minted one** (exit 1 otherwise): nothing else is formatted into a ref name, and a ref of
+  that name that is a symbolic ref or names no commit is refused as not a proposal.
+- **New `scripts/kontroll-export.py`**: `--repo <git dir> <commit id> <dest> [<prefix> …]` writes one commit's
+  files into a directory by the same read — for a play or a script that today pipes `git archive` into `tar`.
+  The whole export or nothing; exit 2 means the commit's tree is refused and nothing else (a usage error, a
+  prefix that selects no file, a repository that cannot be read are exit 1).
+- `tests/validate` holds the shipped tree to the gate's rule: no symbolic link, no submodule entry.
+
+**Still open, and said in SECURITY.md:** the gate judges the commit the proposal's ref names when it reads it; the
+fast-forward resolves the name again.
+
+**On a box that runs the previous build:** a checkout without `scripts/gen-requirements.py` promoted before (the
+gate skipped itself) and is now refused with a sentence; a proposal that carries a `.gitattributes` is judged in
+full; a proposal that commits a symbolic link is refused. `docs/troubleshooting.md` §7 has each sentence.
+
+**New here:** `tests/unit/test_canon_tree.py` — the reader against an attribute, a filter, a replace ref, a lying
+commit-graph, an object swapped under its name (the blob, the tree, the commit), every entry it refuses — the
+spellings of `.git` with git's own refusal as the control, and the names beside them that are still read — a
+sha256 repository, the caps and their boundary, a git that cannot run, stops answering, ends in the middle of an
+answer or dies on one object (whose fault each is); `write_files` and the export command (its exit codes, a
+prefix that selects nothing, a move-in that fails part-way). In `tests/unit/test_kontroll_promote.py` — a
+proposal that hides its conflict behind `export-ignore` is refused on it; the generator is handed the committed
+bytes; a swapped object, a link and a removed registry exit 2; a `main` that is not a plain branch, and a
+proposal that deletes the fleet file, are refused; each way the gate cannot run refuses and says so; a generator
+that fails without a word still refuses; only a minted run id reaches git.
+
 ### fix(pending): the Pending list and the discard read the canonical by full ref name, in one hardened git environment, and as bytes — a tag called `main`, a planted hook or graft, or a name that is not text no longer changes or breaks the list (2026-10-13)
 
 The Pending panel is what an operator reads before approving a change, and the Discard button deletes a ref in the

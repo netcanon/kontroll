@@ -1,7 +1,7 @@
 """canon — how the tool reads the canonical bare repository, and the one environment a git that touches it runs in (C10).
 
 The canonical (`/srv/kontroll.git`) is the instance's source of truth: `refs/heads/main` is what runs, and each
-`refs/heads/proposed/<run id>` is a change the network service staged for a human to promote. Three rules live here,
+`refs/heads/proposed/<run id>` is a change the network service staged for a human to promote. Its rules live here,
 so that each is one function with one test file (tests/unit/test_canon.py) and no reader has to remember them:
 
   1. A REF IS NAMED IN FULL, READ ONCE, AND IS AN ID FROM THEN ON. A short name is looked up — `main` is a tag of
@@ -23,15 +23,24 @@ so that each is one function with one test file (tests/unit/test_canon.py) and n
      committed; none of it has to be text. Nothing here decodes on git's behalf — `show` turns bytes into the text
      a person is shown, and says whether that text is the bytes exactly or an escaped spelling of them.
 
+  4. A COMMIT'S TREE IS READ OBJECT BY OBJECT, AND EVERY OBJECT IS RE-HASHED (`read_tree_verified`). Git does not
+     check that an object it reads is the object its name says, and an export (`git archive`) is the commit as its
+     own attribute files, the repository's filters and its replacement refs make it. A gate that judges a commit
+     must judge THAT commit: the tree its bytes name, the files those trees name, regular files only.
+
 Needs git 2.31 or later: the config overrides travel in `GIT_CONFIG_COUNT`, which an older git ignores without a
 word (every hook would run). `GIT_NO_LAZY_FETCH` is honoured by git 2.45 and later; before it `protocol.allow=never`
 is what stops a promisor remote.
 
-No write verb lives in this module (it is in the pinned layer, so the completeness sweep would name one).
+Nothing here writes the CANONICAL (the module is in the pinned layer, so the completeness sweep would name a verb
+that did). `export_commit` writes a commit's files into a directory the caller names; it is a registered write
+verb for that reason, so no read view can reach it.
 """
+import hashlib
 import os
 import re
 import subprocess
+import threading
 
 MAIN = "refs/heads/main"
 PROPOSED = "refs/heads/proposed/"
@@ -47,6 +56,13 @@ _OID = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")          # a sha1 (40 hex) or 
 class Unreadable(Exception):
     """The canonical could not be read: git is absent, did not answer in time, or refused the repository. The
     message is a sentence of ours — never git's output and never a name read from the repository."""
+
+
+class TreeRefused(Unreadable):
+    """A commit's tree is not one the reader takes: an object is missing or is not what its name says, an entry is
+    a link or a submodule, a name no checkout could hold, more than the caps. The fault is in what was COMMITTED
+    (or in the object store), not in our ability to run — a caller that judges the commit refuses it; a caller
+    told only `Unreadable` could not tell that from "git is not installed"."""
 
 
 def valid_run_id(s):
@@ -296,3 +312,213 @@ def show(b):
         else:
             out.append(ch.encode("unicode_escape").decode("ascii"))
     return "".join(out), False
+
+
+# ---- one commit's tree, as it is ------------------------------------------------------------------------------ #
+_FILE_MODES = (b"100644", b"100755")
+_TREE_MODE = b"40000"
+# Far above any tree this tool ships or stages (the shipped tree is a few hundred files, a few megabytes): the caps
+# exist so that a commit somebody else wrote cannot make the reader hold an unbounded amount, or run without end.
+MAX_TREE_ENTRIES = 20000
+MAX_TREE_BYTES = 64 * 1024 * 1024
+TREE_READ_SECONDS = 120
+
+
+_NAME_BYTES = 255                 # the longest name ext4, xfs, btrfs and NTFS take; git cannot check a longer one out
+_PATH_BYTES = 4000                # under PATH_MAX with room for the directory the files are written into
+# The characters HFS+ ignores in a name: with one of them inside it, `.git` is still `.git` there (git: core.protectHFS)
+_HFS_IGNORED = dict.fromkeys(list(range(0x200C, 0x2010)) + list(range(0x202A, 0x202F)) + list(range(0x206A, 0x2070))
+                             + [0xFEFF])
+
+
+def _is_dot_git(name):
+    """Is `name` a spelling of `.git` that git's own checkout refuses? `.git` in any case; and — on EVERY platform,
+    because `core.protectNTFS` is on by default — `.git` or its short name `git~1` followed by any run of dots and
+    spaces and by an optional `:stream` (NTFS drops all of that and opens `.git`); and `.git` with characters HFS+
+    ignores inside it. A commit with one of these on `main` is a `main` no clone can check out."""
+    low = name.lower()
+    if low.split(b":", 1)[0].rstrip(b". ") in (b".git", b"git~1"):
+        return True
+    try:
+        return low.decode("utf-8").translate(_HFS_IGNORED) == ".git"
+    except UnicodeDecodeError:
+        return False
+
+
+def _refused_name(name):
+    """A tree entry's name the reader refuses: empty, `.`, `..`, one that holds a path separator or a control
+    byte, one longer than a file system takes, or a spelling of `.git` (`_is_dot_git`). Git's own checkout takes
+    none of them on the node; a tree that holds one was written by hand."""
+    return (not name or name in (b".", b"..") or b"/" in name or b"\\" in name or len(name) > _NAME_BYTES
+            or any(c < 0x20 or c == 0x7f for c in name) or _is_dot_git(name))
+
+
+def read_tree_verified(repo, commit_id, max_entries=MAX_TREE_ENTRIES, max_bytes=MAX_TREE_BYTES,
+                       timeout=TREE_READ_SECONDS):
+    """Every regular file of the commit `commit_id`, as `{path bytes: content bytes}` — or `TreeRefused(<the rule>)`
+    (and plain `Unreadable` when git itself cannot be run or stops answering).
+
+    ONE `git cat-file --batch` process answers for every object, and nothing it answers is believed: an object's
+    header must name the id that was asked for and the kind its place requires, and its bytes must HASH to that id
+    — the commit, every tree, every blob. Trees are parsed from their own bytes (`<mode> <name>\\0<raw id>`), and
+    the root tree's id is taken from the commit's first line. So nothing in the repository can make this return a
+    tree other than the one `commit_id` names — not an attribute or a filter (no path is ever checked out or
+    exported), not a replace ref, a graft or a commit-graph (the seam, and the commit's own bytes), not an object
+    file swapped under its name (the hash). The worst any of them can do is make it refuse.
+
+    Refused, each with a sentence that names the RULE and never a path or a value: an object that is missing, of
+    another kind, or not what its name says; an entry that is not a regular file or a directory (a symbolic link,
+    a submodule); a name no checkout could take, or one name twice in a tree; more entries or more bytes than the
+    caps; git not answering within `timeout` seconds."""
+    if not valid_oid(commit_id):
+        raise TreeRefused("the commit to read is not named by a full id")
+    digest = hashlib.sha1 if len(commit_id) == 40 else hashlib.sha256
+    raw_len = len(commit_id) // 2
+    try:
+        proc = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, **git_kwargs(repo))
+    except OSError:
+        raise Unreadable("git could not be run on the canonical") from None
+    timed_out = threading.Event()
+
+    def end():                                                 # a git that stops answering is ended, not waited for
+        timed_out.set()
+        proc.kill()
+    watchdog = threading.Timer(timeout, end)
+    watchdog.daemon = True
+    watchdog.start()
+    left = {"entries": max_entries, "bytes": max_bytes, "answered": 0}
+
+    def gone():
+        """git's answer stopped short. WHO ended it says whose fault that is: the watchdog (git was too slow — ours);
+        git itself BEFORE it answered for anything (it cannot open the repository — ours); git itself after it had
+        answered for the commit (it died on one object: a file of the store it cannot inflate, or of a kind it does
+        not know — the store's fault, like an object that is missing)."""
+        if timed_out.is_set():
+            return Unreadable("git did not answer for an object within the time the reader gives it")
+        if left["answered"]:
+            return TreeRefused("git ended on an object the commit names: the object store holds one git cannot read")
+        return Unreadable("git gave no answer for an object (it ended, or it cannot read the repository)")
+
+    def exactly(n):
+        chunks = []
+        while n:
+            chunk = proc.stdout.read(n)
+            if not chunk:
+                raise gone()
+            chunks.append(chunk)
+            n -= len(chunk)
+        return b"".join(chunks)
+
+    def obj(oid, kind):
+        try:
+            proc.stdin.write(oid.encode("ascii") + b"\n")
+            proc.stdin.flush()
+        except OSError:
+            raise gone() from None
+        header = proc.stdout.readline()
+        if not header.endswith(b"\n"):                     # nothing, or a line cut short: git ended, or was ended
+            raise gone()
+        parts = header[:-1].split(b" ")
+        if parts == [oid.encode("ascii"), b"missing"]:
+            raise TreeRefused("an object the commit names is missing")
+        if len(parts) != 3 or parts[0] != oid.encode("ascii") or not parts[2].isdigit():
+            raise TreeRefused("git's answer for an object is not in the form that was asked for")
+        if parts[1] != kind:
+            raise TreeRefused("an object is not the kind its place in the tree asks for")
+        left["bytes"] -= int(parts[2])
+        if left["bytes"] < 0:
+            raise TreeRefused("the tree is larger than the gate reads")
+        body = exactly(int(parts[2]))
+        if exactly(1) != b"\n":
+            raise TreeRefused("git's answer for an object is not in the form that was asked for")
+        if digest(kind + b" " + parts[2] + b"\0" + body).hexdigest() != oid:
+            raise TreeRefused("an object is not what its name says")
+        left["answered"] += 1
+        return body
+
+    try:
+        first = obj(commit_id, b"commit").split(b"\n", 1)[0]
+        root = _text(first[5:])
+        if not first.startswith(b"tree ") or len(root) != len(commit_id) or not valid_oid(root):
+            raise TreeRefused("the commit does not name a tree")
+        files, pending = {}, [(b"", root)]
+        while pending:
+            prefix, tree_id = pending.pop()
+            data, at, names = obj(tree_id, b"tree"), 0, set()
+            while at < len(data):
+                sp = data.find(b" ", at)
+                nul = data.find(b"\0", sp + 1) if sp != -1 else -1
+                if sp == -1 or nul == -1 or nul + 1 + raw_len > len(data):
+                    raise TreeRefused("a tree object is not in the form git writes")
+                mode, name, oid = data[at:sp], data[sp + 1:nul], data[nul + 1:nul + 1 + raw_len].hex()
+                at = nul + 1 + raw_len
+                left["entries"] -= 1
+                if left["entries"] < 0:
+                    raise TreeRefused("the tree holds more entries than the gate reads")
+                if _refused_name(name) or name in names or len(prefix) + len(name) > _PATH_BYTES:
+                    raise TreeRefused("the tree holds an entry whose name no checkout could take")
+                names.add(name)
+                if mode == _TREE_MODE:
+                    pending.append((prefix + name + b"/", oid))
+                elif mode in _FILE_MODES:
+                    files[prefix + name] = obj(oid, b"blob")
+                else:
+                    raise TreeRefused("the tree holds an entry that is not a regular file or a directory "
+                                      "(a symbolic link, a submodule, or a mode git does not write)")
+        return files
+    finally:
+        watchdog.cancel()
+        for stream in (proc.stdin, proc.stdout):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        proc.kill()
+        proc.wait()
+
+
+def write_files(files, dest, prefixes=None):
+    """Write `files` (`{path bytes: content bytes}`, as `read_tree_verified` returns them) under the directory
+    `dest` — all of them, or those under one of `prefixes` (bytes such as `b"modules/"`; a prefix without the slash
+    names that one file). Returns the number written.
+
+    Each file is created exclusively (`xb`): `dest` is expected to be a fresh directory, and a path that is
+    already there — two names of the tree that one filesystem folds into one — is refused, never overwritten.
+    (Files only: two DIRECTORY names one file system folds into one — `Modules/` and `modules/` where case is
+    folded — are written into one directory. No file system of a node folds; a promote run on one that does can
+    judge another tree than the node will hold.) A path that is not UTF-8 is refused (`TreeRefused`: the tree's
+    fault), and so is one that would be written outside `dest`. A file that cannot be written is `Unreadable`
+    (ours). What was already written stays for the caller to remove; the callers hand in a temporary directory."""
+    written = 0
+    for path in sorted(files):
+        if prefixes is not None and not any(path.startswith(p) if p.endswith(b"/") else path == p for p in prefixes):
+            continue
+        try:
+            rel = path.decode("utf-8")
+        except UnicodeDecodeError:
+            raise TreeRefused("the tree holds a path that is not UTF-8") from None
+        parts = rel.split("/")
+        target = os.path.join(dest, *parts)
+        # The reader hands in no such path; another caller might, and on Windows a name like `D:x` is a path on
+        # another drive: nothing is written that is not under `dest`.
+        if (any(p in ("", ".", "..") for p in parts)
+                or not os.path.abspath(target).startswith(os.path.abspath(dest).rstrip(os.sep) + os.sep)):
+            raise TreeRefused("the tree holds a path that would be written outside the directory it was to go into")
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "xb") as fh:
+                fh.write(files[path])
+        except FileExistsError:
+            raise TreeRefused("the tree holds two paths that this filesystem takes for one") from None
+        except OSError:
+            raise Unreadable("a file of the tree could not be written where it was to be read") from None
+        written += 1
+    return written
+
+
+def export_commit(repo, commit_id, dest, prefixes=None):
+    """Write the regular files of the commit `commit_id` under the directory `dest` (see `write_files`). The files
+    are what `read_tree_verified` returns, so this is the commit as it is: no attribute hides or rewrites a path,
+    no filter runs, and no link is created (a tree that holds one is refused). Returns the number written."""
+    return write_files(read_tree_verified(repo, commit_id), dest, prefixes)

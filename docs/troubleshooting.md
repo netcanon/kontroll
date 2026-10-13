@@ -113,6 +113,33 @@ lines and commented-out entries are not counted — and never repeats the line.
 A line that IS a class key and has no directory under `modules/` is none of these: the bootstrap stops on it
 (its own lookup) and nothing else says a word (SECURITY.md C22, the limits).
 
+## 7. A promote that is refused for the proposal's tree, or because the gate could not run
+
+Before it fast-forwards `main`, a promote reads the proposal's commit — the commit itself, object by object, each
+re-hashed against its id — and hands its files to this checkout's collection generator. It refuses (exit 2,
+`main` untouched, the proposal still staged) when the tree is not one it takes, and — with a different sentence —
+when it could not judge at all. The gate's own sentences name the rule, never a path or a value of the proposal.
+When it is the generator that refuses, its last lines are shown: they can name a module file and, for a
+`signature_policy` that is not a word it takes, repeat the value — escaped.
+
+| What you read | What it means | What to do |
+|---|---|---|
+| `REFUSED: promoting proposed/<run_id> — the proposal's tree does not resolve …` and under it `the tree cannot be read as it was committed: the tree holds an entry that is not a regular file or a directory (a symbolic link, a submodule, or a mode git does not write)` | the proposal commits a symbolic link or a submodule entry (or a file mode written by hand). Nothing this tool writes does; a link in `main` is a file a later step would open through | discard the proposal (Pending panel) and stage the change again without the link. If the link is on `main` already (the message then says `main` is refused as well), remove it in the node's checkout and deploy |
+| … `the tree holds an entry whose name no checkout could take` | a file or directory name with a path separator or a control byte in it, `.`, `..`, any spelling of `.git` that git's own checkout refuses (`git~1`, `.git` with trailing dots or spaces or a `:stream`), a name longer than a file system takes, or the same name twice in one directory | as above — such a tree was written by hand |
+| … `an object is not what its name says`, `an object the commit names is missing`, `an object is not the kind its place in the tree asks for` | the canonical's object store does not hold what the commit names: a corrupted or replaced object file | do not override. The canonical is a reconstructible cache: rebuild it from the node's checkout (a deploy re-creates `main`) and stage the proposal again. Do not run git by hand in the canonical or in a copy of it — a copy carries the canonical's own `config` |
+| … `git ended on an object the commit names: the object store holds one git cannot read` | git died while it read one object of the proposal — a damaged object file, not a missing one | as the row above: do not override; rebuild the canonical and stage again |
+| … `the tree holds a path that is not UTF-8` / `two paths that this filesystem takes for one` / `git's answer for an object is not in the form that was asked for` / `the commit does not name a tree` / `a tree object is not in the form git writes` | a tree or a commit written by hand | discard the proposal; find out who wrote it |
+| … `the tree is larger than the gate reads` / `holds more entries than the gate reads` | the proposal's tree is far beyond anything this tool stages (the caps are `MAX_TREE_BYTES` and `MAX_TREE_ENTRIES` in `scripts/kontroll/canon.py`; a node whose own tree has outgrown them promotes with the override until they are raised) | look at what the proposal changes (Pending panel) before anything else |
+| … `the tree has no modules/ directory and main has one: promoting it would remove the device-class registry` | the proposal deletes `modules/` | discard it |
+| … `the tree has no fleet file … and main has one` | the proposal deletes `instance/` (or the legacy `config/fleet.yml`) | discard it |
+| … `` `main` is not a branch that names a commit `` | `refs/heads/main` in the canonical is a symbolic ref or names a tag — nothing this tool writes | nothing is promoted onto it: rebuild the canonical from the node's checkout |
+| … `the ref of that name is not a proposal: it is a symbolic ref, or it names no commit` | the ref under that run id was not staged by the service (the Pending panel lists it under "Not proposals") | nothing can be promoted from it; find out who wrote it |
+| `REFUSED: promoting proposed/<run_id> — the gate could not run, so the proposal's tree was not judged:` and under it the reason — `this checkout has no scripts/gen-requirements.py …`, `the collection generator could not be started` / `did not finish in N seconds`, `git could not be run on the canonical`, `the canonical holds a commondir file …` | nothing was judged, so nothing was promoted. Not a verdict on the proposal | correct what the reason names and promote again. `--skip-conflict-check` promotes WITHOUT the gate — for a node that must move while the gate cannot run; read the proposal's change list first |
+| `… the gate could not run …` and under it `git did not answer for an object within the time the reader gives it` | git went silent on one object for the reader's whole time limit (`TREE_READ_SECONDS` in `scripts/kontroll/canon.py`). A slow disk once; the same object every time is a damaged object file | run the promote again. If it repeats: as the object-store row above — do NOT override |
+| `… the gate could not run …` and under it `a file of the tree could not be written where it was to be read` | the promote could not write its temporary copy: the temporary directory is full or not writable | free space in the temporary directory (`TMPDIR`) and promote again |
+| `… the gate could not run …` and under it `the canonical's <part> is a symbolic link …` / `git could not read the canonical` / `the canonical lists one ref name more than once` | the canonical itself is not as this tool makes it | nothing is promoted from it: rebuild the canonical from the node's checkout |
+| `REFUSED: that is not a run id …` (exit 1) | the argument is not an id the service mints | copy the id from the Pending panel |
+
 ## See also
 - [logging-architecture.md](logging-architecture.md) — the layered design + the degrade-path source of truth
 - [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, the refusal that is the repository's own, and a
