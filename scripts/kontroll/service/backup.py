@@ -140,10 +140,10 @@ def build_plan(key, selection):
                    "  retention: %s" % retention, "  destination: %s" % destination]
     if not diff["changes"]:
         text_after = text_before                               # idempotent no-op (same value) — writes nothing
-    elif current:                                              # declared → replace the `backup:` mapping in place
+    else:                         # declared → replaced where it stands; no `backup:` key → appended at EOF. One
+        # writer for both: a key that is THERE with nothing under it (`backup:   # todo`) reads as not declared,
+        # and a text append would write the key a second time beside it.
         text_after = upsert_into_block(text_before, "backup", _METHOD, block_lines, list_block=False)
-    else:                                                      # first declare → append at EOF
-        text_after = text_before.rstrip("\n") + "\n" + "\n".join(block_lines) + "\n"
     sched_rel = "config/semaphore/schedules.generated.yml"
     sev_dec = _diff.severity_decision(diff)
     return {"error": None, "key": key, "method": _METHOD,

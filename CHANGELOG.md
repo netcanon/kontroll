@@ -11,6 +11,49 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(capability): the block writer edits a module file as it is written — a key line with a comment, a list at the key's column — so a reconfigure no longer drops or breaks a class's methods (2026-10-13)
+
+The capability dialogs (telemetry, logging, backup) change a class's `module.yml` by line surgery, so that a
+hand-written file keeps its comments. The writer found a block by looking for the bare `key:` line. A key line that
+carries a comment — `metrics:      # ORDER = …`, as the shipped `docker_host` class's does — was not found: the
+entry was appended as a **second** top-level `metrics:` block at the end of the file, and YAML reads the last of
+two. The class's other methods were then gone from every generated file (for `docker_host`: its `host_node`
+target) at the next regeneration, while the module file still showed them and the proposal's diff showed an added
+block and nothing removed.
+
+- **The key line is found with or without a comment** (`_blockwrite._block_start`), by the list writers and by the
+  mapping writer; the mapping writer keeps the key line as it stands, comment included. The backup dialog's first
+  declare goes through the same writer, so a `backup:` key with nothing under it is filled where it stands.
+- **A list is edited at the indent it is written with.** A list whose items sit at the key's own column — what
+  `yaml.safe_dump` writes, and so what an onboard writes for a class with a derived floor — or four spaces in was
+  taken to end at its first item: the new entry was put above the list at an indent of its own, and the plan held a
+  module text that is not YAML. The block now runs to the next key, and a new or replaced entry takes the indent of
+  the entries beside it (`set_list_block`, the Settings view's list writer, shares the bound).
+- **Two shapes are refused instead of written beside** — 409 `repository_data`, with a sentence that names the key
+  and the rule, before anything is written: a block key with its value on the key's own line (`metrics: []`, a flow
+  list — not a block the writer can edit), and a module file that already holds the key twice.
+
+**On a box where a capability of a class with such a key line was changed through the API or the GUI** (of the
+shipped classes: `docker_host`), the instance's copy of that module file may hold the key twice. Look, in a
+checkout that is level with the canonical's `main`:
+`for k in metrics logs backup dashboards; do grep -c "^$k:" modules/*/module.yml | grep -v ':[01]$'; done`
+prints each such file, and `yamllint` — which `tests/validate` runs — reports it as `key-duplicates`. YAML reads
+only the last block, so what the generators render is the last block alone. Merge the entries of the earlier
+block into it by hand, regenerate (`python3 scripts/gen-observability.py`, `gen-logging.py`, `gen-backup.py`),
+commit the module file with the regenerated files, bring that commit to the canonical's `main` the way the node
+promotes, and deploy. Until the merged file is on `main`, a change to that block through a dialog is refused
+with the sentence above; a proposal staged before the merge still holds the damaged file — discard it and
+propose again.
+
+**New here:** in `tests/unit/test_blockwrite.py` — a key line with a comment opening the block for each writer; the
+mapping writer keeping the commented key line; only the key itself, at column zero, opening the block; both refused
+shapes at each writer, with nothing of the file in the sentence; a list at the key's column, as an onboard writes
+it, and one four spaces in, edited at their own indent; and every shipped class file put through a rewrite of each
+of its entries, an added one and a replaced `backup` block, with everything else still read by YAML as before. In
+`tests/unit/test_observe.py` — the planner over the shipped `docker_host` file; in `tests/unit/test_backup.py` — a
+`backup:` key with nothing under it filled where it stands, and `backup: {}` refused; in
+`tests/integration/test_api_capability.py` — the route answering 409 with its audit line.
+
 ### fix(fleet): a fleet line that is not a class key is skipped by what renders and refused by what installs (C22) (2026-10-13)
 
 `instance/fleet.yml`'s `enabled_modules` is a hand-editable list, and every deploy-time reader formatted each entry

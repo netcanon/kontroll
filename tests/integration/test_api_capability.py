@@ -245,3 +245,28 @@ def test_a_write_target_that_does_not_confine_is_a_409_on_the_capability_route(c
     assert _module_text(cap) == before and len(cap.calls) == committed
     rows = read_audit(cap.audit_log, action="repository-refuse")
     assert rows and "what=path" in rows[-1]["detail"] and "route=/capability/" in rows[-1]["detail"]
+
+
+@pytest.mark.parametrize("body_of_file,says", [
+    ("key: demo_sw\ncollections:\n  - name: cisco.ios\ninventory_group: core_switch\nmetrics: []\n", "own line"),
+    ("key: demo_sw\ncollections:\n  - name: cisco.ios\ninventory_group: core_switch\n"
+     "metrics:\n  - {method: blackbox, params: {probe: icmp}}\nstatus: active\nmetrics:\n  - {method: host_node}\n", "twice"),
+], ids=["a-value-on-the-key-line", "the-key-twice"])
+def test_a_module_file_the_block_writer_cannot_edit_is_a_409_on_the_capability_route(cap, body_of_file, says):
+    """A telemetry propose for a class whose module file writes `metrics` with a value on the key's line, or holds
+    the key twice, answers 409 `repository_data` with a sentence that names the key and the rule: the file is
+    unchanged, nothing is committed, and the audit log holds `repository-refuse` with the route's template.
+
+    Guards the refusal reaching a caller as what it is. The writer used to append a second `metrics:` block beside
+    such a file — YAML then read only the last one — and the route answered 200 with a plan that named the same
+    paths as any other; a refusal mapped as a refused field (422) or a failed read (500) would send
+    the operator after the request instead of the file."""
+    (cap.repo / "modules" / "demo_sw" / "module.yml").write_text(body_of_file, encoding="utf-8")
+    before = _module_text(cap)
+    r = cap.client.post("/capability/telemetry", headers=AUTH,
+                        json={"key": "demo_sw", "selection": {"method": "snmp", "params": {"module": "if_mib"}}})
+    assert r.status_code == 409 and r.json()["code"] == "repository_data", r.text
+    assert "`metrics`" in r.text and says in r.text
+    assert _module_text(cap) == before and not cap.calls
+    rows = read_audit(cap.audit_log, action="repository-refuse")
+    assert rows and "what=module file" in rows[-1]["detail"] and "route=/capability/" in rows[-1]["detail"]

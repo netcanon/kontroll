@@ -68,7 +68,8 @@ field=<name>` for a refused field and `reason=planner-guard` (body `code: invali
 that is not about one field, such as a partially filled credential set. When what stops a request is the
 repository's own data or layout — a class's module file holds a group, domain, backend or role that is not a name; a
 credential field is declared with a name that is not one; a backend names no role and none can be derived from its
-name (or its registry entry holds a role that is not a name); a write target does not resolve inside the repository
+name (or its registry entry holds a role that is not a name); a write target does not resolve inside the repository;
+a block of a module file is written with its value on the key's line, or twice
 — the answer is **409** `repository_data` with a sentence that says where to look, and the audit action is
 `repository-refuse`: nothing in the request is wrong, and the remedy is the file or the layout. `POST /onboard`'s
 other 409 — a drop-in that exists with different content, answered without a `code` and retried with `overwrite` —
