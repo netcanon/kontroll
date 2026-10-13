@@ -11,6 +11,72 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(promote): what is judged is what is promoted — the promote reads the proposal once, lands that commit in one ref transaction, and an approval names the commit (`<run id>@<commit id>`) (2026-10-13)
+
+A promote was a sequence of steps — a preview, the resolve gate, a fast-forward check, the move of `main`, the
+delete of the proposal — and each looked the proposal's NAME up for itself. A proposal is a name, and between
+two steps the name could come to mean another commit: the commit previewed, the commit the gate judged and the commit that landed could be three, and the commit an operator
+read about in the Pending panel was not necessarily any of them. SECURITY.md C10 named this as the gate's
+remaining limit; this closes it.
+
+- **One read, then ids.** `kontroll-promote.py` reads `refs/heads/main` and the proposal once, each by its full
+  name (`canon.read_ref`), and looks no name up again: the fast-forward question, the preview and the gate are
+  asked of the two commit ids. A ref of the proposal's name that is a symbolic ref, or names no commit, is not a
+  proposal (exit 1).
+- **One transaction.** `gitio.promote_commit` moves `main` with a single `update-ref --stdin` transaction that
+  verifies the proposal is still the commit that was judged and updates `main` only from the commit it was read
+  as, neither following a symbolic ref. A proposal re-pointed after it was judged is refused ("no longer the
+  commit that was judged"); so is a promote that lost a race to another ("main moved"). `main` is untouched in
+  both cases. The proposal is retired by compare-and-delete with `--no-deref`.
+- **In the seam.** Every git of the promote runs in `canon.git_kwargs`: the canonical's hooks and config-named
+  programs do not run on it, and of the promoter's environment git is handed where programs and temporary
+  files are and the locale, and nothing else — no `HOME`, no `GIT_*`, no key.
+- **An approval names the commit.** The promote takes `<run id>@<commit id>` and refuses when the proposal is
+  not that commit ("not the commit you were shown"). The Pending panel's copy control now copies that form
+  ("copy to promote"); `kontroll-promote.py --list --repo <canonical>` prints it for every staged proposal. The
+  `promote-proposal` Semaphore job requires it (`--require-pin`; its survey field is now "Proposal
+  run_id@commit"); at the box's shell a bare run id still works and promotes the commit the read returns.
+- **The promote prints what it lands, before it lands it:** `kontroll_run_id=<run id> promote proposed/<run id>
+  commit=<commit id> -> main (was <commit id>); commits=<n>` and the commits (id, subject — escaped where it is
+  not text, cut where it is long, the rest counted). The listing is read as committed, one record per commit that
+  names its commit twice, and opens with the commit that lands. That output — the Semaphore job log, or the
+  terminal — is the record of what was approved (at a shell nothing keeps it: an approval that must be on file
+  goes through the job). The play's own `git log` preview and
+  existence check are gone (they ran by short name, outside the seam), and no message sends a person to run git
+  in the canonical by hand.
+- **A refusal says what happened.** A transaction git refuses while both refs are as they were read is said as a
+  held lock (not as "`main` moved"); a git that was stopped at its time limit is reported by what `main` IS, read
+  afresh; a proposal left at `main`'s own commit (a promote that moved `main` and could not delete the ref) is
+  "`main`'s commit already" — and the Pending panel lists such a row as not promotable, so its Discard control
+  is offered.
+- **Exit codes:** 1 — not a run id or not a full commit id, no such proposal, not a proposal, not the commit
+  named, not a fast-forward, the proposal is `main`'s commit already, the canonical unreadable, or a ref moved
+  meanwhile; 2 — the gate refused the tree or could not run. An option-like word in the run id's place
+  returns 1 instead of leaving through the argument parser.
+
+`gitio.promote_ref(<run id>)` remains as a wrapper that reads the two refs and calls `promote_commit`.
+
+**On a box that runs the previous build:** the `promote-proposal` job asks for `<run id>@<commit id>` — copy it
+from the Pending panel ("copy to promote") or print it with `kontroll-promote.py --list`; a bare run id is refused
+there. A proposal staged under the previous build is promotable as it is. After the next deploy, run
+`./kontroll configure-semaphore` (`python3 scripts/configure-semaphore.py`): it updates the registered
+`promote-proposal` template in place, survey text included. The deploy does not run it. Until it has run, the
+job's survey still reads "Proposal run_id" and still describes a bare id — and the job refuses a bare id, with
+the sentence that says what to enter.
+
+**New here:** `tests/unit/test_promote_cas.py` rewritten against real git — the races injected between the
+read and the transaction, a symbolic proposal costing only its own name, no hook on a promote, the refusal of a
+canonical the seam refuses, a string that is not a run id never reaching the transaction text, a held lock, a
+git that cannot start or is stopped at its time limit, the retire's argv, the wrapper. In
+`tests/unit/test_kontroll_promote.py` — the commit judged is the commit landed, the pin, `--require-pin`,
+`--list` (its order, what git left out, its exit status), the races through the whole command, the exit codes,
+the preview (the count, the cut, the escapes; printed before the gate judges), a terminal that cannot encode a
+subject, a directory named `.git` inside the canonical; the command starts one process and it is the generator.
+In `tests/unit/test_canon.py` — the play read as YAML (one command, the pinned assert, no raw git),
+`commits_between` (a commit with no message, an output encoding the repository names, a listing that is not in
+the form asked for), `git_dir`; the seam pin follows a pinned function into the helpers it calls.
+`tests/e2e/test_pending_changes.py` — each row's copy control yields that row's `<run id>@<commit id>`.
+
 ### fix(promote): the promote gate judges the proposal's commit itself — read object by object, every object re-hashed — and fails closed (2026-10-13)
 
 Before a promote fast-forwards `main`, a gate hands the proposal's tree to the collection generator and refuses

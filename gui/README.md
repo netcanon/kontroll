@@ -176,7 +176,8 @@ and vice-versa). Read-only, so it never gates onboarding (INVARIANT D*).
 A header button, **Pending**, opens a **read-only** list of every change STAGED as `proposed/<run_id>` and not yet
 promoted (`GET /api/pending` → `kontroll.service.pending.list_pending`, a pure read of the canonical bare repo via
 `git for-each-ref`, by full ref name and in the one environment `kontroll.canon` gives its git — SECURITY.md C10).
-Each row shows the **run_id** (with a one-click **copy** affordance), the proposal's full commit id, the tip
+Each row shows the **run_id**, a one-click **copy to promote** control — it copies `<run id>@<commit id>`, the
+form the promote takes, so that what was read on this row is what is approved — the proposal's full commit id, the tip
 subject, what it changes — one status letter and one NAME per file, each on its own line, never file contents; a
 file the proposal *moves* is two entries (`D` the old name, `A` the new one) — and a **static** instruction to
 run the Semaphore `promote-proposal` task. A file name that is not text (not UTF-8, or holding a character that

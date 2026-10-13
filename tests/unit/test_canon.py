@@ -66,18 +66,26 @@ def test_a_run_id_is_one_of_the_two_minted_shapes_and_nothing_else():
 
 
 def test_the_promote_play_spells_the_run_id_rule_as_the_validator_does():
-    """The promote play's assert and `canon.valid_run_id` accept and refuse the SAME samples. The play's pattern is
-    read out of `ansible/playbooks/promote.yml` and applied the way its `regex(…, match_type='fullmatch')` test
+    """The promote play's assert takes `<run id>@<commit id>`, and its two halves accept and refuse the SAME
+    samples as `canon.valid_run_id` and the shape of a full commit id; a bare run id is refused. The play's pattern
+    is read out of the play's parsed assert and applied the way its `regex(…, match_type='fullmatch')` test
     applies it. Guards two spellings of one rule drifting apart — and the drift that was there: the play used
     `match` with `^…$`, which accepts an id followed by a newline (`$` matches before a final one), while the
-    Python rule refuses it."""
-    play = open(os.path.join(ROOT, "ansible", "playbooks", "promote.yml"), encoding="utf-8").read()
-    found = re.findall(r"- run_id is regex\('([^']+)', match_type='fullmatch'\)", play)
-    assert len(found) == 1, "the play's run-id assert is not the one full-match test this reads: %r" % found
-    assert "run_id is match(" not in play, "a prefix match of the run id is back in the play"
+    Python rule refuses it. The null commit id is the one sample the two halves treat differently by design —
+    the play's pattern is a shape, and the command refuses the null id with its own sentence."""
+    that = _promote_tasks()[0]["ansible.builtin.assert"]["that"]
+    found = [m.group(1) for m in (re.fullmatch(r"run_id is regex\('([^']+)',\s+match_type='fullmatch'\)", line) for line in that) if m]
+    assert len(found) == 1, "the play's run-id assert is not the one full-match test this reads: %r" % that
+    assert not any("is match(" in line for line in that), "a prefix match of the run id is back in the play"
     pattern = re.compile(found[0])
+    oid = "a" * 40
     for sample in _GOOD_IDS + _BAD_IDS + (mint_run_id(), uuid.uuid4().hex[:12]):
-        assert bool(pattern.fullmatch(sample)) == canon.valid_run_id(sample), "the two rules differ on %r" % sample
+        assert bool(pattern.fullmatch(sample + "@" + oid)) == canon.valid_run_id(sample), \
+            "the two rules differ on the run id %r" % sample
+    for pin in ("a" * 40, "b" * 64, "a" * 39, "a" * 41, "A" * 40, "g" * 40, "", "a" * 40 + "\n", "a" * 40 + "@" + "a" * 40):
+        assert bool(pattern.fullmatch("abc123def456@" + pin)) == bool(canon._OID.fullmatch(pin)), \
+            "the two rules differ on the commit id %r" % pin
+    assert not pattern.fullmatch("abc123def456"), "the job takes the pinned form only"
 
 
 def test_an_object_id_is_full_lower_case_and_not_the_null_id():
@@ -455,6 +463,40 @@ def test_no_program_a_config_names_is_started_by_a_read(tmp_path):
     assert not canary.exists(), "a program named by the repository's config or hooks ran during a read"
 
 
+def test_what_a_fast_forward_would_land_is_counted_and_listed_by_id(tmp_path):
+    """`commits_between(main, proposal)` returns how many commits a fast-forward lands and the newest of them as
+    `(commit id, subject bytes)` — one for the builder's fast-forward proposal, with a subject that is not UTF-8
+    returned as its bytes; with a limit below the count the list is cut and the count is not; beside a tag called
+    `main` and a replace ref the answer is the same; and names in place of ids, or an id of no object, raise
+    `Unreadable`. Guards the promote's preview — the lines an approval is recorded by: they are asked of the two
+    ids the promote read, in the seam, so they are the commits that land and not a range some other ref names."""
+    r = R.build(tmp_path)
+    assert canon.commits_between(r.bare, r.main, r.ff) == (1, [(r.ff, b"feat: ff one")])
+    t = R.git(r.bare, "rev-parse", r.ff + "^{tree}").decode()
+    two = R.commit(r.bare, t, [r.ff], subject=b"subj \xff")
+    assert canon.commits_between(r.bare, r.main, two) == (2, [(two, b"subj \xff"), (r.ff, b"feat: ff one")])
+    assert canon.commits_between(r.bare, r.main, two, limit=1) == (2, [(two, b"subj \xff")])
+    assert canon.commits_between(r.bare, r.main, r.main) == (0, [])
+    R.plant_short_names(r)
+    R.plant_replace(r)
+    assert canon.commits_between(r.bare, r.main, r.ff) == (1, [(r.ff, b"feat: ff one")])
+    for a, b in (("main", r.ff), (r.main, "refs/heads/proposed/" + R.FF), (r.main, "a" * 40)):
+        with pytest.raises(canon.Unreadable):
+            canon.commits_between(r.bare, a, b)
+
+
+def test_a_repository_is_named_by_its_git_directory(tmp_path):
+    """`git_dir` returns a bare repository's own path and `<path>/.git` for a checkout. Guards the one place a
+    caller's "repository" becomes the directory the seam names to git: handed a checkout's root as `GIT_DIR`, git
+    finds no repository, and every promote from a clone failed as "the canonical could not be read"."""
+    r = R.build(tmp_path)
+    assert canon.git_dir(r.bare) == r.bare
+    work = tmp_path / "work"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True, capture_output=True)
+    assert canon.git_dir(str(work)) == os.path.join(str(work), ".git")
+    assert canon.read_ref(canon.git_dir(str(work)), canon.MAIN) is None          # a repository git can read
+
+
 def test_an_unreadable_canonical_is_said_not_guessed(tmp_path):
     """A directory that is not a repository makes `read_ref` and `proposals` raise `Unreadable`, and the ancestry
     check answer None — for ids that are not ids as well. Guards the difference between "there is no such ref"
@@ -523,28 +565,24 @@ def _promote_tasks():
     return [t for play in plays for t in play.get("tasks", [])]
 
 
-def test_the_promote_play_checks_the_run_id_first_and_names_every_ref_in_full():
+def test_the_promote_play_checks_the_pinned_id_first_and_runs_no_git_of_its_own():
     """Read as YAML: the play's FIRST task is the assert that holds `run_id is defined` and the one full-match
-    test of the run id; and every raw `git` command after it names `refs/heads/main` and
-    `refs/heads/proposed/{{ run_id }}` in full — no word of it is `main`, `main..…` or `proposed/…`. Guards two
-    things a read of the file's TEXT does not: the assert being there as a task (commented out, its line still
-    matches a text search), and the preview's range — beside a tag called `main`, `main..<proposal>` is the tag's
-    range, and the job log then records as "what was approved" commits that are not what the promote lands."""
+    test of `<run id>@<commit id>`; its ONE command is the promote with `--require-pin`; and no raw `git` command
+    is left in it, nor a sentence that sends a person to run git in the canonical. Guards three things: the assert
+    being there as a task (commented out, its line still matches a text search); the pin being required on the
+    job (a bare run id approves whatever the proposal is by then); and the preview — the play's own `git log` ran
+    outside the seam, by short name, and recorded as "what was approved" a range the promote did not land. The
+    promoter prints its own preview now, from the ids it uses."""
     tasks = _promote_tasks()
     first = tasks[0]["ansible.builtin.assert"]["that"]
     assert first[0] == "run_id is defined" and len(first) == 2
-    assert re.fullmatch(r"run_id is regex\('[^']+', match_type='fullmatch'\)", first[1])
+    assert re.fullmatch(r"run_id is regex\('([^']+)',\s+match_type='fullmatch'\)", first[1])
     commands = [t["ansible.builtin.command"]["cmd"] for t in tasks if "ansible.builtin.command" in t]
-    gits = [c for c in commands if c.startswith("git ")]
-    assert len(gits) == 2, "the existence check and the preview are the play's raw git commands"
-    for cmd in gits:
-        words = cmd.split()
-        short = [w for w in words if w == "main" or w.startswith(("main..", "proposed/", "heads/"))
-                 or "..main" in w or "..proposed/" in w]
-        assert not short, "a short ref name in the play: %r" % (short,)
-        assert "refs/heads/proposed/{{" in cmd
-    assert any("refs/heads/main..refs/heads/proposed/{{ run_id }}" in c for c in gits)
-    assert any("show-ref --verify --quiet refs/heads/proposed/{{ run_id }}" in c for c in gits)
+    assert [c for c in commands if c.split()[0] == "git"] == [], "a raw git command is back in the promote play"
+    assert commands == ["python3 {{ repo_root }}/scripts/kontroll-promote.py {{ run_id }} --require-pin "
+                        "--repo {{ canonical }}"]
+    text = open(os.path.join(ROOT, "ansible", "playbooks", "promote.yml"), encoding="utf-8").read()
+    assert "git -C" not in text, "the play tells a person to run git in the canonical by hand"
 
 
 # ---- bytes to text -------------------------------------------------------------------------------------------- #
@@ -592,12 +630,14 @@ def test_show_calls_a_name_with_plain_spaces_exact(raw, text):
 def test_every_git_of_the_canonical_readers_runs_in_the_seam():
     """In `canon.py`, `service/pending.py` and `service/discard.py` every `subprocess` call is a git argv literal
     that passes `**canon.git_kwargs(…)` — and its verb is one of the verbs THAT module runs today: `for-each-ref`,
-    `merge-base` and `cat-file` (the batch reader of one commit's objects); `merge-base` and `diff`; `update-ref`. Guards the seam being a convention — a new call that
+    `merge-base`, `cat-file` (the batch reader of one commit's objects) and `rev-list` (ids and subjects, for the
+    promote's preview); `merge-base` and `diff`; `update-ref`. Guards the seam being a convention — a new call that
     inherits `os.environ`, names the repository with `-C`, or builds its verb at run time would run git on the
     canonical outside it — and guards its reach: the seam is proven for these verbs and for no others, so a reader
     rewritten onto another verb fails here, in the commit that adds the call, which is the moment to ask what the
     seam does for that verb."""
-    assert_git_runs_in_the_seam("scripts/kontroll/canon.py", verbs={"for-each-ref", "merge-base", "cat-file"})
+    assert_git_runs_in_the_seam("scripts/kontroll/canon.py",
+                                verbs={"for-each-ref", "merge-base", "cat-file", "rev-list"})
     assert_git_runs_in_the_seam("scripts/kontroll/service/pending.py", verbs={"merge-base", "diff"})
     assert_git_runs_in_the_seam("scripts/kontroll/service/discard.py", verbs={"update-ref"})
 
@@ -692,3 +732,137 @@ def test_the_seam_pin_refuses_the_ways_around_it_that_are_not_a_call(tmp_path, m
     with pytest.raises(AssertionError, match=re.escape(complaint)):
         _readonly_pins.assert_git_runs_in_the_seam("m.py", verbs=GIT_READONLY_VERBS)
 
+
+# ---- the preview's listing, the git directory, the play's own summary ---------------------------------------------- #
+
+def _commit_with_no_message(r, parent, when):
+    """A commit object whose message is empty — what `git commit --allow-empty-message -m ''` writes."""
+    tree = R.git(r.bare, "rev-parse", r.ff + "^{tree}")
+    body = (b"tree " + tree + b"\nparent " + parent.encode("ascii") + b"\nauthor t <t@example.test> " + when +
+            b"\ncommitter t <t@example.test> " + when + b"\n\n")
+    return R.git(r.bare, "hash-object", "-t", "commit", "-w", "--stdin", stdin=body).decode("ascii")
+
+
+def test_a_commit_with_no_message_does_not_shift_the_listing(tmp_path):
+    """Three commits ahead of `main` — the oldest with the SUBJECT `commit <forty hex digits>`, the middle one with
+    no message at all, the newest an ordinary one: `commits_between` lists exactly those three ids, newest first,
+    each with its own subject (the middle one's is empty). Guards the parse of `rev-list`'s output: git prints no
+    subject line for a format that expands to nothing, so with `--format=%s` the middle commit's missing line
+    shifted the pairs — the oldest commit's ID was returned as a subject, and the forty hex digits of its subject
+    as the id of a commit that is not in the repository. Whoever can stage a proposal chose both."""
+    r = R.build(tmp_path)
+    tree = R.git(r.bare, "rev-parse", r.ff + "^{tree}").decode()
+    planted = "c0ffee" + "0" * 34
+    oldest = R.commit(r.bare, tree, [r.main], subject=("commit " + planted).encode("ascii"), when=b"1750000001 +0000")
+    middle = _commit_with_no_message(r, oldest, b"1750000002 +0000")
+    newest = R.commit(r.bare, tree, [middle], subject=b"feat: the tip", when=b"1750000003 +0000")
+    assert canon.commits_between(r.bare, r.main, newest) == (
+        3, [(newest, b"feat: the tip"), (middle, b""), (oldest, ("commit " + planted).encode("ascii"))])
+    assert canon.commits_between(r.bare, r.main, middle) == (2, [(middle, b""), (oldest, b"commit " + planted.encode())])
+
+
+@pytest.mark.parametrize("key", ["i18n.logOutputEncoding", "i18n.commitEncoding"])
+def test_an_output_encoding_named_by_the_repository_does_not_rewrite_a_subject(tmp_path, key):
+    """With the repository's config naming UTF-16BE as the log output (or commit) encoding, and a proposal whose
+    subject is characters chosen so that their UTF-16 bytes read `real subject`, a newline, `commit <forty f>`, a
+    newline and another subject: `commits_between` returns ONE commit for the one commit there is, with the
+    subject's bytes as they were committed — the same answer as without the key. Guards a key of the repository's
+    config deciding what the promote prints as its evidence: `rev-list` re-encodes a formatted message to that
+    encoding, so the listing came back with a second commit line that names no commit of the repository."""
+    r = R.build(tmp_path)
+    tree = R.git(r.bare, "rev-parse", r.ff + "^{tree}").decode()
+    want = b"real subject\ncommit " + b"f" * 40 + b"\nfeat: looks like another commit "
+    subject = want[:len(want) // 2 * 2].decode("utf-16-be").encode("utf-8")
+    one = R.commit(r.bare, tree, [r.main], subject=subject)
+    plain = canon.commits_between(r.bare, r.main, one)
+    assert plain == (1, [(one, subject)])
+    R.git(r.bare, "config", key, "UTF-16BE")
+    assert canon.commits_between(r.bare, r.main, one) == plain
+
+
+def test_a_bare_repository_is_its_own_git_directory_whatever_it_holds(tmp_path):
+    """`git_dir` of a bare repository is the repository — also when it holds a directory called `.git`, empty or a
+    repository of its own; and for a checkout whose `.git` is a FILE (a linked worktree) it returns the path it
+    was given, which the seam then reports as unreadable. Guards the bare repository being asked FIRST: the
+    canonical's top directory is writable by the service, and `<canonical>/.git` taken for the repository moved
+    every promote into whatever that directory was."""
+    r = R.build(tmp_path)
+    os.makedirs(os.path.join(r.bare, ".git"))
+    assert canon.git_dir(r.bare) == r.bare
+    shutil.rmtree(os.path.join(r.bare, ".git"))
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", os.path.join(r.bare, ".git")], check=True,
+                   capture_output=True)
+    assert canon.git_dir(r.bare) == r.bare and canon.read_ref(canon.git_dir(r.bare), canon.MAIN)[0] == r.main
+    work, linked = tmp_path / "work", tmp_path / "linked"
+    subprocess.run(["git", "clone", "-q", R.build(tmp_path, "second").bare, str(work)], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(work), "worktree", "add", "-q", "--detach", str(linked)], check=True,
+                   capture_output=True)
+    assert os.path.isfile(linked / ".git") and canon.git_dir(str(linked)) == str(linked)
+    with pytest.raises(canon.Unreadable):
+        canon.read_ref(canon.git_dir(str(linked)), canon.MAIN)
+
+
+def test_the_listing_of_commits_with_no_git_or_a_slow_one_is_unreadable(tmp_path, monkeypatch):
+    """With no `git` on the path, and with a git that runs past its time limit, `commits_between` raises
+    `Unreadable`. Guards the promote's preview against the two exceptions `subprocess` raises that are not about
+    the repository: the command handles `Unreadable` and nothing else, so either one let out is a traceback where
+    a sentence and exit 1 were promised."""
+    r = R.build(tmp_path)
+    (tmp_path / "no-programs").mkdir()
+    with monkeypatch.context() as m:
+        m.setenv("PATH", str(tmp_path / "no-programs"))
+        with pytest.raises(canon.Unreadable):
+            canon.commits_between(r.bare, r.main, r.ff)
+
+    def too_slow(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+    monkeypatch.setattr(canon.subprocess, "run", too_slow)
+    with pytest.raises(canon.Unreadable):
+        canon.commits_between(r.bare, r.main, r.ff)
+
+
+def test_the_promote_play_reports_changed_by_the_promoters_own_line():
+    """The play's one command registers its result and is `changed` only when the promoter's stdout holds
+    `promoted`; the task after it prints that stdout. Guards the job's own summary: without `changed_when` every
+    run of the command reads as a change, and without the register the preview — the record of what was approved
+    — is not printed on a success."""
+    tasks = _promote_tasks()
+    command = next(t for t in tasks if "ansible.builtin.command" in t)
+    assert command["register"] == "_promote" and command["changed_when"] == "'promoted' in _promote.stdout"
+    assert tasks[-1]["ansible.builtin.debug"]["msg"] == "{{ _promote.stdout_lines }}"
+
+
+@pytest.mark.parametrize("label, listing", [
+    ("a record that names another commit than its header", "commit {a}\n{a}\0s\ncommit {b}\n{a}\0s\n"),
+    ("a first record that is not the commit asked about", "commit {b}\n{b}\0s\ncommit {a}\n{a}\0s\n"),
+    ("fewer records than the count", "commit {a}\n{a}\0s\n"),
+    ("a pair that is no record, between two that are",
+     "commit {a}\n{a}\0s\nsomething else\nx\0s\ncommit {b}\n{b}\0s\n"),
+    ("a header with no record under it", "commit {a}\n{a}\0s\ncommit {b}\n"),
+    ("a record with no separator", "commit {a}\n{a} s\ncommit {b}\n{b}\0s\n"),
+    ("no final newline", "commit {a}\n{a}\0s\ncommit {b}\n{b}\0s"),
+])
+def test_a_listing_that_is_not_in_the_form_asked_for_is_unreadable(tmp_path, monkeypatch, label, listing):
+    """`commits_between` handed, in place of git's answer, a listing that says two commits and then: a record
+    whose own id is not its header's, a first record that is not the commit asked about, fewer records than the
+    count, a pair that is no record standing between two that are, a header with nothing under it, a record without its separator, and output
+    cut before its last newline — each raises `Unreadable`; the same call with the well-formed listing returns
+    both commits. Guards the checks no real git reaches today: they are what makes the preview "the ids the
+    promote lands" rather than "whatever came back", and each of them could be deleted with every row that runs
+    git still green."""
+    r = R.build(tmp_path)
+    a, b = r.ff, r.main
+
+    def fake(text):
+        def run(argv, **kwargs):
+            out = b"2\n" if "--count" in argv else text.format(a=a, b=b).encode("ascii")
+            return subprocess.CompletedProcess(argv, 0, out, b"")
+        return run
+
+    monkeypatch.setattr(canon.subprocess, "run", fake("commit {a}\n{a}\0s one\ncommit {b}\n{b}\0s two\n"))
+    assert canon.commits_between(r.bare, r.base, a) == (2, [(a, b"s one"), (b, b"s two")])
+    monkeypatch.setattr(canon.subprocess, "run", fake(listing))
+    with pytest.raises(canon.Unreadable):
+        canon.commits_between(r.bare, r.base, a)

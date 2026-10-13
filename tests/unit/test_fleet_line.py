@@ -296,8 +296,13 @@ def test_the_promote_gate_refuses_a_bad_fleet_line_and_lets_its_removal_through(
     _fleet(repo, "enabled_modules:\n  - docker_host\n")
     _git(repo, "commit", "-qam", "removes the line")
     _git(repo, "checkout", "-q", "main")
-    assert "entry 2 " in (promote._would_brick_generate("0000000000b2", str(repo)) or "")
-    assert promote._would_brick_generate("0000000000c3", str(repo)) is None
+    def gate(run_id):
+        gitdir = promote.canon.git_dir(str(repo))
+        proposal = promote.canon.read_ref(gitdir, promote.canon.proposal_ref(run_id))
+        return promote._tree_refusal(proposal[0], gitdir, promote.canon.read_ref(gitdir, promote.canon.MAIN)[0])
+
+    assert "entry 2 " in (gate("0000000000b2") or "")
+    assert gate("0000000000c3") is None
 
 
 # --- the plays ----------------------------------------------------------------------------------------------------- #
@@ -727,10 +732,15 @@ def test_a_refusal_that_is_not_about_the_fleet_says_nothing_about_the_fleet(tmp_
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "main")
-    _git(repo, "branch", "proposed/0000000000f6")
-    monkeypatch.setattr(promote, "_would_brick_generate", lambda run_id, repo: (
+    _git(repo, "checkout", "-q", "-b", "proposed/0000000000f6")
+    (repo / "notes.txt").write_text("a change of its own\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "0000000000f6")
+    _git(repo, "checkout", "-q", "main")
+    # the gate refuses the PROPOSAL's commit (it is asked with `main`'s id beside it) and passes `main`'s own
+    monkeypatch.setattr(promote, "_tree_refusal", lambda commit_id, gitdir, main_id=None: (
         "requirements pin conflict: collection community.docker is pinned to both '==3.0.0' and '==4.0.0' by "
-        "different actuation units — re-pin one (gen-requirements fails closed)."))
+        "different actuation units — re-pin one (gen-requirements fails closed)." if main_id else None))
     assert promote.main(["0000000000f6", "--repo", str(repo)]) == 2
     err = capsys.readouterr().err
     assert "pin conflict" in err and "fleet file" not in err and "`main` already" not in err, err

@@ -82,18 +82,20 @@ hook, set by `local-canonical.yml` on every install) and the operator's CLI prom
    this posture forbids (closed 2026-07-05, dogfood VM 144; `tests/unit/test_staging_isolation.py`
    `test_staging_push_origin_never_advances_canonical_main`). A uid-1001 canonical `update` hook
    (`ansible/playbooks/files/canonical-update-hook.sh`) refuses such a push at the canonical as belt-and-braces.
-4. **The promote action** — `kontroll promote <run_id>` (CLI verb, operator-run = trusted) fast-forwards
-   `main ← proposed/<run_id>` **only if it is a fast-forward** (else it refuses), then deletes the proposal.
+4. **The promote action** — `kontroll-promote.py <run_id>@<commit_id>` (CLI verb, operator-run = trusted)
+   fast-forwards `main ← proposed/<run_id>` **only if it is a fast-forward** and **only if the proposal is still
+   the commit named** (else it refuses), then deletes the proposal — see "The promote lands one commit" below.
    **The in-GUI follow-on is built (item C, 2026-06-15):** the **`promote-proposal`** Semaphore template
    (`config/semaphore/templates/promote-proposal.yml` → `ansible/playbooks/promote.yml`) wraps the same verb,
-   driven by a `run_id` survey var. It runs as **gid 1001** against the canonical mounted `:rw` (gated on
+   driven by a `run_id` survey var that takes `<run id>@<commit id>`. It runs as **gid 1001** against the canonical mounted `:rw` (gated on
    `api_privileged` via `KONTROLL_CANONICAL_MODE`; `core.sharedRepository=group` makes new objects group-writable
    so no host root is needed). The promoter is **Semaphore** (admin-authed, mgmt-VLAN) — **not** the API token,
    so the proposer can never self-promote.
 
    **The GUI surfaces pending proposals read-only (#129):** a header **"Pending"** panel (`GET /api/pending` →
-   `kontroll.service.pending.list_pending`) lists every `proposed/<run_id>` ref + a one-click copy-`run_id`, so the
-   operator can feed the `promote-proposal` survey without shelling into the box for `git for-each-ref`. It is a
+   `kontroll.service.pending.list_pending`) lists every `proposed/<run_id>` ref + a one-click copy of
+   `<run id>@<commit id>`, so the operator can feed the `promote-proposal` survey without shelling into the box
+   (there, `kontroll-promote.py --list` prints the same form). It is a
    pure read of the canonical — it **never promotes** (no Promote control, no `promote_ref`/push import), so the
    two-key split is intact: the GUI proposes and *shows*, Semaphore promotes.
 
@@ -146,13 +148,40 @@ capability-promote path is live too, not just the API. The from-scratch recipe (
 4. **Promote — the `promote-proposal` Semaphore task (item C):** arm with `api_privileged` incl. `semaphore` in
    `stack_services` (so Semaphore is recreated mounting the canonical `:rw` via `KONTROLL_CANONICAL_MODE=rw`),
    run `python3 scripts/configure-semaphore.py` to register the template, then run **promote-proposal** in the
-   Semaphore UI and enter the `run_id`. It fast-forwards `main` as gid-1001 (no host root — the
-   `core.sharedRepository=group` + B group-write grant make the proposal refs/objects group-writable). CLI
-   fallback: `sudo python3 scripts/kontroll-promote.py <run_id> --repo /srv/kontroll.git`.
+   Semaphore UI and enter `<run id>@<commit id>` (the Pending panel's copy control). It fast-forwards `main` as
+   gid-1001 (no host root — the `core.sharedRepository=group` + B group-write grant make the proposal
+   refs/objects group-writable). CLI fallback: `sudo python3 scripts/kontroll-promote.py --list --repo
+   /srv/kontroll.git`, then `sudo python3 scripts/kontroll-promote.py <run_id>@<commit_id> --repo
+   /srv/kontroll.git`.
 5. **Verify:** `curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" https://<mgmt>:8444/audit/log`
    (`http://` under `frontend.tls_mode: byo_proxy` or `acme`, where the API serves plain HTTP to your proxy)
    → 200 (no token → 401); a capture-exception/capability promote returns `staged:true target_ref:proposed/<run_id>`
    with `main` unchanged; `sudo docker inspect kontroll-api` shows `/repo` rw + `/srv/kontroll.git` + **no** age key.
+
+### The promote lands one commit (decided 2026-10-13)
+
+The promote used to be a sequence of steps that each looked the proposal's NAME up for itself: a preview, a
+gate, a fast-forward check, the move of `main`, the delete. Between any two of them the name could come to mean
+another commit, so what was previewed, what was judged and what landed could be three commits. Decided:
+
+- **One read, then ids.** `kontroll-promote.py` reads `main` and the proposal once (by full ref name, in the
+  seam of `kontroll.canon`), and everything after is asked of the two commit ids. The move is one ref
+  transaction (`gitio.promote_commit`) that verifies the proposal is still that commit and moves `main` only
+  from the commit it was read as. Judged is promoted, or nothing moves.
+- **A human names the commit.** The approval is `<run id>@<commit id>` — the commit the operator was shown. The
+  `promote-proposal` job requires it; the box's shell accepts a bare run id (it promotes what the read returns,
+  and prints it first). A proposal that is no longer the named commit is refused. Whether the job requires the
+  pin is the maintainer's call; making it optional is the flag and the assert's pattern in `promote.yml`, and the
+  rows of `tests/unit/test_canon.py` that hold them.
+- **The promoter's printed preview is the record.** Before it moves anything the promote prints the run id, the
+  commit, and the commits being landed, from the ids it will use. That — in the Semaphore job log, or on the
+  terminal — is what was approved; the Pending panel is how one finds it.
+- **The gate fails closed** (the entry before this one): a tree it cannot read, or a gate that cannot run, is a
+  refusal. `--skip-conflict-check` therefore means "the check could not run and the node must move" or "I have
+  read this proposal myself" — it is no longer the way past a gate that had quietly skipped itself.
+- **Nobody is told to run git in the canonical by hand.** The play's raw `git` tasks and the messages that
+  suggested `git -C /srv/kontroll.git …` are gone; `kontroll-promote.py --list` and the Pending panel answer the
+  same questions through the tool's own reader.
 
 ## 6. What's deferred (named, not silently dropped)
 

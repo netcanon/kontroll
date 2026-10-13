@@ -5,15 +5,28 @@ The deployed API/GUI runs as a STAGING network service (`KONTROLL_STAGE_PUSHES=1
 `proposed/<run_id>` ref to the canonical — it CANNOT advance `main`. This operator-run command fast-forwards
 `main` into that proposal (**fast-forward ONLY** — it refuses a non-FF, so a proposal can never rewrite
 history), then deletes the proposal. Run it on the control node against the canonical (a bare repo works —
-`--repo /srv/kontroll.git`), or against a clone that has fetched the proposal. A Semaphore "approve" task
-wrapping this is the in-GUI follow-on. Decision record: docs/privileged-mutation-enablement.md (SECURITY.md C10).
+`--repo /srv/kontroll.git`), or against a clone that has fetched the proposal. The Semaphore `promote-proposal`
+task wraps it. Decision record: docs/privileged-mutation-enablement.md (SECURITY.md C10).
+
+ONE ID. The proposal's ref is read once, by its full name; the commit that read returned is the commit whose
+landing is previewed, the commit the gate judges, and the commit one ref transaction makes `main` — provided the
+proposal is STILL that commit when the transaction runs (`gitio.promote_commit`). A person says which commit they
+looked at by giving `<run id>@<commit id>` (the Pending panel's copy control and `--list` print that form); a
+proposal that has become another commit since is refused. `--require-pin` (the Semaphore job passes it) refuses a
+bare run id. The lines this command prints before it promotes — the run id, the commit, and the commits being
+landed — are the record of what was approved.
 
 Run it as ROOT (`sudo`) — or as a member of the canonical's owning group (gid 1001). It advances `main` and
 then deletes the staged proposal; the proposal ref is created by the container (uid 1001), so deleting it needs
 write to the group-1001 canonical (the FF of `main` itself works as the repo owner, but the proposal cleanup
 does not). Verified live 2026-06-15 (docs/privileged-mutation-enablement.md §5).
 
-Usage:  sudo python3 scripts/kontroll-promote.py <run_id> --repo /srv/kontroll.git
+Usage:  sudo python3 scripts/kontroll-promote.py <run_id>@<commit_id> --repo /srv/kontroll.git
+        sudo python3 scripts/kontroll-promote.py --list --repo /srv/kontroll.git
+
+Exit 0: promoted (or listed). Exit 1: nothing to promote as asked — not a run id, no such proposal, not the commit
+that was named, not a fast-forward, the canonical unreadable, or `main` moved meanwhile. Exit 2: the gate refused
+the proposal's tree, or could not run (`--skip-conflict-check` is the override).
 """
 import argparse
 import os
@@ -38,72 +51,33 @@ _GATE_ENV = ("PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "LANG", "LC_ALL", "PYT
 
 
 _GATE_SECONDS = 300      # the generator judges a tree in well under a second; this is the bound, not the budget
+_PREVIEW = 20            # how many of the commits a promote lands are printed, newest first
+_SUBJECT = 200           # how much of one subject is printed; the rest is counted, not shown
+
+
+def _subject(b):
+    """A commit subject as one line of the preview or of `--list`: escaped where it is not text (`canon.show`),
+    and cut — a subject is as long as its author made it, and a line of spaces as wide as the terminal reads as
+    the end of one line and the start of the next."""
+    text = canon.show(b)[0]
+    return text if len(text) <= _SUBJECT else "%s [+%d characters]" % (text[:_SUBJECT], len(text) - _SUBJECT)
+
+
+def _streams_never_raise():
+    """A subject is whatever was committed and the terminal's encoding is whatever the caller's locale says: a
+    character the encoding lacks used to end the preview — or `--list`, part-way down — in a traceback. It is
+    written as its backslash escape instead."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
 
 
 class GateCouldNotRun(Exception):
     """The gate did not judge the tree: git could not read the repository, this checkout has no generator, the
     generator could not start or did not finish. NOT a verdict on the proposal — and not a pass either: the promote
     is refused with this sentence, and `--skip-conflict-check` is the human's way past a gate that cannot run."""
-
-
-def _git_dir(repo):
-    """The git DIRECTORY `--repo` names: the path itself for a bare repository (the canonical), `<path>/.git` for a
-    clone. The gate names the repository to git outright (`kontroll.canon`), so nothing is discovered from a cwd."""
-    repo = repo or ROOT
-    dot = os.path.join(repo, ".git")
-    return dot if os.path.isdir(dot) else repo
-
-
-def _would_brick_generate(run_id, repo):
-    """FIX-M9 — the promote-time resolve gate. Read the PROSPECTIVE post-merge tree (`proposed/<run_id>`, which a
-    fast-forward makes `main`) and run THIS tree's `gen-requirements.py --conflict-check --root <copy>` over it:
-    report anything the collection generator would REFUSE there — two conflicting `==` pins for one collection, a
-    bad `signature_policy`, a collection entry or a trust statement it cannot render, a fleet whose
-    `enabled_modules` is not a list of class keys. It judges the whole tree, so a fault already on `main` refuses
-    every proposal until one that removes it. Returns the message to refuse on, or None to proceed; raises
-    `GateCouldNotRun` when nothing could be judged.
-
-    Why at promote: two units each fine against today's `main` can conflict with EACH OTHER once both are active;
-    only the FF moment (against the live `main`) is authoritative, so checking here means two conflicting `==` units
-    can NEVER both become active and brick a LATER deploy's generate (which halts pre-image-build, far from the
-    cause). Read-only: copies to a temp dir and never touches the canonical or `main`.
-
-    TRUSTED CODE, PROPOSAL DATA. The gate used to run the proposal's OWN copy of gen-requirements.py — i.e. execute
-    unreviewed code from the very ref it was judging, as root on the `sudo` CLI or with SOPS_AGE_KEY in scope on the
-    Semaphore path (2026-10-08 review, finding 3). Now the generator is the one THIS checkout ships (ROOT — canonical
-    `main`, or the baked image), the tree is handed to it as a DATA root (`--root`), and the subprocess sees only
-    the whitelisted environment above.
-
-    THE COMMIT ITSELF. The proposal's ref is read ONCE, by its full name (`canon.read_ref`), and what is judged is
-    the commit it names: its tree read object by object, each object re-hashed against its id
-    (`canon.read_tree_verified`). The gate used to judge `git archive`'s EXPORT of the ref — and an export is the
-    commit as its own `.gitattributes` make it (`export-ignore` hides a path from the judge, `export-subst`
-    rewrites a file for it), with the repository's filters run over it. A ref of that name that is a symbolic ref,
-    or names no commit, is not a proposal and is refused.
-
-    IT FAILS CLOSED. Every way the old gate answered "nothing to check" on a tree it had not read — the export
-    failed, the unpack failed, `modules/` was not in what came out, git or tar was missing — was a way for the
-    proposal (or the repository) to switch the gate off. Now: a tree the reader refuses is a refusal; a proposal
-    with no `modules/` where `main` has one is a refusal; and a gate that cannot run says so and refuses
-    (`GateCouldNotRun`). "Nothing to check" is left for one case, decided on trees that WERE read: neither the
-    proposal nor `main` has a device-class registry. A proposal that does not exist is not judged at all — the
-    fast-forward that follows refuses it (it reports "not a fast-forward") and the exit is non-zero."""
-    gitdir = _git_dir(repo)
-    try:
-        proposal = canon.read_ref(gitdir, canon.proposal_ref(run_id))
-        main = canon.read_ref(gitdir, canon.MAIN)
-    except canon.Unreadable as e:
-        raise GateCouldNotRun(str(e)) from None
-    if proposal is None:
-        return None                                      # no such proposal: the fast-forward says so and refuses
-    if proposal[2] or proposal[1] != "commit":
-        return "the ref of that name is not a proposal: it is a symbolic ref, or it names no commit"
-    if main is not None and (main[2] or main[1] != "commit"):
-        # Not "there is no `main` to compare with": the fast-forward below would move whatever this pointer leads to,
-        # and the one comparison the gate makes with `main` (does the proposal remove the registry) would be skipped.
-        return ("`main` is not a branch that names a commit — it is a symbolic ref, or it names another kind of "
-                "object — so nothing is promoted onto it")
-    return _tree_refusal(proposal[0], gitdir, main[0] if main else None)
 
 
 _SAID_LINES, _SAID_CHARS = 12, 600
@@ -130,10 +104,39 @@ def _reads_the_example(files):
 
 
 def _tree_refusal(commit_id, gitdir, main_id=None):
-    """The gate's answer for ONE commit of the repository at `gitdir`: why its tree is refused, or None — exactly
-    as `_would_brick_generate` describes. `main_id` is the commit `main` names (None when there is none to compare
-    with); it decides one thing only — whether a tree without `modules/` is a proposal that REMOVES the registry.
-    `main()` asks this of `main`'s own commit as well, to say WHERE a fault is."""
+    """FIX-M9 — the promote-time resolve gate, for ONE commit of the repository at `gitdir`: why its tree is
+    refused, or None. The commit is the one the promote will land (a fast-forward makes it `main`); the gate runs
+    THIS tree's `gen-requirements.py --conflict-check --root <copy>` over it and reports anything the collection
+    generator would REFUSE there — two conflicting `==` pins for one collection, a bad `signature_policy`, a
+    collection entry or a trust statement it cannot render, a fleet whose `enabled_modules` is not a list of class
+    keys. It judges the whole tree, so a fault already on `main` refuses every proposal until one that removes it
+    (`main()` asks this of `main`'s own commit as well, to say WHERE a fault is). Raises `GateCouldNotRun` when
+    nothing could be judged. `main_id` is the commit `main` names; it decides one thing only — whether a tree
+    without `modules/` is a proposal that REMOVES the registry.
+
+    Why at promote: two units each fine against today's `main` can conflict with EACH OTHER once both are active;
+    only the FF moment (against the live `main`) is authoritative, so checking here means two conflicting `==` units
+    can NEVER both become active and brick a LATER deploy's generate (which halts pre-image-build, far from the
+    cause). Read-only: copies to a temp dir and never touches the canonical or `main`.
+
+    TRUSTED CODE, PROPOSAL DATA. The gate used to run the proposal's OWN copy of gen-requirements.py — i.e. execute
+    unreviewed code from the very ref it was judging, as root on the `sudo` CLI or with SOPS_AGE_KEY in scope on the
+    Semaphore path (2026-10-08 review, finding 3). Now the generator is the one THIS checkout ships (ROOT — canonical
+    `main`, or the baked image), the tree is handed to it as a DATA root (`--root`), and the subprocess sees only
+    the whitelisted environment above.
+
+    THE COMMIT ITSELF. What is judged is the commit `commit_id` — an id, which the caller read from the proposal's
+    ref once — and its tree as it is: read object by object, each object re-hashed against its id
+    (`canon.read_tree_verified`). The gate used to judge `git archive`'s EXPORT of a ref name — and an export is
+    the commit as its own `.gitattributes` make it (`export-ignore` hides a path from the judge, `export-subst`
+    rewrites a file for it), with the repository's filters run over it.
+
+    IT FAILS CLOSED. Every way the old gate answered "nothing to check" on a tree it had not read — the export
+    failed, the unpack failed, `modules/` was not in what came out, git or tar was missing — was a way for the
+    proposal (or the repository) to switch the gate off. Now: a tree the reader refuses is a refusal; a proposal
+    with no `modules/` where `main` has one is a refusal; and a gate that cannot run says so and refuses
+    (`GateCouldNotRun`). "Nothing to check" is left for one case, decided on trees that WERE read: neither the
+    proposal nor `main` has a device-class registry."""
     gen = os.path.join(ROOT, "scripts", "gen-requirements.py")    # THIS tree's generator — never the proposal's copy
     try:
         files = canon.read_tree_verified(gitdir, commit_id)
@@ -167,42 +170,127 @@ def _tree_refusal(commit_id, gitdir, main_id=None):
         raise GateCouldNotRun(str(e)) from None
 
 
-def _main_is_refused(repo):
+def _main_is_refused(gitdir, main_id):
     """Is `main` as it stands refused by the gate? For the hint only: any failure to tell is a no."""
     try:
-        gitdir = _git_dir(repo)
-        main = canon.read_ref(gitdir, canon.MAIN)
-        return bool(main and main[1] == "commit" and not main[2] and _tree_refusal(main[0], gitdir))
-    except (canon.Unreadable, GateCouldNotRun):
+        return bool(_tree_refusal(main_id, gitdir))
+    except GateCouldNotRun:
         return False
+
+
+def _refuse(code, sentence):
+    sys.stderr.write("REFUSED: %s\n" % sentence)
+    return code
+
+
+def _list(gitdir):
+    """`--list`: every staged proposal as `<run id>@<commit id>  <subject>`, newest first — the form the promote
+    takes, read the way the promote reads (by full ref name, in the seam). What a person uses instead of running
+    git in the canonical by hand."""
+    try:
+        found, apart, left_out = canon.proposals(gitdir)
+    except canon.Unreadable as e:
+        sys.stderr.write("kontroll-promote: the canonical could not be read (%s)\n" % e)
+        return 1
+    for f in sorted(found, key=lambda f: f["when"], reverse=True):
+        print("%s@%s  %s" % (f["run_id"], f["oid"], _subject(f["subject"])))
+    if not found:
+        sys.stderr.write("kontroll-promote: no proposals are staged\n")
+    if apart:
+        sys.stderr.write("kontroll-promote: refs that are not proposals sit under refs/heads/proposed/ (the "
+                         "Pending panel lists them); none of them can be promoted\n")
+    if left_out:
+        sys.stderr.write("kontroll-promote: git left out at least one ref under refs/heads/proposed/ that it "
+                         "could not read\n")
+    return 0
 
 
 def main(argv):
     ap = argparse.ArgumentParser(
-        description="Promote a staged proposed/<run_id> ref to main (fast-forward only) — C10.")
-    ap.add_argument("run_id", help="the proposal's run_id (the proposed/<run_id> ref the service created)")
+        description="Promote a staged proposal to main (fast-forward only) — C10. The proposal is named by its "
+                    "run id, or by <run id>@<commit id> to say which commit you were shown.")
+    ap.add_argument("target", nargs="?", metavar="<run_id>[@<commit_id>]",
+                    help="the proposal's run id; with @<commit id>, promote only if the proposal is still that "
+                         "commit (the Pending panel's copy control and --list print this form)")
     ap.add_argument("--repo", default=None,
                     help="the canonical (bare) or clone git dir (default: this repo root)")
+    ap.add_argument("--list", action="store_true",
+                    help="print the staged proposals as <run id>@<commit id> and exit")
+    ap.add_argument("--require-pin", action="store_true",
+                    help="refuse a bare run id — the commit must be named (the Semaphore job passes this)")
     ap.add_argument("--skip-conflict-check", action="store_true",
                     help="skip the promote-time resolve gate (FIX-M9) — two conflicting == pins, a fleet line that "
                          "is not a class key, anything else the collection generator refuses (emergency override)")
-    args = ap.parse_args(argv)
-    if not canon.valid_run_id(args.run_id):
-        # The only strings that name a proposal are the ids the service mints. Anything else never reaches a ref
-        # name — and, since a leading hyphen is not one, never reaches git as an option.
-        sys.stderr.write("REFUSED: that is not a run id (twelve hex digits, or <UTC stamp>-<six hex digits>). The "
-                         "Pending panel and the propose response show the id of each staged proposal.\n")
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as e:                               # argparse printed its own sentence (or the help text)
+        if e.code in (0, None):
+            raise
         return 1
+    _streams_never_raise()
+    gitdir = canon.git_dir(args.repo or ROOT)
+    if args.list:
+        return _list(gitdir)
+    if not args.target:
+        return _refuse(1, "name the proposal: <run id>, or <run id>@<commit id> (--list prints what is staged)")
+    rid, at, pin = args.target.partition("@")
+    if not canon.valid_run_id(rid) or (at and not canon.valid_oid(pin)):
+        # The only strings that name a proposal are the ids the service mints, and the only pin is a full commit
+        # id. Anything else never reaches a ref name — and, since a leading hyphen is neither, never reaches git
+        # as an option.
+        return _refuse(1, "that is not a run id (twelve hex digits, or <UTC stamp>-<six hex digits>), or what "
+                          "follows the @ is not a full commit id. The Pending panel and --list show each staged "
+                          "proposal in the form to use.")
+    if args.require_pin and not pin:
+        return _refuse(1, "say which commit: <run id>@<commit id>. The Pending panel's copy control and "
+                          "`kontroll-promote.py --list` print it.")
+    # ONE read of each ref, by its full name. Everything after this is asked of the two ids.
+    try:
+        main_ref = canon.read_ref(gitdir, canon.MAIN)
+        proposal = canon.read_ref(gitdir, canon.proposal_ref(rid))
+    except canon.Unreadable as e:
+        return _refuse(1, "the canonical could not be read (%s). Nothing was promoted." % e)
+    if proposal is None:
+        return _refuse(1, "no staged proposal proposed/%s on the canonical (--list prints what is staged)." % rid)
+    if proposal[2] or proposal[1] != "commit":
+        return _refuse(1, "the ref proposed/%s is not a proposal: it is a symbolic ref, or it names no commit. "
+                          "Nothing was promoted." % rid)
+    if main_ref is None or main_ref[2] or main_ref[1] != "commit":
+        return _refuse(1, "refs/heads/main is missing, or is not a branch that names a commit — there is nothing "
+                          "to fast-forward. Nothing was promoted.")
+    main_id, commit_id = main_ref[0], proposal[0]
+    if pin and pin != commit_id:
+        return _refuse(1, "proposed/%s is not the commit you were shown: it is %s now. Look at it again (the "
+                          "Pending panel, or --list) before promoting." % (rid, commit_id))
+    if commit_id == main_id:
+        return _refuse(1, "proposed/%s is main's commit already: there is nothing to promote. Its ref was left "
+                          "behind by a promote that could not delete it, or was staged at main — discard it (the "
+                          "Pending panel)." % rid)
+    if canon.is_ancestor(gitdir, main_id, commit_id) is not True:
+        return _refuse(1, "proposed/%s is not a fast-forward of main (main moved past it, or the canonical could "
+                          "not say) — stage the change again against current main." % rid)
+    # What this approval lands — printed by the promoter itself, from the ids it will use. This, not a panel, is
+    # the record of what was approved.
+    try:
+        count, listed = canon.commits_between(gitdir, main_id, commit_id, _PREVIEW)
+    except canon.Unreadable as e:
+        return _refuse(1, "the commits this promote would land could not be listed (%s). Nothing was promoted." % e)
+    print("kontroll_run_id=%s promote proposed/%s commit=%s -> main (was %s); commits=%d"
+          % (rid, rid, commit_id, main_id, count))
+    for oid, subject in listed:
+        print("  %s  %s" % (oid[:12], _subject(subject)))
+    if count > len(listed):
+        print("  … and %d older" % (count - len(listed)))
     if not args.skip_conflict_check:                      # FIX-M9: refuse a promote that would brick the next generate
         try:
-            msg = _would_brick_generate(args.run_id, args.repo)
+            msg = _tree_refusal(commit_id, gitdir, main_id)
         except GateCouldNotRun as e:
             sys.stderr.write(
                 "REFUSED: promoting proposed/%s — the gate could not run, so the proposal's tree was not judged:\n"
                 "  %s\n"
                 "Nothing was promoted. Correct what the indented line names and run the promote again "
                 "(--skip-conflict-check promotes WITHOUT the gate — the human's override, for a node that must "
-                "move while the gate cannot run).\n" % (args.run_id, e))
+                "move while the gate cannot run).\n" % (rid, e))
             return 2
         if msg:
             # The gate judges the whole tree, so ask the same of `main` as it stands: when `main` is refused too, the
@@ -212,14 +300,14 @@ def main(argv):
             where = ("(`main` as it stands is refused as well: the fault is on `main` already, and every proposal is "
                      "refused until it is corrected there — on the node, correct it in the checkout and deploy; or "
                      "promote a proposal that corrects it.)\n"
-                     if _main_is_refused(args.repo) else "")
+                     if _main_is_refused(gitdir, main_id) else "")
             sys.stderr.write(
                 "REFUSED: promoting proposed/%s — the proposal's tree does not resolve, so the next bootstrap (and, "
                 "for a fleet line, the next deploy) would stop:\n  %s\n"
                 "The indented line says what to correct (--skip-conflict-check overrides this gate).\n%s"
-                % (args.run_id, msg, where))
+                % (rid, msg, where))
             return 2
-    return 0 if gitio.promote_ref(args.run_id, cwd=args.repo) else 1
+    return 0 if gitio.promote_commit(rid, commit_id, main_id, gitdir) else 1
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import json
 import os
 import subprocess
 
-from kontroll import paths
+from kontroll import canon, paths
 
 # The attribution trailer every machine-made commit carries (the API/GUI propose paths and the operator CLI's
 # `--commit`), in ONE place. It used to be eighteen string literals naming the model that wrote the code — an
@@ -55,13 +55,6 @@ def _run(cmd, cwd=None, quiet_args=0):
     shown = cmd[:len(cmd) - quiet_args] + (["***"] if quiet_args else [])
     print("  $ %s" % " ".join(shown))
     return subprocess.run(cmd, cwd=cwd or paths.write_root()).returncode
-
-
-def _out(cmd, cwd=None):
-    """The READ twin of _run: capture one value (a ref's object id) for promote_ref's compare-and-swap. Reads
-    only — every write still goes through _run, the one seam the tests monkeypatch and the read-only pins watch."""
-    p = subprocess.run(cmd, cwd=cwd or paths.write_root(), capture_output=True, text=True)
-    return p.returncode, p.stdout.strip()
 
 
 def offsite_remote_exists():
@@ -414,30 +407,112 @@ def commit_and_push(paths, message_lines, push_origin=False, run_id=None):
 
 
 def promote_ref(run_id, cwd=None):
-    """The trusted PROMOTE half of C10's propose-then-promote: fast-forward `main` to the staged proposal
-    `proposed/<run_id>`. REFUSES (returns False) unless the proposal is a strict fast-forward of `main` (so a
-    proposal can never rewrite history — defence-in-depth with the bare repo's `receive.denyNonFastForwards`),
-    then advances `main` and deletes the promoted proposal. Operator-run (the trusted human / a Semaphore
-    approval task) against the canonical — the network service can only CREATE proposals, never run this. Goes
-    through _run (the one monkeypatched seam), so the FF-gate is testable offline."""
-    ref = "refs/heads/proposed/%s" % run_id
-    # COMPARE-AND-SWAP, not check-then-set. Read the object id `main` has NOW, run the fast-forward check against
-    # it, then hand that id to `update-ref` as the old-value operand: git refuses the update if `main` moved in
-    # between ("is at X but expected Y"). Without it, two promotes racing (the Semaphore task and a CLI run, or
-    # two CLI runs) let the second one overwrite the first with a ref that is no longer a fast-forward of what it
-    # replaces — a promote lost silently while both report success (2026-10-08 review, finding 9).
-    rc, main_was = _out(["git", "rev-parse", "--verify", "--quiet", "refs/heads/main"], cwd=cwd)
-    if rc != 0 or not main_was:
-        print("  ! refuse: cannot read refs/heads/main (no canonical main to fast-forward) — nothing promoted")
+    """Promote the proposal a RUN ID names: read `main` and `refs/heads/proposed/<run_id>` once, each by its full
+    name (`canon.read_ref`), and land the commit that read returned (`promote_commit`). Kept for a caller that
+    holds a run id and nothing else (the permissive edition's automaton is one; in this tree its callers are the
+    tests); `scripts/kontroll-promote.py` — the promote a person or the Semaphore job
+    runs — reads the refs itself, judges the commit, and calls `promote_commit` with the id it judged. Returns
+    False (and says why) when either ref is absent, is a symbolic ref, or names no commit."""
+    repo = canon.git_dir(cwd or paths.write_root())
+    try:
+        main = canon.read_ref(repo, canon.MAIN)
+        proposal = canon.read_ref(repo, canon.proposal_ref(run_id))
+    except ValueError:
+        print("  ! refuse: that is not a run id — nothing promoted")
         return False
-    if _run(["git", "merge-base", "--is-ancestor", "refs/heads/main", ref], cwd=cwd) != 0:
+    except canon.Unreadable as e:
+        print("  ! refuse: the canonical could not be read (%s) — nothing promoted" % e)
+        return False
+    if main is None or main[2] or main[1] != "commit":
+        print("  ! refuse: cannot read refs/heads/main as a branch that names a commit (no canonical main to "
+              "fast-forward) — nothing promoted")
+        return False
+    if proposal is None or proposal[2] or proposal[1] != "commit":
+        print("  ! refuse: no proposal proposed/%s (no such ref, or the ref of that name is not a proposal) — "
+              "nothing promoted" % run_id)
+        return False
+    return promote_commit(run_id, proposal[0], main[0], repo)
+
+
+def promote_commit(run_id, oid, main_id, repo):
+    """The trusted PROMOTE half of C10's propose-then-promote, for ONE COMMIT: make `refs/heads/main` the commit
+    `oid`, provided `main` is still `main_id` and `refs/heads/proposed/<run_id>` is still `oid` — then retire the
+    proposal. `repo` is the canonical's git directory. Returns True when `main` is `oid`.
+
+    WHAT IS JUDGED IS WHAT IS PROMOTED. The caller read both refs once and judged the commit `oid` (the gate, the
+    human's pin). Nothing here looks a name up again: the fast-forward question is asked of the two ids, and ONE
+    ref transaction (`update-ref --stdin`: `verify` the proposal, `update` main with its old value, both under
+    `option no-deref`) either finds both refs exactly as they were read and moves `main`, or changes nothing. A
+    proposal re-pointed after it was judged — a second push to the same name — fails the `verify`; a `main` moved
+    by another promote fails the old value (2026-10-08 review, finding 9: two promotes racing used to let the
+    second overwrite the first). `no-deref`: a ref that turned SYMBOLIC is compared and moved as the name it is,
+    never as the ref it points at.
+
+    The proposal is retired by compare-and-delete (`update-ref --no-deref -d <ref> <oid>`), also without following
+    a pointer: a proposal that is a symbolic ref costs that one name, not the ref it points at. A failure there is
+    a note — `main` has moved, and that is what was asked for.
+
+    Every git here runs in the seam (`canon.git_kwargs`): no hook of the canonical runs on the update, and of the
+    caller's environment git is handed where programs and temporary files are and the locale, and nothing else —
+    a promote is run by an identity that holds more than the service does."""
+    try:
+        ref = canon.proposal_ref(run_id)                       # the only way a string of the caller's gets into the
+    except ValueError:                                         # transaction text below: a minted id, or nothing
+        print("  ! refuse: that is not a run id — nothing promoted")
+        return False
+    if not (canon.valid_oid(oid) and canon.valid_oid(main_id)):
+        print("  ! refuse: the commits to promote are not named by full ids — nothing promoted")
+        return False
+    if oid == main_id or canon.is_ancestor(repo, main_id, oid) is not True:
         print("  ! refuse: proposed/%s is not a fast-forward of main (re-propose against current main)" % run_id)
         return False
-    if _run(["git", "update-ref", "refs/heads/main", ref, main_was], cwd=cwd) != 0:
-        print("  ! refuse: main moved while promoting proposed/%s (another promote landed first) — "
-              "re-run to re-check it against the new main" % run_id)
+    txn = ("start\n"
+           "option no-deref\nverify %s %s\n"
+           "option no-deref\nupdate %s %s %s\n"
+           "prepare\ncommit\n" % (ref, oid, canon.MAIN, oid, main_id)).encode("ascii")
+    try:
+        p = subprocess.run(["git", "update-ref", "--stdin"], input=txn, capture_output=True, timeout=30,
+                           **canon.git_kwargs(repo))
+    except (OSError, subprocess.SubprocessError, canon.Unreadable):
+        # git did not start, was refused the repository, or was stopped at its time limit. Only the last can have
+        # moved anything, and a git that is stopped leaves its lock files: say what `main` IS, from a fresh read.
+        try:
+            now = canon.read_ref(repo, canon.MAIN)
+        except canon.Unreadable:
+            now = None
+        if now != (oid, "commit", ""):
+            print("  ! refuse: git could not run the promote on the canonical, or did not finish — %s"
+                  % ("the canonical could not be read afterwards" if now is None else
+                     "nothing promoted, main is not this commit"))
+            return False
+        p = None                                               # it finished the move before it was stopped
+    if p is not None and p.returncode != 0:
+        print("  ! refuse: %s — nothing promoted, main is untouched" % _what_moved(repo, ref, oid, main_id))
         return False
-    if _run(["git", "update-ref", "-d", ref], cwd=cwd) != 0:   # best-effort: main is already advanced
+    try:
+        rc = subprocess.run(["git", "update-ref", "--no-deref", "-d", "--end-of-options", ref, oid],
+                            capture_output=True, timeout=30, **canon.git_kwargs(repo)).returncode
+    except (OSError, subprocess.SubprocessError, canon.Unreadable):
+        rc = 1
+    if rc != 0:                                                # best-effort: main is already advanced
         print("  ~ note: promoted main, but could not delete proposed/%s (stale ref left behind)" % run_id)
-    print("  + promoted proposed/%s -> main" % run_id)
+    print("  + promoted proposed/%s (commit %s) -> main" % (run_id, oid))
     return True
+
+
+def _what_moved(repo, ref, oid, main_id):
+    """Why the promote's transaction was refused, said from a fresh read of the two refs — never from git's own
+    error text, which is in the caller's locale and quotes names."""
+    try:
+        main, proposal = canon.read_ref(repo, canon.MAIN), canon.read_ref(repo, ref)
+    except canon.Unreadable:
+        return "the canonical could not be read after the promote was refused"
+    if main is None or main[0] != main_id or main[2]:
+        return ("main moved while this proposal was being promoted (another promote landed first) — run the "
+                "promote again to check it against the new main")
+    if proposal is None or proposal[0] != oid or proposal[2]:
+        return ("the proposal is no longer the commit that was judged (it was re-pointed or removed) — look at "
+                "it again before promoting")
+    return ("git refused the transaction although both refs are as they were read: a lock file is held in the "
+            "canonical (another promote is running — run this one again; or a git that was stopped left one "
+            "behind — docs/troubleshooting.md §7), or this user cannot write the canonical")

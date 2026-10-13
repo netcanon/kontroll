@@ -144,6 +144,22 @@ def git_env(repo):
 _NOT_A_LINK = ("refs", "packed-refs", "logs", "objects", "HEAD", "config")
 
 
+def git_dir(path):
+    """The git DIRECTORY of the repository at `path`: the path itself when it IS one (a bare repository — the
+    canonical), else `<path>/.git` for a clone. The seam names a repository to git outright, so every caller that
+    is handed "a repository" by a person or a play turns it into the directory once, here, and nothing is
+    discovered from a working directory.
+
+    The path itself is asked FIRST. A directory called `.git` inside the canonical is something a writer of the
+    canonical can make; taken for the repository, it had every promote read, judge and move the refs of a
+    repository that writer built, and report success while the canonical's `main` stood still (the same redirection
+    a `commondir` file is refused for in `git_kwargs`)."""
+    if all(os.path.lexists(os.path.join(path, part)) for part in ("HEAD", "objects", "refs")):
+        return path
+    dot = os.path.join(path, ".git")
+    return dot if os.path.isdir(dot) else path
+
+
 def git_kwargs(repo):
     """The keyword arguments of every `subprocess` call that runs git on the canonical: `**git_kwargs(repo)`. One
     function, so that what such a process runs in — and whether it runs at all — is decided in one place.
@@ -282,6 +298,46 @@ def is_ancestor(repo, ancestor, descendant, timeout=5):
     except (OSError, subprocess.SubprocessError, Unreadable):
         return None
     return True if rc == 0 else False if rc == 1 else None
+
+
+def commits_between(repo, main_id, oid, limit=20, timeout=10):
+    """What a fast-forward of `main_id` to `oid` would land, for a person to read before it happens:
+    `(count, [(commit id, subject bytes), …])` — the number of commits reachable from `oid` and not from `main_id`,
+    and the newest `limit` of them. Both are ids; subjects stay bytes (see `show`). Raises `Unreadable` when git
+    cannot say. `rev-list` prints ids and subjects and starts no program for either.
+
+    THE LISTING IS ONE RECORD PER COMMIT, AND EACH RECORD NAMES ITS COMMIT TWICE. git prints `commit <id>` and
+    then the format's line — but NO line at all when the format expands to nothing, so with a bare `%s` a commit
+    whose message is empty shifted every pair after it, and a neighbour whose subject was the text `commit <40
+    hex>` was then read as a commit of that id. The format is `%H%x00%s`: never empty, and the id in it must be
+    the id of the header above it. `--encoding=none` because the subject is otherwise RE-ENCODED to what the
+    repository's `i18n.logOutputEncoding` / `i18n.commitEncoding` names — to UTF-16, a subject of chosen
+    characters comes out as bytes that hold a newline and a second `commit <id>` line. And the listing must be
+    as long as the count says and open with `oid` itself: the commit that lands is the first line of the preview."""
+    if not (valid_oid(main_id) and valid_oid(oid)):
+        raise Unreadable("the commits to compare are not named by full ids")
+    try:
+        n = subprocess.run(["git", "rev-list", "--count", oid, "^" + main_id],
+                           capture_output=True, timeout=timeout, **git_kwargs(repo))
+        p = subprocess.run(["git", "rev-list", "--max-count=%d" % limit, "--encoding=none", "--format=%H%x00%s",
+                            oid, "^" + main_id], capture_output=True, timeout=timeout, **git_kwargs(repo))
+    except (OSError, subprocess.SubprocessError):
+        raise Unreadable("git could not be run on the canonical") from None
+    count = _text(n.stdout.strip())
+    if n.returncode != 0 or p.returncode != 0 or not count.isdigit():
+        raise Unreadable("git could not list the commits between the two ids")
+    odd = Unreadable("git's listing of the commits is not in the form that was asked for")
+    lines, listed = p.stdout.split(b"\n"), []
+    if lines.pop() != b"" or len(lines) % 2:
+        raise odd
+    for i in range(0, len(lines), 2):                     # `commit <id>`, then `<id>` NUL `<subject>`
+        head, (named, nul, subject) = _text(lines[i]), lines[i + 1].partition(b"\0")
+        if not (head.startswith("commit ") and valid_oid(head[7:]) and nul and _text(named) == head[7:]):
+            raise odd
+        listed.append((head[7:], subject))
+    if len(listed) != min(int(count), max(limit, 0)) or (listed and listed[0][0] != oid):
+        raise odd
+    return int(count), listed
 
 
 def show(b):

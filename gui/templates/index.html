@@ -1226,8 +1226,14 @@ function pendingRow(p, data) {
       row.appendChild(ET('div', 'meta warn', 'A name above holds bytes that cannot be shown as written — it is '
         + 'shown escaped.', 'pending-path-inexact'));
   }
-  const copy = E('button', 'mini', 'copy run_id', 'pending-copy-runid');         // the load-bearing affordance
-  copy.onclick = () => copyRunId(copy, p.run_id);
+  // The load-bearing affordance. What it copies is what the promote takes: `<run id>@<commit id>` — WHICH proposal,
+  // and which commit of it this row shows. The promote refuses if the proposal has become another commit since, so
+  // what was read here is what is approved there. (A row without a full commit id copies the bare run id, which
+  // the Semaphore job refuses — better than a pin that names nothing.)
+  const pinned = /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(p.sha || '') ? p.run_id + '@' + p.sha : p.run_id;
+  const copy = E('button', 'mini', 'copy to promote', 'pending-copy-runid');
+  copy.title = 'Copy <run id>@<commit id> for the Semaphore promote-proposal task';
+  copy.onclick = () => copyRunId(copy, pinned);
   row.appendChild(copy);
   // A stale proposal can't be promoted — steer the operator to re-propose instead of the (would-be-refused) recipe.
   // `promotable === null` (strictly: a payload without the key keeps the recipe) is "could not be told" — not
@@ -1309,8 +1315,9 @@ function reproposeFromPending(hint) {
 // twice). NEVER a run trigger — the GUI cannot promote (C10 two-key). Plain text only (no deep-link — scope-2).
 function pendingPromoteHint(p, data) {
   const task = (data && data.promote_task) || 'promote-proposal';
-  const hint = E('div', 'meta', 'To promote: open <b>Semaphore</b> → run the <b data-slot="task"></b> task → paste '+
-    'this run_id into the <i>Proposal run_id</i> survey field. (The GUI cannot promote — C10 two-key safety.)',
+  const hint = E('div', 'meta', 'To promote: use <b>copy to promote</b>, open <b>Semaphore</b> → run the '+
+    '<b data-slot="task"></b> task → paste into the <i>Proposal run_id@commit</i> survey field. The job prints the '+
+    'commits it lands before it lands them. (The GUI cannot promote — C10 two-key safety.)',
     'pending-promote-hint');
   hint.querySelector('[data-slot=task]').textContent = task;      // the task name comes from the server -> text
   return hint;

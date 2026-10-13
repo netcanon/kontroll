@@ -126,7 +126,9 @@ def _entry(cdir, main_id, found, deadline):
     oid = found["oid"]
     promotable, changes, changes_read = None, [], False
     if main_id and time.monotonic() < deadline:
-        promotable = canon.is_ancestor(cdir, main_id, oid)
+        # A proposal that IS main's commit has nothing left to land (the promote refuses it): not promotable, so
+        # that the panel offers its Discard control and not a pin.
+        promotable = False if oid == main_id else canon.is_ancestor(cdir, main_id, oid)
         base_id = _merge_base(cdir, main_id, oid)
         listed = _changes(cdir, base_id, oid) if base_id else None
         if listed is not None:

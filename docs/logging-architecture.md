@@ -107,6 +107,16 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   (`/var/lib/kontroll/ansible-log`, surviving the ephemeral job clone) **and** a host
   logrotate bound on it (`deploy-stack.yml` drops `/etc/logrotate.d/kontroll-ansible-log`,
   `copytruncate` so Vector's exact-path tail survives rotation; `test_ansible_log_rotate.py`).
+- ✅ **The promote's own line** — before it moves anything, `scripts/kontroll-promote.py` prints
+  `kontroll_run_id=<the proposal's run id> promote proposed/<run id> commit=<commit id> -> main (was
+  <commit id>); commits=<n>` and then the commits it lands (id and subject, escaped where a subject
+  is not text). It goes to the Semaphore job output for the `promote-proposal` task, or to the
+  operator's terminal. The run id is the PROPOSAL's — the same id the propose-side audit line
+  carries, so the two ends of one change meet on it — and the commit id is what was approved: the
+  promote lands exactly that commit or nothing (SECURITY.md C10). No credential is in it. The
+  `promote-proposal` job's log also carries the job's OWN stamp from `_log-run-id.yml`
+  (`kontroll_run_id=<UTC stamp>`), printed first; the promoter's line is the one that ends in
+  `commits=<n>`.
 - ✅ **Capture history** — `backup-configs.yml`'s final play commits a timestamped
   snapshot of the captures dir into a **local-only git history** (no remote, inside the
   0700/uid-1001 dir, never pushed — as protected as the captures). `git diff` now answers
