@@ -11,6 +11,25 @@ NetConfig project.
 
 ## [Unreleased]
 
+### feat(promote): `--onto <commit id>` — a judgement that depended on `main` names the commit it was made against (2026-10-13)
+
+The promote lands the commit that was judged — but "judged" can mean two things. The gate judges the proposal's
+TREE: the same whatever `main` is. A caller that reads `main` itself and judges the proposal's DIFF against it —
+which paths change — has approved a change relative to THAT commit, and the promote reads `main` for itself a
+moment later. A proposal that is a fast-forward of both could then land a change that, measured from where
+`main` had moved to, nobody judged (it may take back what was promoted in between).
+
+- `kontroll-promote.py … --onto <commit id>` promotes only if `refs/heads/main` is that commit (exit 1 otherwise:
+  "main is not the commit this promote was to land on"). The transaction moves `main` only from the commit the
+  command read, so the named commit is the old value of the one ref update.
+- The operand is a full commit id, never a name.
+- Nothing passes it today: the `promote-proposal` job and a person at a shell approve a commit, and the gate
+  judges its tree. It is for a caller that classifies a change list.
+
+**New here:** in `tests/unit/test_kontroll_promote.py` — a proposal that is a fast-forward of the `main` it was
+judged against AND of the commit `main` moved to is refused with `--onto` (control: it lands without); a name in
+the operand's place; `main` moved after the command's own read.
+
 ### fix(canonical): the canonical's `update` hook is an allow-list — the network service's uid may create a proposal by push, and nothing else (2026-10-13)
 
 The hook on the canonical refused one thing: a push to `refs/heads/main` from the network service's uid (1001).

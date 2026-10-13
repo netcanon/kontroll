@@ -690,7 +690,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   **What a human confirms.** An approval names the proposal AND the commit: `<run id>@<commit id>`. The Pending
   panel's copy control yields that form for the row the operator read, and `kontroll-promote.py --list` prints
   it on the box; the promote refuses when the proposal has become another commit since ("not the commit you were
-  shown"). The `promote-proposal` job requires the pinned form (`--require-pin`); at the box's shell a bare run
+  shown"). A caller whose judgement of a proposal depended on what `main` was — a change list read against it —
+  can name that commit too (`--onto <commit id>`): the promote then moves `main` from that commit or not at all.
+  The `promote-proposal` job requires the pinned form (`--require-pin`); at the box's shell a bare run
   id is still accepted and promotes the commit the read returns. **The Pending panel is a convenience; the
   promoter's own printed preview is the evidence** — the panel is rendered by the service that staged the
   proposal, while the lines in the job log (or on the terminal) are printed by the promote itself, from the ids

@@ -16,6 +16,12 @@ proposal that has become another commit since is refused. `--require-pin` (the S
 bare run id. The lines this command prints before it promotes — the run id, the commit, and the commits being
 landed — are the record of what was approved.
 
+AND, FOR A CALLER WHOSE JUDGEMENT DEPENDED ON `main`: `--onto <commit id>` promotes only if `refs/heads/main` IS
+that commit. The gate here judges the proposal's TREE, which is the same whatever `main` is; a caller that judged
+the proposal's DIFF against a `main` it read itself (which paths change — a classifier, a reviewer of a change
+list) approved a change RELATIVE to that commit, and this command reads `main` for itself, a moment later. Named,
+the commit it was judged against is the commit `main` is moved FROM, or nothing moves.
+
 Run it as ROOT (`sudo`) — or as a member of the canonical's owning group (gid 1001). It advances `main` and
 then deletes the staged proposal; the proposal ref is created by the container (uid 1001), so deleting it needs
 write to the group-1001 canonical (the FF of `main` itself works as the repo owner, but the proposal cleanup
@@ -25,7 +31,8 @@ Usage:  sudo python3 scripts/kontroll-promote.py <run_id>@<commit_id> --repo /sr
         sudo python3 scripts/kontroll-promote.py --list --repo /srv/kontroll.git
 
 Exit 0: promoted (or listed). Exit 1: nothing to promote as asked — not a run id, no such proposal, not the commit
-that was named, not a fast-forward, the canonical unreadable, or `main` moved meanwhile. Exit 2: the gate refused
+that was named, `main` not the commit named with `--onto`, not a fast-forward, the canonical unreadable, or
+`main` moved meanwhile. Exit 2: the gate refused
 the proposal's tree, or could not run (`--skip-conflict-check` is the override).
 """
 import argparse
@@ -218,6 +225,9 @@ def main(argv):
                     help="print the staged proposals as <run id>@<commit id> and exit")
     ap.add_argument("--require-pin", action="store_true",
                     help="refuse a bare run id — the commit must be named (the Semaphore job passes this)")
+    ap.add_argument("--onto", default=None, metavar="<commit_id>",
+                    help="promote only if refs/heads/main is this commit — for a caller that judged the proposal "
+                         "against the main it read (a change list, a classifier); refused when main is another")
     ap.add_argument("--skip-conflict-check", action="store_true",
                     help="skip the promote-time resolve gate (FIX-M9) — two conflicting == pins, a fleet line that "
                          "is not a class key, anything else the collection generator refuses (emergency override)")
@@ -244,6 +254,9 @@ def main(argv):
     if args.require_pin and not pin:
         return _refuse(1, "say which commit: <run id>@<commit id>. The Pending panel's copy control and "
                           "`kontroll-promote.py --list` print it.")
+    if args.onto is not None and not canon.valid_oid(args.onto):
+        return _refuse(1, "--onto takes a full commit id: the commit refs/heads/main was when the proposal was "
+                          "judged (never a ref name — a name is what this is here to rule out).")
     # ONE read of each ref, by its full name. Everything after this is asked of the two ids.
     try:
         main_ref = canon.read_ref(gitdir, canon.MAIN)
@@ -259,6 +272,12 @@ def main(argv):
         return _refuse(1, "refs/heads/main is missing, or is not a branch that names a commit — there is nothing "
                           "to fast-forward. Nothing was promoted.")
     main_id, commit_id = main_ref[0], proposal[0]
+    if args.onto is not None and args.onto != main_id:
+        # The caller's judgement was of this proposal RELATIVE to another `main`. Whatever is a fast-forward of
+        # both would land a change, measured from where `main` is now, that nobody judged.
+        return _refuse(1, "main is not the commit this promote was to land on: it is %s now (it was to be %s). "
+                          "Nothing was promoted — judge proposed/%s again, against main as it is."
+                          % (main_id, args.onto, rid))
     if pin and pin != commit_id:
         return _refuse(1, "proposed/%s is not the commit you were shown: it is %s now. Look at it again (the "
                           "Pending panel, or --list) before promoting." % (rid, commit_id))

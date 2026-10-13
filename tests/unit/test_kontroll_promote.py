@@ -909,3 +909,71 @@ def test_the_promote_command_starts_one_process_and_it_is_the_generator():
     argv = starts[0].args[0]
     assert isinstance(argv, ast.List) and ast.unparse(argv.elts[0]) == "sys.executable"
     assert not [k.arg for k in starts[0].keywords if k.arg in ("shell", "executable")]
+
+
+# ---- `--onto`: a judgement that depended on `main` names the commit it was made against --------------------------- #
+
+def _line_of_three(tmp_path):
+    """A canonical `main` ── first ── second: `first` is a commit a human could promote, `second` is staged under
+    `RID` on top of it and is a fast-forward of `main` AND of `first`. Returns the namespace with both ids."""
+    r = _canonical(tmp_path)
+    r.first = R.commit(r.bare, R.snapshot(r.bare, {**_CLEAN, b"posture.yml": b"armed: false\n"}), [r.main],
+                       subject=b"feat: a change a human promotes")
+    r.second = R.commit(r.bare, R.snapshot(r.bare, {**_CLEAN, b"tile.yml": b"- a tile\n"}), [r.first],
+                        subject=b"feat: takes the first change back, and adds a tile")
+    R.set_ref(r.bare, canon.PROPOSED + RID, r.second)
+    return r
+
+
+@pytest.mark.usefixtures("isolated_git")
+def test_onto_lands_only_on_the_main_the_proposal_was_judged_against(tmp_path, capsys):
+    """A proposal that is a fast-forward of `main` and of the commit a human then promotes: handed `--onto <the
+    main it was judged against>` after `main` has moved to that commit, the promote exits 1 — "main is not the
+    commit this promote was to land on" — and nothing moves; handed `--onto <main as it is now>` it promotes.
+    Control: without `--onto` the same promote goes through. Guards a judgement made of a proposal's DIFF: seen
+    from the older `main` this proposal adds one file; landed on the newer one it also takes back what the human
+    just promoted — a change nobody judged, on a verdict given to another. (The gate judges the tree, which is
+    the same either way: it cannot see this.)"""
+    r = _line_of_three(tmp_path)
+    judged_against = r.main
+    R.set_ref(r.bare, canon.MAIN, r.first)                           # a human's promote lands in between
+    pinned = "%s@%s" % (RID, r.second)
+    assert promote.main([pinned, "--onto", judged_against, "--repo", r.bare]) == 1
+    cap = capsys.readouterr()
+    assert "main is not the commit this promote was to land on" in cap.err and r.first in cap.err and cap.out == ""
+    assert _main_of(r.bare) == r.first and canon.read_ref(r.bare, canon.PROPOSED + RID)[0] == r.second
+    assert promote.main([pinned, "--onto", r.first, "--repo", r.bare]) == 0 and _main_of(r.bare) == r.second
+    control = _line_of_three(tmp_path / "control")
+    R.set_ref(control.bare, canon.MAIN, control.first)
+    assert promote.main(["%s@%s" % (RID, control.second), "--repo", control.bare]) == 0, "control: it IS a fast-forward"
+    assert _main_of(control.bare) == control.second
+
+
+@pytest.mark.usefixtures("isolated_git")
+@pytest.mark.parametrize("bad", ["main", "refs/heads/main", "HEAD", "", "0" * 40, "abc123", "A" * 40, "a" * 40 + "\n"])
+def test_onto_takes_a_full_commit_id_and_never_a_name(tmp_path, capsys, bad):
+    """`--onto` handed a ref name, `HEAD`, an empty string, the null id, a short id, upper case or an id with a
+    newline exits 1 before any ref is read, and nothing moves. Guards the operand against being resolved: `--onto
+    main` would be true by definition — the name is exactly what the caller's commit id is there to replace."""
+    r = _canonical(tmp_path, {**_CLEAN, b"modules/gamma/module.yml": b"key: gamma\n"})
+    assert promote.main(["%s@%s" % (RID, r.proposal), "--onto", bad, "--repo", r.bare]) == 1
+    assert "--onto takes a full commit id" in capsys.readouterr().err and _main_of(r.bare) == r.main
+
+
+@pytest.mark.usefixtures("isolated_git")
+def test_with_onto_the_transaction_moves_main_from_that_commit_or_not_at_all(tmp_path, monkeypatch, capsys):
+    """With `--onto <main>` given and `main` moved by another writer AFTER the command's own read (between its
+    checks and the transaction), nothing lands and the exit is 1. Guards the last gap: the command compares
+    `--onto` with the `main` it read, and the transaction moves `main` only from that same commit — so the commit
+    the caller named is the old value of the one ref update, with no read in between that is not checked."""
+    r = _line_of_three(tmp_path)
+    real = promote.gitio.promote_commit
+
+    def another_promote_lands_first(run_id, oid, main_id, repo):
+        assert main_id == r.main
+        R.set_ref(r.bare, canon.MAIN, r.first)
+        return real(run_id, oid, main_id, repo)
+
+    monkeypatch.setattr(promote.gitio, "promote_commit", another_promote_lands_first)
+    assert promote.main(["%s@%s" % (RID, r.second), "--onto", r.main, "--repo", r.bare]) == 1
+    assert _main_of(r.bare) == r.first and "main moved" in capsys.readouterr().out
