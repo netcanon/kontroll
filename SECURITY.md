@@ -609,10 +609,11 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   the canonical carries an `update` hook (`ansible/playbooks/files/canonical-update-hook.sh`, installed by
   `local-canonical.yml`) that refuses a receive-pack update of `refs/heads/main` from the **network-service uid
   (1001)** — the legit mirror push (uid **0** in the installer container, or the operator uid on a host-direct run,
-  **never 1001**) and `promote_ref`'s `update-ref` (not receive-pack, so the hook never fires — a human promote is
-  untouched) keep working. **`promote_ref` is a compare-and-swap:** it passes the object id `main` had when its
-  fast-forward check ran as `update-ref`'s old-value operand, so a promote that loses a race to another promote is
-  refused by git itself instead of overwriting the winner with a ref that no longer fast-forwards what it replaced
+  **never 1001**) and the promote's `update-ref` (not receive-pack, so the hook never fires — a human promote is
+  untouched) keep working. **The promote is one ref transaction over two ids** (`gitio.promote_commit`): it
+  verifies that the proposal is still the commit that was read and judged, and moves `main` only from the commit
+  `main` was read as — so a promote that loses a race to another promote is refused by git itself instead of
+  overwriting the winner, and a proposal re-pointed after it was judged is not promoted at all
   (`tests/unit/test_promote_cas.py`, real git). Design-of-record: `docs/reviews/2026-07-05-c10-origin-push-breach/` (a design record kept in the private repository).
   **`hooks/` is root:root `0755` and pruned from the gid-1001 write-grant** (`local-canonical.yml`): the uid-1001
   writer holds the canonical `:rw` under `api_privileged`, and a group-writable `hooks/` would let it plant a
@@ -664,11 +665,31 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   where `main` has one is refused (the generator would read this checkout's shipped example in its place). When
   the generator itself fails on a file of the proposal, its last lines are shown, bounded. `--skip-conflict-check` is the human's override for all of it — the never-brick path of a
   node whose gate cannot run — and nothing automatic passes it. The argument itself must be a minted run id
-  (exit 1 otherwise), so nothing else is ever formatted into a ref name. **The limit that remains:** the gate
-  judges the commit the proposal's ref names when the gate reads it, and the fast-forward then resolves the name
-  again — a push to the same `proposed/<run_id>` between the two is promoted unjudged, which also means the
-  commit an operator reviewed is not necessarily the commit promoted. `tests/unit/test_canon_tree.py`,
+  (exit 1 otherwise), so nothing else is ever formatted into a ref name. `tests/unit/test_canon_tree.py`,
   `tests/unit/test_kontroll_promote.py`.
+  **What is judged is what is promoted.** `kontroll-promote.py` reads `refs/heads/main` and the proposal ONCE,
+  each by its full name; from then on it holds two commit ids and looks no name up again. The fast-forward
+  question is asked of those ids; the preview it prints (the run id, the commit, the commits being landed) is
+  listed from them; the gate judges that commit's tree; and `gitio.promote_commit` runs **one ref transaction**
+  — `verify` the proposal is still that commit, `update` `main` from the commit it was read as, both under
+  `option no-deref` — that lands exactly it or changes nothing. A proposal re-pointed
+  after the read fails the `verify`; another promote that moved `main` fails the old value; neither can put on
+  `main` a commit the gate did not judge. The proposal is then retired by compare-and-delete, also without
+  following a symbolic ref. Every git of the promote runs in the seam (`canon.git_kwargs`): no hook and no
+  config-named program of the canonical runs on it, and of the promoter's environment git is handed where
+  programs and temporary files are and the locale, and nothing else — no `HOME`, no `GIT_*`, no key.
+  **What a human confirms.** An approval names the proposal AND the commit: `<run id>@<commit id>`. The Pending
+  panel's copy control yields that form for the row the operator read, and `kontroll-promote.py --list` prints
+  it on the box; the promote refuses when the proposal has become another commit since ("not the commit you were
+  shown"). The `promote-proposal` job requires the pinned form (`--require-pin`); at the box's shell a bare run
+  id is still accepted and promotes the commit the read returns. **The Pending panel is a convenience; the
+  promoter's own printed preview is the evidence** — the panel is rendered by the service that staged the
+  proposal, while the lines in the job log (or on the terminal) are printed by the promote itself, from the ids
+  it lands. The listing is one record per commit that names its commit twice, read as committed
+  (`--encoding=none`), and must open with the commit that lands (`canon.commits_between`). On the `sudo` path
+  that record is the terminal's and nothing keeps it: an approval that must be on file goes through the job.
+  `tests/unit/test_promote_cas.py`, `tests/unit/test_kontroll_promote.py`,
+  `tests/e2e/test_pending_changes.py` (the copy control).
 - **Every GUI write surface rides this propose-only staging — including the Homepage editor (#136).** The
   onboard/capability/secret/keygen writes and the new `:8443` **Homepage editor** (`POST /api/homepage` — rearrange
   the portal tiles) all go through `gitio.commit_and_push(run_id=…)` → `proposed/<run_id>`; **none imports

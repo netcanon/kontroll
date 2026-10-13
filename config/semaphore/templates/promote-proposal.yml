@@ -4,20 +4,23 @@
 # fast-forwards main into that proposal. Reachable only by a Semaphore admin on the
 # mgmt VLAN — never by the API token — so a leaked token can never self-promote.
 #
-# The run_id is a survey variable: the operator enters the proposal's id (from the
-# onboard/capability/secret propose response) when launching the task. promote.yml
-# asserts its shape, previews the commits, then runs the tested FF-only promote.
+# The run_id is a survey variable: the operator enters the proposal as <run id>@<commit id> — which
+# proposal, and which commit of it they looked at (the GUI's Pending panel copies exactly that;
+# `kontroll-promote.py --list` prints it). promote.yml asserts its shape, then runs the tested
+# FF-only promote, which refuses if the proposal has become another commit since, prints what it
+# lands, and moves main in one transaction.
 name: promote-proposal
 playbook: ansible/playbooks/promote.yml
 description: >-
   Approve + promote a staged proposal (proposed/<run_id>) to main — C10. Fast-forward
-  only: refuses a non-fast-forward, and a tree that would not resolve. Enter the run_id
-  from the propose response.
+  only: refuses a non-fast-forward, a proposal that is no longer the commit you name, and
+  a tree that would not resolve. Enter <run id>@<commit id> from the Pending panel.
 survey_vars:
   - name: run_id
-    title: Proposal run_id
+    title: Proposal run_id@commit
     description: >-
-      The id of the proposed/<run_id> ref to promote (from the onboard / capability /
-      secret propose response, or `git ls-remote`). Letters, digits and hyphens only.
+      The proposal to promote and the commit of it you looked at, as <run id>@<commit id> —
+      the copy control on the proposal's row in the GUI's Pending panel gives exactly this
+      (on the control node, `kontroll-promote.py --list` prints it). A bare run id is refused.
     type: ""          # free-text (Semaphore passes it to the playbook as an extra-var)
     required: true

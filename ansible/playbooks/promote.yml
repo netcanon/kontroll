@@ -1,14 +1,15 @@
 ---
 # Promote a staged proposal (proposed/<run_id>) to main — the Semaphore "approve" half of C10's
 # propose-then-promote. Runs the ONE tested FF-only promote (scripts/kontroll-promote.py ->
-# gitio.promote_ref) against the mounted canonical. The network service (API/GUI) can only PROPOSE;
+# gitio.promote_commit) against the mounted canonical. The network service (API/GUI) can only PROPOSE;
 # THIS is the trusted promote, reachable only by a Semaphore admin (mgmt VLAN), NEVER by the API
 # token — so a leaked token can never self-promote. SECURITY.md C10 / docs/privileged-mutation-enablement.md.
 #
 # Access chain used:   Semaphore runner (gid 1001) -> the rw-mounted canonical /srv/kontroll.git. No host root:
 #                      it uses the gid-1001 group-write grant + core.sharedRepository=group set by
-#                      local-canonical.yml. update-ref bypasses the receive.deny* push hooks, but the promote
-#                      is FF-only (gitio refuses a non-fast-forward), so it can never rewrite history.
+#                      local-canonical.yml. The promote is one ref transaction run by kontroll-promote.py (not a
+#                      push, so the receive hooks are not what bounds it): it is fast-forward only, moves main
+#                      only from the commit it read to the commit it judged, and can never rewrite history.
 # May break:           advances the canonical's main (the instance source of truth). FF-only ⇒ no history
 #                      rewrite; the canonical is a reconstructible cache (operator workstation + GitHub are truth).
 # Fallback required:   no — a bad main is re-pushable from the workstation; main only ever fast-forwards.
@@ -28,67 +29,41 @@
     canonical: /srv/kontroll.git
     repo_root: "{{ playbook_dir }}/../.."
   tasks:
-    - name: Require a service-minted run_id (the proposed/<run_id> to promote)
-      # Survey-supplied free text -> validate before it reaches a git refname / argv. Pin to the EXACT minted
-      # grammar so only a service-issued id is promotable: uuid4().hex[:12] (12 lowercase hex) OR mint_run_id()
-      # (<YYYYMMDD>T<HHMMSS>Z-<6hex>, api/audit.py). This rejects typo'd/guessed branch names (main, HEAD, ...) at
-      # the boundary, shrinking the trick-the-admin surface; the literal proposed/ prefix + existence check + the
-      # FF gate are the deeper guards, and the command module (no shell) blocks injection.
-      # A FULL match, the same rule as kontroll.canon.valid_run_id (one test feeds both the same samples): `match`
-      # with `^…$` also accepts the id followed by a newline, because `$` matches before a final one.
+    - name: Require the proposal as <run id>@<commit id> (which proposal, and which commit of it was looked at)
+      # Survey-supplied free text -> validate before it reaches an argv. Pin to the EXACT minted grammar so only a
+      # service-issued id is promotable: uuid4().hex[:12] (12 lowercase hex) OR mint_run_id()
+      # (<YYYYMMDD>T<HHMMSS>Z-<6hex>, api/audit.py) — then `@` and the FULL commit id the operator was shown. The
+      # commit is what ties this approval to what was read: kontroll-promote.py refuses when the proposal has
+      # become another commit since. The command module (no shell) blocks injection.
+      # A FULL match, the same rule as kontroll.canon.valid_run_id / valid_oid (one test feeds both the same
+      # samples): `match` with `^…$` also accepts the value followed by a newline, because `$` matches before a
+      # final one.
       ansible.builtin.assert:
         that:
           - run_id is defined
-          - run_id is regex('[0-9a-f]{12}|[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}', match_type='fullmatch')
+          - >-
+            run_id is regex('([0-9a-f]{12}|[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6})@[0-9a-f]{40}([0-9a-f]{24})?',
+            match_type='fullmatch')
         fail_msg: >-
-          run_id must be a service-minted proposal id (12 hex, or <UTC-stamp>-<6hex>). Get the exact value from
-          the onboard/capability/secret propose response, or
-          `git -C /srv/kontroll.git for-each-ref refs/heads/proposed`.
+          Give the proposal as <run id>@<commit id>: a service-minted run id (12 hex, or <UTC-stamp>-<6hex>), an
+          @, and the full commit id. Copy it from the GUI's Pending panel (the copy control on the proposal's
+          row), or print the staged proposals in that form on the control node with
+          `kontroll-promote.py --list --repo {{ canonical }}`.
         quiet: true
 
-    - name: Check the proposal ref exists on the canonical  # noqa: command-instead-of-module
-      # Raw git: there is no ansible module for show-ref/log against an external bare repo. Read-only.
+    - name: Promote the proposal to main (fast-forward only, and only the commit that was named)
+      # The single tested promote (scripts/kontroll-promote.py -> gitio.promote_commit): it reads main and the
+      # proposal once, refuses unless the proposal is the commit named after the @, PRINTS what the approval lands
+      # (run id, commit, the commits — this job's log is the record of what was approved), runs the resolve gate,
+      # and moves main in one ref transaction. Non-zero exit fails the job: 1 = no such proposal, not the commit
+      # named, not a fast-forward, or main moved meanwhile; 2 = the resolve gate refused the tree (two conflicting
+      # pins, a fleet line that is not a class key, a tree it does not take) or could not run — its sentence is in
+      # the job log.
       ansible.builtin.command:
-        cmd: git -C {{ canonical }} show-ref --verify --quiet refs/heads/proposed/{{ run_id }}
-      register: _exists
-      changed_when: false
-      failed_when: false
-
-    - name: Fail clearly when there is no such proposal
-      ansible.builtin.assert:
-        that: _exists.rc == 0
-        fail_msg: >-
-          No staged proposal proposed/{{ run_id }} on the canonical. Check the run_id
-          (the propose response, or `git -C {{ canonical }} for-each-ref refs/heads/proposed`).
-        quiet: true
-
-    - name: Preview the commits this approval will land (proposal not yet on main)  # noqa: command-instead-of-module
-      # Read-only — records in the Semaphore job log exactly what is being approved (the audit trail). Never
-      # fails the run; the promote step below enforces the FF gate + existence. Raw git: no module for log.
-      # Both ends are FULL names: beside a tag called `main`, the short name is the tag and the range is not
-      # the one being approved.
-      ansible.builtin.command:
-        cmd: git -C {{ canonical }} log --oneline refs/heads/main..refs/heads/proposed/{{ run_id }}
-      register: _preview
-      changed_when: false
-      failed_when: false
-
-    - name: Record the promotion in the job log (run_id-correlated; never a secret)
-      ansible.builtin.debug:
-        msg: >-
-          kontroll_run_id={{ run_id }} promote proposed/{{ run_id }} -> main;
-          commits={{ _preview.stdout_lines | default([]) | length }}
-
-    - name: Promote the proposal to main (fast-forward only; refuses a non-FF)
-      # Reuses the single tested promote (gitio.promote_ref via scripts/kontroll-promote.py) so the FF gate and
-      # the ref surgery live in ONE place. Non-zero exit fails the job: 1 = no such proposal or not a fast-forward;
-      # 2 = the gate: the proposal's tree is refused (two conflicting pins, a fleet line that is not a class key, a
-      # tree the gate does not take) or the gate could not run — its sentence is in the job log.
-      ansible.builtin.command:
-        cmd: python3 {{ repo_root }}/scripts/kontroll-promote.py {{ run_id }} --repo {{ canonical }}
+        cmd: python3 {{ repo_root }}/scripts/kontroll-promote.py {{ run_id }} --require-pin --repo {{ canonical }}
       register: _promote
       changed_when: "'promoted' in _promote.stdout"
 
-    - name: Promotion result
+    - name: Promotion result (the promoter's own preview and outcome; run_id-correlated, never a secret)
       ansible.builtin.debug:
         msg: "{{ _promote.stdout_lines }}"

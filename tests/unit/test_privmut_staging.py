@@ -1,10 +1,10 @@
-"""Propose-then-promote staging (SECURITY.md C10) — gitio._push_target / commit_and_push / promote_ref.
+"""Propose-then-promote staging (SECURITY.md C10) — gitio._push_target / commit_and_push.
 
 Pins the network-service write posture decided in docs/privileged-mutation-enablement.md: a service deployed
-with KONTROLL_STAGE_PUSHES pushes a per-request `proposed/<run_id>` STAGING ref (never `main`), and
-`promote_ref` fast-forwards `main` into a proposal ONLY when it is a strict fast-forward. Guards the two safety
-properties — a staging service cannot write `main` directly, and a promotion cannot rewrite history — through
-the `gitio._run` seam, offline. These are the covering checks C10's control claims (SECURITY.md).
+with KONTROLL_STAGE_PUSHES pushes a per-request `proposed/<run_id>` STAGING ref (never `main`). Guards that a
+staging service cannot write `main` directly — through the `gitio._run` seam, offline. The other half of the
+control — the promote moves `main` only as a fast-forward, only to the commit that was judged — is held against
+real git in tests/unit/test_promote_cas.py (a mocked seam cannot say which transaction git accepts).
 """
 import pytest
 
@@ -54,50 +54,6 @@ def test_staging_without_a_run_id_is_fail_closed(rec, monkeypatch):
     with pytest.raises(ValueError):
         gitio.commit_and_push(["x"], ["msg"])
     assert not rec                                  # nothing ran: no add/commit/push before the refusal
-
-
-def test_promote_fast_forwards_only(monkeypatch):
-    """promote_ref advances `main` to `proposed/<run_id>` only when it's a fast-forward: the merge-base
-    ancestor check passes, then it update-refs main + deletes the proposal. Guards the trusted PROMOTE half."""
-    calls = []
-    monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
-    monkeypatch.setattr(gitio, "_out", lambda cmd, cwd=None: (0, "a" * 40))     # main's object id before the check
-    assert gitio.promote_ref("000000000007") is True
-    joined = [" ".join(c) for c in calls]
-    assert any("merge-base --is-ancestor refs/heads/main refs/heads/proposed/000000000007" in j for j in joined)
-    assert any("update-ref refs/heads/main refs/heads/proposed/000000000007 " + "a" * 40 in j for j in joined), \
-        "the update-ref must carry main's old object id (compare-and-swap, finding 9)"
-    assert any("update-ref -d refs/heads/proposed/000000000007" in j for j in joined)
-
-
-def test_promote_refuses_a_non_fast_forward(monkeypatch):
-    """A non-fast-forward proposal (the ancestor check fails) is REFUSED — `main` is never updated, so a
-    proposal can't rewrite history (defence-in-depth with the bare repo's receive.denyNonFastForwards)."""
-    updated = []
-
-    def fake(cmd, cwd=None, quiet_args=0):
-        if cmd[:2] == ["git", "merge-base"]:
-            return 1                              # main is NOT an ancestor → not a fast-forward
-        if cmd[:2] == ["git", "update-ref"] and "refs/heads/main" in cmd:
-            updated.append(cmd)
-        return 0
-    monkeypatch.setattr(gitio, "_run", fake)
-    monkeypatch.setattr(gitio, "_out", lambda cmd, cwd=None: (0, "a" * 40))
-    assert gitio.promote_ref("000000000009") is False
-    assert not updated                            # main was never advanced
-
-
-def test_promote_reports_success_even_if_proposal_cleanup_fails(monkeypatch, capsys):
-    """If the post-FF `update-ref -d` (proposal cleanup) fails — e.g. a perms edge on the container-created ref —
-    promote_ref STILL returns True (main was correctly advanced) but emits a visible note, so a half-completed
-    promote (advanced-but-not-cleaned) is surfaced rather than silently reported as fully done. Guards the
-    review's 'ignored cleanup rc' finding."""
-    def fake(cmd, cwd=None, quiet_args=0):
-        return 1 if cmd[:2] == ["git", "update-ref"] and cmd[2] == "-d" else 0
-    monkeypatch.setattr(gitio, "_run", fake)
-    monkeypatch.setattr(gitio, "_out", lambda cmd, cwd=None: (0, "a" * 40))
-    assert gitio.promote_ref("000000000005") is True
-    assert "could not delete proposed/000000000005" in capsys.readouterr().out
 
 
 def test_from_env_refuses_a_token_without_staging(monkeypatch):

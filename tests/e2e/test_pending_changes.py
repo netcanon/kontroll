@@ -161,3 +161,39 @@ def test_what_the_list_could_not_read_is_a_warning_above_it(page):
     _open(page, _payload([], note="no proposals pending"))
     expect(page.get_by_test_id("pending-empty")).to_have_class("meta")
 
+
+def test_the_copy_control_yields_the_run_id_and_the_commit(page):
+    """Clicking `pending-copy-runid` puts `<run id>@<full commit id>` on the clipboard — the proposal AND the
+    commit of it the row shows — and the promote hint names the survey field that takes it. Guards the link
+    between what an operator read and what they approve: the control used to copy the bare run id, which the
+    promote then resolved to whatever the proposal had become."""
+    _open(page, _payload([_proposal("abc123def456", [{"status": "M", "path": "instance/fleet.yml", "exact": True}])]))
+    page.evaluate("Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: "
+                  "t => { window.__copied = t; return Promise.resolve(); }}})")
+    row = page.get_by_test_id("pending-row").first
+    row.get_by_test_id("pending-copy-runid").click()
+    expect(row.get_by_test_id("pending-copy-runid")).to_have_text("copied ✓")
+    assert page.evaluate("window.__copied") == "abc123def456@" + _SHA
+    expect(row.get_by_test_id("pending-promote-hint")).to_contain_text("run_id@commit")
+
+
+def test_each_rows_copy_control_pins_that_rows_commit_and_a_row_without_one_copies_the_bare_id(page):
+    """With three rows — two proposals at DIFFERENT commits and one whose payload carries no full commit id — the
+    copy control of the second row yields the second row's `<run id>@<commit id>`, the first row's yields the
+    first's, and the third yields the bare run id (which the job refuses, with the sentence that says how to get
+    the pinned form). Guards the pin being the commit of the row that was READ: every row of this file used to
+    carry one commit id, so a control that pinned the first row's commit — or any commit but its own — passed, and
+    so did one that copied `<run id>@undefined` for a row with no id."""
+    other = "cd" * 20
+    rows = [_proposal("abc123def456", [{"status": "M", "path": "a.yml", "exact": True}]),
+            dict(_proposal("0000000000b2", [{"status": "M", "path": "b.yml", "exact": True}]), sha=other),
+            dict(_proposal("0000000000c3", [{"status": "M", "path": "c.yml", "exact": True}]), sha="")]
+    _open(page, _payload(rows))
+    page.evaluate("Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: "
+                  "t => { window.__copied = t; return Promise.resolve(); }}})")
+    controls = page.get_by_test_id("pending-row").get_by_test_id("pending-copy-runid")
+    expect(controls).to_have_count(3)
+    for index, want in ((1, "0000000000b2@" + other), (0, "abc123def456@" + _SHA), (2, "0000000000c3")):
+        controls.nth(index).click()
+        expect(controls.nth(index)).to_have_text("copied ✓")
+        assert page.evaluate("window.__copied") == want

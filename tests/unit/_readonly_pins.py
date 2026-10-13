@@ -89,6 +89,9 @@ WRITE_VERBS = frozenset({
     # gate's temporary root; an export a play asks for). Not a write of the canonical — and still nothing a read view
     # may reach: a view that could export a tree could put a staged, unpromoted proposal's files on disk.
     "write_files", "export_commit",
+    # gitio.promote_commit moves `refs/heads/main` (one ref transaction) and retires the proposal — the promote
+    # itself. promote_ref reads the two refs and delegates to it.
+    "promote_commit",
     # A staged write that cannot land (2026-10-12). `write_module` is the ONE place the module reconfigures write
     # `modules/<key>/module.yml` (each used to carry its own open:w inside an apply_* verb); `_drop_refused`
     # removes what an apply wrote and `git add` would not take (a `git clean` of files at the request's own paths,
@@ -396,7 +399,7 @@ _SUBPROCESS_CALLS = frozenset({"run", "Popen", "call", "check_call", "check_outp
 _OS_PROCESS_CALLS = frozenset({"system", "popen", "startfile"})
 
 
-def assert_git_runs_in_the_seam(module_rel, verbs):
+def assert_git_runs_in_the_seam(module_rel, verbs, functions=None):
     """Pin a module whose git runs on the CANONICAL: every process it starts is `subprocess.<call>(["git",
     "<verb>", …], …, **canon.git_kwargs(<repo>))` — nothing else.
 
@@ -414,6 +417,10 @@ def assert_git_runs_in_the_seam(module_rel, verbs):
     `verbs` is the set THIS module runs today, not the read-only list: the seam is proven for the verbs its
     readers use, and a module that needs another one says so where it is pinned.
 
+    `functions` narrows the pin to the named functions of a module that ALSO runs git somewhere else (`gitio.py`:
+    its other half works in the service's own content clone, which is not the canonical). Every named function
+    must exist, and the import rules still hold for the whole module.
+
     It complements the verb pins above: those say WHICH git a read view may run, this says IN WHAT."""
     path = os.path.join(ROOT, module_rel)
     tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
@@ -421,6 +428,20 @@ def assert_git_runs_in_the_seam(module_rel, verbs):
     seam_names = {"git_kwargs"} if in_canon else {"canon.git_kwargs"}
     imports_canon = in_canon
     sites = 0
+    scope = None
+    if functions is not None:
+        defs = {f.name: f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)}
+        missing = sorted(set(functions) - set(defs))
+        assert not missing, "%s: no such function(s) to pin: %s" % (module_rel, ", ".join(missing))
+        # … and every function of this module they call, however deep: a helper is part of what it helps.
+        todo, reached = list(functions), set()
+        while todo:
+            name = todo.pop()
+            if name in reached or name not in defs:
+                continue
+            reached.add(name)
+            todo += [c.func.id for c in ast.walk(defs[name]) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)]
+        scope = {id(n) for name in reached for n in ast.walk(defs[name])}
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom):
             assert n.module != "subprocess", "%s:%d: import subprocess by its own name — a bare run() is not seen" % (
@@ -431,6 +452,8 @@ def assert_git_runs_in_the_seam(module_rel, verbs):
             assert not any(a.name == "subprocess" and a.asname for a in n.names), (
                 "%s:%d: subprocess is imported under another name — its calls are not seen" % (module_rel, n.lineno))
         if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Attribute):
+            continue
+        if scope is not None and id(n) not in scope:
             continue
         owner = n.func.value.id if isinstance(n.func.value, ast.Name) else None
         where = "%s:%d" % (module_rel, n.lineno)

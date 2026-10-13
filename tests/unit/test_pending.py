@@ -548,3 +548,16 @@ def test_template_wires_the_pending_panel():
     assert "'pending-main-note'" in tpl and "'pending-skipped-note'" in tpl and "data.note_kind" in tpl
     assert "'pending-unrecognised'" in tpl and "'pending-unrecognised-row'" in tpl and "data.unrecognised" in tpl
     assert "if (apart.length) body.appendChild(pendingApart(apart));" in tpl      # … and the card is put on the page
+
+
+def test_a_proposal_that_is_mains_own_commit_is_not_listed_as_promotable(tmp_path):
+    """A proposal ref that names `main`'s commit — what a promote leaves behind when it moved `main` and could not
+    delete the ref — is listed with `promotable` False, beside a real fast-forward that is True. Guards the panel
+    offering "copy to promote" for a row the promote always refuses (nothing is left to land) while withholding
+    the Discard control, which is offered only for a row that is not promotable: the ref then had no way out but
+    a hand in the canonical."""
+    r = R.build(tmp_path)
+    R.set_ref(r.bare, canon.PROPOSED + "0000000000a2", r.main)
+    rows = {p["run_id"]: p for p in pending.list_pending(r.bare)["proposals"]}
+    assert rows["0000000000a2"]["promotable"] is False and rows["0000000000a2"]["changes"] == []
+    assert rows[R.FF]["promotable"] is True

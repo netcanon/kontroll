@@ -270,7 +270,7 @@ admin-authed Semaphore app (C10 two-key); there is deliberately no Promote/Appro
 | `pending-subject` | the proposal's commit subject line (when present) | painted with `ET()` — whatever the proposal's author committed (C19); bytes that are not text arrive escaped |
 | `pending-unrecognised` | the "Not proposals" card after the rows | present only when the canonical holds a ref under `refs/heads/proposed/` that is not a proposal (a name the service does not mint, a symbolic ref, a ref that names no commit); **no** copy, promote or discard control inside |
 | `pending-unrecognised-row` | one such ref: its name, its object id and the reason | painted with `ET()` — a ref name written by another hand (C19) |
-| `pending-copy-runid` | the copy-run_id button inside a row | clipboard + a select-text fallback on plain-HTTP dev |
+| `pending-copy-runid` | the "copy to promote" button inside a row | copies `<run id>@<full commit id>` — the form the promote takes (a row with no full id copies the bare run id); clipboard + a select-text fallback on plain-HTTP dev |
 | `pending-paths` | the container of what the proposal changes (when it changes anything) | holds one `pending-change` per file |
 | `pending-change` | one change: a status letter and one NAME | names only — never file contents (no C8 weight); a moved file is two entries (`D` old name, `A` new name); one element per entry, so a name cannot read as two entries; painted with `ET()` (C19) |
 | `pending-changes-unread` | the warning that the row's change list could not be read | present when `changes_read` is `false`; the row then carries no `pending-promote-hint` |
