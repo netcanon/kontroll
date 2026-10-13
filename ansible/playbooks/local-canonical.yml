@@ -11,7 +11,7 @@
 # Blast radius:        this VM only
 # Idempotence:         re-runnable; init is `creates:`-guarded, remote add tolerated,
 #                      the mirror push is a fast-forward (no-op if already current);
-#                      the plaintext gate in front of the commit is read-only.
+#                      the fleet check and the plaintext gate in front of the commit are read-only.
 
 - name: Ensure the local canonical bare repo
   hosts: localhost
@@ -194,6 +194,36 @@
       register: _remote
       changed_when: _remote.rc == 0
       failed_when: _remote.rc != 0 and 'already exists' not in _remote.stderr
+
+    - name: Check the fleet list before it is committed and mirrored (scripts/gen-requirements.py --fleet-check)
+      # The commit and the mirror below are a way into the canonical's `main` that passes no promote gate: they take
+      # the operator's worktree as it is. A fleet line that is not a device-class key would be on `main` when this
+      # play ends — and from then on the promote gate refuses EVERY proposal, not only one that touches the fleet.
+      # One rule (kontroll.paths), asked before the commit. Read-only: it runs under --check too, so the mandated
+      # dry-run names the entry's place before the real run does. (Not the only such way: scripts/update.sh,
+      # scripts/update-from-bundle.sh and the operator CLI's onboard push HEAD to `main` unchecked — SECURITY.md C22.)
+      ansible.builtin.command:
+        cmd: python3 -B scripts/gen-requirements.py --fleet-check   # -B: a read leaves no __pycache__ behind
+        chdir: "{{ worktree }}"
+      register: _fleet_check_canonical
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to mirror a fleet the promote gate would refuse, and say which entry
+      # ANY non-zero status refuses, as for the plaintext guard below: a check that could not run checked nothing —
+      # and then the message says that, not "correct the fleet".
+      ansible.builtin.fail:
+        msg: >-
+          local-canonical: REFUSING to commit —
+          {{ _fleet_check_canonical.stderr_lines | default([]) | last
+          | default('the fleet check printed nothing.', true) }}
+          This play staged, committed and pushed nothing: no ref of the canonical moved.
+          {{ 'Correct instance/fleet.yml in'
+          if 'gen-requirements: instance/fleet.yml' in (_fleet_check_canonical.stderr | default(''))
+          else 'Nothing was checked: make `python3 scripts/gen-requirements.py --fleet-check` run in' }}
+          {{ worktree }} and run again.
+      when: _fleet_check_canonical.rc != 0
 
     - name: List anything the commit below would take in plaintext (names only, never content)
       # The commit below is a BLANKET add of the operator's worktree; this is its content gate

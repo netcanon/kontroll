@@ -26,8 +26,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 DEPLOY = os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml")
 
 # Read-only resolvers whose registered stdout feeds the .env render / early play vars -> MUST run in --check.
-# The first four are UNGATED and feed the render directly (the exact bug); the last two are gated read-only
-# resolvers (getent journal GID for vector; Caddyfile text for acme) flipped for full --check fidelity.
+# The paths.py and frontend.py resolvers feed the render directly (the exact bug); the gated ones (the journal GID
+# for vector, the Caddyfile for acme, the image digests for published images) are flipped for full --check
+# fidelity. The fleet check is not in this list: it registers nothing, and tests/unit/test_fleet_line.py holds
+# its `check_mode: false`.
 _RESOLVERS = {
     "_secrets_dir_resolved",   # paths.py resolve  -> _secrets_dir -> every SOPS lookup (the keystone)
     "_uvicorn_extra",          # frontend.py uvicorn-extra -> KONTROLL_API_UVICORN_EXTRA
@@ -37,6 +39,29 @@ _RESOLVERS = {
     "_caddyfile",              # frontend.py caddyfile     -> the rendered Caddyfile (gated on acme)
     "_img_env",                # gen-image-digests.py --env -> the published @sha256 pins (gated on use_published_images)
 }
+
+
+# A generator's read-only mode WITH the generator that implements it: `--env` means nothing to gen-observability.py,
+# which would ignore the word and write. (`--check` is every generator's own dry mode.)
+_READ_ONLY_MODES = {("scripts/gen-image-digests.py", "--env"), ("scripts/gen-requirements.py", "--fleet-check")}
+_SHELL_SYNTAX = frozenset("&;|`$()<>")
+
+
+def _gen_writes(cmd):
+    """True when `cmd` runs a scripts/gen-* generator in a way this guard cannot call read-only. It is read-only
+    only as ONE generator on ONE line, with no shell syntax, whose words after the script are exactly `--check` or
+    exactly the one read-only mode listed for that script. Anything else — a second generator behind `&&`, a flag
+    beside the mode (`gen-image-digests.py --env --refresh` refreshes: the network, and the lock rewritten) — is a
+    writer until it is listed."""
+    if "scripts/gen-" not in cmd:
+        return False
+    plain = cmd.replace("{{", "").replace("}}", "")                  # a Jinja expression is not shell syntax
+    if cmd.count("scripts/gen-") != 1 or len(cmd.splitlines()) != 1 or _SHELL_SYNTAX & set(plain):
+        return True
+    words = cmd.split()
+    at = next(n for n, word in enumerate(words) if "scripts/gen-" in word)
+    rest = words[at + 1:]
+    return not (rest == ["--check"] or any(script in words[at] and rest == [mode] for script, mode in _READ_ONLY_MODES))
 
 
 def _walk(tasks):
@@ -106,14 +131,38 @@ def test_secrets_dir_resolver_keystone():
 def test_mutating_tasks_are_not_check_mode_false():
     """The compose `up` and the `gen-*` regenerators MUTATE (start containers / write generated files); they
     must STAY check-skipped (never check_mode:false) so a `--check` dry-run never actuates. Pins the
-    resolver-vs-mutator boundary the fix draws, so a future careless `check_mode: false` on a writer is caught."""
+    resolver-vs-mutator boundary the fix draws, so a future careless `check_mode: false` on a writer is caught.
+    A generator's read-only modes are named one by one: a new mode is a writer here until it is listed."""
     offenders = []
     for t in _all_tasks():
         cmd = _cmd_str(t)
-        # A gen-* call MUTATES only when it WRITES (the regenerators); its read-only modes (`--env`, `--check`) are
-        # resolvers, not writers — e.g. gen-image-digests.py --env reads the lock to feed the .env pin (C0).
-        gen_writes = "scripts/gen-" in cmd and "--check" not in cmd and "--env" not in cmd
-        mutates = ("compose" in cmd and "up" in cmd) or gen_writes
+        # A gen-* call MUTATES only when it WRITES (the regenerators); its read-only modes (`--env`, `--check`,
+        # `--fleet-check`) are resolvers, not writers — e.g. gen-image-digests.py --env reads the lock to feed the
+        # .env pin (C0), and gen-requirements.py --fleet-check reads the fleet list and resolves nothing.
+        mutates = ("compose" in cmd and "up" in cmd) or _gen_writes(cmd)
         if mutates and t.get("check_mode") is False:
             offenders.append(t.get("name"))
     assert not offenders, "mutating task(s) must NOT be check_mode:false (would actuate during --check): %r" % offenders
+
+
+@pytest.mark.parametrize("cmd,writes", [
+    ("python3 scripts/gen-observability.py --fleet-check", True),
+    ("python3 scripts/gen-requirements.py --fleet-check && python3 scripts/gen-backup.py", True),
+    ("python3 scripts/gen-requirements.py --fleet-checkpoint", True),
+    ("python3 scripts/gen-image-digests.py --env --refresh v1.2.3", True),
+    ("python3 scripts/gen-observability.py; echo --check", True),
+    ("python3 scripts/gen-requirements.py", True),
+    ("python3 {{ playbook_dir }}/../../scripts/gen-observability.py", True),
+    ("python3 scripts/gen-backup.py --check", False),
+    ("python3 scripts/gen-image-digests.py --env", False),
+    ("python3 -B scripts/gen-requirements.py --fleet-check", False),
+])
+def test_a_generator_command_is_read_only_only_in_a_listed_mode(cmd, writes):
+    """The rule the check-mode guard applies to a `scripts/gen-*` command: read-only as ONE generator, without shell
+    syntax, followed by exactly `--check` or exactly the mode listed for that script; a writer otherwise.
+
+    Guards the guard: a rule that looked for a mode's word anywhere in the command called three writers read-only
+    — a second generator chained behind the fleet check, `gen-image-digests.py --env --refresh` (which refreshes
+    over the network and rewrites the lock), and a bare generator followed by `; echo --check` — so any of them
+    could have been marked `check_mode: false` and run during the mandated dry-run."""
+    assert _gen_writes(cmd) is writes

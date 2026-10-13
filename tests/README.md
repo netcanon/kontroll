@@ -125,6 +125,7 @@ tests/unit/          # pure functions, no I/O
   test_api_audit.py          # one request value is one cell of one audit row: the shared flattener, and the API writer read back through a real file
   test_repository_data.py    # C22: a name adopted from a module file, the reserved names at each seam, the scaffold's arguments, and the refusal that is the repository's own (409), never a field's
   test_yamlscalar.py         # may a string stand unquoted in a hand-formatted YAML line: every position a writer uses, exhaustively for short strings; the quoting fallback of the generators
+  test_fleet_line.py         # C22: a fleet line that is not a class key at every deploy-time reader — skipped and named by what renders, refused by what installs and by the promote gate, checked first by the plays
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
   test_onboard_dryrun.py     # dry-run plans nothing; --apply mutates tmp repo idempotently
   test_search_local.py       # source→record→filter pipeline + --vector filter

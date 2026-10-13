@@ -59,7 +59,7 @@ def drift(fleet, backends=None, telemetry=None, logging=None, locks=None):
     logging = logging if logging is not None else catalog.load_logging()
     locks = locks if locks is not None else catalog.load_dashboard_locks()
     msgs = []
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = os.path.join(ROOT, "modules", key, "module.yml")
         if not os.path.exists(mp):
             continue
@@ -93,6 +93,8 @@ def main(argv):
         fleet = _load(os.path.join(ROOT, "instance.example", "fleet.yml"))
     else:
         fleet = _load(paths.resolve("config/fleet.yml"))
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-class-capabilities: ignoring: instance/fleet.yml: %s\n" % problem)
     msgs = drift(fleet)
     if "--check" in argv:
         if msgs:

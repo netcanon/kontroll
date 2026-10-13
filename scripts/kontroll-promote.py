@@ -38,10 +38,12 @@ _GATE_ENV = ("PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "LANG", "LC_ALL", "PYT
 
 
 def _would_brick_generate(run_id, repo):
-    """FIX-M9 — the promote-time pin-conflict gate. Extract the PROSPECTIVE post-merge tree (`proposed/<run_id>`,
+    """FIX-M9 — the promote-time resolve gate. Extract the PROSPECTIVE post-merge tree (`proposed/<run_id>`,
     which a fast-forward makes `main`) and run THIS tree's `gen-requirements.py --conflict-check --root <extract>`
-    over it: resolve the unioned lockfile pins and report if generation would FAIL CLOSED (two conflicting `==` pins
-    for one collection — or a bad `signature_policy`). Returns the message to refuse on, or None to proceed.
+    over it: report anything the collection generator would REFUSE there — two conflicting `==` pins for one
+    collection, a bad `signature_policy`, a collection entry or a trust statement it cannot render, a fleet whose
+    `enabled_modules` is not a list of class keys. It judges the whole tree, so a fault already on `main` refuses
+    every proposal until one that removes it. Returns the message to refuse on, or None to proceed.
 
     Why at promote: two units each fine against today's `main` can conflict with EACH OTHER once both are active;
     only the FF moment (against the live `main`) is authoritative, so checking here means two conflicting `==` units
@@ -55,7 +57,15 @@ def _would_brick_generate(run_id, repo):
     the whitelisted environment above. Fails OPEN on our own read error (git/tar missing, an unreadable ref, a tree
     with no modules/): the generate-time fail-closed remains the backstop, and the gate must never itself block a
     clean promote."""
-    ref = "proposed/%s" % run_id
+    # The FULL name — the one promote_ref fast-forwards. The short `proposed/<id>` is, to git, a tag
+    # (refs/tags/proposed/<id>) or a ref of its own (refs/proposed/<id>) before it is a branch: a ref of either
+    # kind beside the proposal made this gate judge one tree while the fast-forward took another.
+    return _tree_refusal("refs/heads/proposed/%s" % run_id, repo)
+
+
+def _tree_refusal(ref, repo):
+    """The gate's answer for ONE tree — `ref` in `repo`: the collection generator's refusal of it, or None, exactly as
+    `_would_brick_generate` describes. `main()` asks it of `refs/heads/main` as well, to say WHERE a fault is."""
     gen = os.path.join(ROOT, "scripts", "gen-requirements.py")    # THIS tree's generator — never the proposal's copy
     try:
         arc = subprocess.run(["git", "archive", "--format=tar", ref], cwd=repo or ROOT, capture_output=True)
@@ -67,7 +77,8 @@ def _would_brick_generate(run_id, repo):
                 return None                              # extraction failed / no modules registry in the tree — nothing to check
             env = {k: os.environ[k] for k in _GATE_ENV if k in os.environ}
             env.setdefault("PYTHONIOENCODING", "utf-8")
-            p = subprocess.run([sys.executable, gen, "--conflict-check", "--root", tmp], cwd=ROOT, env=env,
+            # -B: a promote run with sudo from the operator's checkout must not leave a root-owned __pycache__ there
+            p = subprocess.run([sys.executable, "-B", gen, "--conflict-check", "--root", tmp], cwd=ROOT, env=env,
                                capture_output=True, text=True)
             return None if p.returncode == 0 else (p.stderr.strip() or "generation would fail closed")
     except OSError:
@@ -81,14 +92,25 @@ def main(argv):
     ap.add_argument("--repo", default=None,
                     help="the canonical (bare) or clone git dir (default: this repo root)")
     ap.add_argument("--skip-conflict-check", action="store_true",
-                    help="skip the FIX-M9 pin-conflict gate (emergency override — promote a known-conflicting proposal)")
+                    help="skip the promote-time resolve gate (FIX-M9) — two conflicting == pins, a fleet line that "
+                         "is not a class key, anything else the collection generator refuses (emergency override)")
     args = ap.parse_args(argv)
     if not args.skip_conflict_check:                      # FIX-M9: refuse a promote that would brick the next generate
         msg = _would_brick_generate(args.run_id, args.repo)
         if msg:
+            # The gate judges the whole tree, so ask the same of `main` as it stands: when `main` is refused too, the
+            # fault is there already, whatever this proposal changes — say so, or the operator looks for it in a
+            # proposal that does not hold it. (Not "does this proposal touch the fleet file": an onboard of a new
+            # class does, and a pin conflict of the proposal's own does not.) A read error answers None: no hint.
+            where = ("(`main` as it stands is refused as well: the fault is on `main` already, and every proposal is "
+                     "refused until it is corrected there — on the node, correct it in the checkout and deploy; or "
+                     "promote a proposal that corrects it.)\n"
+                     if _tree_refusal("refs/heads/main", args.repo) else "")
             sys.stderr.write(
-                "REFUSED: promoting proposed/%s would brick the next deploy's generate:\n  %s\n"
-                "Re-pin the conflicting unit (or pass --skip-conflict-check to override).\n" % (args.run_id, msg))
+                "REFUSED: promoting proposed/%s — the proposal's tree does not resolve, so the next bootstrap (and, "
+                "for a fleet line, the next deploy) would stop:\n  %s\n"
+                "The indented line says what to correct (--skip-conflict-check overrides this gate).\n%s"
+                % (args.run_id, msg, where))
             return 2
     return 0 if gitio.promote_ref(args.run_id, cwd=args.repo) else 1
 

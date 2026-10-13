@@ -11,6 +11,106 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(fleet): a fleet line that is not a class key is skipped by what renders and refused by what installs (C22) (2026-10-13)
+
+`instance/fleet.yml`'s `enabled_modules` is a hand-editable list, and every deploy-time reader formatted each entry
+straight into a path. A line that is not a device-class key — an unquoted `no` (YAML reads a boolean), a typo with a
+slash, a mapping left by a merge — was a traceback in some generators, was **accepted as a class** when it climbed
+out with `..` and back in to a real one (the generated target was then planned under a path with `..` in it), and in
+the generator that decides what is installed it silently took a class's collections out of the lockfile. No request
+can write such a line (the one writer re-checks its key); a hand edit or a promoted proposal can. It closes C22's
+known-gap clause "the deploy-time generators … and `bootstrap.yml` still join a raw `enabled_modules` entry into a
+path".
+
+- **One classifier.** `paths.fleet_problems(fleet)` is the complement of `paths.enabled_keys(fleet)`: one message
+  per line that is not a class key, naming its **position** (its place among the list's entries, counted from one;
+  comment and blank lines are not counted) and the
+  rule, never the entry — also for a list that is a string, a mapping or a number, and for a file whose document is
+  a list or a word (an empty document is, as before, a fleet with no class). The message for an entry YAML did not
+  read as text — an unquoted `no`, `~`, a number, a date — says that, instead of a charset the line visibly
+  satisfies.
+- **What renders, skips — and says so.** The generators of the scrape targets, the log drop-ins and the Loki
+  retention file, the portal tiles, the backup schedules, the scrape jobs, the exporter fragments and the
+  secret-env manifest, and the checks `gen-class-capabilities.py` and `gen-validate-live.py`, take their keys
+  from `paths.enabled_keys` and print `<generator>: ignoring: instance/fleet.yml: enabled_modules entry N is not
+  a device-class key …` on stderr. They do not stop: some of them run inside the API and the GUI after a
+  capability promote, where a `sys.exit` ends the worker after the module file was written.
+- **A file with no list is not an empty fleet.** A fleet file that is not a mapping, or whose `enabled_modules` is a
+  string, a mapping or a number, is refused by what installs and is NOT rendered by what renders: each renderer says
+  so, returns non-zero without exiting, and writes and prunes nothing. A capability change made through the API or
+  the GUI over such a file is refused before it writes anything (409 `repository_data`, with its audit line),
+  because the regeneration that would follow it would render nothing. (An empty list, or none, is a fleet with no
+  class, as it always was — and so, still, is an empty file: "Not changed" below.)
+- **What installs, refuses.** `gen-requirements.py` stops on such a fleet with one line that says the position
+  and what ends the condition — at bootstrap, at a deploy that builds its images locally, and at the **promote
+  gate**, which keeps the line out of `main`. `--all-modules` ignores a directory under `modules/` that is not a
+  class key.
+- **The promote gate's words.** It judges the whole prospective tree, so with a bad line already on `main` it
+  refuses every promote except the one that removes the line — and it used to say "Re-pin the conflicting unit"
+  whatever the generator had refused. It now says that the proposal's tree does not resolve and prints the
+  generator's own sentence; and when `main` as it stands is refused as well, it says that the fault is on `main`
+  already and names the two ways to correct it there. `--skip-conflict-check` still overrides it.
+- **The promote gate judges the ref the fast-forward takes.** It read the proposal by its short name,
+  `proposed/<run_id>`, which git resolves to a tag, or to a ref directly under `refs/`, before it resolves it to the
+  branch — so with such a ref beside a proposal the gate judged one tree and the fast-forward took another. It reads
+  `refs/heads/proposed/<run_id>` now. Older than the fleet rule.
+- **The plays run one check first, and stop on it**: `python3 -B scripts/gen-requirements.py --fleet-check`, before
+  anything walks the list — in `bootstrap.yml`, before its own `lookup('file', modules_dir ~ '/' ~ item …)`; in a
+  deploy twice: in `local-canonical.yml`, before the blanket commit and the mirror (a way into the canonical's
+  `main` that passes no promote gate — a hand-edited line would otherwise be on `main` when the deploy ends, and
+  refuse every promote; this is where an ordinary deploy stops), and again in `deploy-stack.yml`, before the first
+  generator, for a run that starts later in the play. **That a deploy stops is the careful default; whether it
+  should only warn is a decision for the operator.** A deploy that went on would drop the class from files the
+  running stack reads, and on a node that builds its images would stop anyway at the collection lockfile, after
+  those files were rewritten. The check takes no other mode beside it, and a fleet file the parser gives up on, or
+  one that cannot be opened, is one line from the collection generator — with the place, when the parser gives one
+  — not a traceback.
+
+**On a box that runs the previous build.** A fleet whose every line is a class key meets nothing new: no
+generated file changes by a byte (every generator's `--check` over the shipped example is unchanged). A fleet
+that holds a line that is not one — including a class directory you made by hand with a capital letter or a dot,
+which rendered until now and which the Fleet index never listed (the Settings view does) — now stops the
+bootstrap and the next deploy (before anything is committed to the canonical or regenerated) and, because the
+previous build's deploys have already mirrored that line to the canonical's `main`, every promote until it is
+corrected there. To know before the first deploy of this build, run its own check from the node's checkout:
+`python3 -B scripts/gen-requirements.py --fleet-check` (the previous build's generator does not know the flag and
+would write the lockfile). The way out for a hand-made class is a rename, in the checkout, of everything that
+carries the key: the directory, the `key:` in its `module.yml`, the fleet line, its `device_trust.<key>` entry in
+`instance/instance.yml` if it pins a CA (a pin left under the old key stops applying without a word), and the
+`target.device_class` of any app-store unit that names it; then deploy — the deploy's commit-and-mirror takes the
+correction to `main`, and the generators write the class's files under the new key and prune the old ones. A
+backup schedule Semaphore already holds under the old name (`backup-<old key>`) stays until you delete it there;
+logs stored so far keep the old `device` label.
+
+**Not changed, and written down (SECURITY.md C22 and C10):** a line that IS a class key and has no class directory
+is still skipped without a word by every generator; a fleet file that is EMPTY — no bytes, comments only, `~`, `[]`
+— is still a fleet with no class: it passes the check and the promote gate, and every renderer prunes what it
+generated; the Settings view still lists the fleet as it is (its own pull request); the pushes into the canonical's
+`main` other than a deploy's — `scripts/update.sh`, `scripts/update-from-bundle.sh`, the operator CLI's onboard —
+ask no check; and the promote gate still reads a proposal as `git archive` exports it, and the fast-forward resolves
+the ref again after the gate has judged it — a proposal's own `.gitattributes` can hide its overlay from the gate,
+and a push between the gate and the fast-forward is promoted unjudged (SECURITY.md C10; the next change to that
+gate).
+
+**New here:** `tests/unit/test_fleet_line.py` — the classifier (positions, never the entry; `enabled_keys` and
+`fleet_problems` split the list between them; a line YAML read as another type is told so); every generator's
+fleet-walking function over a table of lines that are not keys — equal to its answer for the clean fleet, and asking
+the filesystem about nothing else; every generator's entry point saying which entries it skipped; each renderer
+rendering nothing for a file with no list — and, in its bare run, pruning nothing; the in-process regenerations (observability, logging, backup) run for real against
+a fleet with such lines; a real run of the collection generator in each of its seats — a bad line, a file the
+parser gives up on, a file that cannot be opened, the check beside another mode — and the plays' check writing
+nothing; a capability change over a file with no list refused before it writes; a real promote over a throwaway
+repository — a proposal that adds the line; with the line already on `main`, an unrelated proposal and one that
+edits the fleet file elsewhere refused with a sentence that says the fault is on `main`, a proposal with a fault of
+its own refused without it, and, on a bare canonical, the proposal that removes the line promoted; and the check
+task of `bootstrap.yml`, of `deploy-stack.yml` and of `local-canonical.yml`, by position, each stopping its play
+and each run as `python3 -B`. `tests/unit/test_kontroll_promote.py` gains the gate judging the branch when a tag,
+or a ref directly under `refs/`, carries the proposal's short name. **A guard was edited:** `tests/unit/test_deploy_stack_check_mode.py` holds every `scripts/gen-*` command that
+is not a read-only mode to stay skipped under `--check`; `gen-requirements.py --fleet-check` has to run in the
+dry-run and is now such a mode — named together with the script that implements it, as `gen-image-digests.py --env`
+now is. A command counts as read-only there only as one generator, on one line without shell syntax, whose words
+after the script are exactly `--check` or that script's listed mode.
+
 ### docs(security): `signature: required` is a declaration — C15-a says what it does today, and a warning stops saying the opposite (2026-10-12)
 
 No install behaviour changes. Several texts said that a collection's `required` policy fails the install when no

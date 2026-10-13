@@ -84,7 +84,13 @@ A clone of the tool has no `instance/`: scaffold yours as the quickstart does (`
 
 Edit your overlay (scaffolded by `fresh-init`, §2):
 - **`instance/fleet.yml`** — enable the modules you actually run (catalog in
-  `config/fleet.example.yml`). This is the file most setups touch.
+  `config/fleet.example.yml`). This is the file most setups touch. Each entry of `enabled_modules` is a
+  device-class key — the name of a directory under `modules/`: lowercase letters, digits, `_` and `-`, starting
+  with a letter or digit. A line that is not one (an unquoted `no`, `off` or `~`, which YAML reads as another
+  type; a typo with a slash; a capital letter) stops the bootstrap and a deploy — and, if it is already on the
+  canonical's `main` (a box that deployed it under an older build), every promote until it is corrected — each
+  naming the entry by its place among the list's entries (comment and blank lines are not counted).
+  [troubleshooting.md](troubleshooting.md) §6 says what each message means.
 - **`instance/inventory/hosts.yml`** — your hosts, in functional groups
   (`edge_firewall`, `core_switch`, …).
 - **`instance/instance.yml`** — confirm `mgmt_ip` / `domain` (set by `--fresh`) and
@@ -97,6 +103,8 @@ deploy. On the legacy host path it is `ansible-playbook playbooks/bootstrap.yml`
 of that sequence is [install-from-scratch.md](install-from-scratch.md) §3–§6.
 
 It is idempotent and does everything we used to do by hand:
+- checks first that every `enabled_modules` entry of your fleet is a device-class key, and stops with the
+  position of a line that is not one (`scripts/gen-requirements.py --fleet-check`),
 - generates `requirements.generated.yml` from `_core` (which lists every collection the install playbooks
   import, whatever the fleet) + your enabled modules via the
   single-source `scripts/gen-requirements.py` (the same resolver deploy-stack + CI use) and

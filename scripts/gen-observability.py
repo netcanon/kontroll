@@ -129,7 +129,7 @@ def metrics_files(fleet, inv, methods=None):
     if methods is None:
         methods = {m["name"]: m for m in catalog.load_telemetry()}
     out = {}
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
@@ -172,6 +172,12 @@ def main(argv):
     else:
         fleet = _load(paths.resolve("config/fleet.yml"))
         inv = inventory.merged_inventory(paths.resolve("ansible/inventory/hosts.yml"))
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-observability: ignoring: instance/fleet.yml: %s\n" % problem)
+    if paths.fleet_list_unreadable(fleet):                   # not an EMPTY fleet: render nothing, prune nothing
+        sys.stderr.write("gen-observability: not rendering: instance/fleet.yml holds no list of classes — nothing is written "
+                         "and nothing is pruned until the file is corrected\n")
+        return 1
     # normpath both sides so the set math holds on Windows too (glob returns native separators).
     want = {os.path.normpath(os.path.join(ROOT, rel)): body
             for rel, body in metrics_files(fleet, inv).items()}

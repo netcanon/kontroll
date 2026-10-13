@@ -22,6 +22,8 @@
   vars:
     repo_root: "{{ playbook_dir }}/../.."
     modules_dir: "{{ repo_root }}/modules"
+    # The check below and the generator read the file kontroll.paths resolves (instance/fleet.yml on a configured
+    # node) — overriding this variable splits the play from both.
     fleet_file: "{{ repo_root }}/instance/fleet.yml"
     req_generated: "{{ repo_root }}/ansible/collections/requirements.generated.yml"
     age_dir: "{{ ansible_env.HOME }}/.config/sops/age"
@@ -42,6 +44,16 @@
         file: "{{ fleet_file }}"
         name: fleet
 
+    # One check, in Python, before anything joins a fleet entry into a path (the lookup two tasks down does): the
+    # rule every reader of the fleet uses (kontroll.paths), not a second copy of its charset in Jinja. It names the
+    # POSITION of a line that is not a device-class key — an unquoted `no`, a typo with a slash — never the entry.
+    - name: Check that every enabled_modules entry is a device-class key (scripts/gen-requirements.py --fleet-check)
+      ansible.builtin.command:
+        cmd: python3 -B scripts/gen-requirements.py --fleet-check   # -B: a read leaves no __pycache__ behind
+        chdir: "{{ repo_root }}"
+      changed_when: false
+      check_mode: false            # a read; a --check run must refuse the same fleet
+
     # Collection resolution lives in ONE place now — scripts/gen-requirements.py (the lockfile task below).
     # bootstrap only collects each module's secrets_domain (the §4 report), which the generator does not own.
     - name: Seed the secrets-domain set
@@ -51,7 +63,7 @@
     - name: Collect each enabled module's secrets domain
       ansible.builtin.set_fact:
         secrets_domains: "{{ (secrets_domains + [_m.secrets_domain]) | unique }}"
-      loop: "{{ fleet.enabled_modules }}"
+      loop: "{{ fleet.enabled_modules | default([], true) }}"   # a list emptied by its last removal is null
       loop_control: { label: "{{ item }}" }
       vars:
         _m: "{{ lookup('file', modules_dir ~ '/' ~ item ~ '/module.yml') | from_yaml }}"
@@ -189,7 +201,7 @@
     - name: Summary
       ansible.builtin.debug:
         msg:
-          - "enabled modules : {{ fleet.enabled_modules | join(', ') }}"
+          - "enabled modules : {{ fleet.enabled_modules | default([], true) | join(', ') }}"
           - "collections     : {{ resolved_colls | join(', ') }}"
           - "age recipient   : {{ age_pub.stdout }} (put in .sops.yaml)"
           - "secrets needed  : {{ secrets_domains | join(', ') }}"

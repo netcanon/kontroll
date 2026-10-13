@@ -28,7 +28,7 @@ import yaml
 
 from kontroll import paths
 from kontroll.service import _diff, promote
-from kontroll.service._blockwrite import staged_paths, upsert_into_block, write_module
+from kontroll.service._blockwrite import require_fleet_list, staged_paths, upsert_into_block, write_module
 
 log = logging.getLogger("kontroll.service.backup")
 
@@ -163,6 +163,7 @@ def apply_plan(plan):
     """PROMOTE — write the `backup:` block into module.yml (idempotent) + regenerate the schedule spec.
     Returns {changed, paths} for the route's scoped commit. The API runs NO play — registering the schedule in
     Semaphore is the operator's enact step."""
+    require_fleet_list()                 # before the first write: no regeneration can follow a fleet with no list
     changed = write_module(plan)         # no write for a plan that changes nothing (_blockwrite.write_module)
     if changed:
         log.info("backup: wrote backup block for %s", plan["key"])

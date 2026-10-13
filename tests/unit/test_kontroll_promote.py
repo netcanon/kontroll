@@ -1,4 +1,4 @@
-"""kontroll-promote.py — the FIX-M9 pin-conflict gate before the fast-forward promote.
+"""kontroll-promote.py — the FIX-M9 resolve gate before the fast-forward promote (it began as the pin-conflict gate).
 
 WHY (the failures these guard):
   * Two app-store units each pinning the SAME collection to a DIFFERENT exact `==` version both becoming `active`
@@ -157,8 +157,9 @@ def test_the_gate_passes_only_the_whitelisted_environment_and_the_trusted_script
     monkeypatch.setattr(promote.subprocess, "run", spy)
     assert promote._would_brick_generate("p1", str(repo)) is None
     assert not canary.exists()
-    assert seen["cmd"][1] == os.path.join(promote.ROOT, "scripts", "gen-requirements.py"), \
-        "the trusted checkout's generator, never the extract's"
+    assert seen["cmd"][1:3] == ["-B", os.path.join(promote.ROOT, "scripts", "gen-requirements.py")], (
+        "the trusted checkout's generator, never the extract's — and with -B, so that a promote run with sudo from "
+        "the operator's checkout leaves no root-owned __pycache__ in it")
     assert "--conflict-check" in seen["cmd"] and "--root" in seen["cmd"], seen["cmd"]
     assert seen["cwd"] == promote.ROOT, "run from the trusted root, not inside the extract"
     assert "SOPS_AGE_KEY" not in seen["env"] and "KONTROLL_WRITE_ROOT" not in seen["env"], \
@@ -167,3 +168,26 @@ def test_the_gate_passes_only_the_whitelisted_environment_and_the_trusted_script
     assert "PYTHONPATH" in seen["env"], \
         "Python's own path configuration must pass through — a runner that locates its packages via PYTHONPATH " \
         "otherwise cannot import yaml in the child (the first private sync found exactly that)"
+
+
+@pytest.mark.parametrize("other", ["refs/tags/proposed/p1", "refs/proposed/p1"], ids=["a-tag", "a-ref-under-refs"])
+def test_the_gate_judges_the_ref_the_fast_forward_takes(tmp_path, other):
+    """The gate extracts `refs/heads/proposed/<id>` — the ref `promote_ref` fast-forwards — also when another ref
+    answers to the short name `proposed/<id>` first: a tag, or a ref directly under `refs/`, that points at a tree
+    without the conflict.
+
+    Guards the gate and the fast-forward reading two different refs. Git resolves a short name to
+    `refs/<name>` and `refs/tags/<name>` before `refs/heads/<name>`, and the canonical's update hook refuses the
+    network service nothing but `main` — so one extra ref beside a proposal made the gate pass a clean tree while
+    `main` took the other one, with no race and no `.gitattributes`."""
+    repo = tmp_path / "repo"
+    _fake_proposal(repo, conflict=True, canary=tmp_path / "canary.txt")     # refs/heads/proposed/p1: a real conflict
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    (repo / "modules" / "beta" / "module.yml").write_text(
+        "key: beta\ncollections:\n  - name: acme.appliance\n    version: '==1.0.0'\n", encoding="utf-8")
+    for cmd in (["git", "commit", "-qam", "the same tree without the conflict"], ["git", "update-ref", other, "HEAD"],
+                ["git", "reset", "-q", "--hard", "HEAD~1"]):
+        sp.run(cmd, cwd=repo, env=env, check=True)
+    msg = promote._would_brick_generate("p1", str(repo))
+    assert msg and "acme.appliance" in msg and "conflict" in msg.lower(), "the gate judged %s, not the branch" % other

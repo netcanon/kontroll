@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Resolve the collection set (modules/_core.yml + each enabled module's module.yml,
-driven by instance/fleet.yml) into an ansible-galaxy requirements file.
+"""Resolve the collection set (modules/_core.yml + each enabled module's module.yml, driven by
+instance/fleet.yml) into an ansible-galaxy requirements file. This is the reader that decides what is INSTALLED: a
+fleet whose `enabled_modules` is not a list of device-class keys is REFUSED here — in a generate, under
+`--conflict-check` (the promote gate) and in `--fleet-check` (the plays) — with the entry's place and never the
+entry (SECURITY.md C22).
 
-Standalone — no ansible (the one kontroll import, paths, is os-only: the instance-overlay
-resolver) — so CI (and anyone) can install the collections without running the full bootstrap. Mirrors ansible/playbooks/bootstrap.yml's resolution
-against the SAME source of truth (modules/); it is never a hand-maintained list (a hard
-rule — see CLAUDE.md). Output path defaults to the generated lockfile bootstrap also uses.
+Standalone — no ansible (its kontroll imports, paths and yamlscalar, need neither a collection nor a play) — so CI
+(and anyone) can install the collections without running the full bootstrap. It is the ONE place the collection
+set is resolved (bootstrap.yml and deploy-stack.yml both call it); it is never a hand-maintained list (a hard
+rule — see CLAUDE.md). Output path defaults to the generated lockfile.
 
 Usage:  python3 scripts/gen-requirements.py [<out-path>]
         python3 scripts/gen-requirements.py --all-modules                    # every module's set: the published runner
         python3 scripts/gen-requirements.py --core                           # modules/_core.yml alone: the installer
         python3 scripts/gen-requirements.py --check                          # is THIS node's lockfile fresh (fleet mode)
         python3 scripts/gen-requirements.py --conflict-check --root <tree>   # FIX-M9: judge ANOTHER tree's data
+        python3 scripts/gen-requirements.py --fleet-check                    # is every fleet line a class key? (plays)
 """
 import os
 import re
@@ -32,6 +36,26 @@ SIG_POLICIES = ("adaptive", "required", "none")           # adaptive = the brick
 def _load(rel):
     with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
+
+
+def _load_fleet():
+    """The fleet file, parsed — or ONE sentence when it cannot be read: where it stops parsing when the parser
+    says, and no piece of the file. A traceback's last line quotes the file: a tag or an alias name (the parser's
+    own errors), and the scalar itself when a constructor fails on it — `!!int x`, `!!bool x`, `!!float x`, a date
+    that does not exist — which are a ValueError, a KeyError, an AttributeError, never a YAMLError. Bytes that are
+    not UTF-8 and a nesting too deep for the parser end here too; a file that cannot be opened says only why."""
+    try:
+        return _load(paths.resolve("config/fleet.yml"))
+    except OSError as exc:
+        raise SystemExit("gen-requirements: instance/fleet.yml cannot be opened (%s). Every generator stops on it."
+                         % (exc.strerror or type(exc).__name__))
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = " (line %d, column %d)" % (mark.line + 1, mark.column + 1) if mark else ""
+    except (ValueError, LookupError, AttributeError, TypeError, RecursionError):
+        where = ""
+    raise SystemExit("gen-requirements: instance/fleet.yml is not YAML this tool can read%s. Correct the file: every "
+                     "generator stops on it." % where)
 
 
 def _is_exact(v):
@@ -226,10 +250,23 @@ def compute(enabled, adir):
     return out, prov
 
 
+def _fleet_message(problems, refusing=True):
+    """The one message for a fleet whose `enabled_modules` is not a list of class keys: positions and the rule,
+    never an entry, and what ends the condition. `refusing` — a generate or the promote gate's resolve, which
+    stop because a skipped class would be missing from what is installed; the plays' `--fleet-check` resolves
+    nothing, so it says only what it found (each play stops on it, before anything walks the list)."""
+    found = ("instance/fleet.yml: %s. Correct the file — remove or fix each line named; a proposal that does "
+             "promotes." % "; ".join(problems))
+    if not refusing:
+        return "gen-requirements: " + found
+    return ("gen-requirements: refusing to resolve the collection set — %s Fail closed: a class that is skipped "
+            "here would install less than the fleet declares, and say nothing." % found)
+
+
 def all_module_keys():
     """Every device-class key in the PUBLIC modules/ catalog (the dirs, not _core.yml) — the superset's enabled set."""
     md = os.path.join(ROOT, "modules")
-    return sorted(d for d in os.listdir(md) if os.path.isdir(os.path.join(md, d)))
+    return sorted(d for d in os.listdir(md) if paths.is_component(d) and os.path.isdir(os.path.join(md, d)))
 
 
 def main():
@@ -244,8 +281,23 @@ def main():
         # caller's. Meant for --conflict-check: a generate with --root would write into that tree.
         ROOT = os.path.abspath(args[args.index("--root") + 1])
         os.environ["KONTROLL_WRITE_ROOT"] = ROOT
+    if "--fleet-check" in args:
+        # The ONE check of the fleet list, for the plays: it runs before anything joins a fleet entry into a path
+        # (bootstrap.yml's own lookup; every generator deploy-stack.yml calls), with the rule every reader uses
+        # (kontroll.paths) and not a second copy of its charset in Jinja. Reads one file; resolves nothing; offline.
+        others = sorted(a for a in args if a in ("--check", "--conflict-check", "--core", "--all-modules"))
+        if others:                                     # it would pass for a mode that never looked at what it names
+            raise SystemExit("--fleet-check resolves nothing, so it cannot be combined with %s — run them separately"
+                             % ", ".join(others))
+        problems = paths.fleet_problems(_load_fleet())
+        if problems:
+            raise SystemExit(_fleet_message(problems, refusing=False))
+        print("gen-requirements: every enabled_modules entry is a device-class key (--fleet-check)")
+        return
     check = "--check" in args
-    conflict_check = "--conflict-check" in args                # FIX-M9: resolve-only (the promote-time pin-conflict gate)
+    conflict_check = "--conflict-check" in args                # FIX-M9: resolve-only — the promote gate (a pin
+    #                                                            conflict, a fleet line that is not a key, an entry
+    #                                                            it cannot render)
     all_modules = "--all-modules" in args                     # the PUBLISHED-runner SUPERSET (report 22 §2.3)
     core_only = "--core" in args                              # the INSTALLER's base: modules/_core.yml alone
     if all_modules and core_only:
@@ -265,8 +317,11 @@ def main():
         # which baked collections a play uses at runtime. OFFLINE (BRICK-1) — pure data over modules/. No fleet read.
         enabled, default_policy, keyring = all_module_keys(), "adaptive", DEFAULT_KEYRING
     else:
-        fleet = _load(paths.resolve("config/fleet.yml"))
-        enabled = fleet.get("enabled_modules") or []
+        fleet = _load_fleet()
+        problems = paths.fleet_problems(fleet)
+        if problems:                                   # the reader that decides what is INSTALLED does not skip
+            raise SystemExit(_fleet_message(problems))
+        enabled = paths.enabled_keys(fleet)
         default_policy = fleet.get("signature_policy") or "adaptive"   # the instance-wide default the sidecar records
         if default_policy not in SIG_POLICIES:
             raise SystemExit("instance signature_policy %r must be one of %s (fail closed)"
@@ -281,7 +336,7 @@ def main():
 
     out, prov = compute(enabled, paths.resolve("actuation"))  # FIX-M9: resolve_pins fails closed on conflicting `==`
     if conflict_check:                                        # the promote-time gate — resolve only, no staleness/no write
-        print("gen-requirements: no pin conflict — generation would succeed (--conflict-check)")
+        print("gen-requirements: the tree resolves — generation would succeed (--conflict-check)")
         return
     lock, side = render_lockfile(out), render_sidecar(out, prov, default_policy, keyring)
     dest = sys.argv[1] if (len(sys.argv) > 1 and not sys.argv[1].startswith("--")) else LOCKFILE_DEST

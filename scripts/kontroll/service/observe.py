@@ -34,7 +34,8 @@ from kontroll.service import promote
 # Shared with logsvc (logging) + any future capability instance — one comment-preserving block writer + one
 # config-injection guard, so the copies can never re-diverge (test_blockwrite.py pins them). Lifted from here.
 from kontroll.service import _diff
-from kontroll.service._blockwrite import (insert_into_block, staged_paths, upsert_into_block, validate_params,
+from kontroll.service._blockwrite import (insert_into_block, require_fleet_list, staged_paths,
+                                          upsert_into_block, validate_params,
                                           write_module)
 from kontroll.service._validate import plain_scalar
 
@@ -360,6 +361,7 @@ def apply_telemetry_plan(plan):
     is no write (_blockwrite.write_module). Returns {"changed", "paths"} — the repo-rel paths the route's scoped
     commit stages (the module + the class's regenerated target files). The API runs NO play here; making metrics
     flow is the operator's enact step (telemetry_enact_commands)."""
+    require_fleet_list()                 # before the first write: no regeneration can follow a fleet with no list
     changed = write_module(plan)
     if changed:
         log.info("observe: wrote %s telemetry block for %s", plan["method"], plan["key"])

@@ -71,7 +71,7 @@ def jobs_files(fleet, methods=None):
     if methods is None:
         methods = {m["name"]: m for m in catalog.load_telemetry()}
     owner = {}                          # job -> the method name that owns it (one method per job)
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
@@ -94,6 +94,12 @@ def main(argv):
     # regen on a node) reads the instance OVERLAY and writes that node's real file.
     example = "--check" in argv or "--example" in argv
     fleet = _load("instance.example/fleet.yml" if example else paths.resolve("config/fleet.yml"))
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-prometheus-jobs: ignoring: instance/fleet.yml: %s\n" % problem)
+    if paths.fleet_list_unreadable(fleet):                   # not an EMPTY fleet: render nothing, prune nothing
+        sys.stderr.write("gen-prometheus-jobs: not rendering: instance/fleet.yml holds no list of classes — nothing is written "
+                         "and nothing is pruned until the file is corrected\n")
+        return 1
     want = {os.path.normpath(os.path.join(ROOT, rel)): body for rel, body in jobs_files(fleet).items()}
     have = {os.path.normpath(p)
             for p in glob.glob(os.path.join(ROOT, "prometheus", "jobs.d", "*.generated.yml"))}

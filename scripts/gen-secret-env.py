@@ -134,7 +134,7 @@ def _collect(fleet, methods, block):
     non-zero (a silent env-var collision would overwrite one method's secret)."""
     axis = "telemetry" if block == "metrics" else "logging"
     out = {}
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
@@ -175,6 +175,12 @@ def main(argv):
     # regen on a node) reads the instance OVERLAY and writes that node's real file.
     example = "--check" in argv or "--example" in argv
     fleet = _load("instance.example/fleet.yml" if example else paths.resolve("config/fleet.yml"))
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-secret-env: ignoring: instance/fleet.yml: %s\n" % problem)
+    if paths.fleet_list_unreadable(fleet):                   # not an EMPTY fleet: render nothing, prune nothing
+        sys.stderr.write("gen-secret-env: not rendering: instance/fleet.yml holds no list of classes — nothing is written "
+                         "and nothing is pruned until the file is corrected\n")
+        return 1
     want = {os.path.normpath(os.path.join(ROOT, rel)): body for rel, body in secret_env_files(fleet).items()}
     cfg_dir = os.path.dirname(MANIFEST_REL)
     # Prune any stale config/*.manifest.generated.yml NOT in want — this auto-removes the retired

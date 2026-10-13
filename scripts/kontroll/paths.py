@@ -306,6 +306,47 @@ def enabled_keys(fleet):
     return [key for key in mods if is_component(key)] if isinstance(mods, list) else []
 
 
+def fleet_problems(fleet):
+    """What is wrong with a PARSED fleet file's `enabled_modules`, as messages that name the entry's PLACE — its
+    number among the list's entries, counted from one; comment and blank lines of the file are not entries — and
+    the rule, and never the entry: [] when it is a list of class keys, and when there is no list (the key absent or
+    null — a fleet with no class). The complement of enabled_keys(): every entry that function drops has one
+    message here, and a file that is not a mapping, or a value that is there and is not a list (an empty mapping
+    or an empty string included), has one too. For the readers that have no request to
+    answer: a generator that RENDERS prints these and skips the entry; the one that decides what is INSTALLED
+    stops (gen-requirements.py), and the install and deploy plays run its check — and stop on it — before anything
+    walks the list."""
+    if not isinstance(fleet, dict):
+        return ["the file is not a mapping"]
+    mods = fleet.get("enabled_modules")
+    if mods is None:
+        return []
+    if not isinstance(mods, list):
+        return ["enabled_modules is not a list"]
+    return ["enabled_modules entry %d is not a device-class key (%s)" % (i + 1, _NOT_A_KEY[isinstance(key, str)])
+            for i, key in enumerate(mods) if not is_component(key)]
+
+
+# Why an entry is not a key, by what YAML made of the line — never by its content. Most such lines are not text at
+# all: an unquoted `no`, `on`, `~`, a number or a date is another type to YAML, and reads like a key in the file.
+_NOT_A_KEY = {
+    True: "1-64 chars of [a-z0-9_-], starting with a letter or digit",
+    False: "YAML does not read it as text: an unquoted no, on, off, ~, a number or a date is another type, and a "
+           "`name: value` or a nested list is not a key",
+}
+
+
+def fleet_list_unreadable(fleet):
+    """True when a PARSED fleet file holds no LIST of classes at all: the file is not a mapping, or its
+    `enabled_modules` is there and is not a list. (Absent or empty is a fleet with no class: readable.) A renderer
+    must not take such a file for an empty fleet — it would write nothing and PRUNE every file it ever generated;
+    it renders nothing and prunes nothing instead, and says so."""
+    if not isinstance(fleet, dict):
+        return True
+    mods = fleet.get("enabled_modules")
+    return mods is not None and not isinstance(mods, list)
+
+
 def collection_fqcn(value, what="collection"):
     """An Ansible collection name, exactly `namespace.name` in Galaxy's charset (lowercase, digits, `_`) — the form
     every `ansible_collections/<ns>/<name>` join and every `ansible-doc` / `ansible-galaxy` argv word expects."""

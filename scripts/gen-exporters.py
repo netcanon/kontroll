@@ -54,7 +54,7 @@ def _used_proxy_methods(fleet, methods):
     so a method that derives an env from the consuming CLASS's TLS posture (`tls_verify_env`) can resolve it
     (the no-bespoke vendor-fact seam) -> {name: {"method": m, "vendor_defaults_by_module": {key: vd}}}."""
     used = {}
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
@@ -167,6 +167,12 @@ def main(argv):
     # regen on a node) reads the instance OVERLAY and writes that node's real file.
     example = "--check" in argv or "--example" in argv
     fleet = _load("instance.example/fleet.yml" if example else paths.resolve("config/fleet.yml"))
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-exporters: ignoring: instance/fleet.yml: %s\n" % problem)
+    if paths.fleet_list_unreadable(fleet):                   # not an EMPTY fleet: render nothing, prune nothing
+        sys.stderr.write("gen-exporters: not rendering: instance/fleet.yml holds no list of classes — nothing is written "
+                         "and nothing is pruned until the file is corrected\n")
+        return 1
     # the per-class trust decisions follow the same switch: the example's under --check/--example, the node's bare
     instance_trust = _load_optional(
         "instance.example/instance.yml" if example else "instance/instance.yml").get("device_trust") or {}

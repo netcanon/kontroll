@@ -29,7 +29,8 @@ import yaml
 from kontroll import catalog, paths
 from kontroll.service import promote
 from kontroll.service import _diff
-from kontroll.service._blockwrite import (insert_into_block, staged_paths, upsert_into_block, validate_params,
+from kontroll.service._blockwrite import (insert_into_block, require_fleet_list, staged_paths,
+                                          upsert_into_block, validate_params,
                                           write_module)
 
 log = logging.getLogger("kontroll.service.logsvc")
@@ -180,6 +181,7 @@ def apply_logging_plan(plan):
     no write (_blockwrite.write_module). Returns {"changed", "paths"} — the repo-rel paths the route's scoped
     commit stages (the module + the class's regenerated drop-ins). The API runs NO play; making logs flow is the
     operator's enact step. Mirror of observe.apply_telemetry_plan."""
+    require_fleet_list()                 # before the first write: no regeneration can follow a fleet with no list
     changed = write_module(plan)
     if changed:
         log.info("logsvc: wrote %s logs block for %s", plan["method"], plan["key"])

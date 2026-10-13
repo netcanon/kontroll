@@ -311,7 +311,7 @@ def logging_files(fleet, inv, methods=None, instance_trust=None):
     instance_trust = instance_trust or {}
     out = {}
     transform_ids = []
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
@@ -375,7 +375,7 @@ def loki_retention_files(fleet):
     A class that sets retention inconsistently across its logs entries exits non-zero (one device label => one
     window)."""
     per_key = {}
-    for key in fleet.get("enabled_modules") or []:
+    for key in paths.enabled_keys(fleet):
         mp = "modules/%s/module.yml" % key
         if not os.path.exists(os.path.join(ROOT, mp)):
             continue
@@ -415,6 +415,12 @@ def main(argv):
         # OPTIONAL per-class trust DECISIONS (instance data) — `device_trust.<key>.tls_ca_file` pins a CA; absent
         # => the class vendor default posture. Read from the instance overlay (absent on a fresh node => no pins).
         instance_trust = _load_optional("instance/instance.yml").get("device_trust") or {}
+    for problem in paths.fleet_problems(fleet):              # skipped, and said: the position, never the entry
+        sys.stderr.write("gen-logging: ignoring: instance/fleet.yml: %s\n" % problem)
+    if paths.fleet_list_unreadable(fleet):                   # not an EMPTY fleet: render nothing, prune nothing
+        sys.stderr.write("gen-logging: not rendering: instance/fleet.yml holds no list of classes — nothing is written "
+                         "and nothing is pruned until the file is corrected\n")
+        return 1
     want = {os.path.normpath(os.path.join(ROOT, rel)): body
             for rel, body in dict(logging_files(fleet, inv, instance_trust=instance_trust),
                                   **loki_retention_files(fleet)).items()}
