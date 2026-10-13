@@ -270,3 +270,24 @@ def test_a_module_file_the_block_writer_cannot_edit_is_a_409_on_the_capability_r
     assert _module_text(cap) == before and not cap.calls
     rows = read_audit(cap.audit_log, action="repository-refuse")
     assert rows and "what=module file" in rows[-1]["detail"] and "route=/capability/" in rows[-1]["detail"]
+
+
+def test_a_plan_that_would_not_read_back_is_a_409_on_the_capability_route(cap):
+    """A telemetry propose for a class whose `metrics` list holds a comment line at the left margin between two
+    entries — a shape the line writer does not model — answers 409 `repository_data` naming the block: the file
+    is unchanged, nothing is committed, and the audit log holds `repository-refuse` with the route's template.
+
+    Guards the read-back's refusal reaching a caller as what it is: the route used to answer 200 with a token for
+    a module text that held the entry twice."""
+    (cap.repo / "modules" / "demo_sw" / "module.yml").write_text(
+        "key: demo_sw\ncollections:\n  - name: cisco.ios\ninventory_group: core_switch\nmetrics:\n"
+        "  - {method: blackbox, params: {probe: icmp}}\n# interface counters\n"
+        "  - {method: snmp, params: {module: system}}\n", encoding="utf-8")
+    before = _module_text(cap)
+    r = cap.client.post("/capability/telemetry", headers=AUTH,
+                        json={"key": "demo_sw", "selection": {"method": "snmp", "params": {"module": "if_mib"}}})
+    assert r.status_code == 409 and r.json()["code"] == "repository_data", r.text
+    assert "`metrics`" in r.text and "read back" in r.text
+    assert _module_text(cap) == before and not cap.calls
+    rows = read_audit(cap.audit_log, action="repository-refuse")
+    assert rows and "what=module file" in rows[-1]["detail"] and "route=/capability/" in rows[-1]["detail"]

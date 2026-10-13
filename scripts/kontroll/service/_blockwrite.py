@@ -82,6 +82,66 @@ def require_fleet_list():
                           "file first; nothing was written")
 
 
+def require_reads_back(text_before, text_after, block_key, new_lines, entry_id=None, ident="method", mapping=False):
+    """Refuse — as the repository's own data (409 `repository_data`) — a module text that does not READ BACK as
+    the change that was planned. The block writers below edit a hand-written file by LINE, so that its comments
+    survive; this is their post-condition, asked in YAML's own reading of the result:
+
+      * every top-level key other than `block_key` reads exactly as it did before;
+      * `block_key` is there once;
+      * a LIST block reads as it did before with the rendered entry in the place of the one it replaces (the one
+        entry whose `ident` is `entry_id` — a list that holds that id twice is refused), or — when there was none — with the rendered entries appended;
+      * a MAPPING block (`mapping=True`) reads as the rendered block.
+
+    A text that is unchanged needs no check. Why it exists: line surgery has met real files it did not model — a
+    key line that carries a comment (a second block was appended, and YAML read only the last), a list at the
+    key's own column (the result was not YAML), items split by a blank line — and each time the plan said one
+    thing and the file another, with the structural no-drop check, which compares the PLAN, none the wiser. A
+    shape the writers still do not model (a comment at column zero between two items, a quoted key or method,
+    `key :`) is now a refusal that names the block and the rule, never a quiet loss. PURE — writes nothing."""
+    if text_after == text_before:
+        return
+    try:
+        before, after = yaml.safe_load(text_before), yaml.safe_load(text_after)
+        before = {} if before is None else before   # no document reads as no keys (the planners' `or {}`)
+        rendered = yaml.safe_load("\n".join(list(new_lines) if mapping else ["%s:" % block_key] + list(new_lines)))
+        rendered = rendered[block_key]
+        ok = isinstance(before, dict) and isinstance(after, dict) and block_key in after
+        keys = [k.value for k, _v in yaml.compose(text_after).value]            # compose keeps a key written twice
+        ok = ok and keys.count(block_key) == 1
+        ok = ok and (_same({k: v for k, v in after.items() if k != block_key},
+                           {k: v for k, v in before.items() if k != block_key}))
+        if ok and mapping:
+            ok = _same(after[block_key], rendered)
+        elif ok:
+            was = before.get(block_key) or []
+            ok = isinstance(was, list) and isinstance(rendered, list)
+            if ok:
+                hits = [i for i, e in enumerate(was) if isinstance(e, dict) and e.get(ident) == entry_id] \
+                    if entry_id is not None else []
+                at = hits[0] if hits else None
+                expected = (was[:at] + rendered + was[at + 1:]) if at is not None else (list(was) + rendered)
+                # an id the list holds twice is not ONE entry to edit: the plan's diff is against the last of
+                # them (current_values is a mapping by id) and the writer replaces the first
+                ok = len(hits) < 2 and _same(after[block_key], expected)
+    except Exception:                                       # noqa: BLE001 — a text YAML cannot read is not the plan
+        ok = False
+    if not ok:
+        shape = ("its values on the lines below it" if mapping else
+                 "one entry per `- ` item on the lines below it, none of them twice")
+        raise paths.RepositoryDataError(
+            "module file", "this class's module.yml is written in a way the writer cannot edit `%s` in: the text it "
+                           "would write does not read back as the change asked for. Write the block with the key "
+                           "alone on its line and %s, with no comment line at the left margin inside the block; "
+                           "nothing was written" % (block_key, shape))
+
+
+def _same(a, b):
+    """Two parsed YAML values read the same. Compared as canonical dumps: key order aside, and by TYPE — `1`,
+    `1.0` and `true` are three readings, where Python holds them equal; the order of a list is part of it."""
+    return yaml.safe_dump(a, sort_keys=True) == yaml.safe_dump(b, sort_keys=True)
+
+
 def staged_paths(plan, regen):
     """The repo-relative paths a module reconfigure hands to the scoped commit: the regenerated files, and the
     module itself WHEN it is in the write root. An apply lists its paths whether or not it wrote the module, and a

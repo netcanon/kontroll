@@ -29,7 +29,7 @@ import yaml
 from kontroll import catalog, paths
 from kontroll.service import promote
 from kontroll.service import _diff
-from kontroll.service._blockwrite import (insert_into_block, require_fleet_list, staged_paths,
+from kontroll.service._blockwrite import (insert_into_block, require_fleet_list, require_reads_back, staged_paths,
                                           upsert_into_block, validate_params,
                                           write_module)
 
@@ -113,6 +113,8 @@ def build_logging_plan(key, method_name, params=None, methods=None):
         text_after = upsert_into_block(text_before, "logs", method_name, new_lines)      # reconfigure (modify)
     else:
         text_after = insert_into_block(text_before, "logs", new_lines)                   # first declare (add)
+    # the writers edit by line: what they would write must READ as this change and nothing else (409 if not)
+    require_reads_back(text_before, text_after, "logs", new_lines, entry_id=method_name)
 
     # The Vector drop-ins this add (re)generates — single-sourced from gen-logging (see _generated_paths) so the
     # planned paths can never drift from where the generator actually writes (the per-(method, key) fragment +

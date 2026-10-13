@@ -14,7 +14,7 @@ import pytest
 
 import yaml
 
-from kontroll import catalog
+from kontroll import catalog, paths
 from kontroll.service import observe, promote
 
 pytestmark = pytest.mark.unit
@@ -351,3 +351,45 @@ def test_a_reconfigure_of_the_shipped_docker_host_class_keeps_its_other_method(t
     assert [m["method"] for m in after["metrics"]] == ["blackbox", "host_node"]
     assert after["metrics"][0]["params"] == {"probe": "tcp_connect"}
     assert sum(1 for ln in plan["text_after"].splitlines() if ln.startswith("metrics:")) == 1
+
+
+def test_a_plan_whose_text_would_not_read_back_is_refused_before_it_is_a_plan(tmp_repo):
+    """Planning a changed `blackbox` probe for a class file like the shipped `docker_host`, with one comment line
+    at the left margin between the `metrics:` key and its entries, raises the repository's refusal: there is no
+    plan, no token, and nothing is written.
+
+    Guards the planner end of the read-back: the line writer takes that comment for the end of the block and
+    puts the new entry above the list, so YAML reads `blackbox` twice — and the plan used to say one entry was
+    changed, with a token for a text that said something else."""
+    real = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                        "modules", "docker_host", "module.yml")
+    with open(real, encoding="utf-8") as fh:
+        lines = fh.read().split("\n")
+    at = next(i for i, ln in enumerate(lines) if ln.startswith("metrics:"))
+    lines.insert(at + 1, "# reachability first, then the host")
+    path = _write_module(tmp_repo, "docker_host", "\n".join(lines))
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        observe.build_telemetry_plan("docker_host", "blackbox", params={"probe": "tcp_connect"}, methods=METHODS)
+    assert "`metrics`" in str(refused.value) and "tcp_connect" not in str(refused.value)
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_a_dashboards_insert_that_would_not_read_back_is_refused(tmp_repo):
+    """Planning a new method WITH a new dashboard for a class whose `dashboards` list holds a comment line at the
+    left margin between two entries raises the repository's refusal naming `dashboards`; the `metrics` edit of the
+    same plan is one the writer handles, and the file is as it was.
+
+    Guards the SECOND read-back of the telemetry planner (the dashboards insert, checked against the text that
+    already holds the metrics edit): without it the new board is written above the comment, between the two
+    boards the class declared, and the plan says it was added at the end."""
+    path = _write_module(tmp_repo, "demo_sw", "key: demo_sw\nrole: backend_network_cli\n"
+                         "inventory_group: core_switch\nmetrics:\n  - {method: snmp, params: {module: if_mib}}\n"
+                         "dashboards:\n  - {gnet: 13659, name: snmp_if}\n# reachability\n"
+                         "  - {gnet: 13660, name: demo_reach}\n")
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        observe.build_telemetry_plan("demo_sw", "host_node", dashboards=[{"gnet": 1860, "name": "node"}],
+                                     methods=METHODS)
+    assert "`dashboards`" in str(refused.value) and "`metrics`" not in str(refused.value)
+    assert path.read_text(encoding="utf-8") == before

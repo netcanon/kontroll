@@ -79,7 +79,9 @@ per-node and gitignored, so `gen-requirements` has no example mode.)
 Each capability is a drop-in `module.yml` block, turned into actuation config by a generator (none hand-written).
 Write each as a BLOCK — the key alone on its line (a trailing comment is fine), its entries on the lines below: the
 capability dialogs edit the file by line, to keep your comments, and refuse a key whose value is on the key's own
-line (`metrics: []`) or that the file holds twice.
+line (`metrics: []`) or that the file holds twice. Keep a comment inside a block indented with its entries: a comment line at the left margin ends the block for the
+dialogs, and they refuse a change they can then no longer place rather than write an entry twice. Declare each
+method once.
 
 | Block | Shape | Generator → artifact | Capability |
 |---|---|---|---|

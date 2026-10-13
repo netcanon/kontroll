@@ -213,3 +213,20 @@ def test_a_backup_key_with_an_empty_flow_mapping_is_refused(tmp_repo):
     with pytest.raises(paths.RepositoryDataError) as refused:
         backup.build_plan("demo_bk", {"method": "backup", "params": {"schedule": "0 2 * * *"}})
     assert "`backup`" in str(refused.value) and "own line" in str(refused.value)
+
+
+def test_a_backup_plan_whose_text_would_not_read_back_is_refused(tmp_repo):
+    """Planning a new schedule for a class whose module file writes its `backup` key in quotes raises the
+    repository's refusal instead of returning a plan, and the file is as it was.
+
+    Guards the backup planner's read-back: the line writer does not see a quoted key, so it appends a second
+    block. YAML's reading of that text IS the planned block — the last of two wins — which is exactly why the
+    post-condition also asks for the key once: a file with the key twice is what the next change is refused on."""
+    d = tmp_repo / "modules" / "demo_bk"
+    d.mkdir(parents=True)
+    text = ('key: demo_bk\nrole: cisco_ios\n"backup":\n  capable: true\n  schedule: "0 3 * * *"\n'
+            'inventory_group: core_switch\n')
+    (d / "module.yml").write_text(text, encoding="utf-8")
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        backup.build_plan("demo_bk", {"method": "backup", "params": {"schedule": "0 2 * * *"}})
+    assert "`backup`" in str(refused.value) and (d / "module.yml").read_text(encoding="utf-8") == text

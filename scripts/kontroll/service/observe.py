@@ -34,7 +34,7 @@ from kontroll.service import promote
 # Shared with logsvc (logging) + any future capability instance — one comment-preserving block writer + one
 # config-injection guard, so the copies can never re-diverge (test_blockwrite.py pins them). Lifted from here.
 from kontroll.service import _diff
-from kontroll.service._blockwrite import (insert_into_block, require_fleet_list, staged_paths,
+from kontroll.service._blockwrite import (insert_into_block, require_fleet_list, require_reads_back, staged_paths,
                                           upsert_into_block, validate_params,
                                           write_module)
 from kontroll.service._validate import plain_scalar
@@ -284,11 +284,15 @@ def build_telemetry_plan(key, method_name, params=None, dashboards=None, methods
         text_after = upsert_into_block(text_before, "metrics", method_name, new_lines)   # reconfigure (modify)
     else:
         text_after = insert_into_block(text_before, "metrics", new_lines)                # first declare (add)
+    # the writers edit by line: what they would write must READ as this change and nothing else (409 if not)
+    require_reads_back(text_before, text_after, "metrics", new_lines, entry_id=method_name)
     if dashboards:
         existing_dash = {d.get("name") for d in (module.get("dashboards") or [])}
         dash_lines = [_render_dashboard_entry(d) for d in dashboards if d.get("name") not in existing_dash]
         if dash_lines:
-            text_after = insert_into_block(text_after, "dashboards", dash_lines)
+            with_metrics = text_after
+            text_after = insert_into_block(with_metrics, "dashboards", dash_lines)
+            require_reads_back(with_metrics, text_after, "dashboards", dash_lines, ident="name")
 
     # Grafana links cover the WHOLE class's curated dashboards (already-declared ∪ newly-selected), deduped by
     # name, so the operator gets a deep-link even when this promote added no new dashboard (#122).

@@ -11,6 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(capability): a planned module text must read back as the change that was asked for — a shape the line writer does not model is a refusal, not a quiet loss (2026-10-13)
+
+The capability dialogs edit a class's `module.yml` by line, so that a hand-written file keeps its comments. Twice
+that surgery met a file it did not model and wrote something other than the plan said — a key line that carries a
+comment, a list at the key's own column (the entry above) — and each time nothing noticed: the no-drop check
+compares the plan, not the text. There are more such shapes. A comment line at the left margin between two
+entries ends the block early for the writer, and the changed entry is then written a second time; a quoted method
+or key, a space before the colon, or a byte-order mark in front of a first-line key is not matched at all.
+
+- **Every plan is read back before it is a plan** (`_blockwrite.require_reads_back`, in the telemetry, logging and
+  backup planners): YAML must read the text the writer returned as the file before with exactly the planned change
+  — every other top-level key as it was, the block's key there once, the list with the rendered entry in the place
+  of the one it replaces (or appended; a method the list holds twice is refused, since the dialog shows one entry
+  and the writer changes the other), the mapping as rendered. If not, the answer is 409 `repository_data`,
+  naming the block and the rule; nothing is written and no token is given.
+- Nothing changes for a file the writers handle: every shipped class file, and a file as an onboard writes it,
+  pass for every edit the dialogs can make.
+
+**New here:** in `tests/unit/test_blockwrite.py` — the read-back over every shipped class file and over an
+onboard-written one, for each edit, declared block or not; each shape the writers do not model refused, with
+nothing of the file in the sentence; each clause of the post-condition on its own; the comparison by type and by
+order; a file with no document; a method held twice. In `tests/unit/test_observe.py`, `test_logsvc.py` and
+`test_backup.py` — each planner refusing before there is a plan, the dashboards insert included, and a logging
+reconfigure reading back in place; in `tests/integration/test_api_capability.py` — the route answering 409 with
+its audit line.
+
 ### fix(capability): the block writer edits a module file as it is written — a key line with a comment, a list at the key's column — so a reconfigure no longer drops or breaks a class's methods (2026-10-13)
 
 The capability dialogs (telemetry, logging, backup) change a class's `module.yml` by line surgery, so that a

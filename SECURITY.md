@@ -1628,7 +1628,8 @@ the Fleet index, classify, the cred-fields route — still answer 500 for such a
 backend registry or a module file declares with a name that is not one, a backend that names no role and has a name
 none can be derived from (or whose registry entry holds a role that is not a name), a write target that does not
 resolve under the write root, a block of a module file that the block writer cannot edit where it stands (its value
-on the key's own line, or the key held twice) — is a `RepositoryDataError`, deliberately NOT a `ValueError`, so a handler written for
+on the key's own line, the key held twice, or a block whose edit would not read back from YAML as the change that
+was planned) — is a `RepositoryDataError`, deliberately NOT a `ValueError`, so a handler written for
 the planner's guards cannot answer it as a refused field. It is mapped once per app to **409** `repository_data`,
 with a sentence that says where to look — the class and its module file with the rule the value breaks, the class
 and the backend whose credential field it is, the class whose backend needs a `role:` or whose registry entry holds

@@ -28,7 +28,8 @@ import yaml
 
 from kontroll import paths
 from kontroll.service import _diff, promote
-from kontroll.service._blockwrite import require_fleet_list, staged_paths, upsert_into_block, write_module
+from kontroll.service._blockwrite import (require_fleet_list, require_reads_back, staged_paths,
+                                          upsert_into_block, write_module)
 
 log = logging.getLogger("kontroll.service.backup")
 
@@ -144,6 +145,8 @@ def build_plan(key, selection):
         # writer for both: a key that is THERE with nothing under it (`backup:   # todo`) reads as not declared,
         # and a text append would write the key a second time beside it.
         text_after = upsert_into_block(text_before, "backup", _METHOD, block_lines, list_block=False)
+        # the writer edits by line: what it would write must READ as this block and nothing else (409 if not)
+        require_reads_back(text_before, text_after, "backup", block_lines, mapping=True)
     sched_rel = "config/semaphore/schedules.generated.yml"
     sev_dec = _diff.severity_decision(diff)
     return {"error": None, "key": key, "method": _METHOD,
