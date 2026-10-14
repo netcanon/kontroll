@@ -714,3 +714,31 @@ def test_a_repository_named_relative_to_where_root_stands_is_still_found(world, 
     assert "%s@%s" % (STAGED, oid) in capsys.readouterr().out
     assert _promote().main(["%s@%s" % (STAGED, oid), "--skip-conflict-check", "--repo", relative]) == 0
     assert canon.read_ref(r.bare, canon.MAIN)[0] == oid
+
+
+def test_the_audits_one_git_is_the_service_when_root_audits_the_canonical(world, monkeypatch):
+    """`scripts/kontroll-canonical.py --audit`, run by root with a `git` first on the path that writes down the
+    uid it runs as before it becomes the real one: on the play's layout that file holds `1001`, once; on a
+    repository that is root's own (the control) it holds `0`.
+
+    Guards the one process the audit starts. It parses the canonical's `config` — a file the network service
+    writes — with git's own parser; the audit hands it the bytes and not the repository, but whatever those
+    bytes can make a git do, they would make it do as root in the installer container, on every deploy."""
+    spec = importlib.util.spec_from_file_location("kontroll_canonical_drop",
+                                                  os.path.join(ROOT, "scripts", "kontroll-canonical.py"))
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    canary = _canary(world)
+    shim = os.path.join(world, "bin")
+    os.mkdir(shim, 0o755)
+    with open(os.path.join(shim, "git"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("#!/bin/sh\nid -u >> '%s'\nexec '%s' \"$@\"\n" % (canary, shutil.which("git")))
+    os.chmod(os.path.join(shim, "git"), 0o755)
+    laid_out = _as_the_play_leaves_it(_build(world))
+    own = _build(world, name="own")
+    monkeypatch.setenv("PATH", shim + os.pathsep + os.environ["PATH"])
+    assert "config-unread: config" not in tool.audit(laid_out.bare).lines()
+    assert _lines(canary) == [str(canon.SERVICE_UID)]
+    open(canary, "w", encoding="utf-8").close()
+    assert "config-unread: config" not in tool.audit(own.bare).lines()
+    assert _lines(canary) == ["0"]

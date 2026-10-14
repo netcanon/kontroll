@@ -647,6 +647,31 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   uids, on a canonical laid out as the play leaves one: a hook that writes down who it runs as, a terminal the
   child must not hold, a working directory the service may not enter — and, for the decision itself,
   `tests/unit/test_canon.py`.
+  **What is in a canonical that the play and the tool do not write is NAMED** (`python3 -B
+  scripts/kontroll-canonical.py --audit <repo>`; `local-canonical.yml` runs it on every deploy, BEFORE its first
+  write into a canonical that is already there, and prints what it names). A bare repository has many places
+  where one more file changes what git does there — a config key, a hook, an entry of `info/` or of
+  `objects/info/`, a ref of a kind the tool does not write, a ref that names another ref, a top-level entry the
+  play does not make. The tool's own git sets its own answer for the ones an environment can answer (above); the
+  audit is how a PERSON learns that one is there. It reads the repository as files, and from open directories:
+  each directory is opened from the one above it and never through a link, and a file is read only when what was
+  opened is a regular file — the directory may be written while it is read. It starts one process — git, handed
+  the bytes of the config file on its standard input and told not to follow an include (from standard input it
+  otherwise does), never told where the repository is; started by root for a repository the service can write,
+  that git is the service uid. It prints a kind and a key per line and never a value: a key the play sets is
+  COMPARED with what the play sets it to (missing, there twice, or turned is a line), and which value it has is
+  not printed. Of owners and modes it reports the ones that decide whether the `update` hook runs and who may
+  replace it, and no others; it does not scan the object store. Because it stands in front of the play's own
+  writes, what the play is about to put right — `HEAD`, its keys, the hook — is named in that run, and a line
+  that returns on the next deploy is something that changes the canonical between deploys. git's own housekeeping
+  leaves nothing the audit names: the reflog of the tool's refs is the tool's own doing, and the play tells git's
+  garbage collection to write neither `info/refs` nor a commit-graph, so one that is there is a finding. The
+  play's own `git config` replaces every occurrence of a key: a second line of one of its keys neither stays in
+  force nor stops the deploy. **It reports; it does not stop a deploy** — whether a finding ever should is not
+  decided (`tests/unit/test_canonical_audit.py`: each planted thing named by kind and key, no value in the
+  output, no link followed and no directory that is exchanged under the reader listed, a pipe not waited on, the
+  one process held by a closed list, every kind in both tables, the play's tasks with their conditions evaluated;
+  `tests/integration/test_canon_drop.py` for the uid).
   **`hooks/` is root:root `0755` and pruned from the gid-1001 write-grant** (`local-canonical.yml`; 2026-10-08
   review, finding 2; `tests/unit/test_local_canonical.py`) — kept. A promote does not rest on it: the seam runs
   none of the repository's hooks (`core.hooksPath`), and root's git there is the service.

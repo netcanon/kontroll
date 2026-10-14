@@ -67,6 +67,60 @@
       # OPERATOR-OWNED, so that push succeeds via OWNER perms regardless; this membership is the runtime/future
       # half (effective on the operator's next login).
 
+    # ── THE AUDIT COMES FIRST: before this play writes anything into a canonical that is already there ──────────
+    # The tasks below put a canonical right — they write `HEAD`, set the play's config keys again, install the
+    # `update` hook, make `hooks/` root's. An audit behind them would never name one of those: it would read the
+    # canonical as this play had just left it. Here it reads the canonical as it has been since the last deploy.
+    # The price is a line that is nobody's doing: an update that ships a newer hook, or sets a key this play did
+    # not set before, names that hook or key once — in the run that puts it right (docs/troubleshooting.md).
+    - name: Is there a canonical already — so that it is audited BEFORE this play writes into it
+      ansible.builtin.stat:
+        path: "{{ bare }}"
+        get_checksum: false     # one look at the path, and nothing started on it
+        get_mime: false
+        get_attributes: false
+      register: _canonical_before
+
+    - name: Audit the canonical — name what is in it that this play did not put there (C10; it reports, it never stops)
+      # Read-only, and it reads the repository AS FILES: it lists directories and reads `HEAD`, the ref files,
+      # `packed-refs` and `hooks/update` itself, and the one process it starts (git, for the keys of the config) is
+      # handed the config file's bytes and never the repository. A kind and a key per line, never a value — so
+      # no_log is not needed, and would hide the one thing an operator has to read. A canonical that holds only
+      # what this play and the tool write prints nothing. It runs under --check too (the mandated dry-run shows
+      # the same report first) and it never fails the play: whether a finding should ever stop a deploy is not
+      # decided. A first run has nothing to audit: the canonical is this play's own a moment later.
+      # Exit 0 is a report. Any other status is NOT one — the path is no directory, the script could not be
+      # started, it ended on an error of its own — and the last of these tasks says that in a sentence: an empty
+      # list would read as "nothing found".
+      ansible.builtin.command:
+        cmd: python3 -B scripts/kontroll-canonical.py --audit {{ bare }}
+        chdir: "{{ worktree }}"
+      register: _canonical_audit
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: _canonical_before.stat.exists
+
+    - name: Show what the audit named (nothing was changed — docs/troubleshooting.md, "the audit of the canonical")
+      ansible.builtin.debug:
+        msg: "{{ _canonical_audit.stdout_lines | default([]) }}"
+      when: _canonical_audit.stdout_lines | default([]) | length > 0
+
+    - name: Say that the audit gave NO REPORT of the canonical — nothing listed is then not "nothing found"
+      vars:
+        _audit_no_report: >-
+          local-canonical: the audit gave NO REPORT of {{ bare }} (exit status
+          {{ _canonical_audit.rc | default('none', true) }}) — nothing listed does not mean the canonical is clean,
+          and the deploy goes on. Run `python3 -B scripts/kontroll-canonical.py --audit {{ bare }}` in
+          {{ worktree }}; docs/troubleshooting.md, "the audit of the canonical".
+      ansible.builtin.debug:
+        msg: >-
+          {{ [_audit_no_report]
+          + (_canonical_audit.stderr_lines | default([]))
+          + ([] if (_canonical_audit.rc | default(none)) is number
+          else ([_canonical_audit.msg | default('')] | select | list)) }}
+      when: _canonical_before.stat.exists and (_canonical_audit.rc | default(-1)) != 0
+
     - name: Create the bare-repo dir (operator-owned; group-writable for the privileged API — C10)
       become: true
       ansible.builtin.file:
@@ -99,14 +153,24 @@
       # core.sharedRepository=group: git itself makes NEW refs/objects group-writable + setgid, so a gid-1001
       # actor (the privileged API pushing a proposal; the Semaphore `promote-proposal` task fast-forwarding main
       # + deleting the proposal) can write them WITHOUT host root — the runtime complement to the recursive grant
-      # below, which only fixes EXISTING objects. Idempotent (set-or-replace).
-      # SECURITY.md C10 / docs/privileged-mutation-enablement.md.
+      # below, which only fixes EXISTING objects.
+      # gc.writeCommitGraph=false, repack.updateServerInfo=false: what git's own garbage collection would otherwise
+      # leave in the canonical BY ITSELF (a push starts a collection once enough has gathered) — `info/refs` and
+      # `objects/info/commit-graph`. Nothing here needs either: the tool's own git reads no commit-graph, and
+      # nothing serves the canonical over the dumb protocol. With them off, a file of that name is somebody's, and
+      # the audit above names it like any other entry there.
+      # --replace-all: a key that is in the file TWICE is one git will not set with a single value (exit 5), so one
+      # more line in `config` stopped every deploy at this task. Replaced, the key is there once, with this value —
+      # and the audit above has named it (`config-value`) before this task put it right.
+      # Idempotent (set-or-replace). SECURITY.md C10 / docs/privileged-mutation-enablement.md.
       ansible.builtin.command:
-        cmd: "git -C {{ bare }} config {{ item.key }} {{ item.value }}"
+        cmd: "git -C {{ bare }} config --replace-all {{ item.key }} {{ item.value }}"
       loop:
         - {key: receive.denyNonFastForwards, value: "true"}
         - {key: receive.denyDeletes, value: "true"}
         - {key: core.sharedRepository, value: "group"}
+        - {key: gc.writeCommitGraph, value: "false"}
+        - {key: repack.updateServerInfo, value: "false"}
       changed_when: false
 
     - name: Install the C10 update-hook — an allow-list of what a push may do to the canonical (defence-in-depth)

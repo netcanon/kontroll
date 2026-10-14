@@ -185,6 +185,11 @@ another commit, so what was previewed, what was judged and what landed could be 
 - **Nobody is told to run git in the canonical by hand.** The play's raw `git` tasks and the messages that
   suggested `git -C /srv/kontroll.git …` are gone; `kontroll-promote.py --list` and the Pending panel answer the
   same questions through the tool's own reader.
+- **What is in the canonical is named, not assumed** (the same day). Every deploy runs
+  `python3 -B scripts/kontroll-canonical.py --audit` over the canonical — before it writes anything into it — and prints, by
+  kind and key, what it finds there that the play and the tool do not write: a config key, a hook, a ref of
+  another kind ([troubleshooting.md](troubleshooting.md) §8). Names, not values; and it reports — it does not
+  stop the deploy.
 - **A promote by root does not run git as root** (the same day). A promote by `sudo` runs every git as the service
   uid, because the files git reads there are ones a network service writes when the deploy is armed
   (SECURITY.md C10). Who else may run it is the maintainer's call. Built: root and the service uid only, where

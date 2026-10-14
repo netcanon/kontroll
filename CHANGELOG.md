@@ -11,6 +11,62 @@ NetConfig project.
 
 ## [Unreleased]
 
+### feat(canonical): `kontroll-canonical.py --audit` — a deploy names what is in the canonical that the play and the tool do not write (2026-10-13)
+
+A bare repository has many places where one more file changes what git does there: a config key, a hook, an entry
+of `info/` or `objects/info/`, a ref of a kind the tool does not write, a top-level entry the play does not make.
+The tool's own git runs in an environment of its own — so nothing has ever said that one of them is THERE, and
+what a node's canonical really holds had not been read by anything.
+
+- **`python3 -B scripts/kontroll-canonical.py --audit <repo>`** (from the checkout) prints one line per finding —
+  a kind and a key, never a value (the name of a config key and not what it is set to; a name is shown escaped
+  and cut, and each kind is cut by itself, so many lines of one kind cannot push another kind out). Exit 0 with
+  the report; `--strict` exits 3 when there is a finding; 2 for a usage error or a path that is not a directory;
+  1 when the audit ended on an error of its own, which its last line then says.
+- **It reads the repository as files, from open directories.** The directory it reads is one somebody else may
+  be writing meanwhile, so each directory is opened from the one above it and never through a link, and a file
+  is read only when the thing that was opened is a regular file (a pipe named `HEAD` does not hang it; a
+  directory exchanged for a link while it is read is not listed). It reads `HEAD`, the ref files, `packed-refs`
+  and `hooks/update` itself. It starts one process: `git config --file - --no-includes --list -z`, handed the
+  config file's bytes on its standard input — bounded first, in size and in the length of a line — and never the
+  repository. `--no-includes` matters: from standard input git follows an `include.path`, which it does not when
+  asked of a path. Started by root for a repository the service can write, that git is the service uid
+  (`canon.identity_kwargs`).
+- **A key the play sets is compared, not only named.** Missing, there twice, or set to something else is a
+  `config-value` line (the value itself is never printed). `hooks/update` is compared with the file the checkout
+  ships, and is named when git would not run it (no execute bit) and when it, or `hooks/`, is the service's to
+  write.
+- **`local-canonical.yml` runs it on every deploy, BEFORE its first write into a canonical that is already
+  there** — under `--check` too — and shows what it named; when the audit gave no report, a sentence says so.
+  It never fails the play: whether a finding should ever stop a deploy is not decided. Because it stands in
+  front of the play's own repairs, what the play is about to put right (`HEAD`, its keys, the hook) is named in
+  that run; a line that returns on the next deploy is something that changes the canonical between deploys.
+- **git's own housekeeping leaves nothing the audit names.** The reflog git keeps under `logs/` for `HEAD`,
+  `main` and a proposal is the tool's own doing (the promote runs git in the tool's environment, where git
+  keeps one); any other file under `logs/` is a finding. And the play now sets two more keys in the canonical —
+  `gc.writeCommitGraph=false`, `repack.updateServerInfo=false` — so that the collection a push starts by itself
+  no longer writes `info/refs` and a commit-graph there. Nothing here reads either, and one that is there is now
+  somebody's.
+- **The play's `git config` replaces every occurrence of a key** (`--replace-all`). A key that is in the file
+  twice is one git will not set with a single value: one more line in `config` stopped every deploy at "Harden
+  the bare repo", with the last line in force. Now the audit names it and the play puts it right.
+
+**On a box that runs the previous build:** the first deploy of this build opens with the audit of the canonical
+as it is. Expect, once: `config-value: gc.writecommitgraph` and `config-value: repack.updateserverinfo` (the play
+had not set them), `hook-changed: update` when the installed hook is older than the shipped one, and — where git
+has collected garbage there before — `info-entry: refs` and `objects-info-entry: commit-graph`: remove those two
+files once. Anything else is a finding; `docs/troubleshooting.md` §8 says what each line means and what to do.
+
+**New here:** `tests/unit/test_canonical_audit.py` — a canonical the play made is clean, and still is after the
+tool used it and after git collected garbage in it (the play's keys and its command line are read from the
+play); each planted thing is named by kind and key and its value is nowhere in the output; an include is named
+and not followed; a name that is not plain text is one escaped line; no link is followed, no directory that is
+exchanged under the reader is listed, and a pipe is not waited on (the rows that would hang fail instead); the
+one process is held by a closed list of what the script may reach for; every kind the script prints has a row
+in both tables; the play audits before it writes, and its conditions are evaluated; a key that is there twice is
+named and then put right by the play's own command. In `tests/integration/test_canon_drop.py`: that one git is
+the service uid when root audits the canonical.
+
 ### fix(canonical): a root caller runs the canonical's git as the service uid — what the canonical's files can make a git do, they make it do as the service that wrote them (2026-10-13)
 
 When a deploy is armed the canonical's own files — its config, its refs, its packs — are written by a network

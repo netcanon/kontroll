@@ -11,7 +11,7 @@ files:
   scripts/kontroll/__init__.py: "4e32bdface251956bcf00108a7c14ec8a00f2e8dafb8174a4783aa5c3edd5cab"
   scripts/kontroll/auditfmt.py: "1ea9e6c4e13a572bfb35d6bfcf97317ce42c1a0f6dbe049ab0f986aa4acb3869"
   scripts/kontroll/authspec.py: "8fd00848a16373002ff506a1262d2333f53b0b82a23041952572a93857a13233"
-  scripts/kontroll/canon.py: "467a903cfb6887c9b3cbdae12873accf7d56214583ac813eb472ac4f1c9307d1"
+  scripts/kontroll/canon.py: "83800e087a67c04d430fa69d923ff41b782746dbef00db7c10d8e9be637ce809"
   scripts/kontroll/catalog.py: "5d95aec7cb1c2e5422f45b8a730d0c9fbcd915bcbf5395c7d9a270d944c9f0df"
   scripts/kontroll/endpoints.py: "9dc9d86f76ab014124b96ecb8f65b4b3266686d307e2019e2f379ef7bfa00fd1"
   scripts/kontroll/envguard.py: "b77a8846a79c38e3a88c47949c5dd04a7b9cbb66cb9357e69341a0dd80279669"
