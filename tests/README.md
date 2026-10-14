@@ -132,6 +132,7 @@ tests/unit/          # pure functions, no I/O
   test_promote_cas.py        # C10: the promote is one ref transaction over the two ids that were read — the races injected between the read and the move, against real git
   test_canon_tree.py         # C10: one commit's tree read object by object and re-hashed — attributes, filters, a swapped object, a link, the caps; the export command (a process stood in for git starts in the test's own environment, not the hardened one: `_in_gits_place`)
   test_canon.py              # C10: how the canonical is read — refs by full name, one canary test (with its control) per entry of the git environment a planted file can show, the whole entry list held by name, bytes to text, the seam pin
+  test_canonical_audit.py    # C10: the audit of a canonical — a canonical the play made, the tool used and git collected garbage in is clean; each planted thing named by kind and key and never by value; names escaped and cut; no link followed, no exchanged directory listed, no pipe waited on; the one process held by a closed list; every kind in both tables; the play's tasks and their conditions, evaluated
   test_fleet_line.py         # C22: a fleet line that is not a class key at every deploy-time reader — skipped and named by what renders, refused by what installs and by the promote gate, checked first by the plays
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
   test_onboard_dryrun.py     # dry-run plans nothing; --apply mutates tmp repo idempotently

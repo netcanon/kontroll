@@ -154,6 +154,56 @@ When it is the generator that refuses, its last lines are shown: they can name a
 | `… the gate could not run …` and under it `the canonical's <part> is a symbolic link …` / `git could not read the canonical` / `the canonical lists one ref name more than once` | the canonical itself is not as this tool makes it | nothing is promoted from it: rebuild the canonical from the node's checkout |
 | `REFUSED: that is not a run id …, or what follows the @ is not a full commit id` (exit 1) | the argument is not `<run id>` or `<run id>@<commit id>` as the service and git write them | copy it from the Pending panel |
 
+## 8. The audit of the canonical named something
+
+Every deploy runs `python3 -B scripts/kontroll-canonical.py --audit /srv/kontroll.git` (the task "Audit the
+canonical" of `local-canonical.yml`) and prints what it names; you can run it yourself, from the checkout, as any
+account that can read the canonical (a part an account cannot read is reported `unread`, so root and you can get
+different reports). It changes nothing in the canonical and it does not stop the deploy. Each line is a KIND and
+a KEY — the name of a config key, of a ref, of a file — never a value. Of owners and modes it reports the ones
+that decide whether the `update` hook runs and who may replace it, and no others
+(`sudo find /srv/kontroll.git -maxdepth 1 -printf '%u:%g %m %p\n'` shows the top level); it does not look into
+the object store. A canonical that holds only what the play and the tool write prints nothing.
+
+**A deploy audits BEFORE it writes.** The play puts a canonical right on every run — it writes `HEAD`, sets its
+own config keys, installs `hooks/update`, makes `hooks/` root's — and the audit stands in front of all of that:
+the report is of the canonical as it has been since the last deploy, and the dry run (`--check`) prints the same
+one. So what the play puts right is named in the run that puts it right, and not again: **a line of that kind
+that comes back on the next deploy is something that changes the canonical between deploys.** An update that
+itself brings a newer hook, or sets a key the play did not set before, names that hook or that key once, in its
+first deploy; that one is nobody's doing. A node's first deploy has no canonical yet and audits nothing.
+
+What the tool itself puts into the canonical is: `refs/heads/main`, `refs/heads/proposed/<run id>`, the objects
+they name, git's reflog of those refs under `logs/`, and what `local-canonical.yml` writes (`HEAD`, its config
+keys, `hooks/update`). Anything else was put there by a person, or by something using the network service's uid
+when the deploy is armed. So before you remove what a line names, look at when it appeared and whose it is
+(`stat -c '%y %u:%g %a %n' <path>`): the service's audit log ([logging-architecture.md](logging-architecture.md))
+for the same hours says what the service was asked to do; a change nobody asked for is the finding, not the file.
+Where a file is the service's or root's, removing it takes `sudo`. What the tool's own git does about each of
+these, and what that covers, is SECURITY.md C10.
+
+| The line | It means | What to do |
+|---|---|---|
+| `config-key: <key>` | `config` holds a key that neither `git init --bare` nor the play writes. Some keys name a program or a path that git would use; the tool's own git sets its own answer for those (SECURITY.md C10) | standing in a directory that is NOT inside the canonical: `git config --file /srv/kontroll.git/config --get-all <key> \| cat -v` shows what it is set to (asked of a file by its path, git reads that one file and follows no include in it), and `git config --file /srv/kontroll.git/config --unset-all <key>` removes it — if nobody set it on purpose. A key the report shows with an escape in it (a backslash and `x`, `u` or `n`) cannot be typed back: open `config` in an editor |
+| `config-value: <key>` | one of the keys the play sets, or `core.bare`, is missing from `config`, is there more than once, or is not set to what the play sets it to. Which value it has is not printed | for a key of the play, nothing: the same deploy sets it again, once (a dry run does not). It is expected ONCE, in the first deploy of a build whose play sets a key it did not set before. Otherwise somebody changed `config` since the last deploy: find out who (above). `core.bare` is the one the play does not set — standing outside the canonical, `git config --file /srv/kontroll.git/config --replace-all core.bare true` |
+| `config-include: include.path` (or `includeif.….path`) | `config` pulls in a second config file. The audit did not read that file: its keys are not in this report | read the path it names (`--get-all include.path`, as in the first row); remove the include unless you put it there |
+| `config-unread: config` | `config` is missing, is not a regular file (a second line — `link: config` or `not-a-file: config` — says so), cannot be read by the account that ran the audit, is larger than the audit reads or has a very long line, or git could not list it (it does not parse; git is not installed; a root that cannot become the service uid — §7) | `ls -l /srv/kontroll.git/config`. A config git cannot parse stops every git in the repository, the deploy's own included: it stops at "Harden the bare repo", after it has printed this line. A missing one is written again by that task, with the play's keys and nothing else — the next audit then names `core.bare` (the row above) |
+| `hook: <name>` | a file in `hooks/` other than `update` and git's own `*.sample` files | remove it (as root: `hooks/` is root's) unless you installed it; the play installs `update` and nothing else |
+| `hook-changed: update` / `hook-missing: update` | `hooks/update` is not the file this checkout ships (`ansible/playbooks/files/canonical-update-hook.sh`), or is not there | nothing for the hook itself: the same deploy installs it. It is expected once when an update brings a newer hook. If the NEXT deploy prints it again, something replaces the hook between deploys — or the checkout you ran the audit from is not the one the deploy runs from |
+| `hook-off: update` | `hooks/update` is there and nobody may execute it. git runs no hook that is not executable, so while it is like this no push is checked by it | the same deploy sets its mode again; who cleared it is the question, and that took root |
+| `hook-writable: hooks` / `hook-writable: update` | the directory, or the hook, is the network service's to write — its own, its group's with the group's write bit, or everybody's. The play makes both root's | the same deploy makes them root's again; find out who changed it — that, too, took root |
+| `info-entry: <name>` | a file in `info/` other than `exclude` — `grafts` and `attributes` change what git reads; `refs` is a list git's own garbage collection wrote before the play told it not to | remove it unless you put it there. `refs`: remove it once; nothing reads it. If it comes back, look for a `config-value` line |
+| `objects-info-entry: <name>` | a file in `objects/info/` other than `packs` — `alternates` makes git read objects from another directory; `commit-graph` (or `commit-graphs/`) is a cache of the history, which git's own garbage collection wrote before the play told it not to | `alternates`: remove it unless you set the canonical up to share objects — and if pushes arrived while it was there, objects may live only in that other directory: keep it until you have looked. `commit-graph`: remove it once (the tool does not read it; removing it loses nothing). If it comes back, something writes it |
+| `branches-entry: <name>` | a file in `branches/`, git's old place for a remote's shorthand (a URL a fetch or push from this repository would use) | remove it; the tool sets up no remote in the canonical |
+| `top-entry: <name>` | an entry of the top directory that a canonical made by the play does not have (`commondir`, `shallow`, `worktrees`, `gitdir`, a `.lock` file a git that was killed left behind, `gc.pid` while git collects garbage, a stray file) | `commondir` and `shallow` change which objects and refs git reads: remove them unless you know why they are there |
+| `reflog: logs/<path>` | a file under `logs/` that is not git's reflog of `HEAD`, of `refs/heads/main` or of a proposal | remove it |
+| `ref: <name>` / `packed-ref: <name>` | a ref other than `refs/heads/main` and `refs/heads/proposed/<run id>` — a tag, a `refs/replace/…`, another branch, a proposal whose id the service does not mint, a `.lock` file a git that was killed left beside a ref. The tool reads none of them: it names its own two kinds in full | remove it unless you made it: its file under `/srv/kontroll.git/refs/`, or its line in `packed-refs` — a text file, one ref a line; under an annotated tag's line there is a second one that begins with `^`, which goes with it. With an editor, not with git. The Pending panel lists the ones under `proposed/` as "not proposals" |
+| `symbolic-ref: <name>` | a ref that names another ref instead of a commit | as above; the tool refuses to promote or discard it |
+| `head: HEAD` | `HEAD` does not name `refs/heads/main` (a fresh clone would check out something else), or is not there (git then takes the directory for no repository at all) | nothing for the file itself: the same deploy writes it. Who changed it is the question |
+| `link: <path>` / `not-a-file: <path>` | `link`: a symbolic link where a file or a directory is expected. `not-a-file`: something else that is not what belongs there — a pipe, a socket, a device, a file where a directory belongs or the reverse. The audit did not follow or open it | find out who made it; remove it |
+| `unread: <what>` | the audit says nothing about that part: it could not be listed or read by this account; it is larger or deeper, or holds more entries, than the audit reads; a line of `packed-refs` is one git would not take for a ref (git refuses the whole file for it — or it is the `^` line left behind when a tag's line was removed by hand); more lines of one kind than are shown; or the audit ended on an error of its own, and what it printed is not a report | look at that part yourself — with `sudo` where your account may not read it. For the last one, run the audit again by hand |
+| `note: FETCH_HEAD` (`ORIG_HEAD`, `gc.log`) | a file git leaves in the top directory by itself | nothing |
+
 ## See also
 - [logging-architecture.md](logging-architecture.md) — the layered design + the degrade-path source of truth
 - [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, the refusal that is the repository's own, and a

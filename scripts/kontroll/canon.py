@@ -206,12 +206,9 @@ def git_kwargs(repo, fed=False):
             raise Unreadable("the canonical's `%s` is a symbolic link, so git would read or write somewhere "
                              "else; nothing was read" % part)
     kw = {"env": git_env(repo)}
-    if hasattr(os, "geteuid") and os.geteuid() == 0 and service_writable(repo):
-        # Rule 5. `subprocess` does it in the child, between fork and exec: setgroups([]), setgid, setuid — in
-        # that order, so nothing of root's is left when git starts.
-        if not _can_drop():
-            raise Unreadable("could not drop to the service uid; nothing was read or changed")
-        kw.update(user=SERVICE_UID, group=SERVICE_GID, extra_groups=[], start_new_session=True)
+    who = identity_kwargs(repo)
+    if who:
+        kw.update(who)
         if not fed:
             kw["stdin"] = subprocess.DEVNULL
         # And it starts in `/`, with the repository named by its full path. The child would otherwise keep the
@@ -220,6 +217,21 @@ def git_kwargs(repo, fed=False):
         # directory the service uid may not search — the operator's home, root's — that question is refused.
         kw.update(env=git_env(os.path.abspath(repo)), cwd=os.sep)
     return kw
+
+
+def identity_kwargs(repo):
+    """AS WHOM a process that reads what the repository at `repo` holds is started (rule 5): `{}` — as the
+    caller — or, for a caller with effective uid 0 where anything in the repository is the service's to write,
+    `user`, `group`, an empty `extra_groups` and a session of the child's own. `subprocess` applies them in the
+    child, between fork and exec: setgroups([]), setgid, setuid — in that order, so nothing of root's is left
+    when the program starts. Raises `Unreadable` for a root that cannot change identity. It is `git_kwargs`' own
+    answer, by itself, for the one caller that hands git a FILE of the repository and not the repository (the
+    audit's `git config --file -`); that caller sees to the standard input and the working directory itself."""
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and service_writable(repo):
+        if not _can_drop():
+            raise Unreadable("could not drop to the service uid; nothing was read or changed")
+        return {"user": SERVICE_UID, "group": SERVICE_GID, "extra_groups": [], "start_new_session": True}
+    return {}
 
 
 def _theirs(st):

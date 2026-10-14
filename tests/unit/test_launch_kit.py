@@ -220,9 +220,12 @@ def test_launch_kit_assembles_without_instance_leak():
         top_level = {n.split("/")[1] for n in names if n.count("/") >= 1}
         for d in ("api", "gui", "tests"):
             assert d not in top_level, "the minimized kit must NOT ship the baked/dev dir %s/ (it runs baked)" % d
-        for keep in ("scripts/kontroll-promote.py", "scripts/gen-requirements.py", "scripts/lib/plaintext-guard.sh"):
+        for keep in ("scripts/kontroll-promote.py", "scripts/gen-requirements.py", "scripts/lib/plaintext-guard.sh",
+                     "scripts/kontroll-canonical.py", "ansible/playbooks/files/canonical-update-hook.sh"):
             assert any(n.endswith("/" + keep) for n in names), \
-                "the kit must KEEP the canonical-run file %s (promote / FIX-M9 / the capture's plaintext gate)" % keep
+                ("the kit must KEEP the canonical-run file %s (promote / FIX-M9 / the capture's plaintext gate / "
+                 "the canonical's audit, which every deploy runs, and the hook it compares the canonical's with)"
+                 % keep)
         for keep in ("ansible", "modules", "scripts"):
             assert keep in top_level, "the kit must KEEP the canonical-run dir %s/ (promote / deploy-stack)" % keep
     finally:
