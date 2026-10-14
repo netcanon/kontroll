@@ -27,6 +27,7 @@ exclude_paths:
 # invoked via include_role(tasks_from:). Don't flag those as "unused".
 kinds:
   - playbook: "ansible/playbooks/*.yml"
+  - tasks: "ansible/playbooks/tasks/*.yml"   # task files a playbook imports (content-clone.yml)
   - tasks: "ansible/roles/**/tasks/*.yml"
 
 # We require no_log on secret tasks by convention + the grep gate in validate;

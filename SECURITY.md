@@ -641,12 +641,48 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   the listing included (a maintainer's call; it is one refusal there). A root that may not change identity (a
   container without the capability) is refused in one sentence; it is never left to run git as itself.
   **What this covers:** the gits this tool starts through the seam — the promote, the listing, the discard, the
-  export — and no other: a git started any other way runs as its caller, as before. The collection generator
+  export — and no other: a git started any other way runs as its caller, as before (the deploy's git in a
+  content clone is the next paragraph's). The collection generator
   the gate runs over a copy of the proposal's files runs as the caller too: it starts no git, the copy is the
   caller's, the content is the proposal's. Held by `tests/integration/test_canon_drop.py` — as root, with real
   uids, on a canonical laid out as the play leaves one: a hook that writes down who it runs as, a terminal the
   child must not hold, a working directory the service may not enter — and, for the decision itself,
   `tests/unit/test_canon.py`.
+  **The deploy's git in a content clone is the clone owner's** (`ansible/playbooks/tasks/content-clone.yml`,
+  which `deploy-stack.yml` imports for the API's clone and for onboard-gui's). Armed, the service commits into
+  its clone, so it writes that clone's config and hooks, and the deploy is root. So root runs no git in a clone
+  the service can write, and changes no owner by path in a tree that uid writes. Armed, root makes the clone's
+  directory, empty, and git run as uid 1001 clones into it and updates it — `setsid --wait setpriv --reuid=1001
+  --regid=1001 --clear-groups --no-new-privs -- env -i …`: a session of its own (no terminal: ansible-core 2.18,
+  the installer's, starts a task's command in the deploy's own session — on a `sudo` deploy, the operator's
+  terminal), no supplementary group, no new privileges, an environment the task builds and a script the module
+  does not rewrite from the deploy's (`expand_argument_vars: false`), started in `/`, and configured by one file
+  root writes, which names the canonical safe and nothing else. Unarmed, the clone is root's, every file of it,
+  and the git module updates it as before. **What stands at the clone's path is root's to place:** the clone's
+  parent is root's in both modes, and so is the storage root that holds that file — the tasks refuse to go on,
+  before anything in the clone is touched, unless each is a directory of root's that neither its group nor
+  anybody else may write (a writer of the parent could exchange the clone for something else between the look
+  and root's git). A clone that is not wholly the owner the flag names — anything in it the service can write
+  while unarmed (every entry is looked at, not the top alone), anything not the service's (root's, another
+  uid's) or not a directory while armed — is removed (Python's rmtree, from open directories: a directory
+  exchanged for a link is refused, a link at the top is unlinked, not followed) and its owner makes it again;
+  the service is restarted after `up` so its bind mount is the new directory. It is never chowned: the earlier
+  build chowned the armed clone recursively on every deploy, by path, in a tree the service writes, and told
+  root's git to trust it with a system-wide `safe.directory` entry — both are gone. Held by
+  `tests/integration/test_content_clone_as_service.py` — the task file run by ansible-playbook as root, holding
+  a terminal, against a canonical of another uid's: programs the service planted in its clone (`core.hooksPath`
+  hooks, `core.fsmonitor`) write down who they run as — uid and gid 1001, no other group, no new privileges, no
+  capability, no terminal, no variable of the deploy's — and, for the structure,
+  `tests/unit/test_content_clone_tasks.py`. **What it does not cover:** such a program runs as uid 1001 — the uid
+  every network service runs as — with what that uid may read where the deploy runs (on a host-direct deploy, the
+  host, outside any container, where it may leave a process behind; in the installer container, what the
+  installer binds, and it ends with the container). It runs as nothing of root's; before this change it ran as
+  root. An armed clone's update fetches `main` and checks it out: a change made in the clone and not proposed is
+  discarded, and the deploy says so (the git module refused to update over one). Unarmed, root's git serves the
+  canonical (the git module's fetch runs git's serving side there as root); nothing the service runs can write
+  the canonical then — every mount of it is `:ro` — and the audit (below) names a key or a file an armed era left
+  there. What a failure of these tasks says, and what to do, is
+  [docs/troubleshooting.md](docs/troubleshooting.md) §9.
   **What is in a canonical that the play and the tool do not write is NAMED** (`python3 -B
   scripts/kontroll-canonical.py --audit <repo>`; `local-canonical.yml` runs it on every deploy, BEFORE its first
   write into a canonical that is already there, and prints what it names). A bare repository has many places

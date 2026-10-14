@@ -114,7 +114,8 @@ trusted runner with the scoped key encrypts the staged cred *names* into the dom
    content-mount writability controlled by clone OWNERSHIP, **no age key**), `docker/services/onboard-gui.yaml`
    (stage env + `user: "1001:1001"` + the `/srv/kontroll.git` mount, mirroring `api.yaml` — keeps its
    host-provisioned age key for device-cred encryption), `ansible/playbooks/deploy-stack.yml` (`api_privileged`
-   flag — now tier-wide: gated token render + gated chown-to-uid-1001 + `local` remote on **both** the API clone
+   flag — now tier-wide: gated token render + a writable clone made by uid 1001 (`tasks/content-clone.yml`) +
+   `local` remote on **both** the API clone
    AND the onboard-gui clone, so the GUI capability dialog stages too), `ansible/playbooks/local-canonical.yml`
    (uid-1001 write grant via shared-group+setgid + the **unconditional** `receive.denyNonFastForwards`/`denyDeletes`
    hardening), `docker/semaphore-runner/Dockerfile` (baked git identity). Everything new is gated
@@ -141,11 +142,14 @@ capability-promote path is live too, not just the API. The from-scratch recipe (
    `<operator>:1001` and grant `g+w` + dir-setgid **outside `hooks/`**, which stays root-owned `0755` (a gid-1001
    writer must never be able to plant a hook; SECURITY.md C10). Never a blanket `chmod -R g+w` of the canonical.
 3. **Gated deploy:** `ansible-playbook playbooks/deploy-stack.yml -e '{"stack_services":["api"],"api_privileged":true}'`.
-   It renders the token + `KONTROLL_STAGE_PUSHES=1`, clones + chowns the API tree to uid-1001, adds its `local`
-   remote, and rebuilds the runner image (the baked git identity). **Live lessons now baked into the artifacts:**
+   It renders the token + `KONTROLL_STAGE_PUSHES=1`, makes (or updates) the API's content clone AS uid-1001 —
+   a root-owned clone from an unarmed deploy is removed and made again by uid 1001, never chowned — with its
+   `local` remote, and rebuilds the runner image (the baked git identity). **Live lessons now baked into the artifacts:**
    the API runs **`user: "1001:1001"`** (gid 1001 to write the group-1001 canonical) and **mounts
    `/srv/kontroll.git`** (so the `file://` remote resolves in-container) — both in `api.yaml`; the deploy avoids
-   `become_user` (no `acl` dependency) and sets `safe.directory` so the clone task is idempotent.
+   `become_user` (no `acl` dependency): its git in an armed clone is started through `setpriv` as uid 1001
+   (`ansible/playbooks/tasks/content-clone.yml`; root never runs git in a clone the service writes — SECURITY.md
+   C10).
 4. **Promote — the `promote-proposal` Semaphore task (item C):** arm with `api_privileged` incl. `semaphore` in
    `stack_services` (so Semaphore is recreated mounting the canonical `:rw` via `KONTROLL_CANONICAL_MODE=rw`),
    run `python3 scripts/configure-semaphore.py` to register the template, then run **promote-proposal** in the

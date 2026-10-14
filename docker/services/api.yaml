@@ -8,7 +8,8 @@
 # serve. The content clone is provisioned ROOT-OWNED, so uid-1001 reads it but cannot write — that
 # filesystem-ownership is the read-only lock (independent of the mount flag). To enable live mutation, the
 # GATED privileged deploy (`-e api_privileged=true`; SECURITY.md C10 + docs/privileged-mutation-enablement.md)
-# renders the token, chowns the clone to uid-1001 + adds a `local` remote, and sets KONTROLL_STAGE_PUSHES — so
+# renders the token, has the content clone made and updated by uid 1001 (never chowned) with a `local` remote,
+# and sets KONTROLL_STAGE_PUSHES — so
 # the API can only PROPOSE (push a proposed/<run_id> staging ref); a trusted `kontroll promote` lands it.
 # NO age key is mounted (the no-key posture — capability writes carry no creds). Bind to mgmt only; never WAN.
 #
@@ -66,8 +67,9 @@ services:
     ports:
       - "${KONTROLL_MGMT_IP:?set in .env}:8444:8444"   # mgmt interface only, HTTPS — never 0.0.0.0 (:? fails closed)
     volumes:
-      # The content clone. uid-1001 can WRITE it ONLY when the gated privileged deploy chowns it to uid-1001
-      # (C10); else it stays root-owned ⇒ effectively read-only (ownership is the lock, not the mount flag).
+      # The content clone. uid-1001 can WRITE it ONLY when the gated privileged deploy has it made by uid 1001
+      # (C10; ansible/playbooks/tasks/content-clone.yml); else it stays root-owned ⇒ effectively read-only
+      # (ownership is the lock, not the mount flag).
       # The content clone == the C10 propose tree. The HOST dir stays …/api/repo (deploy-stack clones it unchanged);
       # the CONTAINER mount target is the write-root — /repo (legacy) or /propose (baked, KONTROLL_WRITE_ROOT). When
       # baked, code is read from /opt/kontroll (PYTHONPATH) and ONLY the instance-overlay propose writes land here.
