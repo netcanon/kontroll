@@ -1,0 +1,285 @@
+---
+# The deploy's git in ONE content clone — the API's or onboard-gui's. deploy-stack.yml imports this file once per
+# surface, with
+#   _clone_dir        the clone: {{ kontroll_api_dir }}/repo or {{ kontroll_gui_dir }}/repo
+#   _clone_service    the compose service that mounts it: api, onboard-gui
+#   _clone_canonical  the canonical it is a clone of, at the path the containers mount it (/srv/kontroll.git)
+# and reads the play's api_privileged, _fresh_preview and kontroll_storage_root.
+#
+# ROOT NEVER RUNS GIT IN A CLONE THE SERVICE UID CAN WRITE, AND NEVER CHANGES AN OWNER BY PATH IN A TREE THAT UID
+# WRITES (SECURITY.md C10). A git started in a repository does what that repository's files tell it to — hooks
+# (core.hooksPath), core.fsmonitor, a filter, an include — so whoever writes the clone chooses what the deploy's
+# git runs. So the clone has ONE owner for this deploy, the one the flag names:
+#   unarmed  root, for every file of it. The git module makes and updates it, as root, as it always has.
+#   armed    the service uid 1001 (the container commits into it). Root makes its directory, empty; git RUN AS
+#            1001 clones into it and updates it: setpriv with no supplementary group and no new privileges, setsid
+#            (a session of its own, so no terminal), an environment the task builds (env -i: the only
+#            configuration that git reads is the file written below), working directory /. What the clone's files
+#            make that git do, they make it do as the service that wrote them.
+# WHAT STANDS AT THE CLONE'S PATH IS ROOT'S TO PLACE: the clone's parent is root's in both modes (the host-dirs
+# task), and so is the storage root that holds the configuration file — this file refuses to go on otherwise. A
+# writer of the parent could put something else there between the look below and root's git.
+# A clone that is not WHOLLY its owner's — anything the service can write while unarmed; anything not the
+# service's, or anything but a directory, while armed — is REMOVED and made again by the right uid. Removal is
+# Python's rmtree, which opens each directory from its parent and refuses one that was exchanged for a link. It is
+# never chowned: a recursive chown by path in a tree the service can write is a race the service can win (it
+# exchanges a directory for a link between the walk's look and its change, and root then changes the owner of a
+# file somewhere else). A replaced clone's container is restarted after `up` (deploy-stack.yml), so its bind
+# mount is the new directory.
+#
+# Access chain used:   local only — the control node's own filesystem and the file:// transport; no device
+# May break:           this surface's content clone (made again from the canonical — nothing in it is kept)
+# Fallback required:   no
+# Blast radius:        this content clone
+
+- name: Look at the clone's parent and the storage root — root's alone to write — {{ _clone_service }}
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    follow: "{{ item.follow }}"
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - {path: "{{ _clone_dir | dirname }}", follow: false}     # made by the play: a directory, never a link
+    - {path: "{{ kontroll_storage_root }}", follow: true}      # an operator may put a link there: the target counts
+  loop_control:
+    label: "{{ item.path }}"
+  register: _clone_dirs_st
+  when: not (_fresh_preview | bool)
+
+- name: Refuse unless the clone's parent and the storage root are root's alone — {{ _clone_service }}
+  # The parent is where the clone's entry lives: a writer of it could exchange the clone for a link — to a
+  # repository it writes — after the look below and before root's git. The storage root holds the one
+  # configuration file both gits read. Both must be directories of root's that neither the group nor anybody else
+  # may write. On a preview of a node where the play has not made them yet, a missing one passes (the apply makes
+  # it, root's).
+  ansible.builtin.assert:
+    that:
+      - (ansible_check_mode and not item.stat.exists) or ((item.stat.isdir | default(false))
+        and (item.stat.uid | default(-1)) == 0 and not (item.stat.wgrp | default(true))
+        and not (item.stat.woth | default(true)))
+    fail_msg: >-
+      {{ item.item.path }} must be a directory of root's that neither its group nor anybody else may write: what
+      stands at the content clone's path, and the configuration file the deploy's git reads, are root's to place
+      (SECURITY.md C10). Make it so — `sudo chown root:root {{ item.item.path }}` and `sudo chmod go-w
+      {{ item.item.path }}` — and deploy again.
+    quiet: true
+  loop: "{{ _clone_dirs_st.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+  when: not (_fresh_preview | bool)
+
+- name: Look at the content clone — who holds it decides who may run git in it — {{ _clone_service }}
+  ansible.builtin.stat:
+    path: "{{ _clone_dir }}"
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: _clone_st
+  when: not (_fresh_preview | bool)
+
+- name: Unarmed — look for anything in the clone the service could write (then it is not root's) — {{ _clone_service }}
+  # Every file, directory and link, not the top alone: a tree whose top is root's can still hold a directory of the
+  # service's (an earlier build's recursive chown changed the top LAST, so one that stopped part-way left exactly
+  # that), and root's git would run what the service put there. Not root's; or the service group's with its write
+  # bit; or anybody's to write (a link's own mode means nothing). Read-only, so it runs in check mode too.
+  ansible.builtin.command:
+    argv:
+      - find
+      - "{{ _clone_dir }}"
+      - "("
+      - "!"
+      - -user
+      - "0"
+      - -o
+      - "!"
+      - -type
+      - l
+      - "("
+      - -perm
+      - -o=w
+      - -o
+      - -group
+      - "1001"
+      - -perm
+      - -g=w
+      - ")"
+      - ")"
+      - -print
+      - -quit
+  register: _clone_foreign
+  changed_when: false
+  check_mode: false
+  when:
+    - not (_fresh_preview | bool)
+    - not (api_privileged | bool)
+    - _clone_st.stat.isdir | default(false)
+    - _clone_st.stat.uid | default(-1) == 0
+
+- name: Decide whether the clone is this deploy's to update as it stands — {{ _clone_service }}
+  # Armed: a directory of the service's (what is inside it is the service's business — only uid 1001 runs git in
+  # it). Unarmed: a directory of root's that the look above found nothing of the service's in. Anything else —
+  # a link, a file, a directory of another owner's — is not kept. A missing look result counts as foreign.
+  ansible.builtin.set_fact:
+    _clone_keep: >-
+      {{ (_clone_st.stat.isdir | default(false))
+         and ((_clone_st.stat.uid == 1001) if (api_privileged | bool)
+              else (_clone_st.stat.uid == 0 and (_clone_foreign.stdout | default('?')) == '')) }}
+  when: not (_fresh_preview | bool)
+
+- name: Remove the clone — it is not wholly its owner's, so its owner makes it again — {{ _clone_service }}
+  # rmtree from open directories (it refuses a directory exchanged for a link, and unlinks a link at the top
+  # rather than following it). Nothing in a clone is kept: what the service proposes it has pushed to the
+  # canonical, and the clone is reset to the canonical's main after every proposal (gitio).
+  ansible.builtin.file:
+    path: "{{ _clone_dir }}"
+    state: absent
+  register: _clone_removed
+  when:
+    - not (_fresh_preview | bool)
+    - _clone_st.stat.exists
+    - not (_clone_keep | bool)
+
+- name: Remember a clone made again — its container still mounts the removed directory — {{ _clone_service }}
+  ansible.builtin.set_fact:
+    _clones_replaced: "{{ (_clones_replaced | default([])) + [_clone_service] }}"
+  when: _clone_removed is changed
+
+- name: Write the one configuration the deploy's git reads for a content clone — {{ _clone_service }}
+  # Both gits below — root's (unarmed) and the service uid's (armed) — run with GIT_CONFIG_NOSYSTEM=1, which keeps
+  # the host's (or the installer image's) system file out, and this file as GIT_CONFIG_GLOBAL. It names the
+  # canonical safe: since git's May-2024 security releases (2.45.1; 2.39.4 and the other maintenance lines) git
+  # refuses to serve a repository that another uid owns — the canonical is the operator's — and
+  # `-c safe.directory=…` does not reach the serving side of a local clone (git clears GIT_CONFIG_PARAMETERS before
+  # it starts it); this variable does. Root's, mode 0644, in the root-owned storage root: the service reads it.
+  ansible.builtin.copy:
+    dest: "{{ kontroll_storage_root }}/content-clone.gitconfig"
+    content: |
+      # Written by deploy-stack.yml (tasks/content-clone.yml). The deploy's git for a content clone runs with
+      # GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=<this file>: this is all it is configured by.
+      [safe]
+          directory = {{ _clone_canonical }}
+    owner: "0"
+    group: "0"
+    mode: "0644"
+  when: not (_fresh_preview | bool)
+
+- name: Unarmed — clone/update the local canonical into the content tree, as root — {{ _clone_service }}
+  # Root-owned and world-readable: uid 1001 reads it and cannot write it (the read-only lock). In check mode a
+  # clone the step above would remove is NOT looked at: the git module runs git in it even to preview, and it is
+  # not root's. Skipped on a fresh-node preview: the module reaches the remote even in check mode, so with no
+  # canonical yet it fails outright rather than say what it would do (see _fresh_preview).
+  ansible.builtin.git:
+    repo: "file://{{ _clone_canonical }}"
+    dest: "{{ _clone_dir }}"
+    version: main
+    update: true
+  environment:
+    GIT_CONFIG_NOSYSTEM: "1"
+    GIT_CONFIG_GLOBAL: "{{ kontroll_storage_root }}/content-clone.gitconfig"
+  when:
+    - not (_fresh_preview | bool)
+    - not (api_privileged | bool)
+    - not ansible_check_mode or not _clone_st.stat.exists or (_clone_keep | bool)
+
+- name: Armed — make the clone's directory, empty and the service's, for the service's git — {{ _clone_service }}
+  # The clone's parent is root's, so the service's git cannot make the directory itself: root makes it — a new,
+  # empty directory, only when there is none — and changes nothing in it afterwards.
+  ansible.builtin.file:
+    path: "{{ _clone_dir }}"
+    state: directory
+    owner: "1001"
+    group: "1001"
+    mode: "0755"
+  when:
+    - not (_fresh_preview | bool)
+    - api_privileged | bool
+    - not _clone_st.stat.exists or (_clone_removed is changed)
+
+- name: Armed — clone/update the local canonical into the content tree, AS THE SERVICE UID — {{ _clone_service }}
+  # uid 1001 clones into the empty directory root made; an existing clone it fetches main into by its full name
+  # and checks `main` out at it. A change made in the clone and not proposed is discarded, and the script says so
+  # (the git module refused to update over one); HEAD is put back on `main`, and `local` — the remote gitio pushes
+  # a proposal to — back at the canonical. In check mode the script changes nothing: it compares HEAD with the
+  # canonical's main (ls-remote) and says what would happen — or that it could not compare, or FAILS where the
+  # deploy would. A clone the step above would remove is not looked at (it is not the service's, and 1001's git
+  # would refuse it). `changed` means the clone was made, `local` added or put back, HEAD moved or put on `main`,
+  # or a change discarded. `expand_argument_vars: false`: the module would otherwise replace the script's own
+  # `$dest`, `$url`, … with the deploy's environment before `sh` sees them.
+  ansible.builtin.command:
+    argv:
+      - setsid
+      - --wait
+      - setpriv
+      - --reuid=1001
+      - --regid=1001
+      - --clear-groups
+      - --no-new-privs
+      - --
+      - env
+      - -i
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - HOME=/nonexistent
+      - LC_ALL=C
+      - GIT_TERMINAL_PROMPT=0
+      - GIT_CONFIG_NOSYSTEM=1
+      - GIT_CONFIG_GLOBAL={{ kontroll_storage_root }}/content-clone.gitconfig
+      - GIT_CEILING_DIRECTORIES={{ _clone_dir | dirname }}
+      - sh
+      - -c
+      - "{{ _clone_as_service }}"
+      - content-clone
+      - "{{ _clone_dir }}"
+      - "file://{{ _clone_canonical }}"
+      - "{{ 'check' if ansible_check_mode else 'apply' }}"
+    chdir: /
+    expand_argument_vars: false
+  vars:
+    _clone_as_service: |
+      set -eu
+      exec </dev/null
+      dest=$1 url=$2 mode=$3
+      if [ ! -e "$dest/.git" ] && [ -z "$(ls -A "$dest" 2>/dev/null || :)" ]; then
+        if [ "$mode" = check ]; then echo "would make $dest from $url"; echo "state=changed"; exit 0; fi
+        git clone -q --branch main "$url" "$dest"
+        git -C "$dest" remote add local "$url"
+        git -C "$dest" fetch -q "$url" +refs/heads/main:refs/remotes/local/main
+        echo "made $dest from $url at $(git -C "$dest" rev-parse HEAD)"; echo "state=changed"; exit 0
+      fi
+      before=$(git -C "$dest" rev-parse -q --verify 'HEAD^{commit}') || {
+        echo "$dest is not a git clone: remove it and run the deploy again" >&2; exit 1; }
+      changed=no
+      if [ "$(git -C "$dest" remote get-url local 2>/dev/null || :)" != "$url" ]; then
+        if git -C "$dest" remote get-url local >/dev/null 2>&1; then verb=set-url; else verb=add; fi
+        [ "$mode" = check ] || git -C "$dest" remote "$verb" local "$url"
+        echo "remote local -> $url"; changed=yes
+      fi
+      branch=$(git -C "$dest" symbolic-ref -q HEAD || :)
+      if [ "$branch" != refs/heads/main ]; then echo "HEAD ${branch:-(detached)} -> refs/heads/main"; changed=yes; fi
+      if [ -n "$(GIT_OPTIONAL_LOCKS=0 git -C "$dest" status --porcelain --untracked-files=no)" ]; then
+        echo "a change made in the clone and not proposed is discarded"; changed=yes
+      fi
+      if [ "$mode" = check ]; then
+        if [ -r "$GIT_CONFIG_GLOBAL" ]; then
+          out=$(git ls-remote "$url" refs/heads/main) || {
+            echo "cannot read refs/heads/main from $url" >&2; exit 1; }
+          want=$(printf '%s\n' "$out" | cut -f1)
+          [ -n "$want" ] || { echo "cannot read refs/heads/main from $url: there is none" >&2; exit 1; }
+        else
+          echo "main not compared: $GIT_CONFIG_GLOBAL is written by this deploy before its git runs"; want=$before
+        fi
+      else
+        git -C "$dest" fetch -q "$url" +refs/heads/main:refs/remotes/local/main
+        git -C "$dest" checkout -q --force -B main refs/remotes/local/main
+        want=$(git -C "$dest" rev-parse HEAD)
+      fi
+      if [ "$before" != "$want" ]; then echo "HEAD $before -> $want"; changed=yes; fi
+      if [ "$changed" = yes ]; then echo "state=changed"; else echo "state=same"; fi
+  register: _clone_service_git
+  changed_when: "'state=changed' in _clone_service_git.stdout_lines"
+  check_mode: false
+  when:
+    - not (_fresh_preview | bool)
+    - api_privileged | bool
+    - not ansible_check_mode or not _clone_st.stat.exists or (_clone_keep | bool)

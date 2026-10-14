@@ -65,7 +65,7 @@ container, so only the host *floor* is distro-specific. A fresh control node nee
 | `python3`, `python3-pip`, `python3-venv` | the service layer + generators + galaxy CLI | 3.11–3.14 supported |
 | `ansible-core` **(>=2.16)** + collections `community.sops`, `community.docker`, `community.general` | the playbooks (deploy-stack, local-canonical, bootstrap) | **NOT on the host by default** — these live in the installer image, which is the whole point: no host toolchain means no version skew, and the PR #87 fresh-Debian-12 bug class is gone structurally. `install-prereqs.sh --with-host-ansible` (legacy rollback) installs them on the host, pip-installing ansible-core because Debian's apt `ansible` is core **2.14** — too old for `deb822_repository` (needs >=2.15) AND its bundled dist-packages collections shadow the lockfile pins. |
 | **`sops`** + **`age`** | secrets at rest (SOPS+age) | **NOT on the host by default** — also in the installer image. `--with-host-ansible` installs them (`age` via apt, `sops` from its pinned GitHub release). Run sops through the installer (`scripts/kontroll-installer.sh shell`) rather than expecting a host binary. |
-| **`acl`** | ansible `become_user`'s unprivileged-become path needs `setfacl` | **HIT LIVE** — without it, `become_user: 1001` fails `chmod: invalid mode 'A+user:...'`. deploy-stack now AVOIDS `become_user` (root + `safe.directory`), so `acl` is optional — but install it to be safe. |
+| **`acl`** | ansible `become_user`'s unprivileged-become path needs `setfacl` | **HIT LIVE** — without it, `become_user: 1001` fails `chmod: invalid mode 'A+user:...'`. deploy-stack now AVOIDS `become_user` (its git in an armed content clone is started through `setpriv` as uid 1001), so `acl` is optional — but install it to be safe. |
 | `yamllint`, `ansible-lint` | `tests/validate` (the lint gate) | dev only; ansible-lint needs POSIX (won't run on Windows — no `grp`) |
 | `gitleaks` | secret-scan (validate + CI) | dev/CI only |
 | `prom/prometheus` image | `promtool check config` runs via the image | **no host install** — `docker run --rm --entrypoint promtool ...` |
@@ -246,8 +246,8 @@ for the full recipe; the itinerary:
    ansible-playbook playbooks/deploy-stack.yml \
      -e '{"stack_services":["api","onboard-gui","semaphore"],"api_privileged":true}'
    ```
-   This renders the token + `KONTROLL_STAGE_PUSHES=1`, clones+chowns the `api`/`onboard-gui` trees to uid-1001,
-   adds each a `local` remote, runs them as `user: "1001:1001"`, and renders `KONTROLL_CANONICAL_MODE=rw` so all
+   This renders the token + `KONTROLL_STAGE_PUSHES=1`, has uid 1001 make (or update) the `api`/`onboard-gui`
+   content clones — a root-owned one is removed and made again, never chowned — adds each a `local` remote, runs them as `user: "1001:1001"`, and renders `KONTROLL_CANONICAL_MODE=rw` so all
    three mount `/srv/kontroll.git` `:rw`. `api` + `onboard-gui` can then only **PROPOSE** (`proposed/<run_id>`);
    `semaphore` is the one that **promotes** — so all three are named together and **recreated** in this one deploy
    (found live: omitting `semaphore` leaves it mounting the canonical `:ro`). `local-canonical.yml` (§3) set
@@ -293,7 +293,7 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
 
 > **The GUI promote path** is served by **onboard-gui** (Flask) over the same `gitio` staging mechanism as the
 > API — §7's arm provisioned its writable clone identically (`user: "1001:1001"`, the `/srv/kontroll.git` mount,
-> chown to uid-1001, a `local` remote) — so a capability-promote from the GUI stages `proposed/<run_id>` (never
+> a clone made by uid 1001, a `local` remote) — so a capability-promote from the GUI stages `proposed/<run_id>` (never
 > `main`), exactly like the API. The age key stays host/GUI-provisioned (the security boundary); the self-signed
 > certificate is minted by the deploy.
 > (**Live-verified 2026-06-15/18:** the gated deploy provisioned the clone; a `run_id` push staged

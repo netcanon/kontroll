@@ -46,7 +46,14 @@ def _tasks(node):
 
 
 def _all_tasks():
-    return list(_tasks(yaml.safe_load(_text())))
+    """deploy-stack.yml's tasks and those of each task file it imports (the content clones are made in one)."""
+    tasks = list(_tasks(yaml.safe_load(_text())))
+    for task in list(tasks):
+        rel = task.get("ansible.builtin.import_tasks")
+        if isinstance(rel, str):
+            with open(os.path.join(os.path.dirname(_DEPLOY), rel), encoding="utf-8") as fh:
+                tasks.extend(_tasks(yaml.safe_load(fh)))
+    return tasks
 
 
 def _named(fragment):
@@ -131,9 +138,11 @@ def test_the_real_precondition_gate_is_NOT_silenced():
 
 def test_the_gates_cover_the_tasks_that_actually_failed():
     """The four live-caught sites, by name, so a rename or a re-ordering that drops a gate is caught here rather
-    than on the next fresh box. Each one failed a real fresh-node dry-run before this fix."""
-    for fragment in ("Clone/update the local canonical into the API",
-                     "Clone/update the local canonical into the onboard-gui",
+    than on the next fresh box. Each one failed a real fresh-node dry-run before this fix. The two clone sites
+    are one task file now (tasks/content-clone.yml, imported for the API and for onboard-gui): its two git tasks,
+    root's and the service uid's."""
+    for fragment in ("Unarmed — clone/update the local canonical into the content tree",
+                     "Armed — clone/update the local canonical into the content tree",
                      "Own the TLS material as the runtime uid",
                      "Own the onboard-gui TLS material"):
         conds = " ".join(_when_of(_named(fragment)))

@@ -74,6 +74,24 @@ def test_removing_the_age_key_failclosed_guard_reflags_it(tmp_path):
         "removing the age.key fail-closed stat guard must re-open it as an offending (un-provisioned) bind"
 
 
+def test_a_clone_made_in_an_imported_task_file_is_provisioned_with_the_imports_values(tmp_path):
+    """The content clones are made in a task file deploy-stack.yml imports (tasks/content-clone.yml), so the
+    guard reads an imported file's tasks as the play's own, with the import's `vars:` put in: a git task there
+    covers the clone the IMPORT names. Without that the clones' binds would be flagged — or, read without the
+    values, a `{{ _clone_dir }}` that matches nothing would hide a missing provisioner. The import is followed,
+    and its values are what count."""
+    g = _guard()
+    (tmp_path / "tasks").mkdir()
+    (tmp_path / "tasks" / "clone.yml").write_text(
+        "- name: clone\n  ansible.builtin.git:\n    repo: file:///srv/kontroll.git\n    dest: \"{{ _clone_dir }}\"\n",
+        encoding="utf-8")
+    play = ("- hosts: localhost\n  tasks:\n    - name: one clone\n"
+            "      ansible.builtin.import_tasks: tasks/clone.yml\n"
+            "      vars:\n        _clone_dir: \"{{ kontroll_api_dir }}/repo\"\n")
+    _owned, git_dests, _stat = g.deploy_provisioners(play, playbook_dir=str(tmp_path))
+    assert git_dests == {"/var/lib/kontroll/api/repo"}, git_dests
+
+
 def test_storage_sources_are_fail_closed():
     """Every relocatable bind source uses ${VAR:-/var/lib/kontroll/…} (a concrete today-exact default), never a
     bare ${VAR} (empty when unset → a '/'-rooted or empty-prefixed mount). Mirrors the retention fail-closed rule."""

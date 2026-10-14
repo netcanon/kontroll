@@ -910,60 +910,28 @@
       when: "'api' in stack_services"
       block:
         - name: Ensure the API host dirs exist
+          # The directory itself is ROOT's: the content clone's entry lives in it, and only root may place
+          # what stands at the clone's path (tasks/content-clone.yml refuses to go on otherwise — a writer of
+          # this directory could exchange the clone for a link between the deploy's look and its git). What
+          # the container reads lives below it, the service's.
           ansible.builtin.file:
             path: "{{ item.path }}"
             state: directory
-            owner: "1001"
-            group: "1001"
+            owner: "{{ item.owner }}"
+            group: "{{ item.owner }}"
             mode: "{{ item.mode }}"
           loop:
-            - {path: "{{ kontroll_api_dir }}", mode: "0755"}
-            - {path: "{{ kontroll_api_dir }}/tls", mode: "0750"}
+            - {path: "{{ kontroll_api_dir }}", mode: "0755", owner: "0"}
+            - {path: "{{ kontroll_api_dir }}/tls", mode: "0750", owner: "1001"}
 
-        - name: Trust the API content clone for root's git on privileged re-runs  # noqa: command-instead-of-module
-          # Once the clone is chowned to uid-1001 (below), root re-running the git module on it hits git's
-          # dubious-ownership guard. Mark it safe.directory for root (system scope) so the clone task stays
-          # idempotent across re-deploys. Gated — the read-only deploy never chowns, so never needs this.
-          when: api_privileged | bool
-          ansible.builtin.command:
-            cmd: git config --system --add safe.directory {{ kontroll_api_dir }}/repo
-          changed_when: false
-
-        - name: Clone/update the local canonical into the API's content tree
-          # Root-owned + world-readable by default ⇒ uid-1001 reads but cannot write (the read-only lock). The
-          # gated privileged block below chowns it to uid-1001 + adds a `local` remote so the API can PROPOSE.
-          # Skipped on a fresh-node preview: the `git` module reaches the remote even in check mode, so with no
-          # canonical yet it fails outright rather than reporting what it would do (see _fresh_preview).
-          when: not (_fresh_preview | bool)
-          ansible.builtin.git:
-            repo: file:///srv/kontroll.git
-            dest: "{{ kontroll_api_dir }}/repo"
-            version: main
-            update: true
-
-        - name: Make the API content clone WRITABLE by uid-1001 + give it a 'local' remote (C10 — privileged)
-          when: api_privileged | bool and not (_fresh_preview | bool)
-          block:
-            - name: Own the API content clone as the runtime uid so the container can commit (C10)
-              # In read-only mode this is SKIPPED, so the clone stays root-owned and uid-1001 cannot write it —
-              # the read-only deploy is provably untouched by the enablement (this block needs api_privileged).
-              ansible.builtin.file:
-                path: "{{ kontroll_api_dir }}/repo"
-                state: directory
-                owner: "1001"
-                group: "1001"
-                recurse: true
-
-            - name: Add the API clone's 'local' remote → the canonical  # noqa: command-instead-of-module
-              # gitio.commit_and_push pushes to a remote literally named `local` (scripts/kontroll/gitio.py).
-              # Run as ROOT (no become_user — that needs the `acl` package + trips the unprivileged-become ACL
-              # path) with safe.directory, since the clone is now uid-1001-owned. The config ends root-owned but
-              # world-readable, so the container reads the remote at push time. Idempotent (tolerates exists).
-              ansible.builtin.command:
-                cmd: git -C {{ kontroll_api_dir }}/repo remote add local file:///srv/kontroll.git
-              register: _api_local_remote
-              changed_when: _api_local_remote.rc == 0
-              failed_when: _api_local_remote.rc != 0 and 'already exists' not in _api_local_remote.stderr
+        - name: Make or update the API content clone — root's unarmed, the service uid's armed (C10)
+          # Root never runs git in a clone the service uid can write, and never chowns one: who runs git in the
+          # clone, and what happens to a clone held by the wrong uid, is tasks/content-clone.yml.
+          ansible.builtin.import_tasks: tasks/content-clone.yml
+          vars:
+            _clone_dir: "{{ kontroll_api_dir }}/repo"
+            _clone_service: api
+            _clone_canonical: /srv/kontroll.git
 
         # byo_proxy/acme terminate TLS at the edge (the operator's proxy / Caddy) — kontroll provisions
         # no cert there. Gated on the resolver so the instance frontend mode is the single source of truth.
@@ -992,22 +960,26 @@
     - name: Provision the onboard-gui host artifacts (RO content clone; the age key stays host-provisioned)
       # Mirrors the API block: onboard-gui (Flask) is the SAME network-service trust tier — it serves the
       # capability dialog + device onboarding. Read-only unless api_privileged (the clone is root-owned ⇒ uid-1001
-      # reads but cannot write/push); the gated privileged block makes it writable + adds a `local` remote so a
-      # capability-promote can only PROPOSE (push proposed/<run_id>). This block never mints the age key — that
-      # stays host/GUI-provisioned (security boundary: never an agent, never committed). The TLS certificate is
-      # generated further down, in self_signed mode, when none is there. C10.
+      # reads but cannot write/push); armed, tasks/content-clone.yml has uid 1001 make and update it with a
+      # `local` remote, so a capability-promote can only PROPOSE (push proposed/<run_id>). This block never mints
+      # the age key — that stays host/GUI-provisioned (security boundary: never an agent, never committed). The
+      # TLS certificate is generated further down, in self_signed mode, when none is there. C10.
       when: "'onboard-gui' in stack_services"
       block:
         - name: Ensure the onboard-gui host dirs exist
+          # The directory itself is ROOT's: the content clone's entry lives in it, and only root may place
+          # what stands at the clone's path (tasks/content-clone.yml refuses to go on otherwise — a writer of
+          # this directory could exchange the clone for a link between the deploy's look and its git). What
+          # the container reads lives below it, the service's.
           ansible.builtin.file:
             path: "{{ item.path }}"
             state: directory
-            owner: "1001"
-            group: "1001"
+            owner: "{{ item.owner }}"
+            group: "{{ item.owner }}"
             mode: "{{ item.mode }}"
           loop:
-            - {path: "{{ kontroll_gui_dir }}", mode: "0755"}
-            - {path: "{{ kontroll_gui_dir }}/tls", mode: "0750"}
+            - {path: "{{ kontroll_gui_dir }}", mode: "0755", owner: "0"}
+            - {path: "{{ kontroll_gui_dir }}/tls", mode: "0750", owner: "1001"}
 
         - name: Stat the onboard-gui age key (host/GUI-provisioned; deploy NEVER mints it — G9)
           # The age PRIVATE KEY stays host/GUI-provisioned (deploy-stack NEVER mints it — security boundary). But
@@ -1073,49 +1045,13 @@
             - {path: "{{ kontroll_gui_dir }}/tls/gui.key", mode: "0640"}
             - {path: "{{ kontroll_gui_dir }}/tls/gui.crt", mode: "0644"}
 
-        - name: Trust the onboard-gui clone for root's git on privileged re-runs  # noqa: command-instead-of-module
-          # Once the clone is chowned to uid-1001 (below), root re-running the git module on it hits git's
-          # dubious-ownership guard. Mark it safe.directory for root (system scope) so the clone task stays
-          # idempotent across re-deploys. Gated — the read-only deploy never chowns, so never needs this.
-          when: api_privileged | bool
-          ansible.builtin.command:
-            cmd: git config --system --add safe.directory {{ kontroll_gui_dir }}/repo
-          changed_when: false
-
-        - name: Clone/update the local canonical into the onboard-gui content tree
-          # Root-owned + world-readable by default ⇒ uid-1001 reads but cannot write (the read-only lock). The
-          # gated privileged block below chowns it to uid-1001 + adds a `local` remote so the GUI can PROPOSE.
-          # Fresh-node preview: skipped for the same reason as the API's clone (see _fresh_preview).
-          when: not (_fresh_preview | bool)
-          ansible.builtin.git:
-            repo: file:///srv/kontroll.git
-            dest: "{{ kontroll_gui_dir }}/repo"
-            version: main
-            update: true
-
-        - name: Make the onboard-gui content clone WRITABLE by uid-1001 + give it a 'local' remote (C10 — privileged)
-          when: api_privileged | bool and not (_fresh_preview | bool)
-          block:
-            - name: Own the onboard-gui content clone as the runtime uid so the container can commit (C10)
-              # In read-only mode this is SKIPPED, so the clone stays root-owned and uid-1001 cannot write it —
-              # the read-only deploy is provably untouched by the enablement (this block needs api_privileged).
-              ansible.builtin.file:
-                path: "{{ kontroll_gui_dir }}/repo"
-                state: directory
-                owner: "1001"
-                group: "1001"
-                recurse: true
-
-            - name: Add the onboard-gui clone's 'local' remote → the canonical  # noqa: command-instead-of-module
-              # gitio.commit_and_push pushes to a remote literally named `local` (scripts/kontroll/gitio.py).
-              # Run as ROOT (no become_user — that needs the `acl` package + trips the unprivileged-become ACL
-              # path) with safe.directory, since the clone is now uid-1001-owned. The config ends root-owned but
-              # world-readable, so the container reads the remote at push time. Idempotent (tolerates exists).
-              ansible.builtin.command:
-                cmd: git -C {{ kontroll_gui_dir }}/repo remote add local file:///srv/kontroll.git
-              register: _gui_local_remote
-              changed_when: _gui_local_remote.rc == 0
-              failed_when: _gui_local_remote.rc != 0 and 'already exists' not in _gui_local_remote.stderr
+        - name: Make or update the onboard-gui content clone — root's unarmed, the service uid's armed (C10)
+          # The same file as the API's clone: one rule, one copy of it.
+          ansible.builtin.import_tasks: tasks/content-clone.yml
+          vars:
+            _clone_dir: "{{ kontroll_gui_dir }}/repo"
+            _clone_service: onboard-gui
+            _clone_canonical: /srv/kontroll.git
 
     - name: Provision the Caddy ingress + render its Caddyfile (acme mode — config-as-data)
       when: _runs_caddy.stdout == "yes"
@@ -1173,6 +1109,19 @@
         cmd: >-
           docker compose --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
           --env-file {{ stack_dir }}/.env up -d {{ _up_services | join(' ') }}
+      changed_when: true
+
+    - name: Restart a service whose content clone was made again (its bind mount still holds the removed directory)
+      # tasks/content-clone.yml removes a clone held by the wrong uid and its owner makes it again — a NEW directory.
+      # A running container keeps the one it mounted; `up` recreates a container only when its configuration
+      # changed (arming and disarming change the canonical's mount mode, so those do), and a start mounts by path.
+      # A service `up` just recreated is restarted once more: harmless.
+      when: (_clones_replaced | default([])) | intersect(_up_services) | length > 0
+      ansible.builtin.command:  # noqa: command-instead-of-module
+        cmd: >-
+          docker compose --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
+          --env-file {{ stack_dir }}/.env restart
+          {{ (_clones_replaced | default([])) | intersect(_up_services) | join(' ') }}
       changed_when: true
 
     - name: Collect the running stack containers

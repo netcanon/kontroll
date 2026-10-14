@@ -11,6 +11,64 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(deploy): the deploy's git in a content clone runs as the clone's owner — root runs none in a clone the service writes (2026-10-14)
+
+Armed, a network service commits into its content clone (`<storage root>/api/repo`,
+`<storage root>/onboard-gui/repo`), so it writes that clone's config and hooks; the deploy runs as root. The
+deploy ran the git module and `git remote add` in that clone as root, with a system-wide `safe.directory` entry so
+git would not refuse it: whatever the service had put in the clone — a `core.hooksPath` hook, a `core.fsmonitor`
+program, a filter — ran AS ROOT at the next deploy. And every armed deploy chowned the clone recursively to uid
+1001, by path, in a tree that uid writes.
+
+- **The rule:** root runs no git in a clone the service uid can write, and changes no owner by path in a tree
+  that uid writes. The tasks are one file, `ansible/playbooks/tasks/content-clone.yml`, imported for each
+  surface.
+- **Armed:** root makes the clone's directory, empty; git run as uid 1001 clones into it and updates it —
+  `setsid --wait setpriv --reuid=1001 --regid=1001 --clear-groups --no-new-privs -- env -i …`, from `/`, its script
+  not rewritten from the deploy's environment (`expand_argument_vars: false`), configured by one file root writes
+  (`<storage root>/content-clone.gitconfig`, which names the canonical safe: since git's May-2024 security
+  releases — 2.45.1, and 2.39.4 and the other maintenance lines — git refuses to serve a repository another uid
+  owns, and `-c safe.directory` does not reach the serving side of a local clone). An existing clone fetches
+  `refs/heads/main` by its full name and checks `main` out at it; a change made in the clone and not proposed is
+  discarded, and the deploy says so (the git module refused to update over one); its `local` remote is put back
+  at the canonical. `changed` is the clone made, `local` added or put back, `HEAD` moved or put back on `main`, or
+  a change discarded; a second deploy reports none. `--check --diff` changes nothing and says what would; a
+  canonical uid 1001 cannot read fails the preview as it fails the deploy.
+- **Unarmed:** the clone is root's and the git module updates it as before — now with the system file switched
+  off and the same configuration file, so a root deploy that is not under `sudo` (no `SUDO_UID`) can serve the
+  operator's canonical on a git that checks ownership.
+- **What stands at the clone's path is root's to place:** each clone's parent (`<storage root>/api`,
+  `<storage root>/onboard-gui`) is now root's in both modes — its `tls/` stays the service's — and the tasks
+  refuse to go on unless the parent and the storage root are directories of root's that neither their group nor
+  anybody else may write.
+- **A clone held by the wrong uid is made again, not chowned:** anything in it the service can write while
+  unarmed (every entry is looked at); anything not the service's — root's, another uid's, a link, a file — while
+  armed. It is removed (Python's rmtree, from open directories) and its owner makes it again; the service is
+  restarted after `up` so its bind mount is the new directory.
+- **Gone:** the two "Trust the … clone for root's git" tasks (`git config --system --add safe.directory …`),
+  the recursive chown of each clone, root's `git remote add`.
+- **Tests:** `tests/integration/test_content_clone_as_service.py` (in `validate.sh`'s as-root step) runs the task
+  file with ansible-playbook as root, holding a terminal; programs planted in the clone write down who they run
+  as — uid and gid 1001, no other group, no new privileges, no capability, no terminal, no variable of the
+  deploy's. One row runs the armed task's own command from a process that holds a terminal, so the terminal is
+  shown gone whatever ansible-core the gate has (2.19's workers drop it by themselves; 2.18's — the installer's —
+  do not). `tests/unit/test_content_clone_tasks.py` holds the structure; `tests/check-storage-chown.py` follows
+  an `import_tasks` (with its `vars:`), and `.ansible-lint` lints `ansible/playbooks/tasks/` as task files.
+
+**On a box that runs the previous build:** the clones need nothing. The first deploy makes each clone's parent
+root's. An armed box keeps its clone (its top is the service's; the one file the previous build left root's in
+it, `.git/config`, stays root's and readable), and from now on only uid 1001 runs git in it. A box deployed
+unarmed after it was armed, or armed after it was unarmed, has its clone made again by its owner; the first such
+deploy reports it. Dry-run first: `--check --diff` — on its first run the armed preview says `main not compared`
+(the configuration file is written by the deploy itself). **On a host-direct box, remove the system-scope
+`safe.directory` entries the previous build added** (one per armed deploy, for each content clone): while one
+stands, a git you run as root in that clone trusts it, and so runs what the service put there, as root. Remove
+exactly those, with your storage root's paths —
+`sudo git config --system --fixed-value --unset-all safe.directory /var/lib/kontroll/api/repo` and
+`sudo git config --system --fixed-value --unset-all safe.directory /var/lib/kontroll/onboard-gui/repo` (exit
+status 5: there was none). A value-pattern such as `'/(api|onboard-gui)/repo$'` would also remove an entry of
+yours that ends the same way. Inside the installer container they never outlived the run.
+
 ### feat(canonical): `kontroll-canonical.py --audit` — a deploy names what is in the canonical that the play and the tool do not write (2026-10-13)
 
 A bare repository has many places where one more file changes what git does there: a config key, a hook, an entry

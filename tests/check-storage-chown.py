@@ -13,6 +13,9 @@ provisioners, parsed from deploy-stack.yml via a yaml.safe_load task-graph walk:
   * a file/copy/template task that sets owner+group  -> the dir/file it creates (loop items expanded);
   * a git task                                       -> its cloned repo tree (its CONTENTS are app-managed, so a
                                                         bind at-or-under the repo, e.g. repo/local, is covered);
+                                                        a task file the play imports (`import_tasks`, with its
+                                                        `vars:` put in) is read as the play's own tasks — the
+                                                        content clones are made in tasks/content-clone.yml;
   * a fail-closed file-absence guard                 -> the age.key case: the file is host-provisioned, never
                                                         minted, so the deploy refuses to `up` without it rather
                                                         than let Docker auto-create it. EITHER shape counts — a
@@ -134,10 +137,42 @@ def _walk_tasks(node, acc):
                 _walk_tasks(node[key], acc)
 
 
-def deploy_provisioners(deploy_text):
+def _put_in(node, values):
+    """`node` with every `{{ name }}` of `values` replaced by its value, in every string it holds."""
+    if isinstance(node, str):
+        for name, value in values.items():
+            node = node.replace("{{ %s }}" % name, value).replace("{{%s}}" % name, value)
+        return node
+    if isinstance(node, list):
+        return [_put_in(item, values) for item in node]
+    if isinstance(node, dict):
+        return {key: _put_in(item, values) for key, item in node.items()}
+    return node
+
+
+def _imported(tasks, playbook_dir):
+    """The tasks of each task file a task of `tasks` imports (`import_tasks: <file>`, relative to the playbook's
+    directory), with the import's `vars:` put in — so a provisioner moved into a task file is still seen."""
+    out = []
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        rel = t.get("ansible.builtin.import_tasks") or t.get("import_tasks")
+        if not isinstance(rel, str):
+            continue
+        with open(os.path.join(playbook_dir, rel), encoding="utf-8") as fh:
+            sub = []
+            _walk_tasks(yaml.safe_load(fh) or [], sub)
+        values = {str(k): str(v) for k, v in (t.get("vars") or {}).items()}
+        out.extend(_put_in(s, values) for s in sub)
+    return out
+
+
+def deploy_provisioners(deploy_text, playbook_dir=None):
     """(exact_owned, git_dests, stat_guarded): resolved today-exact paths deploy-stack provisions uid-scoped.
     exact_owned = file/copy/template tasks that set owner+group (loop items expanded); git_dests = git clone
-    dests; stat_guarded = stat tasks with a failed_when (fail-closed file-absence guards)."""
+    dests; stat_guarded = stat tasks with a failed_when (fail-closed file-absence guards). The tasks of a file
+    the play imports count as its own (`playbook_dir`: where to find it; deploy-stack.yml's by default)."""
     tasks = []
     for doc in yaml.safe_load_all(deploy_text):
         for play in (doc if isinstance(doc, list) else []):
@@ -145,6 +180,7 @@ def deploy_provisioners(deploy_text):
                 for key in ("pre_tasks", "tasks", "post_tasks", "handlers"):
                     if key in play:
                         _walk_tasks(play[key], tasks)
+    tasks += _imported(tasks, playbook_dir or os.path.join(ROOT, "ansible", "playbooks"))
     exact_owned, git_dests, stat_guarded = set(), set(), set()
     _stat_registers = {}
     for t in tasks:

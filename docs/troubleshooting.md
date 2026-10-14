@@ -204,6 +204,24 @@ these, and what that covers, is SECURITY.md C10.
 | `unread: <what>` | the audit says nothing about that part: it could not be listed or read by this account; it is larger or deeper, or holds more entries, than the audit reads; a line of `packed-refs` is one git would not take for a ref (git refuses the whole file for it — or it is the `^` line left behind when a tag's line was removed by hand); more lines of one kind than are shown; or the audit ended on an error of its own, and what it printed is not a report | look at that part yourself — with `sudo` where your account may not read it. For the last one, run the audit again by hand |
 | `note: FETCH_HEAD` (`ORIG_HEAD`, `gc.log`) | a file git leaves in the top directory by itself | nothing |
 
+## 9. A content clone was made again, or its update failed
+
+The deploy makes and updates the API's and onboard-gui's content clones (`<storage root>/api/repo`,
+`<storage root>/onboard-gui/repo`) with `ansible/playbooks/tasks/content-clone.yml`: as root when the deploy is
+unarmed, as uid 1001 when it is armed (`api_privileged`); a clone held by the wrong uid is removed and made again
+([SECURITY.md](../SECURITY.md) C10).
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `<path> must be a directory of root's that neither its group nor anybody else may write …` | the clone's parent (`<storage root>/api`, or onboard-gui's) or the storage root is not root's alone. The deploy makes each parent root's before it gets here, so something changed it back, or the storage root you chose is another account's or group-writable | as the message says: `sudo chown root:root <path>` and `sudo chmod go-w <path>`, and deploy again |
+| "Remove the clone — it is not wholly its owner's …" reports `changed` | the clone was held by the wrong uid for this deploy: the service's (or part of it) on an unarmed deploy; not the service's, or not a directory, on an armed one. The first deploy after arming or disarming does this once | nothing: its owner made it again and its service was restarted. The next deploy leaves it |
+| `… is not a git clone: remove it and run the deploy again` | the armed clone's directory is the service's but holds something that is not a clone (a clone that stopped part-way, or files put there by hand) | `sudo rm -rf <storage root>/api/repo` (or onboard-gui's) and deploy again |
+| the removal fails — `rmtree failed: Cannot call rmtree on a symbolic link` (Python 3.11, the installer's), `rmtree failed: [Errno None] None: '<path>'` (Python 3.12), or another `rmtree failed: …` such as `[Errno 39] Directory not empty` | a directory of the clone was exchanged, or written into, while it was being removed; only a writer of the clone can do that: the service's uid | stop the service (`docker compose stop api`, or `onboard-gui`), deploy again, and find out what was writing |
+| the armed update fails `detected dubious ownership in repository at '/srv/kontroll.git'` | uid 1001's git did not read `<storage root>/content-clone.gitconfig` (since git's May-2024 security releases — 2.45.1, and 2.39.4 and the other maintenance lines — git refuses to serve a repository another uid owns unless it is named safe) | the same deploy writes that file before it runs git: check it is there, root's, mode `0644`, and that uid 1001 can reach it. On the first `--check` after an upgrade the file is not there yet: the preview says `main not compared` |
+| the armed update or its preview fails `cannot read refs/heads/main from file:///srv/kontroll.git` | uid 1001 cannot read the canonical | `local-canonical.yml` gives group 1001 its read and write grant: run the deploy that runs it, then this one |
+| the unarmed update fails `Local modifications exist in the destination: <storage root>/api/repo (force=no).` | a tracked file of the root-owned clone was changed — only root can have done it | look at it (`sudo git -C <storage root>/api/repo status` — the clone is root's), then `sudo rm -rf <storage root>/api/repo` and deploy again |
+| the armed update says `a change made in the clone and not proposed is discarded` | the service changed a tracked file in its clone and did not propose it; the update puts the clone back at the canonical's `main` | propose the change: a proposal is pushed to the canonical, not kept in the clone |
+
 ## See also
 - [logging-architecture.md](logging-architecture.md) — the layered design + the degrade-path source of truth
 - [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, the refusal that is the repository's own, and a
