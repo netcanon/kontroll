@@ -11,6 +11,38 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(deploy): a fresh node's storage root is made root's, and the refusal asks for one the service's git can pass (2026-10-16)
+
+Nothing in `deploy-stack.yml` made the storage root itself. Ansible's `file` gives every parent it creates the
+owner and mode of the path it was asked for, so on a fresh host-direct node the first store made the root its own
+— the Vector dir's 10002 `0700`; without Vector and Prometheus, the backups dir's 1001 `0700`, Loki's 10001
+`0750` or an audit dir's 1001 `0755`, whichever the services ask for first — and the content clone's refusal (the
+2026-10-14 entry) then stopped the first apply. An installer-mode node escaped it: Docker makes a missing bind
+source root's, `0755`.
+
+- **A missing storage root is made root's, `0711`,** right after the play checks its path and before any store is
+  made in it (a missing parent of a relocated root is made the same). A root that exists is not changed (a link,
+  an operator's mount); one that is not root's alone, or that others may not pass through, is refused, with the
+  fix. Every local account can now reach a store below the root by its name; what closes a store is its own mode
+  (SECURITY.md C10).
+- **The refusal also asks that anybody may pass through** the clone's parent and the storage root. Armed, the
+  service's git (uid and gid 1001, no supplementary group) reaches its clone and the configuration file through
+  both by the bit for others, and under a root-owned `0700` root it stopped at `could not create leading
+  directories` — what the fix printed before
+  (`chown root:root`, `chmod go-w`) left of a root an earlier build made 1001's `0700`. The fix it prints is now
+  `sudo chown root:root <path>` and `sudo chmod 0711 <path>`. It is asked unarmed too, so arming never finds the
+  root closed.
+- **Tests:** `tests/unit/test_content_clone_tasks.py` (the root is made only when missing, root's `0711`, before
+  every task that writes under it; the refusal reads `xoth`); `tests/integration/test_content_clone_as_service.py`
+  runs the play's own tasks, in its order, on a node with no storage root (the root ends root's `0711`, the Vector
+  dir keeps its owner, the clone is made by the uid the flag names), and a root closed to the service stops the
+  deploy before any git, after which the printed fix opens it.
+
+**On a box that runs an earlier build:** look first — `sudo stat -L -c '%u:%g %a %F' /var/lib/kontroll` (or your
+storage root; `-L` because the refusal judges what a link there points at). Anything but a directory of uid `0`
+with no group or other write bit and an execute bit for others meets the refusal on the first deploy of this
+build that brings up the API or onboard-gui: make it so with the two commands above, then `--check --diff`, then deploy.
+
 ### docs(process): a reader measures on a copy, in containers named for it — the runner's preamble says what a seed may allow (2026-10-15)
 
 The runner's read-only preamble said an agent runs no git, Ansible or docker at all, while a run's seed often asks
@@ -71,7 +103,8 @@ program, a filter — ran AS ROOT at the next deploy. And every armed deploy cho
   an `import_tasks` (with its `vars:`), and `.ansible-lint` lints `ansible/playbooks/tasks/` as task files.
 
 **On a box that runs the previous build:** the clones need nothing. The first deploy makes each clone's parent
-root's. An armed box keeps its clone (its top is the service's; the one file the previous build left root's in
+root's. Its storage root it does not change: look at it before the first deploy (the 2026-10-16 entry). An armed
+box keeps its clone (its top is the service's; the one file the previous build left root's in
 it, `.git/config`, stays root's and readable), and from now on only uid 1001 runs git in it. A box deployed
 unarmed after it was armed, or armed after it was unarmed, has its clone made again by its owner; the first such
 deploy reports it. Dry-run first: `--check --diff` — on its first run the armed preview says `main not compared`

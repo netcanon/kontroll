@@ -7,7 +7,8 @@ run whatever the service put there AS ROOT: a container's compromise becomes the
 rule (ansible/playbooks/tasks/content-clone.yml): root never runs git in a clone the service uid can write, and
 never changes an owner by path in a tree that uid writes; armed, git in the clone is the service uid's (setpriv,
 no group, no new privileges, a session of its own, an environment of its own); a clone held by the wrong uid is
-removed and made again by the right one. These rows run that task file — the one deploy-stack.yml imports — with
+removed and made again by the right one. These rows run that task file — the one deploy-stack.yml imports — and,
+for a fresh node, deploy-stack.yml's own tasks that make the storage root and the stores before the clone, with
 ansible-playbook as root, against a canonical laid out as the play leaves it (another uid's, group 1001), and plant
 in the clone programs that write down who they run as.
 
@@ -34,6 +35,7 @@ import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TASKS = os.path.join(ROOT, "ansible", "playbooks", "tasks", "content-clone.yml")
+DEPLOY = os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml")
 
 pytestmark = [
     pytest.mark.integration,
@@ -679,3 +681,98 @@ def test_a_parent_or_storage_root_the_service_could_write_stops_the_deploy_befor
     assert out["rc"] != 0 and "must be a directory of root's" in out["out"], out["out"]
     assert os.path.exists(marker) and w.head() == "first", "the deploy touched the clone before it refused"
     assert not any(line.startswith("uid=0 ") for line in w.records())
+
+
+@pytest.mark.parametrize("mode", [0o700, 0o750], ids=["0700", "0750"])
+@pytest.mark.parametrize("armed", [True, False], ids=["armed", "unarmed"])
+def test_a_storage_root_closed_to_the_service_stops_the_deploy_and_the_printed_fix_opens_it(w, armed, mode):
+    """The storage root must be one that anybody may pass through: armed, the service's git (uid and gid 1001, no
+    supplementary group) reaches its clone and the configuration file root writes there through it by the bit for
+    others, and a root-owned 0700 root — what `chown root:root` alone leaves of a root an older build made 1001's
+    0700 — stops it at `could not create leading directories`. So does 0750: the root's group is root's, not the
+    service's, so the refusal reads the bit for others, not the group's. The refusal says so before any git runs,
+    unarmed too (so arming never finds the root closed), and the fix it prints is enough: after it the deploy
+    updates the clone."""
+    w.play(armed=armed)
+    marker = os.path.join(w.clone, "untracked-mark")
+    if armed:
+        w.as_service("touch", marker)
+    else:
+        open(marker, "w").close()
+    os.chown(w.storage, 0, 0)
+    os.chmod(w.storage, mode)
+    w.commit("second")
+    out = w.play(armed=armed, expect_ok=False)
+    assert out["rc"] != 0 and "that anybody may pass through" in out["out"], out["out"]
+    assert "sudo chmod 0711 %s" % w.storage in " ".join(out["out"].split()), out["out"]
+    assert os.path.exists(marker) and w.head() == "first", "the deploy touched the clone before it refused"
+    os.chmod(w.storage, 0o711)                                    # the fix the message prints
+    w.play(armed=armed)
+    assert w.head() == "second"
+
+
+def _deploy_tasks_named(*name_starts):
+    """The tasks of deploy-stack.yml whose names begin so — one each, blocks descended — in the PLAY's order."""
+    with open(DEPLOY, encoding="utf-8") as fh:
+        plays = yaml.safe_load(fh)
+    order = []
+
+    def walk(nodes):
+        for node in nodes:
+            if isinstance(node, dict):
+                order.append(node)
+                for key in ("tasks", "block"):
+                    walk(node.get(key, []))
+    walk(plays)
+    found = []
+    for start in name_starts:
+        hits = [t for t in order if str(t.get("name", "")).startswith(start) and "block" not in t]
+        assert len(hits) == 1, "%d tasks of deploy-stack.yml are named %r" % (len(hits), start)
+        found.append(hits[0])
+    return sorted(found, key=lambda t: next(i for i, o in enumerate(order) if o is t))
+
+
+@pytest.mark.parametrize("armed", [True, False], ids=["armed", "unarmed"])
+def test_a_fresh_nodes_storage_root_is_made_roots_before_its_first_store_and_the_clone_is_made(w, armed):
+    """On a fresh host-direct node nothing stands at the storage root. Ansible's `file` gives every parent it creates
+    the owner and mode of the path it was asked for, so the deploy's first store (the Vector dir, 10002 0700) used
+    to make the root 10002's 0700, and the clone file's refusal then stopped the first apply. deploy-stack.yml's
+    REAL tasks run here in the play's order — look at the root, make a missing one, the Vector dir, the API's audit
+    dir (which makes `api` 1001's on its way), the API host dirs (which make it root's again), the content clone —
+    on a node with no storage root: the root ends root's 0711, the Vector dir keeps its
+    own owner, and the clone is made by the uid the flag names."""
+    shutil.rmtree(w.storage)
+    tasks = _deploy_tasks_named("Look at the storage root", "Make a missing storage root",
+                                "Ensure the Vector host dir exists", "Ensure the persistent API audit-log dir exists",
+                                "Ensure the API host dirs exist")
+    tasks.append({"name": "The content clone, as deploy-stack.yml makes it", "ansible.builtin.import_tasks": TASKS,
+                  "vars": {"_clone_dir": w.clone, "_clone_service": "api", "_clone_canonical": w.canonical}})
+    w.playbook = os.path.join(w.base, "fresh.yml")
+    with open(w.playbook, "w", encoding="utf-8") as fh:
+        yaml.safe_dump([{"hosts": "localhost", "connection": "local", "gather_facts": False,
+                         "vars": {"stack_services": ["vector", "api"],
+                                  "kontroll_vector_dir": os.path.join(w.storage, "vector"),
+                                  "kontroll_api_audit_dir": os.path.join(w.parent, "audit"),
+                                  "kontroll_api_dir": w.parent},
+                         "tasks": tasks}], fh, sort_keys=False)
+    w.play(armed=armed)
+    root, vector = os.stat(w.storage), os.stat(os.path.join(w.storage, "vector"))
+    assert (root.st_uid, root.st_gid, root.st_mode & 0o7777) == (0, 0, 0o711), oct(root.st_mode)
+    assert (vector.st_uid, vector.st_mode & 0o7777) == (10002, 0o700)
+    assert w.head() == "first" and w.owners() == ({SERVICE} if armed else {0})
+
+
+@pytest.mark.parametrize("armed", [True, False], ids=["armed", "unarmed"])
+def test_a_preview_refuses_a_storage_root_closed_to_the_service_as_the_apply_does(w, armed):
+    """The mandated `--check --diff` shows what the apply would stop at. On a provisioned node a storage root the
+    service's git cannot pass through — root's 0700, what the old printed fix left of a root an older build made
+    1001's 0700 — is refused in check mode too, with the fix, and the preview runs no git in the clone. Only a
+    MISSING root passes a preview (the apply makes it); an existing closed one must not."""
+    w.play(armed=armed)
+    os.chown(w.storage, 0, 0)
+    os.chmod(w.storage, 0o700)
+    w.commit("second")
+    out = w.play(armed=armed, check=True, expect_ok=False)
+    assert out["rc"] != 0 and "that anybody may pass through" in out["out"], out["out"]
+    assert "sudo chmod 0711 %s" % w.storage in " ".join(out["out"].split()), out["out"]
+    assert w.head() == "first"

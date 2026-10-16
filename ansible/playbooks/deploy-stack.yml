@@ -262,6 +262,29 @@
           - "kontroll_storage_root | regex_replace('/+', '/') != '/'"    # reject '/', '//', '///'
         fail_msg: "KONTROLL_STORAGE_ROOT must be an absolute path other than '/' (got '{{ kontroll_storage_root }}')"
 
+    - name: Look at the storage root (a missing one is made root's below, before any store is made in it)
+      ansible.builtin.stat:
+        path: "{{ kontroll_storage_root }}"
+      register: _storage_root_st
+
+    - name: Make a missing storage root — root's, passable, listed and written by nobody else (C10)
+      # Ansible's `file` gives every parent it creates the owner and mode of the path it was asked for, so without
+      # this the first store made below would make the root its own — the Vector dir 10002 0700, the backups dir
+      # 1001 0700, an audit dir 1001 0755 — and tasks/content-clone.yml, which refuses a storage root that is not
+      # root's alone, would stop the first apply of a fresh node. 0711: armed, the service's git (uid and gid 1001,
+      # no supplementary group, so the bit for others is the one it passes by) reaches its clone and the
+      # configuration file root writes here; nobody else may list it, though anybody may reach a store below it by
+      # its name. A missing parent of a relocated root is made the same. A root that exists is left as it is — a
+      # link, an operator's mount — and one that is not root's alone, or that others may not pass through, meets
+      # that refusal, which prints the fix.
+      ansible.builtin.file:
+        path: "{{ kontroll_storage_root }}"
+        state: directory
+        owner: "0"
+        group: "0"
+        mode: "0711"
+      when: not _storage_root_st.stat.exists
+
     - name: Fail closed on an unset/invalid trust_mode (you MUST choose your promote posture — F3, never a default)
       # The "never a silent default" rule at deploy time (belt-and-braces with kontroll-init's --fresh guard +
       # the COMMENTED template line): a copied-but-unedited overlay, a typo, or a hand-deleted line can't silently

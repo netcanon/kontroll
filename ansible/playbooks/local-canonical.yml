@@ -19,8 +19,10 @@
   gather_facts: true
   vars:
     # Operator-owned (the working tree pushes here) and runner-readable (Semaphore
-    # clones it via the mount). NOT under /var/lib/kontroll — that dir is 0700/uid-1001
-    # (Semaphore-private, for the secret captures), so the operator can't traverse it.
+    # clones it via the mount). NOT under the storage root (/var/lib/kontroll): that dir is
+    # root's (deploy-stack.yml makes a missing one 0711; the installer's is Docker's 0755),
+    # and its stores are the services' — the secret captures 1001's 0700. The operator's
+    # canonical stays apart.
     bare: /srv/kontroll.git
     worktree: "{{ playbook_dir }}/../.."
     # MF-1 (compose-native installer — docs/reviews/2026-06-29-compose-native-install/99-synthesis.md): inside the
