@@ -219,6 +219,10 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > preserve today's paths, so leaving them unset changes nothing. deploy-stack **creates each dir uid-scoped 0750
 > before the stack comes up** (the chown follows the path you set — SECURITY.md C8); named volumes (Prometheus
 > TSDB, Grafana, Postgres, Vector buffers) are Docker-managed and not relocated by these knobs.
+> A root you make yourself (a mount, a directory on another disk) must be a directory of root's that neither its
+> group nor others may write and that others may pass through, with every directory above it passable too —
+> `sudo chown root:root <root>` and `sudo chmod 0711 <root>`; a deploy that brings up `api` or `onboard-gui`
+> refuses another ([troubleshooting.md](troubleshooting.md) §9). A root you leave missing, the deploy makes so.
 
 ## 7. Distribute access + prove connectivity
 

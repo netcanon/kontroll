@@ -242,12 +242,52 @@ def test_the_refusal_covers_the_clones_parent_and_the_storage_root_before_anythi
     """Before anything looks at the clone or runs git, the task file stats the clone's parent (the entry itself,
     not through a link) and the storage root, and refuses unless each is a directory of root's that neither its
     group nor anybody else may write — the parent because a writer of it could exchange the clone for a link
-    between the look and root's git, the storage root because it holds the configuration file both gits read."""
+    between the look and root's git, the storage root because it holds the configuration file both gits read —
+    and that anybody may pass through (`xoth`): armed, the service's git (uid and gid 1001, no supplementary
+    group) reaches its clone through both and that file through the storage root, by the bit for others, and a
+    root-owned 0700 storage root stops it with a git error instead."""
     tasks = _clone_tasks()
     look, refuse = tasks[0], tasks[1]
     paths = [(i["path"], i["follow"]) for i in look["loop"]]
     assert paths == [("{{ _clone_dir | dirname }}", False), ("{{ kontroll_storage_root }}", True)], paths
     that = " ".join(refuse["ansible.builtin.assert"]["that"])
-    for needle in ("isdir", "uid | default(-1)) == 0", "wgrp", "woth"):
+    for needle in ("isdir", "uid | default(-1)) == 0", "wgrp", "woth", "xoth"):
         assert needle in that, needle
     assert refuse["loop"] == "{{ _clone_dirs_st.results }}"
+
+
+def test_a_missing_storage_root_is_made_roots_and_passable_before_any_store_is_made_in_it():
+    """deploy-stack.yml makes a MISSING storage root root's, 0711, and does so before any task writes a path under
+    it. Ansible's `file` gives every parent it creates the owner and mode of the path it was asked for, so without
+    this the first store would make the root its own (the Vector dir 10002 0700, the backups dir 1001 0700) and the
+    clone file's refusal would stop the first apply of a fresh host-direct node. Only a missing root: one that
+    exists is left to that refusal, which prints the fix, so the play never changes an owner it did not make. And
+    only after the play has checked the root's path (absolute, never '/'): a relative root would otherwise be made
+    before that check refused it. The look does not follow a link: a link there, even one whose target is missing,
+    is a root that exists, left as it is."""
+    tasks = [t for t, _ in _deploy_tasks()]
+    guards = [i for i, t in enumerate(tasks) if isinstance(t.get("ansible.builtin.assert"), dict)
+              and "kontroll_storage_root is match" in str(t["ansible.builtin.assert"].get("that"))]
+    looks = [i for i, t in enumerate(tasks) if isinstance(t.get("ansible.builtin.stat"), dict)
+             and t["ansible.builtin.stat"].get("path") == "{{ kontroll_storage_root }}"]
+    makes = [i for i, t in enumerate(tasks) if isinstance(t.get("ansible.builtin.file"), dict)
+             and t["ansible.builtin.file"].get("path") == "{{ kontroll_storage_root }}"]
+    assert len(guards) == 1 and len(looks) == 1 and len(makes) == 1, (guards, looks, makes)
+    look, make = tasks[looks[0]], tasks[makes[0]]
+    assert guards[0] < looks[0] < makes[0], "the root is looked at or made before its path is checked"
+    assert look["ansible.builtin.stat"].get("follow", False) is False, look
+    register = look["register"]
+    assert make["ansible.builtin.file"] == {"path": "{{ kontroll_storage_root }}", "state": "directory",
+                                            "owner": "0", "group": "0", "mode": "0711"}
+    assert _when(make) == ["not %s.stat.exists" % register], _when(make)
+    derived = {name for t in tasks if isinstance(t.get("ansible.builtin.set_fact"), dict)
+               for name, value in t["ansible.builtin.set_fact"].items() if "kontroll_storage_root" in str(value)}
+    derived.discard("kontroll_storage_root")
+    assert {"kontroll_vector_dir", "kontroll_backups_dir", "kontroll_api_dir"} <= derived, derived
+    writers = ("ansible.builtin.file", "ansible.builtin.copy", "ansible.builtin.template", "ansible.builtin.command",
+               "ansible.builtin.import_tasks")
+    under = [i for i, t in enumerate(tasks) if i != makes[0] and any(k in t for k in writers)
+             and any(name in str(t) for name in derived | {"kontroll_storage_root"})]
+    assert len(under) >= 10, under
+    early = [tasks[i].get("name") for i in under if i < makes[0]]
+    assert not early, "these write under the storage root before it is made: %s" % early

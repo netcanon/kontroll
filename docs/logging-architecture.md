@@ -258,9 +258,11 @@ carries a collector address/credential follows the SOPS path, never a committed 
   to the mgmt VLAN only, behind the existing boundary (SECURITY.md C3) — never WAN. Vector publishes only the
   mgmt-bound syslog ingress (`${KONTROLL_MGMT_IP}:5514` for `syslog_push`; its API stays loopback-internal);
   Loki's `:3100` binds `${KONTROLL_MGMT_IP}` only.
-- **At rest:** the captures store + run-logs are local, `0700`/uid-scoped, retention-
-  bounded (C8 "local state at rest is the trust boundary"). A leaked log/snapshot reveals
-  ops metadata, not credentials. → a new **SECURITY.md control** lands with Layer 0.
+- **At rest:** the captures store is local, `0700`/uid-1001; the run-logs (the Ansible run-log, the API and GUI
+  audit logs) are local and uid-owned, in `0755` dirs non-root Vector reads by the bit for others, so under the
+  storage root's `0711` every local account can reach them (SECURITY.md C10); all are retention-bounded (C8
+  "local state at rest is the trust boundary"). A leaked log/snapshot reveals ops metadata, not credentials. →
+  a new **SECURITY.md control** lands with Layer 0.
 
 ---
 

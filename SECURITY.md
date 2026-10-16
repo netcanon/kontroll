@@ -662,18 +662,27 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   parent is root's in both modes, and so is the storage root that holds that file — the tasks refuse to go on,
   before anything in the clone is touched, unless each is a directory of root's that neither its group nor
   anybody else may write (a writer of the parent could exchange the clone for something else between the look
-  and root's git). A clone that is not wholly the owner the flag names — anything in it the service can write
-  while unarmed (every entry is looked at, not the top alone), anything not the service's (root's, another
-  uid's) or not a directory while armed — is removed (Python's rmtree, from open directories: a directory
-  exchanged for a link is refused, a link at the top is unlinked, not followed) and its owner makes it again;
-  the service is restarted after `up` so its bind mount is the new directory. It is never chowned: the earlier
-  build chowned the armed clone recursively on every deploy, by path, in a tree the service writes, and told
-  root's git to trust it with a system-wide `safe.directory` entry — both are gone. Held by
-  `tests/integration/test_content_clone_as_service.py` — the task file run by ansible-playbook as root, holding
-  a terminal, against a canonical of another uid's: programs the service planted in its clone (`core.hooksPath`
-  hooks, `core.fsmonitor`) write down who they run as — uid and gid 1001, no other group, no new privileges, no
-  capability, no terminal, no variable of the deploy's — and, for the structure,
-  `tests/unit/test_content_clone_tasks.py`. **What it does not cover:** such a program runs as uid 1001 — the uid
+  and root's git), and that anybody may pass through (armed, the service's git — uid and gid 1001, no supplementary
+  group — reaches its clone through both, and that file through the storage root, by the bit for others). The play
+  makes a missing storage root root's, `0711`, before any store is made in it: Ansible's `file` gives the parents it
+  creates the owner and mode of the path it was asked for, so the first store would otherwise make the root its own. A
+  root that exists is not changed; one that is not root's alone, or that others may not pass through, is refused, with
+  the fix. Under a `0711` root every local account reaches a store below it by its name, so a store's own mode is what
+  closes it: the secret ones are closed (the captures `0700`, Loki `0750`, Vector's dir `0700`, the TLS dirs `0750`,
+  the age key `0600`), and those the containers read by the bit for others — the audit dirs and the Ansible run-log
+  dir, `0755` — are open to every local account, as they already were under an installer-mode root (Docker makes it
+  `0755`) and were not under a root an earlier build's first store made `0700`. A clone that is not wholly the owner
+  the flag names — anything in it the service can write while unarmed (every entry is looked at, not the top alone),
+  anything not the service's (root's, another uid's) or not a directory while armed — is removed (Python's rmtree,
+  from open directories: a directory exchanged for a link is refused, a link at the top is unlinked, not followed) and
+  its owner makes it again; the service is restarted after `up` so its bind mount is the new directory. It is never
+  chowned: the earlier build chowned the armed clone recursively on every deploy, by path, in a tree the service
+  writes, and told root's git to trust it with a system-wide `safe.directory` entry — both are gone. Held by
+  `tests/integration/test_content_clone_as_service.py` — the task file run by ansible-playbook as root, holding a
+  terminal, against a canonical of another uid's: programs the service planted in its clone (`core.hooksPath` hooks,
+  `core.fsmonitor`) write down who they run as — uid and gid 1001, no other group, no new privileges, no capability,
+  no terminal, no variable of the deploy's — and, for the structure, `tests/unit/test_content_clone_tasks.py`. **What
+  it does not cover:** such a program runs as uid 1001 — the uid
   every network service runs as — with what that uid may read where the deploy runs (on a host-direct deploy, the
   host, outside any container, where it may leave a process behind; in the installer container, what the
   installer binds, and it ends with the container). It runs as nothing of root's; before this change it ran as

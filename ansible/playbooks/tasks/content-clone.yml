@@ -47,22 +47,28 @@
   register: _clone_dirs_st
   when: not (_fresh_preview | bool)
 
-- name: Refuse unless the clone's parent and the storage root are root's alone — {{ _clone_service }}
+- name: Refuse unless the clone's parent and the storage root are root's alone and passable — {{ _clone_service }}
   # The parent is where the clone's entry lives: a writer of it could exchange the clone for a link — to a
   # repository it writes — after the look below and before root's git. The storage root holds the one
   # configuration file both gits read. Both must be directories of root's that neither the group nor anybody else
-  # may write. On a preview of a node where the play has not made them yet, a missing one passes (the apply makes
-  # it, root's).
+  # may write, and that anybody may pass through: armed, the service's git (uid and gid 1001, no supplementary
+  # group, so the bit for others is the one it passes by) reaches its clone through both and that file through the
+  # storage root (a root-owned 0700 storage root stops it at `could not create leading directories`). Asked
+  # unarmed too, so arming never finds the root closed. Only these two are looked at: a relocated root needs every
+  # directory above it passable too, and a closed one stops the armed git the same way. On a preview of a node
+  # where the play has not made them yet, a missing one passes (the apply makes it, root's: deploy-stack.yml makes
+  # a missing storage root 0711, and the host-dirs task the parent 0755).
   ansible.builtin.assert:
     that:
       - (ansible_check_mode and not item.stat.exists) or ((item.stat.isdir | default(false))
         and (item.stat.uid | default(-1)) == 0 and not (item.stat.wgrp | default(true))
-        and not (item.stat.woth | default(true)))
+        and not (item.stat.woth | default(true)) and (item.stat.xoth | default(false)))
     fail_msg: >-
-      {{ item.item.path }} must be a directory of root's that neither its group nor anybody else may write: what
-      stands at the content clone's path, and the configuration file the deploy's git reads, are root's to place
-      (SECURITY.md C10). Make it so — `sudo chown root:root {{ item.item.path }}` and `sudo chmod go-w
-      {{ item.item.path }}` — and deploy again.
+      {{ item.item.path }} must be a directory of root's that neither its group nor anybody else may write, and
+      that anybody may pass through: what stands at the content clone's path, and the configuration file the
+      deploy's git reads, are root's to place, and an armed deploy's git runs as the service, which passes
+      through it by the bit for others (SECURITY.md C10). Make it so — `sudo chown root:root {{ item.item.path }}`
+      and `sudo chmod 0711 {{ item.item.path }}` — and deploy again.
     quiet: true
   loop: "{{ _clone_dirs_st.results }}"
   loop_control:
