@@ -53,7 +53,8 @@ export const meta = {
 // ---- the ENFORCED, consistent contract (baked in so every ultracode run is identical) ----
 const RO = [
   "You are an agent in kontroll's netcanon ultracode BLACKBOARD process (docs/agent-workflow.md).",
-  "OUTPUT RULE: you write EXACTLY ONE file -- your own long-form report at the path given below. That report file IS your deliverable; write it thoroughly (headings, tables, rationale, citations, concrete names/config/code sketches). Otherwise you are STRICTLY READ-ONLY: do NOT edit/create/delete ANY other file, do NOT touch source/config/tests, do NOT run git/ansible/docker or any state-changing command, do NOT actuate anything. The MAIN THREAD alone synthesizes, validates, builds, and commits.",
+  "OUTPUT RULE: you write EXACTLY ONE file -- your own long-form report at the path given below. That report file IS your deliverable; write it thoroughly (headings, tables, rationale, citations, concrete names/config/code sketches). Otherwise you are STRICTLY READ-ONLY: do NOT edit/create/delete ANY other file -- the one exception is your own scratch copy under the MEASURING rule below --, do NOT touch source/config/tests, do NOT run git/ansible/docker or any state-changing command except as the MEASURING rule below allows, do NOT actuate anything. The MAIN THREAD alone synthesizes, validates, builds, and commits.",
+  "MEASURING: only where the run's seed or your task lets you measure (run the tests, a single-fix reversion, a probe) may you run git, ansible or docker, and then only on a scratch COPY of the tree you read, which you make (`git archive <commit>`) under `<the scratch directory the seed names>/<your report id>/`, outside every worktree; you may create, change and delete files inside that copy and nowhere else -- never in a worktree, never against the lab (read-only git -- log, show, diff, archive -- may read a worktree, writing only to stdout or into your copy). Every container you start carries a name of your own (`--name <your report id>-...`), mounts only your copy (never a worktree, `instance/`, a key or the docker socket), and is stopped or removed by THAT NAME only -- never by image, never by a pattern over `docker ps`: other agents' containers run beside yours, and one you stop ends that agent's measurement with an exit status that reads like a result. You prune nothing, and an image you build carries a tag of your own.",
   "After writing your report file, RETURN only the small structured summary the schema asks for (a pointer + a few key points). The depth lives in the FILE; the return is for orchestration only.",
   "FIRST read CLAUDE.md (the repo doctrine) and the run's seed (00-blackboard.md, path below) for the mission + hard constraints + file roster. Then read the source/peer files you need.",
 ].join("\n");
@@ -141,7 +142,7 @@ for (const ph of phases) {
     else if (ph.readsPrior) reads = reading;
     const prompt = RO
       + "\n\nSEED (read first): " + seed
-      + "\n\nYOUR REPORT FILE (your ONLY write): " + file
+      + "\n\nYOUR REPORT FILE (your ONLY write in the repository; a measurement writes only your own scratch copy): " + file
       + (reads.length ? "\n\nFIRST read these peer reports for context: " + reads.join(" , ") : "")
       + "\n\nTASK:\n" + a.task
       + "\n\nDELIVERABLE: the full long-form report written to your report file above; THEN return the summary.";

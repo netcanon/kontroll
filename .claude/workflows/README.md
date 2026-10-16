@@ -11,8 +11,10 @@ Every ultracode run uses this runner so the discipline never has to be re-hand-r
 bakes in the load-bearing contract:
 
 - **Read-only agents, one report file each.** Each agent writes EXACTLY ONE long-form report (its `id`.md under
-  the run dir) and is otherwise strictly read-only — no source/config/test edits, no git/ansible/docker, no
-  actuation. The contract preamble is prepended to every agent prompt automatically.
+  the run dir) and is otherwise strictly read-only — no source/config/test edits, no git/ansible/docker except
+  what the run's seed allows for a measurement (on the agent's own scratch copy of the tree it reads, outside
+  every worktree, in containers named for the agent and stopped by that name only), no actuation. The contract
+  preamble is prepended to every agent prompt automatically.
 - **File-based peer comms.** Later-phase agents read earlier phases' report files (`readsPrior: true`, or an
   explicit per-agent `reads: [id,…]`).
 - **Short returns.** Agents return only a pointer/summary (`report_file`, `headline`, `key_points`; reviewers
@@ -78,7 +80,7 @@ Workflow({ scriptPath: "<repo>/.claude/workflows/blackboard.js", args: {
 | `phases[].model` | no | model for the whole phase (default `opus`). |
 | `phases[].effort` | no | reasoning effort for the whole phase (`low`/`medium`/`high`/`xhigh`/`max`). Omit to inherit the session effort; use `max` for adversarial/security passes. |
 | `phases[].agents` | yes | the phase's agents (at least one). |
-| `agents[].id` | yes | report filename stem; numeric-prefixed + **unique** (it IS the agent's only write target). |
+| `agents[].id` | yes | report filename stem; numeric-prefixed + **unique** (its report is the agent's only write in the repository). |
 | `agents[].task` | yes | the run-specific prompt body (the read-only contract is prepended for you). |
 | `agents[].label` | no | progress label (default = `id`). |
 | `agents[].reads` | no | explicit `[id,…]` peer reports to read (overrides `readsPrior`). |

@@ -13,9 +13,21 @@ The one-line shape:
 
 - **Stage-1 agents are strictly read-only on the repo and the lab.** An agent may
   read anything; it may **write ONLY its one designated report file** under the
-  run folder. No source edits, no `git add`/commit, no `ansible-playbook`, no
-  touching the live fleet. No worktree isolation is needed precisely *because*
-  they cannot edit (saves disk + dispatch cost).
+  run folder (and, where the seed lets it measure, files inside its own scratch
+  copy — below). No source edits, no `git add`/commit, no `ansible-playbook` in
+  a worktree or against the lab, no touching the live fleet. No worktree
+  isolation is needed precisely *because* they edit no worktree (saves disk +
+  dispatch cost).
+- **Measuring is done on a copy, in containers named for the agent.** A run's seed (or a single reader's task)
+  may let an agent measure — run the tests, a single-fix reversion, a probe. The agent then works on a scratch
+  copy of the tree it reads (`git archive` of the frozen worktree into `<the seed's scratch dir>/<report id>/`,
+  outside every worktree), never in a worktree and never against the lab; read-only git (log, show, diff,
+  archive) may read a worktree, writing only to stdout or into the copy. Every container it starts carries a
+  name of its own (`--name <report id>-…`), mounts only that copy (never a worktree, `instance/`, a key or the
+  docker socket), and is stopped or removed by that name only, never by image or by a pattern over `docker ps`;
+  it prunes nothing, and an image it builds carries a tag of its own. Readers run side by side: one reader's
+  filter on an image name once stopped another reader's mutation containers, and a stopped container's exit
+  status read as "caught". The runner's preamble says the same.
 - **The orchestrator (main thread) is the only actor that validates and
   actuates.** It reads the agents' reports, reconciles them into a synthesis +
   fix-plan, and then applies fixes, commits, and runs anything against the lab —
@@ -78,6 +90,10 @@ main thread seeds this file + writes 99-synthesis.md + is the sole actor that bu
 ## Hard constraints (apply to every report)
 <the non-negotiables for THIS run — e.g. homelab scale / no over-engineering; no god files / drop-ins /
 zero-spine-edit; INVARIANT-D; C8/C12 at-rest; fail-closed knobs>
+
+## Measuring (omit when this run does not measure)
+<what an agent may run — the suite, single-fix reversions, a probe; the image; the scratch dir, outside every
+worktree, one subdirectory per report id>
 
 ## File roster
 | File | Phase | Author | Covers |
@@ -230,8 +246,9 @@ decision gets a record ([adr/README.md](adr/README.md)).
    touches a file of the table above. It is a read of a diff, not a review of a design.
 5. **A decision record only if a decision was made that someone could later reverse.**
 
-The read-only rule does not change with the loop: a research or review agent writes its one file and nothing
-else, and the main thread is the only actor that edits, commits or touches the lab.
+The read-only rule does not change with the loop: a research or review agent writes its one file (and, measuring,
+only inside its own scratch copy) and nothing else, and the main thread is the only actor that edits, commits or
+touches the lab.
 
 ## Stage 2 (actuation)
 

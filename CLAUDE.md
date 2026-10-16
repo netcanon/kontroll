@@ -59,9 +59,11 @@ lives in the private `instance/` overlay (template: `instance.example/`), never 
   `tests/_leak_guard.py`) and the PII-guard workflow enforce it, with your instance's
   own names listed in `instance/leak-tokens.txt`.
 - **Never** let a research/review agent edit source or actuate. Agents are
-  **read-only** and write **only their one report file**; the **main thread is
-  the only actor that validates and actuates** (edits, commits, runs Ansible,
-  touches the lab). See [docs/agent-workflow.md](docs/agent-workflow.md). And
+  **read-only** and write **only their one report file** (and, where a run's
+  seed lets them measure, files in a scratch copy of their own outside every
+  worktree); the **main thread is the only actor that validates and actuates**
+  (edits, commits, runs Ansible in a worktree or against the lab, touches the
+  lab). See [docs/agent-workflow.md](docs/agent-workflow.md). And
   **never dispatch an agent on a model weaker than the task needs** — set
   `model: opus` explicitly for design/audit/research; `Explore` defaults to Haiku.
 - **Never** add or change a test without a docstring stating **what it verifies and
