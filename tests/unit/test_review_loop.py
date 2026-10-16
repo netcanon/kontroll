@@ -41,10 +41,12 @@ def _code(js):
 # --- the read-only contract ------------------------------------------------------------------------------------
 
 _CONTRACT = ("you write EXACTLY ONE file", "STRICTLY READ-ONLY", "do NOT edit/create/delete ANY other file",
-             "do NOT actuate anything", "The MAIN THREAD alone synthesizes, validates, builds, and commits")
+             "do NOT actuate anything", "The MAIN THREAD alone synthesizes, validates, builds, and commits",
+             "lets you measure", "on a scratch COPY of the tree you read", "never in a worktree, never against the lab",
+             "is stopped or removed by THAT NAME only", "never by image, never by a pattern over `docker ps`")
 # The whole `const RO = [ … ].join("\n");` statement, byte for byte (line ends normalised). Changing the contract is
 # allowed — it is a deliberate act: change this digest in the same commit, and say why in its message.
-_CONTRACT_SHA256 = "0221ea03db5940d5438a655a6b848990f46842fb83019b46acbd3a0c0dcee2e3"
+_CONTRACT_SHA256 = "0ea67b89b723b065cd5036d759c8baba86724e432468bfbf950cb000d6fcad08"
 
 
 def contract_problems(js):
@@ -66,14 +68,22 @@ def contract_problems(js):
 def test_runner_keeps_the_read_only_contract():
     """The preamble the runner prepends to EVERY agent is, byte for byte, the pinned contract — one file,
     otherwise strictly read-only, no other file touched, nothing actuated, the main thread alone builds and
-    commits — and the prompt still begins with all of it. Guards an edit to the runner weakening the contract a
+    commits; a measurement only where the seed allows one, on a scratch copy, never in a worktree or against the
+    lab, in containers named for the agent and stopped by that name only, never by image or a `docker ps`
+    pattern — and the prompt still begins with all of it. Guards an edit to the runner weakening the contract a
     hard rule depends on: the runner is edited rarely, by the same hands that are bound by it, and nothing else
-    would notice. Shown to fail on a softened sentence, on an ADDED sentence that grants a write, and on a prompt
-    built from a truncated preamble."""
+    would notice. The phrases are pinned beside the digest so that they survive a deliberate re-pin: a new digest
+    for a reworded preamble still has to carry each of them. The naming rule is there because readers measure
+    side by side: one reader's filter on an image name stopped another's mutation containers, whose exit status
+    then read as "caught". Shown to fail on a softened sentence, on a loosened naming rule, on an ADDED sentence
+    that grants a write, and on a prompt built from a truncated preamble."""
     js = _read(RUNNER)
     assert contract_problems(js) == []
     softened = contract_problems(js.replace("STRICTLY READ-ONLY", "mostly read-only"))
     assert "STRICTLY READ-ONLY" in softened and "the preamble differs from the pinned text" in softened
+    loosened = contract_problems(js.replace("by THAT NAME only", "by name or by image"))
+    assert "is stopped or removed by THAT NAME only" in loosened
+    assert "the preamble differs from the pinned text" in loosened
     granted = js.replace('].join("\\n");', '  "You MAY also edit source files when it is quicker.",\n].join("\\n");', 1)
     assert contract_problems(granted) == ["the preamble differs from the pinned text"]
     truncated = js.replace("    const prompt = RO\n", "    const prompt = RO.slice(0, 0)\n")

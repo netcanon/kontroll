@@ -11,6 +11,21 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs(process): a reader measures on a copy, in containers named for it — the runner's preamble says what a seed may allow (2026-10-15)
+
+The runner's read-only preamble said an agent runs no git, Ansible or docker at all, while a run's seed often asks
+its readers to run the suite and single-fix reversions in the local gate image. The preamble
+(`.claude/workflows/blackboard.js`) now says what a seed (or a single reader's task) may allow: a measurement on
+the agent's own scratch copy of the tree read — the one write besides its report — outside every worktree and
+never against the lab, with every container named for the agent, mounting only that copy, and stopped or removed
+by that name only — never by image or by a pattern over `docker ps`; nothing pruned. Read-only git (log, show,
+diff, archive) may read a worktree, writing only to stdout or into the copy. Readers run side by side, and one
+reader's filter on an image name once stopped another's mutation containers, whose exit status then read as
+"caught". `CLAUDE.md`'s hard rule, `docs/agent-workflow.md` (with a "Measuring" section in the seed template) and
+`.claude/workflows/README.md` say the same. The preamble's pinned digest in `tests/unit/test_review_loop.py`
+changes with it, and the test now pins the measuring rule's clauses as phrases too, so that a later re-pin still
+has to carry them.
+
 ### fix(deploy): the deploy's git in a content clone runs as the clone's owner — root runs none in a clone the service writes (2026-10-14)
 
 Armed, a network service commits into its content clone (`<storage root>/api/repo`,
