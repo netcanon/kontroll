@@ -9,8 +9,10 @@ not operator-owned, that push dies with "Permission denied: unable to write obje
 The #119 box needed a manual `groupadd -g 1001 kontroll; usermod -aG 1001 admin; chown -R admin:1001 <canonical>`.
 
 The fix lands those three as idempotent tasks: (1) ensure the gid-1001 group, (2) add the operator to it, and
-(3) the grant on existing objects sets owner=operator too (not just group) — as detect-then-fix `find` commands that
-PRUNE `hooks/`, which stays root:root 0755 so the uid-1001 writer can never plant a hook (finding 2). The owner half is load-bearing: a freshly
+(3) the grant on existing objects sets owner=operator too (not just group) — as a detect-then-apply pair around the
+ownership pass of `scripts/kontroll-canonical.py --normalise` (the audit's walker: every entry opened from the
+directory it was listed in and changed through its own descriptor — `tests/unit/test_canonical_normalise.py`), which
+PASSES OVER `hooks/`, which stays root:root 0755 so the uid-1001 writer can never plant a hook (finding 2). The owner half is load-bearing: a freshly
 added supplementary group is NOT effective in the operator's current login session, so on the very first run the
 push can't rely on membership yet — operator OWNERSHIP makes it succeed via OWNER perms regardless. This test
 pins all three, plus the ordering (group/membership before the operator's push), so a refactor that drops any
@@ -78,35 +80,64 @@ def _cmd(task):
     return ""
 
 
-def test_the_ownership_grant_sets_operator_owner_and_prunes_hooks():
-    """The write-grant on EXISTING objects (become) must set BOTH owner=operator AND group=1001 — the owner half is
-    what lets the operator's first-run push succeed before the just-added group membership becomes effective (next
-    login) — and it must PRUNE hooks/ so the hook files never become operator- or group-owned. It is a detect-then-fix
-    pair of `find` commands now (the `file` module cannot exclude a subtree), so a second run reports 0 changed.
-    Guards a regression to group-only (re-breaks F-CANON) or to a blanket recurse that re-grants hooks/."""
-    chowns = [t for t in _tasks() if "chown" in _cmd(t)]
-    assert len(chowns) == 1, "exactly one chown grant task: %r" % [t.get("name") for t in chowns]
-    cmd = _cmd(chowns[0])
-    assert "{{ operator_uid }}:1001" in cmd, "owner=operator AND group=1001 (the F-CANON owner half)"
-    assert "-path {{ bare }}/hooks -prune" in cmd, "hooks/ must be pruned from the ownership grant"
-    assert chowns[0].get("become") is True and chowns[0].get("when"), "become, and gated on the detector"
+def _pass_tasks():
+    """(the detect task, the apply task): the two command tasks that run `kontroll-canonical.py --normalise`."""
+    hits = [t for t in _tasks() if "--normalise" in _cmd(t)]
+    assert len(hits) == 2, "a detect task and an apply task run the ownership pass: %r" % [t.get("name") for t in hits]
+    return hits[0], hits[1]
+
+
+def test_the_ownership_pass_sets_operator_owner_and_is_a_detect_then_apply_pair():
+    """The grant on EXISTING objects is the ownership pass of `scripts/kontroll-canonical.py --normalise`, run from
+    the worktree with become, as a detect-then-apply pair: the detect task carries `--check`, runs under the play's
+    `--check` too (`check_mode: false`) — when there is a canonical to look at (`_canonical_before`), so the dry-run
+    of a fresh node is not failed by a path that is not there yet —, is never "changed", and fails on any status but 0 (nothing to do) and 3
+    (something to do); the apply task carries no `--check`, runs only when the detect task exited 3, and is
+    "changed" then — so a second run reports 0 changed. Both say `--owner {{ operator_uid }} --group 1001`: the
+    owner half is what lets the operator's first-run push succeed before the just-added group membership becomes
+    effective (next login). No task of the play runs `find`, `chown` or `chmod` over the canonical any more, and
+    none recurses the `file` module over it. Guards a regression to group-only (re-breaks F-CANON), to a path-based
+    grant, to a detect task the dry-run skips, or to an apply that runs — and reports a change — on every run."""
+    detect, apply = _pass_tasks()
+    for task in (detect, apply):
+        cmd = _cmd(task)
+        assert cmd.split()[:3] == ["python3", "-B", "scripts/kontroll-canonical.py"], cmd
+        assert "--normalise {{ bare }}" in cmd and "--owner {{ operator_uid }} --group 1001" in cmd, cmd
+        assert _mod(task, "ansible.builtin.command", "command").get("chdir") == "{{ worktree }}"
+        assert task.get("become") is True, "the pass opens entries nobody else may open: become"
+        assert "no_log" not in task, "the pass prints names only — hiding them hides what the operator must read"
+    assert _cmd(detect).rstrip().endswith("--check") and "--check" not in _cmd(apply)
+    assert detect.get("check_mode") is False and detect.get("changed_when") is False
+    assert str(detect.get("failed_when")).replace(" ", "") == "%s.rcnotin[0,3]" % detect["register"]
+    assert str(apply.get("when")).replace(" ", "") == "(%s.rc|default(0))==3" % detect["register"]
+    assert str(detect.get("when")).replace(" ", "") == "_canonical_before.stat.existsornotansible_check_mode", (
+        "the detect must be skipped under the dry-run of a node with no canonical yet (its path is not there), and "
+        "run everywhere else")
+    assert apply.get("changed_when") is True and "check_mode" not in apply
+    for task in _tasks():
+        words = _cmd(task).split()
+        assert not {"find", "chown", "chmod"} & set(words), "a path-based grant is back: %s" % task.get("name")
     blanket = [t for t in _tasks() if (m := _mod(t, "ansible.builtin.file", "file")) and m.get("recurse")
                and str(m.get("path")) == "{{ bare }}"]
     assert blanket == [], "no blanket recurse over the whole canonical — it would re-grant hooks/ every run"
 
 
 def test_hooks_stay_root_owned_and_outside_every_grant():
-    """hooks/ is root:root 0755 (recurse) and PRUNED from every chmod/chown grant, and the re-own task runs AFTER the
-    grants. The canonical is mounted :rw into the uid-1001 service (api_privileged); with a group-writable hooks/
-    that writer could plant a `reference-transaction` or `update` hook that the next `sudo kontroll-promote` runs as
-    ROOT (2026-10-08 review, finding 2). Every git actor only needs to READ hooks. Guards the grant growing back over
-    hooks/, the re-own going missing, or it running before a grant that would undo it."""
+    """hooks/ is root:root 0755 (recurse), the ownership pass passes it over (its `_HOOKS` is the entry `hooks` of
+    the top directory, read from the script), and the re-own task runs AFTER the pass. The canonical is mounted :rw
+    into the uid-1001 service (api_privileged); with a group-writable hooks/ that writer could plant a
+    `reference-transaction` or `update` hook that the next `sudo kontroll-promote` runs as ROOT (2026-10-08
+    review, finding 2). Every git actor only needs to READ hooks. Guards the grant growing back over hooks/, the
+    re-own going missing, or it running before a grant that would undo it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kontroll_canonical_for_hooks",
+                                                  os.path.join(ROOT, "scripts", "kontroll-canonical.py"))
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    assert tool._HOOKS == b"hooks", "the pass must pass over the top directory's `hooks` entry"
     tasks = _tasks()
-    grants = [i for i, t in enumerate(tasks)
-              if ("chmod" in _cmd(t) or "chown" in _cmd(t)) and "{{ bare }}" in _cmd(t)]
-    assert grants, "the grant tasks must exist"
-    for i in grants:
-        assert "-path {{ bare }}/hooks -prune" in _cmd(tasks[i]), "a grant reaches into hooks/: %s" % tasks[i].get("name")
+    grants = [i for i, t in enumerate(tasks) if "--normalise" in _cmd(t)]
+    assert len(grants) == 2, "the grant tasks must exist"
     hooks = [i for i, t in enumerate(tasks)
              if (m := _mod(t, "ansible.builtin.file", "file")) and str(m.get("path")) == "{{ bare }}/hooks"]
     assert len(hooks) == 1, "exactly one task owns hooks/"

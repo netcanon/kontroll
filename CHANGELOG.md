@@ -11,6 +11,41 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the canonical's ownership pass changes what it opened — `kontroll-canonical.py --normalise` replaces the play's four `find` tasks (2026-10-19)
+
+`local-canonical.yml` brings the entries of an existing canonical to `<operator>:1001`, group-writable, directories
+setgid (F-CANON), outside `hooks/`. That grant was four `find … -exec chown -h / chmod` tasks, which address every
+entry by its full path. It is now a mode of the audit's own script, so the canonical has one walker.
+
+- **`python3 -B scripts/kontroll-canonical.py --normalise <repo> --owner <uid> --group <gid> [--check]`** walks the
+  repository the way `--audit` reads it: each directory opened from its parent's descriptor and never through a
+  link, each entry opened from the directory it was listed in, and the owner and the mode changed THROUGH THAT
+  DESCRIPTOR (`fchown`, `fchmod`) — on the regular file or directory that was opened, inside the repository,
+  whatever its name is exchanged for meanwhile. A symbolic link is named (`link`) and left as it is, its own owner
+  too, and nothing it points at is looked at, listed or changed; a pipe, a socket, a device is named
+  (`not-a-file`) and never opened. The owner is set before the mode, and the mode read again in between (a
+  change of owner clears a regular file's setgid bit). `hooks/` is passed over.
+- **`--check` names what would change and changes nothing** — one line per entry, a kind (`owner`, `mode`) and a
+  path, bounded per kind as the audit's report is, never a file's content; exit 3 when there is something, 0 when
+  there is nothing. Applied, exit 0 says every entry it named is now as asked. A part the pass did not go over or
+  could not change (`unread`, `failed`) is exit 1, with the lines that say which. On a platform without
+  descriptor-relative operations (Windows) the pass refuses, exit 2, rather than change anything by path.
+- **The play runs it as a detect-then-apply pair:** the detect task (`--check`, `check_mode: false`, so the
+  mandated dry-run prints the names the real run then changes — when there is a canonical to look at, so the
+  dry-run of a fresh node is not failed by a path that is not there yet) and a debug task that shows them; the
+  apply task runs only when the detect task exited 3, so a second apply reports 0 changed as before (as before: a
+  push in between leaves git's `0444` objects for the next deploy to name). An entry git removes during a push
+  (`*.lock`, `tmp_obj_*`) is not reported: a part that is gone is nothing to change. `hooks/` stays root's
+  through the task that follows. An operator sees the names of what a deploy changed in the canonical where the
+  old tasks printed one path; nothing else changes for a canonical the play made.
+- Tests: `tests/unit/test_canonical_normalise.py` (`--check` changes nothing; the bits set and a second run with
+  nothing to do; a link to a file and to a directory outside the tree named and what they point at left as it
+  was; a pipe named within a bound; `hooks/` passed over; a directory exchanged for a link after it was looked at
+  not gone into; the refusal with the capability flag off; one walker), `tests/integration/test_canonical_normalise_as_root.py`
+  (the chown to another uid, with real uids, in the gate's root step), `tests/unit/test_local_canonical.py` (the
+  pair's conditions). Docs: SECURITY.md C10, docs/troubleshooting.md §8, docs/install-from-scratch.md,
+  docs/privileged-mutation-enablement.md.
+
 ### docs(repo): one status page, checked against the tree; a template for a deployment's own ledger (2026-10-19)
 
 Where the project stands lived in three places that disagreed: the README's undated "Current status", `PLAN.md`

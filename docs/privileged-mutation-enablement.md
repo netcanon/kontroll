@@ -138,9 +138,11 @@ capability-promote path is live too, not just the API. The from-scratch recipe (
 1. **Token:** on the VM, `sops instance/secrets/dashboards.sops.yml` → add
    `kontroll_api_token: "$(openssl rand -hex 32)"` (a secret — born + encrypted on the VM, never committed/transcripted).
 2. **Canonical hardening + write grant** (`local-canonical.yml` does the top dir + deny-non-FF; existing objects
-   need the one-time recursive grant): re-run `local-canonical.yml` — its detect-then-fix tasks chown
-   `<operator>:1001` and grant `g+w` + dir-setgid **outside `hooks/`**, which stays root-owned `0755` (a gid-1001
-   writer must never be able to plant a hook; SECURITY.md C10). Never a blanket `chmod -R g+w` of the canonical.
+   need the one-time recursive grant): re-run `local-canonical.yml` — its ownership pass
+   (`scripts/kontroll-canonical.py --normalise`, detect-then-apply) makes every entry `<operator>:1001`, `g+w` and
+   dir-setgid **outside `hooks/`**, which stays root-owned `0755` (a gid-1001 writer must never be able to plant a
+   hook; SECURITY.md C10) — each entry opened from its directory and changed through its descriptor, a link named
+   and left alone. Never a blanket `chmod -R g+w` of the canonical.
 3. **Gated deploy:** `ansible-playbook playbooks/deploy-stack.yml -e '{"stack_services":["api"],"api_privileged":true}'`.
    It renders the token + `KONTROLL_STAGE_PUSHES=1`, makes (or updates) the API's content clone AS uid-1001 —
    a root-owned clone from an unarmed deploy is removed and made again by uid 1001, never chowned — with its

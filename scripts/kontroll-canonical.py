@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Say what is in a canonical that this tool did not put there (C10). Read-only: it reports, it changes nothing.
+"""Say what is in a canonical that this tool did not put there (C10) — and, as a mode of its own, the ownership pass
+the play applies to one. `--audit` is read-only: it reports, it changes nothing. `--normalise` changes owners and
+modes, and nothing else, of the entries it opened.
 
 The canonical (`/srv/kontroll.git`) is made by `ansible/playbooks/local-canonical.yml`, and from then on written
 by three things: that play's mirror, the promote, and — when a deploy is armed — the network service, which
@@ -87,6 +89,42 @@ Exit 0 with the report (also when there are findings: the deploy prints them and
 3 when there is at least one finding. Exit 2 for a usage error, or when the path is not a directory. Exit 1
 when the audit ended on an error of its own: what it printed is then not the whole report, and its last line
 says so.
+
+THE OWNERSHIP PASS (`--normalise`) is what `local-canonical.yml` applies to a canonical that is already there:
+every entry of the tree outside `hooks/` — the top directory, each directory below it, each regular file — is
+made `--owner:--group` (numeric), group-writable and, a directory, setgid, so that the operator's push and the
+service's write both land beside what the other wrote (F-CANON). `hooks/` is passed over without a word: the
+play keeps it root's.
+
+    python3 -B scripts/kontroll-canonical.py --normalise /srv/kontroll.git --owner 1000 --group 1001 --check
+    python3 -B scripts/kontroll-canonical.py --normalise /srv/kontroll.git --owner 1000 --group 1001
+
+IT WALKS THE REPOSITORY THE WAY THE AUDIT READS IT, AND CHANGES WHAT IT OPENED. Each directory is opened from
+its parent's descriptor with `O_NOFOLLOW` and `O_DIRECTORY`; each entry is opened from the directory it was
+listed in, with `O_NOFOLLOW` and without waiting; and the owner and the mode are changed THROUGH THAT
+DESCRIPTOR (`fchown`, `fchmod`) — on the regular file or directory that was opened, which is inside the
+repository whatever its name is exchanged for meanwhile. A symbolic link is never followed: it is named and left
+as it is — its own owner too — and nothing it points at is looked at, listed or changed. A pipe, a socket, a
+device is named and never opened. The owner is set first and the mode read again after it (a change of owner
+clears a regular file's setgid bit), so what is set is set on the mode the file then has. Where the platform
+has no such descriptors (Windows) the pass refuses, exit 2, and changes nothing by path instead.
+
+WHAT IT PRINTS is one line per entry, `<kind>: <path from the top directory>` — a name, cut and escaped as the
+audit's are, bounded per kind; never a file's content.
+
+  owner                 the entry is not `--owner:--group` — would be chowned (`--check`), or was
+  mode                  the entry is not group-writable, or is a directory without the setgid bit — likewise
+  link                  a symbolic link: named, left as it is, not followed
+  not-a-file            a pipe, a socket, a device: named, never opened
+  unread                a part the pass did not go over: a directory that could not be listed or opened, an
+                        entry that could not be opened, a tree with more entries or more levels than this goes
+  failed                a change the kernel refused (an immutable file, a read-only file system)
+
+Exit 0 when every entry outside `hooks/` is now as asked (or, with `--check`, already was). With `--check`, exit
+3 when at least one entry would be changed — the lines say which — and nothing was changed. Exit 1 when a part
+was not gone over or a change was refused (`unread`, `failed`: the deploy fails at that task and shows the
+lines), or when the pass ended on an error of its own. Exit 2 for a usage error, a path that is not a
+directory, or a platform without descriptor-relative operations.
 """
 import argparse
 import hashlib
@@ -142,6 +180,12 @@ _REF_VALUE = re.compile(rb"[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\n")            # 
 # macOS: yes. Windows: no.)
 _AT = (hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW") and os.open in os.supports_dir_fd
        and os.stat in os.supports_dir_fd and os.scandir in os.supports_fd)
+# … and can an owner and a mode be changed through the descriptor of the thing that was opened? (Linux, the BSDs,
+# macOS: yes. Windows: no — and the ownership pass refuses there rather than change anything by its path.)
+_FD_WRITES = _AT and hasattr(os, "fchown") and hasattr(os, "fchmod")
+
+_HOOKS = b"hooks"                 # the one entry of the top directory the ownership pass does not go into
+_PASS_ENTRIES = 1 << 22           # entries the ownership pass goes over in one run — an object store of thousands fits
 
 
 class _Report:
@@ -255,10 +299,10 @@ class _Dir:
         except OSError:
             return None
 
-    def read(self, name, limit):
-        """`(bytes, stat)` of the regular file `name` of this directory — the bytes and the `stat` of the ONE
-        thing that was opened — or `(None, None)`: it is not there, is not a regular file (a link is not
-        followed, a pipe is not waited on), cannot be read, or is larger than `limit`."""
+    def file(self, name):
+        """The regular file `name` of this directory, OPEN: `(fd, stat)`, the descriptor and the `stat` of the
+        ONE thing that was opened — or `(None, None)`: it is not there, is not a regular file (a link is not
+        followed, a pipe is not waited on), or cannot be opened. The caller closes the descriptor."""
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
         try:
             if self.fd is not None:
@@ -271,8 +315,22 @@ class _Dir:
             return None, None
         try:
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode):
-                return None, None
+        except OSError:
+            os.close(fd)
+            return None, None
+        if not stat.S_ISREG(st.st_mode):
+            os.close(fd)
+            return None, None
+        return fd, st
+
+    def read(self, name, limit):
+        """`(bytes, stat)` of the regular file `name` of this directory — the bytes and the `stat` of the ONE
+        thing that was opened (`file`) — or `(None, None)`: it is not there, is not a regular file, cannot be
+        read, or is larger than `limit`."""
+        fd, st = self.file(name)
+        if fd is None:
+            return None, None
+        try:
             data = os.read(fd, limit + 1)
             while data and len(data) <= limit:
                 more = os.read(fd, limit + 1 - len(data))
@@ -456,40 +514,45 @@ def _ours(refname):
         return False
 
 
-def _files_below(report, top, name):
-    """Every regular file below the directory `name` of the open directory `top`, as `(path from the top
-    directory, the open directory it is in, its name there)` — so the caller reads it from that directory. A
-    link and a thing that is neither file nor directory are findings on the way and are not gone into; a
-    directory that cannot be listed, a tree with more entries or more levels than this reads, are `unread`.
-    One directory is open per level, `_MAX_DEPTH` at most."""
-    first = _enter(report, top, name)
-    if first is None:
-        return
-    left = _MAX_ENTRIES
-    stack = [(first, name, None)]
+def _walk(report, first, rel, total=_MAX_ENTRIES, skip=()):
+    """THE ONE WALK of a tree of the repository — the audit's and the ownership pass's. Every entry below the
+    OPEN directory `first` (`rel`: its path from the top directory, and the name the report gives it; empty for
+    the top directory itself), as `(path from the top directory, the open directory it is in, its name there,
+    the open directory it IS)`: a regular file is yielded with None last, for the caller to open from the
+    directory it was listed in; a directory is yielded OPEN — from its parent's descriptor, never through a
+    link — before what is in it, and is closed by this walk, as `first` is when the walk ends. An entry of
+    `first` itself whose name is in `skip` is passed over without a word. A link and a thing that is neither
+    file nor directory are findings on the way and are not gone into; a directory that cannot be listed, a
+    tree with more entries (`total`) or more levels than this reads, are `unread`. One directory is open per
+    level, `_MAX_DEPTH` at most."""
+    shown = rel or b"the top directory"
+    left = total
+    stack = [(first, rel, None)]
     try:
         while stack:
-            here, rel, names = stack[-1]
+            here, here_rel, names = stack[-1]
             if names is None:
-                listed = here.names(left)
+                listed = here.names(min(left, _MAX_ENTRIES))
                 if listed is None:
-                    report.add("unread", rel)
+                    report.add("unread", here_rel or shown)
                     stack.pop()[0].close()
                     continue
                 found, more = listed
                 left -= len(found)
                 if more:
-                    report.add("unread", name + b" (more entries than this reads)")
+                    report.add("unread", (here_rel or shown) + b" (more entries than this reads)")
                 names = iter(found)
-                stack[-1] = (here, rel, names)
+                stack[-1] = (here, here_rel, names)
             entry = next(names, None)
             if entry is None:
                 stack.pop()[0].close()
                 continue
-            path = rel + b"/" + entry
+            if len(stack) == 1 and entry in skip:
+                continue
+            path = here_rel + b"/" + entry if here_rel else entry
             is_a = here.kind(entry)
             if is_a == "file":
-                yield path, here, entry
+                yield path, here, entry, None
             elif is_a == "link":
                 report.add("link", path)
             elif is_a == "other":
@@ -498,16 +561,29 @@ def _files_below(report, top, name):
                 report.add("unread", path)
             elif is_a == "dir":
                 if len(stack) >= _MAX_DEPTH:
-                    report.add("unread", name + b" (deeper than this reads)")
+                    report.add("unread", shown + b" (deeper than this reads)")
                     continue
                 below = here.sub(entry)
                 if below is None:
-                    report.add("unread", path)
+                    if here.kind(entry) is not None:     # still there, and not a directory one can open from here
+                        report.add("unread", path)
                 else:
+                    yield path, here, entry, below
                     stack.append((below, path, None))
     finally:
         for here, _rel, _names in stack:
             here.close()
+
+
+def _files_below(report, top, name):
+    """Every regular file below the directory `name` of the open directory `top` (`_walk`), as `(path from the
+    top directory, the open directory it is in, its name there)` — so the caller reads it from that directory."""
+    first = _enter(report, top, name)
+    if first is None:
+        return
+    for path, here, entry, below in _walk(report, first, name):
+        if below is None:
+            yield path, here, entry
 
 
 def _loose_refs(report, top):
@@ -606,6 +682,73 @@ def _objects(report, top):
                             report.add("link", b"objects/pack/" + name)
 
 
+def _own(report, fd, st, path, uid, gid, check):
+    """One entry of the repository — `fd`, the descriptor of the regular file or directory that was opened, and
+    `st`, its `fstat` — brought to `uid:gid`, group-writable and, a directory, setgid: what is not so is a
+    line (`owner`, `mode`) and, unless `check`, is changed THROUGH THE DESCRIPTOR, on the thing that was
+    opened and on nothing a name resolves to now. The owner goes first and the mode is read again after it
+    (a change of owner clears a regular file's setgid bit), so the bits are added to the mode the entry then
+    has, and no other bit is touched. A change the kernel refuses is `failed`."""
+    want = 0o020 | (0o2000 if stat.S_ISDIR(st.st_mode) else 0)
+    try:
+        if st.st_uid != uid or st.st_gid != gid:
+            report.add("owner", path)
+            if not check:
+                os.fchown(fd, uid, gid)
+                st = os.fstat(fd)
+        mode = stat.S_IMODE(st.st_mode)
+        if mode & want != want:
+            report.add("mode", path)
+            if not check:
+                os.fchmod(fd, mode | want)
+    except OSError:
+        report.add("failed", path)
+
+
+def normalise(repo, uid, gid, check):
+    """The ownership pass over the repository at `repo` (a path): the top directory, every directory below it
+    and every regular file, outside `hooks/`, made `uid:gid`, group-writable and (a directory) setgid — or,
+    with `check`, named as one that would be — each reached by `_walk` from an open directory and changed
+    through its own descriptor (`_own`). A symbolic link, a pipe, a socket, a device is named and left as it
+    is, and nothing a link points at is looked at. Returns the `_Report`; raises nothing for what the
+    repository holds — every part that was not gone over is itself a line of it."""
+    repo = os.fsencode(os.path.abspath(repo))
+    report = _Report()
+    top = _Dir.top(repo)
+    if top is None:
+        report.add("unread", b"the top directory")
+        return report
+    with top:
+        st = top.stat()
+        if st is None:
+            report.add("unread", b"the top directory")
+            return report
+        _own(report, top.fd, st, b"the top directory", uid, gid, check)
+        for path, here, entry, below in _walk(report, top, b"", _PASS_ENTRIES, skip=(_HOOKS,)):
+            if below is not None:                        # a directory, open from its parent: its own fd
+                st = below.stat()
+                if st is None:
+                    report.add("unread", path)
+                else:
+                    _own(report, below.fd, st, path, uid, gid, check)
+                continue
+            fd, st = here.file(entry)                    # a regular file a moment ago; opened O_NOFOLLOW now
+            if fd is None:
+                now = here.kind(entry)                   # asked again: what is there NOW
+                if now == "link":                        # exchanged for a link since: refused, and named as one
+                    report.add("link", path)
+                elif now is not None:                    # exchanged for something else, or cannot be opened
+                    report.add("unread", path)
+                # None: gone since it was listed — git's own `*.lock` or `tmp_obj_*` of a push in flight. Nothing
+                # is there to change, and nothing was: not a line (as `_expect` reads "nothing there").
+                continue
+            try:
+                _own(report, fd, st, path, uid, gid, check)
+            finally:
+                os.close(fd)
+    return report
+
+
 def audit(repo):
     """The report for the repository at `repo` (a path): a `_Report`. Raises nothing for what the repository
     holds — every part that cannot be read is itself a line of the report."""
@@ -636,26 +779,54 @@ def audit(repo):
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description="Say what is in a canonical that this tool did not put there (C10). "
-                                             "Read-only.")
-    ap.add_argument("--audit", required=True, metavar="<repo>", help="the canonical: a bare repository's directory")
-    ap.add_argument("--strict", action="store_true", help="exit 3 when there is at least one finding")
+    ap = argparse.ArgumentParser(description="Say what is in a canonical that this tool did not put there (C10; "
+                                             "--audit, read-only) — or apply the play's ownership pass to one "
+                                             "(--normalise: owners and modes, through descriptors, outside hooks/).")
+    what = ap.add_mutually_exclusive_group(required=True)
+    what.add_argument("--audit", metavar="<repo>", help="the canonical: a bare repository's directory")
+    what.add_argument("--normalise", metavar="<repo>", help="the canonical whose entries outside hooks/ are made "
+                                                           "--owner:--group, group-writable, directories setgid")
+    ap.add_argument("--strict", action="store_true", help="--audit: exit 3 when there is at least one finding")
+    ap.add_argument("--owner", type=int, metavar="<uid>", help="--normalise: the numeric uid every entry is given")
+    ap.add_argument("--group", type=int, metavar="<gid>", help="--normalise: the numeric gid every entry is given")
+    ap.add_argument("--check", action="store_true",
+                    help="--normalise: name what would change and change nothing; exit 3 when something would")
     try:
         args = ap.parse_args(argv)
     except SystemExit as e:
         if e.code in (0, None):
             raise
         return 2
-    if not os.path.isdir(args.audit):
-        sys.stderr.write("kontroll-canonical: %s is not a directory; nothing was audited\n" % canon.show(
-            os.fsencode(args.audit))[0][:_NAME_CHARS])
+    passing = args.normalise is not None
+    did_not = "nothing was changed" if passing else "nothing was audited"
+    if passing and (args.owner is None or args.group is None or args.owner < 0 or args.group < 0 or args.strict):
+        sys.stderr.write("kontroll-canonical: --normalise takes --owner <uid> and --group <gid>, numeric and not "
+                         "negative, and no --strict; %s\n" % did_not)
+        return 2
+    if not passing and (args.owner is not None or args.group is not None or args.check):
+        sys.stderr.write("kontroll-canonical: --owner, --group and --check go with --normalise; %s\n" % did_not)
+        return 2
+    if passing and not _FD_WRITES:
+        sys.stderr.write("kontroll-canonical: this platform cannot open a directory from its parent's descriptor "
+                         "or change an owner or a mode through one (Windows has no such descriptors), and the "
+                         "ownership pass does not change anything by its path instead; %s — run it on the control "
+                         "node\n" % did_not)
+        return 2
+    repo = args.normalise if passing else args.audit
+    if not os.path.isdir(repo):
+        sys.stderr.write("kontroll-canonical: %s is not a directory, or cannot be looked at by this account; %s\n" % (
+            canon.show(os.fsencode(repo))[0][:_NAME_CHARS], did_not))
         return 2
     try:
-        report, ended = audit(args.audit), None
+        report = normalise(repo, args.owner, args.group, args.check) if passing else audit(repo)
+        ended = None
     except Exception as e:      # noqa: BLE001 — a deploy prints what this printed: a traceback there says nothing
         report, ended = _Report(), type(e).__name__
     lines = report.lines()
-    if ended:
+    if ended and passing:
+        lines.append("unread: the ownership pass ended on an error of its own (%s); what it printed is not the "
+                     "whole of what it did" % ended)
+    elif ended:
         lines.append("unread: the audit ended on an error of its own (%s); this is not a report of the canonical"
                      % ended)
     try:
@@ -677,6 +848,11 @@ def main(argv):
         return 1
     if ended:
         return 1
+    if passing:
+        kinds = {kind for kind, _text in report.findings}
+        if kinds & {"unread", "failed"}:                 # a part not gone over, or not changed: the task fails
+            return 1
+        return 3 if args.check and kinds & {"owner", "mode"} else 0
     return 3 if args.strict and report.findings else 0
 
 

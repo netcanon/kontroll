@@ -196,52 +196,63 @@
     # canonical created before the grant has objects still on the operator's primary group / not group-writable /
     # owned by a different actor (e.g. uid-1001 staged a proposal), so the operator's push can't write near them.
     # Fix the existing objects — the one-time manual `chown -R <operator>:1001 + chmod -R g+w + find -type d
-    # setgid` step (F-CANON, #119), now idempotent detect-then-fix tasks. owner=<operator> is the F-CANON half:
-    # operator-owned objects let the operator's Mirror push succeed via OWNER perms even before the group
-    # membership added above takes effect (next login). SECURITY.md C10 / docs/install-from-scratch.md §3.
+    # setgid` step (F-CANON, #119), now an idempotent detect-then-apply pair: THE OWNERSHIP PASS of
+    # scripts/kontroll-canonical.py (`--normalise`), which under `--check` names what it would change and,
+    # applied, changes exactly that. owner=<operator> is the F-CANON half: operator-owned objects let the
+    # operator's Mirror push succeed via OWNER perms even before the group membership added above takes effect
+    # (next login). SECURITY.md C10 / docs/install-from-scratch.md §3.
     #
-    # hooks/ is PRUNED from every grant below and re-owned by root at the end. The canonical is mounted :rw into
-    # the uid-1001 service when api_privileged (and, on the permissive edition, into the auto-promoter); with a
-    # group-writable hooks/ that writer could plant a `reference-transaction` or `update` hook, and the next
-    # `sudo kontroll-promote` would run it as ROOT (2026-10-08 review, finding 2). Every git actor only needs to
-    # READ hooks (receive-pack as uid 1001 executes hooks/update), so root:root 0755 is the whole grant.
-    - name: Detect canonical objects (outside hooks/) not owned operator:1001  # noqa: command-instead-of-module
+    # The pass walks the repository the way the audit above reads it (one walker, `_walk`): each directory is
+    # opened from its parent's descriptor and never through a link, each entry is opened from the directory it
+    # was listed in, and the owner and the mode are changed THROUGH THAT DESCRIPTOR (fchown/fchmod) — on the
+    # regular file or directory that was opened, inside the repository, whatever its name is exchanged for
+    # meanwhile. A symbolic link is named (`link`) and left as it is, its own owner too, and nothing it points at
+    # is looked at; a pipe, a socket, a device is named (`not-a-file`) and never opened. The canonical is mounted
+    # :rw into the uid-1001 service when api_privileged (and, on the permissive edition, into the auto-promoter):
+    # every name in it is that writer's to choose, and the pass changes no entry but the ones it opened there.
+    #
+    # hooks/ is PASSED OVER by the pass and re-owned by root at the end. With a group-writable hooks/ that writer
+    # could plant a `reference-transaction` or `update` hook, and the next `sudo kontroll-promote` would run it as
+    # ROOT (2026-10-08 review, finding 2). Every git actor only needs to READ hooks (receive-pack as uid 1001
+    # executes hooks/update), so root:root 0755 is the whole grant.
+    - name: Detect canonical entries outside hooks/ not operator:1001, or missing group-write or setgid (names only)
       become: true
-      # find's own ( ) ! operators (no shell) — `command` passes them as argv. -print -quit stops at the FIRST
-      # offender; non-empty stdout ⇒ at least one object still needs the chown. -user/-group take the numeric ids.
+      # `--check` prints what the pass would change — a kind and a path, bounded per kind, never a file's content —
+      # and changes nothing: exit 3 when there is something, 0 when there is nothing, 1 when a part could not be
+      # gone over (the lines say which part), 2 when it could not start. Read-only, so it runs under --check too
+      # (`check_mode: false`) when there is a canonical to look at: the mandated dry-run prints the names the real
+      # run then changes. become, because
+      # an entry nobody else may open is still one the pass has to look at. -B: no __pycache__ in the checkout.
       ansible.builtin.command:
         cmd: >-
-          find {{ bare }} -path {{ bare }}/hooks -prune -o
-          ( ! -user {{ operator_uid }} -o ! -group 1001 ) -print -quit
-      register: _own_needed
+          python3 -B scripts/kontroll-canonical.py --normalise {{ bare }}
+          --owner {{ operator_uid }} --group 1001 --check
+        chdir: "{{ worktree }}"
+      register: _normalise_needed
       changed_when: false
+      failed_when: _normalise_needed.rc not in [0, 3]
+      check_mode: false
+      # Under the dry-run of a node that has no canonical yet there is nothing to look at (the `file` and
+      # `git init` tasks above were only simulated), so the detect is skipped, as the audit is, and so is the apply.
+      when: _canonical_before.stat.exists or not ansible_check_mode
 
-    - name: Chown existing canonical objects operator:1001, hooks/ pruned (F-CANON)  # noqa: command-instead-of-module
-      become: true
-      ansible.builtin.command:
-        cmd: "find {{ bare }} -path {{ bare }}/hooks -prune -o -exec chown -h {{ operator_uid }}:1001 {} +"
-      when: _own_needed.stdout | length > 0
-      changed_when: true
+    - name: Show what the ownership pass names (what it would change; a link or a pipe it leaves as it is)
+      ansible.builtin.debug:
+        msg: "{{ _normalise_needed.stdout_lines | default([]) }}"
+      when: _normalise_needed.stdout_lines | default([]) | length > 0
 
-    - name: Detect canonical objects outside hooks/ missing group-write or setgid  # noqa: command-instead-of-module
+    - name: Make existing canonical entries operator:1001, group-writable, dirs setgid — hooks/ passed over (F-CANON)
       become: true
-      # Same shape: a `| head` under pipefail would SIGPIPE the task, so find's own -print -quit does the capping.
-      # The find module can't express this perm predicate, hence raw find.
+      # The same pass, applied: exit 0 says every entry it named is now as asked; any other status fails the play,
+      # with the lines that say which entry was not gone over or not changed. Skipped when the detect task found
+      # nothing (a second apply reports 0 changed) and in check mode (a command that writes).
       ansible.builtin.command:
         cmd: >-
-          find {{ bare }} -path {{ bare }}/hooks -prune -o
-          ( ! -perm -020 -o -type d ! -perm -2000 ) -print -quit
-      register: _grant_needed
-      changed_when: false
-
-    - name: Grant group-write + setgid on existing canonical objects, hooks/ pruned  # noqa: command-instead-of-module
-      become: true
-      ansible.builtin.shell: >-
-        find {{ bare }} -path {{ bare }}/hooks -prune -o -exec chmod g+w {} +
-        && find {{ bare }} -path {{ bare }}/hooks -prune -o -type d -exec chmod g+s {} +
-      args:
-        executable: /bin/bash
-      when: _grant_needed.stdout | length > 0
+          python3 -B scripts/kontroll-canonical.py --normalise {{ bare }}
+          --owner {{ operator_uid }} --group 1001
+        chdir: "{{ worktree }}"
+      register: _normalised
+      when: (_normalise_needed.rc | default(0)) == 3
       changed_when: true
 
     - name: Keep hooks/ root-owned and read-only to everyone else — a gid-1001 writer must never plant a hook (C10)
