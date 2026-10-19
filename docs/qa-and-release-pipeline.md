@@ -1,5 +1,7 @@
 # QA & Release Pipeline — plan of record
 
+> **DESIGN HISTORY — not a description of the tree.** This is the design record of CI and the release pipeline, written from June 2026. CI is built ([.github/workflows/](../.github/workflows/), [tests/README.md](../tests/README.md)); the release-automation half is not. Its ⬜ marks are as they were then. Where it disagrees with the code or with `SECURITY.md`, they are right.
+
 How kontroll gets **full CI** (unit + integration + security), a **test-after-change**
 discipline, and — once the GUI alpha matures — an **automated build + public
 dissemination** path beyond git. Modeled on the netcanon/NetConfig setup
@@ -107,7 +109,7 @@ recommends but hasn't wired it — we should, given galaxy.py + gui are real cod
 | ⬜ Container/image scan | **trivy** | runner image, onboard-gui, homepage/grafana/prom images | scan on build, fail on HIGH/CRITICAL fixable |
 | ⬜ Ansible content | **ansible-lint** security profile + **kics/checkov** (optional) | playbooks/roles | infra-as-code misconfig scanning |
 | ⬜ SAST (Python) | **bandit** | `scripts/`, `gui/` | the GUI is privileged — worth it |
-| ⬜ Dependency updates | **Dependabot** (`.github/dependabot.yml`) | pip, github-actions, docker | copy netcanon's config near-verbatim |
+| ✅ Dependency updates | **Dependabot** (`.github/dependabot.yml`) | pip, github-actions, docker | copy netcanon's config near-verbatim |
 | ⬜ **GUI-specific** | auth + TLS + audit log before beta | `gui/` | tracked in [gui/README.md](../gui/README.md) security posture; the GUI can write the repo, encrypt secrets, push, and run Ansible — treat as a crown-jewel surface |
 
 ---
@@ -122,7 +124,7 @@ Mirror netcanon's dev loop, enforced locally + in CI:
 - ⬜ **One entry point**: extend `tests/validate.sh` (or add `make test`) to run, in order,
   L1 (lint/validate) → L2 (`pytest -m "not e2e"`). `validate` stays the single "is it
   green?" command contributors already know.
-- ⬜ Document in `CONTRIBUTING.md` (new) + the CLAUDE.md "Before you commit" checklist:
+- ✅ Document in [CONTRIBUTING.md](../CONTRIBUTING.md) + the CLAUDE.md "Before you commit" checklist:
   the required sequence and which layers run where (local vs CI vs live-VM).
 - Keep the existing doctrine hooks: Documentation Sync Checklist, access-chain headers,
   `--check --diff` before state-changing plays. These ARE the test-after-change culture

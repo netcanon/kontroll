@@ -1,5 +1,7 @@
 # API Architecture — plan of record
 
+> **DESIGN HISTORY — not a description of the tree.** This is the design record of the API, written in June 2026. It was built; [api/README.md](../api/README.md) describes what exists. Where it disagrees with the code or with `SECURITY.md`, they are right.
+
 How kontroll's functionality gets **fully API-ified** the way the netcanon reference is:
 extract a **service layer** from `scripts/galaxy.py`, stand a typed **API** over it, and
 retire the GUI's subprocess-scrape — with **testing across every layer** and the **Layer 0
@@ -137,7 +139,7 @@ This is a place kontroll *exceeds* the reference.
 
 ---
 
-## 5. Workstream — tests + published OpenAPI  ⬜
+## 5. Workstream — tests + published OpenAPI  ✅ (built: `tests/integration/test_api.py`)
 
 **What:** port the GUI's Flask test-client tests to FastAPI `TestClient`; publish `/openapi.json` as the
 contract; add schema/contract checks. The e2e (Playwright) + live (smoke gate) layers (being built now)

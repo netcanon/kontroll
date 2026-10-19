@@ -1,6 +1,6 @@
 ---
 title: Observability Onboarding Flow — Master Design
-status: DESIGN ONLY — not built
+status: DESIGN HISTORY — largely built; see the banner
 baseline: HEAD 63de129 (CI green)
 scope: kontroll composed control plane — the telemetry-method seam + GUI-actuatable per-device/service observability
 audience: a Claude Opus 4.8 (1M context) implementer in a normal (non-orchestrated) session
@@ -9,13 +9,15 @@ authors: synthesized from 7 read-only design dimensions + 3 self-reviews + 1 QA 
 
 # Observability Onboarding Flow — Master Design
 
+> **DESIGN HISTORY — not a description of the tree.** This is the design record of the observability and capability track, written in June 2026. Most of it was built (the telemetry-method registry, the capability seam, the generators); [telemetry/README.md](../telemetry/README.md), [capabilities/README.md](../capabilities/README.md) and [secondary-capability-dialog.md](observability/secondary-capability-dialog.md) describe what exists. Where it disagrees with the code or with `SECURITY.md`, they are right.
+
 ## 1. Purpose
 
 This document is the **spine** that wraps seven design sections into one coherent, implementable plan for making per-device and per-service observability a **modular, self-describing, GUI-actuatable** capability of kontroll. Today, telemetry is a closed two-value enum (`via: host | proxy`) hard-wired into an `if/else` in `scripts/gen-observability.py`, the proxy-exporter relabel is hand-written in `prometheus.yml`, agent-less devices (the Cisco core switch, the FortiGate edge firewall) are unmonitored, and onboarding a device does **not** generate its metrics/dashboards/exporter wiring — those were added by hand. This plan promotes `via` into a **drop-in telemetry-method registry** (`telemetry/<method>.yml`), turns `gen-observability.py` into a dispatcher over it, generates the proxy-exporter Prometheus jobs and exporter containers from data, adds a telemetry **capability vector** for detection, converges the **two onboarding roots** (Galaxy-rooted devices + OpenAPI-rooted services) on a shared observability opt-in, adds a **hybrid dashboard discovery** UX, and exposes the whole thing as a **propose-then-promote**, fail-closed, audited GUI/API flow — all while honoring the "deeply modular, no god files; one dispatch seam; config-as-data; generated-never-hand-maintained; propose-then-promote; tests/logging/docs are first-class" doctrine of `CLAUDE.md`.
 
 ## 2. Status & scope
 
-> **THIS IS A DESIGN DOCUMENT. NOTHING HERE IS BUILT.** No source file has been edited, no Ansible has run, no lab device has been touched. The baseline is **HEAD `63de129`** (CI green). Every file path, schema, code sketch, test name, log line, security control, and doc-sync row below is a *specification for a future implementer*, not a record of work done.
+> **THIS WAS A DESIGN DOCUMENT WHEN IT WAS WRITTEN** (most of it has since been built — see the banner at the top). At the time no source file had been edited, no Ansible has run, no lab device has been touched. The baseline is **HEAD `63de129`** (CI green). Every file path, schema, code sketch, test name, log line, security control, and doc-sync row below is a *specification for a future implementer*, not a record of work done.
 
 **In scope** (designed in full, with phased delivery): the telemetry-method registry + dispatcher; proxy-exporter Prometheus-job generation; exporter-container generation; agent-less SNMP/blackbox monitoring of the switch + firewall; the telemetry capability vector (honestly scoped); the OpenAPI service-onboarding root + the radarr/exportarr worked example; hybrid dashboard discovery; the GUI/API observability opt-in with a minimal propose-then-promote primitive.
 

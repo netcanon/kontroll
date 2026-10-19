@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs: the design records say they are history, on their first line (2026-10-19)
+
+Several design documents still opened with a status that was no longer true: "DESIGN ONLY — not built" above a
+design that has shipped, "Still design: … a GUI" in a tree that has one. A reader arriving by a link took them for
+descriptions of the tree.
+
+- **Each design record opens with a banner:** design history, when it was written, whether it was built,
+  superseded or parked, and that the code and `SECURITY.md` win where they disagree. That covers the eight
+  history records under `docs/observability/` (two documents there are current references and carry none),
+  `docs/observability-onboarding-flow.md`, `docs/capability-matrix.md`, `docs/api-architecture.md` and
+  `docs/qa-and-release-pipeline.md`. Every path stays where it was, so nothing that cites one changes.
+- **The false status clauses are gone or corrected:** the "DESIGN ONLY, not built" clauses, the master design's
+  "NOTHING HERE IS BUILT", the capability matrix's "Still design" list, the API's published-OpenAPI workstream
+  (built), and two items of the QA plan that exist (`CONTRIBUTING.md`, Dependabot).
+- **`docs/observability/README.md`** (new) says what the directory holds and names the two current references. The
+  README's table lists the design history.
+
 ### fix(deploy): a fresh node's storage root is made root's, and the refusal asks for one the service's git can pass (2026-10-16)
 
 Nothing in `deploy-stack.yml` made the storage root itself. Ansible's `file` gives every parent it creates the

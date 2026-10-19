@@ -1,5 +1,7 @@
 # SIEM integration plan — where log normalization belongs
 
+> **DESIGN HISTORY — not a description of the tree.** This is the design record of where log normalization belongs for a SIEM, written in June 2026. It is parked until a SIEM destination exists. Where it disagrees with the code or with `SECURITY.md`, they are right.
+
 > **STATUS: PLANNED — not built. Do not build any of this until a real SIEM destination is on the table.**
 > Today (Loki-only) the standard envelope transform is the *correct* answer, not a stopgap — see §3. This doc is
 > the durable synthesis of a 2026-06-16 research pass (three independent web surveys) answering one question:
