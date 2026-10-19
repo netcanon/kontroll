@@ -8,9 +8,9 @@ rule (ansible/playbooks/tasks/content-clone.yml): root never runs git in a clone
 never changes an owner by path in a tree that uid writes; armed, git in the clone is the service uid's (setpriv,
 no group, no new privileges, a session of its own, an environment of its own); a clone held by the wrong uid is
 removed and made again by the right one. These rows run that task file — the one deploy-stack.yml imports — and,
-for a fresh node, deploy-stack.yml's own tasks that make the storage root and the stores before the clone, with
-ansible-playbook as root, against a canonical laid out as the play leaves it (another uid's, group 1001), and plant
-in the clone programs that write down who they run as.
+for a fresh node or a box an older build deployed, deploy-stack.yml's own tasks that make the storage root, the
+stores and the clone's parent before the clone, with ansible-playbook as root, against a canonical laid out as the
+play leaves it (another uid's, group 1001), and plant in the clone programs that write down who they run as.
 
 ansible-playbook is started with a CONTROLLING TERMINAL (a pseudo-terminal it is made the session leader of), as
 an operator's `sudo` deploy is: a program of the service's that kept it could push keystrokes into the operator's
@@ -776,3 +776,38 @@ def test_a_preview_refuses_a_storage_root_closed_to_the_service_as_the_apply_doe
     assert out["rc"] != 0 and "that anybody may pass through" in out["out"], out["out"]
     assert "sudo chmod 0711 %s" % w.storage in " ".join(out["out"].split()), out["out"]
     assert w.head() == "first"
+
+
+@pytest.mark.parametrize("armed", [True, False], ids=["armed", "unarmed"])
+def test_a_preview_stops_at_a_parent_the_previous_build_left_the_services_and_its_chown_is_enough(w, armed):
+    """A box last deployed by a build older than the 2026-10-14 entry's has each clone's parent as that build's
+    host-dirs task made it: the service's, 0755. This build's host-dirs task makes it root's before the clone's
+    refusal looks, but the mandated `--check --diff` changes nothing, so the first preview on such a box stops at
+    the parent, armed or not, and prints the `chown` the deploy would do. The 2026-10-14 entry's note for such a
+    box and docs/troubleshooting.md section 9 tell the operator to run that `chown` and dry-run again; this row
+    keeps them true. With deploy-stack.yml's REAL host-dirs task before the clone: the preview names the parent
+    (not the storage root) and changes nothing; the `chown` alone makes the next preview pass; the apply then
+    leaves the parent root's 0755 and updates the clone."""
+    w.play(armed=armed)                                   # a clone, as on a box that has deployed
+    os.chown(w.parent, SERVICE, SERVICE)                  # what the previous build's host-dirs task left
+    os.chmod(w.parent, 0o755)
+    tasks = _deploy_tasks_named("Ensure the API host dirs exist")
+    tasks.append({"name": "The content clone, as deploy-stack.yml makes it", "ansible.builtin.import_tasks": TASKS,
+                  "vars": {"_clone_dir": w.clone, "_clone_service": "api", "_clone_canonical": w.canonical}})
+    w.playbook = os.path.join(w.base, "previous-build.yml")
+    with open(w.playbook, "w", encoding="utf-8") as fh:
+        yaml.safe_dump([{"hosts": "localhost", "connection": "local", "gather_facts": False,
+                         "vars": {"stack_services": ["api"], "kontroll_api_dir": w.parent},
+                         "tasks": tasks}], fh, sort_keys=False)
+    w.commit("second")
+    out = w.play(armed=armed, check=True, expect_ok=False)
+    flat = " ".join(out["out"].split())
+    assert out["rc"] != 0 and "sudo chown root:root %s`" % w.parent in flat, out["out"]
+    assert "sudo chown root:root %s`" % w.storage not in flat, "the preview named the storage root"
+    assert os.stat(w.parent).st_uid == SERVICE and w.head() == "first", "the preview changed something"
+    os.chown(w.parent, 0, 0)                              # the `chown` it printed, alone
+    again = w.play(armed=armed, check=True, expect_ok=False)
+    assert again["rc"] == 0, again["out"]
+    w.play(armed=armed)
+    p = os.stat(w.parent)
+    assert (p.st_uid, p.st_gid, p.st_mode & 0o7777) == (0, 0, 0o755) and w.head() == "second"
