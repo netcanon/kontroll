@@ -107,8 +107,13 @@ root's. Its storage root it does not change: look at it before the first deploy 
 box keeps its clone (its top is the service's; the one file the previous build left root's in
 it, `.git/config`, stays root's and readable), and from now on only uid 1001 runs git in it. A box deployed
 unarmed after it was armed, or armed after it was unarmed, has its clone made again by its owner; the first such
-deploy reports it. Dry-run first: `--check --diff` — on its first run the armed preview says `main not compared`
-(the configuration file is written by the deploy itself). **On a host-direct box, remove the system-scope
+deploy reports it. Dry-run first: `--check --diff`. A dry-run changes nothing, so its first run stops at a clone's
+parent, armed or not: the previous build left it the service's. The `sudo chown root:root <parent>` it prints is
+enough (it is what the deploy does there first, and the parent's `0755` passes); then dry-run again. Or make both
+parents root's before the first dry-run: `sudo chown root:root /var/lib/kontroll/api /var/lib/kontroll/onboard-gui`,
+with your storage root's paths, for each that exists (no service mounts a parent itself, so the running build is
+not disturbed). On its first full run the armed preview says `main not compared` (the configuration file is
+written by the deploy itself). **On a host-direct box, remove the system-scope
 `safe.directory` entries the previous build added** (one per armed deploy, for each content clone): while one
 stands, a git you run as root in that clone trusts it, and so runs what the service put there, as root. Remove
 exactly those, with your storage root's paths —
