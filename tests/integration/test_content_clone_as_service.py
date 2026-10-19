@@ -18,19 +18,23 @@ shell (TIOCSTI). Every record must show none.
 
 It needs ROOT, a Linux kernel, setpriv, setsid and ansible-playbook. tests/validate.sh runs this file in its
 as-root step, which fails when a row here was SKIPPED; in a plain `pytest` run by an ordinary user every row is
-skipped.
+skipped (and on a host with no pty or termios module, a Windows workstation, the file still collects).
 """
-import fcntl
 import json
 import os
-import pty
 import re
 import shutil
 import subprocess
 import tempfile
-import termios
 
 import pytest
+
+try:                                   # POSIX only. On a host without them (a Windows workstation) every row is
+    import fcntl                       # skipped below, and the file must still COLLECT: an import error here
+    import pty                         # stopped `pytest -m "not e2e and not slow"` there before any test ran.
+    import termios
+except ImportError:
+    fcntl = pty = termios = None
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
