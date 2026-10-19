@@ -1,6 +1,8 @@
 # Telemetry-method registry & generator dispatcher
 
-> **Part of the [Option-A observability + onboarding flow](../observability-onboarding-flow.md) design — DESIGN ONLY, not built (baseline HEAD `63de129`).**
+> **DESIGN HISTORY — not a description of the tree.** This is the design record of the telemetry-method registry and its generator dispatcher, written in June 2026. It was built; [telemetry/README.md](../../telemetry/README.md) and [prometheus/README.md](../../prometheus/README.md) describe what exists. Where it disagrees with the code or with `SECURITY.md`, they are right.
+
+> **Part of the [Option-A observability + onboarding flow](../observability-onboarding-flow.md) design (baseline HEAD `63de129`).**
 >
 > ⚠️ **Binding contracts (the catalog loader name, the flat `telemetry/<method>.yml` schema, the single clean-cutover dispatcher, the `network` job-vs-inventory-group distinction, the `.env` secret-render mechanism) are pinned in the master design's §4.0 SHARED CONTRACTS.** Where this section names a symbol, schema, or sequencing differently, **§4.0 wins** and this section is reconciled to it before implementation. See the master design's §8 “Resolved conflicts” for the per-section reconciliation list.
 

@@ -1,5 +1,7 @@
 # GUI-actuatable onboarding + observability flow
 
+> **DESIGN HISTORY — not a description of the tree.** This is the design record of the GUI-actuatable onboarding and observability flow, written in June 2026. The seam it designs shipped; the as-built reference is [secondary-capability-dialog.md](secondary-capability-dialog.md). Where it disagrees with the code or with `SECURITY.md`, they are right.
+
 > **Part of the [Option-A observability + onboarding flow](../observability-onboarding-flow.md) design. This is INSTANCE #1 (telemetry) of the generalized secondary-capability seam, which SHIPPED in Capability-track Phase 7 — see the [seam reference-of-record](secondary-capability-dialog.md) for the as-built state. This section remains the telemetry instance's UX design rationale; where it predicts a future tense, the seam is now built.**
 >
 > ⚠️ **Binding contracts (the catalog loader name, the flat `telemetry/<method>.yml` schema, the single clean-cutover dispatcher, the `network` job-vs-inventory-group distinction, the `.env` secret-render mechanism) are pinned in the master design's §4.0 SHARED CONTRACTS.** Where this section names a symbol, schema, or sequencing differently, **§4.0 wins** and this section is reconciled to it before implementation. See the master design's §8 “Resolved conflicts” for the per-section reconciliation list.

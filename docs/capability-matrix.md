@@ -1,11 +1,8 @@
 # Design: capability-matrix onboarding (Galaxy + local, programmatically derived)
 
-> Status: **building**. Implemented + live-verified: prober + drop-in `vectors/`,
-> unified Galaxy+local search with structured records, `overrides/`, `refresh`,
-> `audit`, the classifier + `scaffold`, and the first executable backend
-> (`netcommon_cli` — `cisco_ios` migrated, non-human e2e in `tests/e2e/`). Still
-> design: the `api`-backend + OpenAPI enrichment (§5.2), the `onboard` orchestrator
-> (§4.1), `raw_ssh`/openwrt, and a GUI. This doc is the contract for *how* it stays
+> **DESIGN HISTORY — not a description of the tree.** This is the design record of capability-matrix onboarding (the search, the classifier, the backends), written from May 2026. It was built — the backends, the onboard orchestrator and the GUI included; [scripts/README.md](../scripts/README.md) (`galaxy.py`) and [modules/README.md](../modules/README.md) describe what exists. Where it disagrees with the code or with `SECURITY.md`, they are right.
+
+> This doc is the contract for *how* it stays
 > extensible — the feature that must not be gotten wrong. Numbers/labels are
 > illustrative; the system derives them.
 
