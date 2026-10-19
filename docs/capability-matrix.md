@@ -86,7 +86,7 @@ search bar ──► search index ──► merge(local, galaxy) ──► facet
                    │
    on "add": DEEP probe ──► classifier ──► BACKEND ──► scaffold module decl
                                               │
-                                       (verify live ─ human/AI gate) ─► enable in fleet ─► bootstrap
+                                       enable in fleet ─► bootstrap ─► (you run ping/backup once)
 ```
 
 Components:
@@ -106,7 +106,8 @@ Components:
   (`backup:yes`, `actuate:rw`, `origin:galaxy`, certified-only, …).
 - **Onboard pipeline** — select → deep-probe → classifier picks a backend →
   scaffold the module declaration (zero task code for standard backends; a marked
-  stub for bespoke) → **live-verify gate** → enable in `instance/fleet.yml` → bootstrap.
+  stub for bespoke) → enable in `instance/fleet.yml` → bootstrap; then the operator runs ping/backup
+  against the host once (§6).
 
 ### 4.1 The onboarding flow (the operator's path, end to end)
 
@@ -227,14 +228,16 @@ This is the answer to "can the per-device lift be programmatic?": for everything
 that fits a backend, **yes — one declaration line (+ a derived recipe for APIs) +
 verification.** Only genuinely novel paradigms need a new backend.
 
-## 6. Confidence and the verification gate
+## 6. Confidence, and what is *not* verified
 
-Labels are never trusted blind — each carries `confidence` (shallow/deep/verified)
-and a provenance (`derived` / `override`). A device is not promoted to a *managed
-class* until a **live smoke test** passes (it actually reaches the device, captures
-the right thing, is idempotent, `no_log` is correct). This is the existing doctrine
-— "the main thread validates and actuates", "verify before trusting green" — applied
-as the onboarding gate. Generation gets you 70–95%; this gate owns the last mile.
+Each label carries a `confidence` (`high`/`medium`/`low`, from the vector rule that
+matched; the probe behind it was `shallow` or `deep`) and a provenance (`derived` /
+`override`). **No step of the tool checks a newly
+onboarded class against the device:** a class runs the moment `instance/fleet.yml`
+lists it, and the onboard enables it in the same change. The check is the
+operator's: `ansible/playbooks/ping.yml --limit <host>` (or the `ping-fleet`
+Semaphore template) and the first backup run, after the promote. Generation gets
+you 70–95%; that first run is where the last mile shows.
 
 ## 7. What stays human/AI (honest boundary)
 
@@ -242,7 +245,7 @@ as the onboarding gate. Generation gets you 70–95%; this gate owns the last mi
 - **The `backup_capable` *meaning* judgment** (technically-possible ≠ worth doing).
 - **Trust/quality go-no-go** on a collection (Galaxy gives signals — downloads,
   certified, last-updated — but the call is yours).
-- **The live-verify gate.** None of these are things you'd *want* fully automated.
+- **The operator's live check** (§6). None of these are things you'd *want* fully automated.
 
 ## 8. Build phases
 
@@ -269,7 +272,7 @@ as the onboarding gate. Generation gets you 70–95%; this gate owns the last mi
    apis.guru / vendor), reads `securitySchemes`→auth + `servers`→port, classifies
    endpoints by heuristic (GET `/backup|/export|/config`→backup; write verbs→actuate;
    GET `/status|/health`→check) and emits a **staged** recipe (guessed auth + unmatched
-   capabilities flagged). Recipe authorship is now automated; the live-verify gate +
+   capabilities flagged). Recipe authorship is now automated; the operator's live check +
    `overrides/` own the heuristic's last mile.
 7. **The `onboard` orchestrator** (§4.1) — ✅ *done* — `galaxy.py onboard` is the
    one-shot. Dry-run prints the plan; `--apply` performs the three repo mutations

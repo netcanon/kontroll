@@ -1,7 +1,7 @@
 """identity — the module-IDENTITY reconfigure instance (Phase 4b, #139).
 
 These pin the heaviest non-platform reconfigure: a diff-able, comment-preserving change to a device-class's
-top-level identity keys (secrets_domain / inventory_group / backend / role / status) in modules/<key>/module.yml.
+top-level identity keys (secrets_domain / inventory_group / backend / role) in modules/<key>/module.yml.
 WHY (the failures they guard): before 4b an identity change had no surgical seam and fell off into a whole-file
 Overwrite (design 22 §5.4 G7) — silently flattening a hand-written module. And an identity re-point RE-HOMES
 hosts / ORPHANS creds, so it MUST carry the heaviest gate: each test asserts the change is classified
@@ -17,7 +17,8 @@ from kontroll.service import identity, promote
 
 pytestmark = pytest.mark.unit
 
-# A hand-written module WITH comments + all five identity keys — the shape the write must never flatten.
+# A hand-written module WITH comments + all four identity keys — the shape the write must never flatten. Its
+# `status:` line is a leftover of a lifecycle field the tool no longer has: no knob reads it.
 _MODULE = """# Device-class module: a network switch (hand-written, with comments).
 key: demo_sw
 description: demo switch
@@ -33,7 +34,7 @@ metrics:
 """
 
 # The full declared identity set the renderer submits, pre-filled from current (one value changed per test).
-_CURRENT = {"status": "active", "role": "backend_network_cli", "backend": "network_cli",
+_CURRENT = {"role": "backend_network_cli", "backend": "network_cli",
             "inventory_group": "core_switch", "secrets_domain": "network"}
 
 
@@ -110,13 +111,17 @@ def test_two_identity_keys_at_once_is_refused(tmp_repo):
     assert plan["error"] == "multi_identity"
 
 
-def test_a_status_modify_may_ride_with_one_identity_change(tmp_repo):
-    """A `status` flip (severity `modify`) MAY accompany a single identity change — two changes, max severity
-    `identity`. Guards the rule being over-strict (blocking a benign status flip alongside the re-home)."""
+def test_status_is_not_an_identity_knob(tmp_repo):
+    """`status` was a knob of this dialog: a GUI control that staged a proposal to change a lifecycle field nothing
+    reads. The knob is gone, so a selection that asks for it is an unknown field and nothing is planned — while the
+    module's own leftover `status:` line (the fixture keeps one) is read by no knob and survives an identity change
+    untouched. Guards the route regaining a knob that writes an unread field."""
     _write_module(tmp_repo, "demo_sw", _MODULE)
-    plan = identity.build_plan("demo_sw", _sel(inventory_group="edge_firewall", status="staged"))
-    assert plan["error"] is None and plan["severity"] == "identity"
-    assert {c["path"] for c in plan["changes"]} == {"inventory_group", "status"}
+    plan = identity.build_plan("demo_sw", _sel(status="staged"))
+    assert plan["error"] == "unknown_field"
+    plan = identity.build_plan("demo_sw", _sel(inventory_group="edge_firewall"))
+    assert plan["error"] is None and {c["path"] for c in plan["changes"]} == {"inventory_group"}
+    assert "status: active\n" in plan["text_after"]
 
 
 def test_a_crafted_value_is_rejected_before_the_write(tmp_repo):
@@ -168,7 +173,7 @@ def test_the_enact_hint_stages_only_generator_output():
     import importlib.util
     import os
     import re
-    for changes in ([{"kind": "modify", "path": "inventory_group"}], [{"kind": "modify", "path": "status"}], []):
+    for changes in ([{"kind": "modify", "path": "inventory_group"}], [{"kind": "modify", "path": "role"}], []):
         for step in identity.identity_enact_commands("demo_sw", changes):
             assert not re.search(r"\badd\s+(-A|--all|\.)(\s|$)", step["cmd"]), step["cmd"]
     regen = identity.identity_enact_commands("demo_sw", [])[-1]["cmd"]

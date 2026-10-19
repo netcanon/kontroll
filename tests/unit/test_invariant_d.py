@@ -16,6 +16,7 @@ import yaml
 from kontroll import catalog, probe
 from kontroll.service import capability
 from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan
+from kontroll.service.scaffold import build_scaffold
 
 pytestmark = pytest.mark.unit
 
@@ -25,7 +26,7 @@ pytestmark = pytest.mark.unit
 # legitimately written — but ONLY when marked `derived: true` (test_onboard_apply_writes_only_the_derived_floor),
 # and the floor never GATES onboarding (the load-bearing D* property, pinned by the failure-degrades tests below).
 # Still structurally EXCLUDES backup + any future hand-curated/credentialed block.
-_ONBOARD_KEYS = {"key", "description", "status", "collections", "role", "backend",
+_ONBOARD_KEYS = {"key", "description", "collections", "role", "backend",
                  "backend_params", "inventory_group", "secrets_domain",
                  "metrics", "logs", "derived"}   # F2: the auto-derived universal floor + its class-level flag
 
@@ -69,6 +70,19 @@ def test_onboard_apply_writes_only_known_keys(tmp_repo, _onboardable):
     capability. Holds even if the registry is empty/fails to load (the can't-vanish property)."""
     written = _apply_and_read(tmp_repo)
     assert set(written) <= _ONBOARD_KEYS, "onboard wrote unexpected key(s): %s" % (set(written) - _ONBOARD_KEYS)
+
+
+def test_onboard_and_scaffold_write_no_lifecycle_status_key(tmp_repo, _onboardable):
+    """No writer of a module emits a `status` key. It was a lifecycle field (`staged`/`active`) that nothing read:
+    a class runs the moment `instance/fleet.yml` lists it, and the onboard enables it in the same apply. The pin
+    above is a SUBSET check, so it cannot fail on a key that is still written; this row can. Guards the inert field
+    coming back, and with it text telling an operator to "flip" a switch that does nothing."""
+    written = _apply_and_read(tmp_repo)
+    assert "status" not in written
+    plan = build_onboard_plan("ns.other", "demo_y", "core_switch", "192.0.2.10")
+    assert plan["error"] is None and "status" not in plan["module"]
+    scaffolded = build_scaffold("ns.demo", "demo_z", "core_switch", "network")
+    assert scaffolded["error"] is None and "status" not in scaffolded["module"]
 
 
 def test_onboard_apply_writes_only_the_derived_floor(tmp_repo, _onboardable):

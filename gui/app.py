@@ -590,7 +590,7 @@ def api_onboard():
     git = gitio.commit_and_push(
         applied["paths"],
         ["feat(onboard): %s -> %s via %s backend" % (d["collection"], d["key"], plan["backend"]),
-         "Onboarded via the kontroll onboarding GUI (run_id %s). Host %s in group %s; staged — verify live." % (
+         "Onboarded via the kontroll onboarding GUI (run_id %s). Host %s in group %s; run ping.yml --limit HOST to verify." % (
              run_id, plan["host_name"], plan["group"])],   # the plan's group: a reuse ADOPTS the class's
         push_origin=bool(d.get("push")), run_id=run_id)   # staging GUI ⇒ proposed/<run_id> (C10)
     _audit("onboard-result", "key=%s committed=%s staged=%s run_id=%s" % (
@@ -901,7 +901,7 @@ def api_actuation_stage(key):
 
 
 # --- module-IDENTITY reconfigure (Phase 4b, #139): re-classify a class's secrets_domain/inventory_group/backend/
-# role/status. The heaviest reconfigure short of platform settings — an identity change re-homes hosts / orphans
+# role. The heaviest reconfigure short of platform settings — an identity change re-homes hosts / orphans
 # creds — so it rides the SAME propose→token→promote→stage spine + the type-to-confirm identity gate, and STAGES
 # proposed/<run_id> (C10, never main). The diff PATHS + values are non-secret config (auditable; no value leak).
 @app.route("/api/identity/<key>", methods=["POST"])

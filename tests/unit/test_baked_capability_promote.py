@@ -50,7 +50,7 @@ RECONFIGURES = [
     ("telemetry", observe, {"method": "host_node"}),
     ("logging", logsvc, {"method": "journald_remote"}),
     ("backup", backup, {"method": "backup", "params": {"schedule": "0 2 * * *"}}),
-    ("identity", identity, {"values": {"status": "staged"}}),
+    ("identity", identity, {"values": {"secrets_domain": "semaphore"}}),
 ]
 IDS = [r[0] for r in RECONFIGURES]
 
@@ -132,7 +132,7 @@ def test_a_shipped_class_the_clone_does_not_hold_lands_in_the_clone(roots, name,
 
 
 @pytest.mark.parametrize("name,service,selection,text", [
-    ("identity", identity, {"values": {"status": "active"}}, SHIPPED),
+    ("identity", identity, {"values": {"secrets_domain": "network"}}, SHIPPED),
     ("telemetry", observe, {"method": "host_node"}, SHIPPED + "metrics:\n  - {method: host_node}\n"),
 ], ids=["identity", "telemetry"])
 def test_a_plan_that_changes_nothing_writes_nothing_in_either_root(roots, name, service, selection, text):

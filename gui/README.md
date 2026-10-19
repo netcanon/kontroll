@@ -135,7 +135,7 @@ not authorization** — the anti-clobber controls are `verify_no_drop` + the hum
 the **one** data-driven reconfigure dialog (`openReconfigureDialog` — the shared knob renderer pre-filled with
 `current` + the `reconfig-diff` pane + the shared `reconfigGate`), opened from the **Index** fleet card:
 - **⚙ identity** (a per-class badge) → `module-identity` re-classify of `secrets_domain`/`inventory_group`/
-  `backend`/`role`/`status` (`POST /api/identity/<key>` → `service/identity.py` → `upsert_top_level_key`,
+  `backend`/`role` (`POST /api/identity/<key>` → `service/identity.py` → `upsert_top_level_key`,
   comment-preserving). An identity change is the heaviest tier — it **re-homes hosts / orphans creds** — so the
   `settings/module-identity.yml` descriptor upgrades it to `severity: identity`, gated by a **type-to-confirm**
   (`reconfig-identity-confirm` — retype the new value); **at most one** identity key per proposal. A new

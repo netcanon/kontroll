@@ -12,7 +12,7 @@ container compose stack. So the pipeline is multi-artifact, and one hard constra
 shapes everything:
 
 > **CI proves OFFLINE correctness; the live lab is never in CI.** Ansible runs that
-> touch real devices stay on the control VM / Semaphore (the "L3 live-verify gate").
+> touch real devices stay on the control VM / Semaphore (the "L3 live-smoke layer").
 > CI covers lint, unit, integration-with-mocks, compose validation, and security
 > scans — everything that needs no real fleet.
 

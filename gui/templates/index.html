@@ -1720,7 +1720,7 @@ function renderHomepageResult(r) {
 function fleetClassRow(c) {
   const row = E('div', 'card', null, 'fleet-class'); row.dataset.key = c.key;
   const fh = ET('h3', null, c.key + ' ');
-  fh.appendChild(ET('span', 'meta', (c.collection||'')+' · group '+(c.group||'?')+' · '+(c.status||'?')));
+  fh.appendChild(ET('span', 'meta', (c.collection||'')+' · group '+(c.group||'?')));
   row.appendChild(fh);
   const caps = E('div', 'badges', null, null);
   ['telemetry','backup','logging'].forEach(cap => {        // all three clickable — declared OR addable (the dialog detects)
@@ -1731,7 +1731,7 @@ function fleetClassRow(c) {
     bd.onclick = () => openCapabilityDialog(cap, c.key, {});
     caps.appendChild(bd);
   });
-  // Phase 4b: reconfigure the class IDENTITY (secrets_domain / inventory_group / backend / role / status) — the
+  // Phase 4b: reconfigure the class IDENTITY (secrets_domain / inventory_group / backend / role) — the
   // heaviest reconfigure (re-homes hosts / orphans creds), gated by the type-to-confirm identity gate.
   const idb = E('span', 'badge no cap-open', '⚙ identity', 'fleet-class-identity');
   idb.dataset.key = c.key;

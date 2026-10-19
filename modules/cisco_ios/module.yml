@@ -1,7 +1,6 @@
 # Device-class module: Cisco IOS-XE switch.
 key: cisco_ios
 description: Cisco IOS-XE switch (network_cli/SSH)
-status: active                 # current core (pre-cutover)
 # F2 (de-bespoke): this class's metrics:/logs: FLOOR is AUTO-DERIVED, not hand-typed — `derived: true` marks the
 # class as gen-class-capabilities-owned. scripts/gen-class-capabilities.py --check re-derives the floor from
 # facts.pinned.yml + the registries (backend netcommon_cli confers snmp+blackbox+syslog) and fails CI on drift. The

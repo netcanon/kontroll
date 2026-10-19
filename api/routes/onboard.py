@@ -122,7 +122,7 @@ def onboard(body: OnboardIn, request: Request,
     git = gitio.commit_and_push(
         applied["paths"],
         ["feat(onboard): %s -> %s via %s backend" % (body.collection, body.key, plan["backend"]),
-         "Onboarded via the kontroll API (run_id %s). Host %s in group %s; staged — verify live." % (
+         "Onboarded via the kontroll API (run_id %s). Host %s in group %s; run ping.yml --limit HOST to verify." % (
              principal.run_id, plan["host_name"], plan["group"])],   # the plan's group: a reuse ADOPTS the class's
         push_origin=body.push, run_id=principal.run_id)   # staging network service ⇒ proposed/<run_id> (C10)
     if not git["committed"]:

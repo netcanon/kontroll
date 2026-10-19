@@ -119,7 +119,7 @@ def test_dialog_error_strings_are_painted_as_text(page):
     keygen (opened from their pickers) — paint its `error` as text. Same rule as the panel errors, through the
     dialogs that open on top of a panel."""
     _serve(page, "**/api/fleet", [{"key": "cisco_ios", "collection": "cisco.ios", "group": "core_switch",
-                                   "status": "enabled", "capabilities": {}, "hosts": []}])
+                                   "capabilities": {}, "hosts": []}])
     _serve(page, "**/api/configurable*", {"error": PAYLOAD})
     _serve(page, "**/api/secrets", [{"domain": "network", "label": "Network", "description": "device logins"}])
     _serve(page, "**/api/keygen", [{"role": "breakglass", "label": "Break-glass", "description": "offline key"}])
@@ -150,14 +150,14 @@ def test_index_rows_paint_repository_values_as_text_and_never_link_a_script_url(
     `module.yml`/`services.yml` value, and the neighbour that text-painting alone does not close — an
     `href="javascript:…"`, which runs on click however its label is painted."""
     _serve(page, "**/api/fleet", [{"key": P("key"), "collection": P("coll"), "group": P("group"),
-                                   "status": P("status"), "capabilities": {}, "hosts": []}])
+                                   "capabilities": {}, "hosts": []}])
     _serve(page, "**/api/services", [
         {"name": P("svc"), "url": SCRIPT_URL, "description": "a service", "enabled": True},
         {"name": "Grafana", "url": "https://grafana.example.test", "description": "boards", "enabled": True}])
     page.goto("/")
     page.get_by_test_id("fleet-open").click()
     fleet_row = page.get_by_test_id("fleet-class").first
-    for tag in ("key", "coll", "group", "status"):
+    for tag in ("key", "coll", "group"):
         expect(fleet_row).to_contain_text(P(tag))
     services = page.get_by_test_id("service-row")
     expect(services.first).to_contain_text(P("svc"))
@@ -177,7 +177,7 @@ def test_the_capability_dialog_paints_its_projection_as_text(page):
     labels in one `innerHTML` string), the confirm row where `JSON.stringify` looked like protection, and the second
     `href` sink."""
     _serve(page, "**/api/fleet", [{"key": "cisco_ios", "collection": "cisco.ios", "group": "core_switch",
-                                   "status": "enabled", "capabilities": {"telemetry": True}, "hosts": []}])
+                                   "capabilities": {"telemetry": True}, "hosts": []}])
     _serve(page, "**/api/configurable*", {
         "methods": [{"name": 'm"1', "label": P("method"), "declared": True, "secret_domain": P("domain"),
                      "group": {"testid": "cap-params", "source_kind": "params",

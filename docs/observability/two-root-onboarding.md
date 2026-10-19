@@ -108,7 +108,8 @@ key: radarr
 kind: service                      # NEW: device | service (default device). Selects the
                                    #      service inventory shape + the widget/href wiring.
 description: Radarr (movie PVR) — REST service integrated via OpenAPI (VERIFY before active)
-status: staged                     # staged until live-verified, exactly like a device onboard
+                                   # (this record once had a `status: staged` line here; the field was
+                                   #  removed 2026-10-19 — a module has no lifecycle state)
 collections: []                    # a service has no collection — recipe-driven
 role: backend_api                  # generic uri-driven role (ansible/roles/backend_api)
 backend: api                       # the api backend (ansible/backends/api/backend.yml)
@@ -347,7 +348,7 @@ def build_service_plan(recipe, key, service_url, secrets="services",
     host_name = host_name or key
     module = {"key": key, "kind": "service",
               "description": "%s — REST service via the api backend (onboarded - VERIFY before active)" % key,
-              "status": "staged",
+              # (a "status": "staged" line stood here; the field was removed 2026-10-19)
               "collections": [], "role": "backend_api", "backend": "api",
               "recipe": recipe, "service_url": service_url,
               "inventory_group": "services", "secrets_domain": secrets}

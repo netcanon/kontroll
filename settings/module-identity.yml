@@ -58,9 +58,3 @@ knobs:
     help: "The Ansible role applied to this class's hosts (device_role)."
     confirm_text: >-
       Changing role swaps the play set applied to every host of this class on the next run.
-  - key: status
-    type: enum
-    allowed: [staged, active]
-    reconfigurable: true
-    severity: modify
-    help: "Lifecycle status — staged (onboarded; dry-run before use) or active (verified, in production)."

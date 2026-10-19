@@ -1,13 +1,12 @@
 # Device-class module: OPNsense firewall.
 key: opnsense
 description: OPNsense firewall (API)
-status: staged                 # post-cutover edge — enable at cutover, disable fortigate
 # F2 (de-bespoke, north-star Rung 4): this class's metrics FLOOR is AUTO-DERIVED. ansibleguy.opnsense ships NO
 # connection plugin (it drives the OPNsense REST API via modules, not a plugin), so predicate.classify falls through
 # to the `raw_ssh` catch-all — NOT `api` (a real probe corrected the design; there is no httpapi PLUGIN). raw_ssh
-# confers telemetry [blackbox, host_node]. ADDITIVE migration (no metrics before) but STAGED/DORMANT (commented out
-# of the fleet + inventory) — zero live targets until cutover; while staged the floor is gated by the frozen-oracle
-# unit test (test_derive_class_capabilities.py), not gen-class-capabilities --check. host_node is honest (OPNsense
+# confers telemetry [blackbox, host_node]. ADDITIVE migration (no metrics before). Not enabled in the example fleet,
+# so the floor is gated by the frozen-oracle unit test (test_derive_class_capabilities.py), not
+# gen-class-capabilities --check. host_node is honest (OPNsense
 # can run node_exporter) — it scrapes DOWN until one is installed. backup stays role-gated (not derived).
 derived: true
 collections:
@@ -23,8 +22,9 @@ metrics:
   - {method: blackbox, params: {probe: icmp}, derived: true}    # ICMP reachability (blackbox, no creds/agent)
   - {method: host_node, derived: true}                          # node_exporter host metrics (honest-DOWN until set up)
 # Dashboards - the DERIVED Grafana-board FLOOR (Rung 4a): raw_ssh confers [blackbox, host_node] -> reachability
-# (gnet 13659) + node_exporter (gnet 1860, honest-DOWN until installed). STAGED -> gated by the frozen-oracle unit
-# test, not --check, until cutover. `derived: true` = gen-class-capabilities-owned. See dashboards/derived/.
+# (gnet 13659) + node_exporter (gnet 1860, honest-DOWN until installed). Not in the example fleet, so the
+# frozen-oracle unit test gates it, not --check. `derived: true` = gen-class-capabilities-owned.
+# See dashboards/derived/.
 dashboards:
   - {gnet: 13659, name: blackbox, derived: true}   # blackbox -> "Blackbox Exporter (HTTP prober)"
   - {gnet: 1860, name: node, derived: true}        # host_node -> "Node Exporter Full" (honest-DOWN until set up)

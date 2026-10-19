@@ -32,7 +32,6 @@ and runs **one command** (`ansible-playbook playbooks/bootstrap.yml`). They neve
 |---|---|
 | `key` | unique id; must equal the directory name and the name used in `instance/fleet.yml`. One path component of `[a-z0-9_-]` that YAML reads as a string: not a keyword (`null`, `true`, `on`, `no`), not a number in any YAML spelling (all digits, digits with underscores, `0x…`), not shaped like a date — the key stands unquoted in the fleet list. The same holds for `inventory_group`, `secrets_domain` and `backend` at onboard. |
 | `description` | human label |
-| `status` | `active` (default-runnable now) or `staged` (available, enable when ready — e.g. post-cutover) |
 | `collections` | list of `{name, version}` Ansible collections this class needs (`[]` if raw SSH) |
 | `role` | the `ansible/roles/<role>` that implements it. A name like `key` |
 | `inventory_group` | the functional group in `instance/inventory/hosts.yml` it feeds. A name like `key` (one path component YAML reads as a string), and not one Ansible reserves: `all`, `ungrouped`, `localhost` — a class's group is a play's `hosts:` pattern |
@@ -133,23 +132,25 @@ floor under a **byte-identical** gate — their floor is `derived: true` but the
 unchanged (the generators read `method`/`params` only, ignoring the marker). Two proof shapes: `cisco_ios` (cliconf →
 `netcommon_cli`) derives its **full** floor (snmp + blackbox + syslog); `fortigate` (httpapi → `api`) is the
 **residual-isolation** proof — only `blackbox` derives, and `snmp` stays a **bare** curated override because an
-httpapi device's plugin shape can't confer SNMP (never faked onto it). A **staged** class (one commented out of the
-fleet, e.g. `routeros`/`opnsense`) can carry a `derived: true` floor too, but since `gen-class-capabilities --check`
+httpapi device's plugin shape can't confer SNMP (never faked onto it). A class the example fleet does not enable
+(e.g. `routeros`/`opnsense`) can carry a `derived: true` floor too, but since `gen-class-capabilities --check`
 only visits the ENABLED example fleet, its floor is gated by a **frozen-oracle unit test** (`test_derive_class_
-capabilities.py`) until it is enabled at cutover — the same drift protection, per-class.
+capabilities.py`) instead — the same drift protection, per-class.
 
 ## Catalog (shipped modules)
 
-| key | status | collection | role | group |
-|---|---|---|---|---|
-| `proxmox` | active | community.proxmox | proxmox | hypervisors |
-| `docker_host` | active | community.docker | docker_host | docker_hosts |
-| `fortigate` | active | fortinet.fortios | fortigate | edge_firewall |
-| `cisco_ios` | active | cisco.ios | cisco_ios | core_switch |
-| `openwrt` | active | — (raw SSH) | openwrt | wireless_ap |
-| `opnsense` | staged | ansibleguy.opnsense | opnsense | edge_firewall |
-| `routeros` | staged | community.routeros | routeros | core_switch |
-| `ios_xe_auto` | staged | cisco.ios | backend_netcommon_cli | core_switch |
+Which classes run is decided only by `instance/fleet.yml`; a module file has no lifecycle state.
+
+| key | collection | role | group |
+|---|---|---|---|
+| `proxmox` | community.proxmox | proxmox | hypervisors |
+| `docker_host` | community.docker | docker_host | docker_hosts |
+| `fortigate` | fortinet.fortios | fortigate | edge_firewall |
+| `cisco_ios` | cisco.ios | cisco_ios | core_switch |
+| `openwrt` | — (raw SSH) | openwrt | wireless_ap |
+| `opnsense` | ansibleguy.opnsense | opnsense | edge_firewall |
+| `routeros` | community.routeros | routeros | core_switch |
+| `ios_xe_auto` | cisco.ios | backend_netcommon_cli | core_switch |
 
 > `ios_xe_auto` is **machine-scaffolded** (`galaxy.py scaffold`) and uses the generic
 > `backend_netcommon_cli` backend instead of a hand-written role — kept as the
@@ -172,8 +173,8 @@ its final play prints a per-host `captured / skipped / not-run` summary.
 | `openwrt` | true | `uci export` (raw SSH) |
 | `proxmox` | true | guest `.conf` + node network/storage (SSH; config, not vzdump) |
 | `docker_host` | **false** (default) | none — app-managed state; opt in per host for a manifest |
-| `opnsense` | true (staged) | `/conf/config.xml` — written, unverified until cutover |
-| `routeros` | true (staged) | `/export show-sensitive` — written, unverified until cutover |
+| `opnsense` | true | `/conf/config.xml` — written; not yet proven against a device |
+| `routeros` | true | `/export show-sensitive` — written; not yet proven against a device |
 
 To make a managed-but-not-backed-up host explicit, or to enable a capture for a
 normally-skipped one, set `backup_capable` in `host_vars/<host>.yml`.

@@ -1,7 +1,7 @@
 """identity — the module-IDENTITY reconfigure instance (Phase 4b, #139).
 
 A safe, diff-able change to a device-class's top-level IDENTITY keys (secrets_domain / inventory_group / backend /
-role / status) in `modules/<key>/module.yml`. Before 4b these had NO surgical seam — changing one fell off into a
+role) in `modules/<key>/module.yml`. Before 4b these had NO surgical seam — changing one fell off into a
 whole-file Overwrite (design `docs/reviews/2026-06-19-gui-paradigm/22-design-reconfigure-overwrite-rework.md`
 §5.4, G7). This rides the SAME propose→token→promote→stage spine as the capability reconfigure (Phase 4a): a pure
 `current_values` read-back → `_diff.compute_changes` (with the `module-identity` knob_meta that UPGRADES a value
@@ -11,8 +11,8 @@ type-to-confirm + the C10 two-key promote.
 Heaviest-blast reconfigure short of platform settings: changing `inventory_group` RE-HOMES every host of the class
 at the one dispatch seam; changing `secrets_domain` ORPHANS its credentials. So each identity change carries
 `severity: identity` (the type-to-confirm `reconfig-identity-confirm`), and a proposal may change AT MOST ONE
-identity-severity key at a time (so the type-to-confirm value is unambiguous); a `status` flip (severity `modify`)
-may ride along. The staged proposal carries `module.yml` only — the operator REGENERATES the scrape/log targets +
+identity-severity key at a time (so the type-to-confirm value is unambiguous). The staged proposal carries
+`module.yml` only — the operator REGENERATES the scrape/log targets +
 re-runs bootstrap/deploy-stack at enact (the identity ripple is named in the enact hint), keeping the blast of a
 single GUI action bounded (MVP scope; M6 single-object). PURE propose; the write is the operator-promoted stage.
 """
@@ -68,7 +68,7 @@ def build_plan(key, selection):
     identity change UPGRADED via the descriptor knob_meta), the `current`/`proposed` structs `verify_no_drop`
     checks, the enact hand-off, and `token_parts`/`plan_token` (text_after + the severity decision — anti-drift +
     no-quiet-upgrade, M1). At most ONE identity-severity change per proposal (so the type-to-confirm is
-    unambiguous); a `status` modify may ride along."""
+    unambiguous)."""
     # Where the class is READ from (the clone's copy, or the baked one). The plan's "mod_path", below, is the
     # WRITE target, and is not this path for a shipped class the clone does not hold yet.
     mod_path = _mod_path(key)
@@ -123,7 +123,7 @@ def build_plan(key, selection):
 
     text_after = text_before
     try:
-        for c in diff["changes"]:                            # fold each changed key (≤1 identity + optional status)
+        for c in diff["changes"]:                            # fold each changed key (≤1 identity)
             if c["kind"] in ("add", "modify"):
                 text_after = upsert_top_level_key(text_after, c["path"], c["after"])
     except ValueError:

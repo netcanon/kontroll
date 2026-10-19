@@ -32,7 +32,8 @@ log = logging.getLogger("kontroll.service.onboard")
 
 # Drop-in banners — also the OWNERSHIP markers gitio.write_inventory_host keys its merge-vs-conflict decision on
 # (a file that opens with our inventory banner is one we wrote, so a 2nd host MERGES; a foreign file hard-stops).
-_MODULE_BANNER = "# Onboarded by scripts/galaxy.py. Verify (live-smoke) before status: active.\n"
+_MODULE_BANNER = ("# Onboarded by scripts/galaxy.py. Nothing verifies it for you: run ping.yml --limit <host> "
+                  "after promote.\n")
 _INV_BANNER = "# Drop-in host, onboarded by scripts/galaxy.py onboard. Additive — safe to delete to remove the host.\n"
 
 
@@ -256,8 +257,7 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             module_text = fh.read()
     else:
         module = {"key": key,
-                  "description": "%s via %s backend (onboarded - VERIFY before active)" % (collection, backend),
-                  "status": "staged",
+                  "description": "%s via %s backend (onboarded)" % (collection, backend),
                   "collections": [{"name": collection, "version": ">=%s" % version}],
                   "role": role, "backend": backend}
         if params:

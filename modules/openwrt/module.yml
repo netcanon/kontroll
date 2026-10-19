@@ -1,7 +1,6 @@
 # Device-class module: OpenWrt AP (raw SSH — no collection).
 key: openwrt
 description: OpenWrt access point (raw SSH; no dedicated collection)
-status: active
 # F2 (de-bespoke, north-star Rung 4): this class's metrics FLOOR is AUTO-DERIVED. openwrt has no collection, so its
 # facts.pinned.yml is EMPTY → predicate.classify falls to the `raw_ssh` catch-all, which confers telemetry [blackbox,
 # host_node]. ADDITIVE migration (the AP had no metrics before) → it gains a committed blackbox (ICMP reachability)
@@ -27,7 +26,6 @@ dashboards:
   - {gnet: 1860, name: node, derived: true}        # host_node -> "Node Exporter Full" (honest-DOWN until set up)
 # Backup — the secondary-capability block (instance #2). gen-backup -> a per-class Semaphore schedule running
 # backup-configs.yml --limit wireless_ap. capable mirrors the role's backup_capable. See capabilities/backup.yml.
-# (The AP sits on its own VLAN; until the mgmt->AP-VLAN rule lands it is unreachable — backup-configs tolerates that.)
 backup:
   capable: true
   schedule: "0 4 * * *"   # nightly 04:00
