@@ -204,6 +204,28 @@ these, and what that covers, is SECURITY.md C10.
 | `unread: <what>` | the audit says nothing about that part: it could not be listed or read by this account; it is larger or deeper, or holds more entries, than the audit reads; a line of `packed-refs` is one git would not take for a ref (git refuses the whole file for it — or it is the `^` line left behind when a tag's line was removed by hand); more lines of one kind than are shown; or the audit ended on an error of its own, and what it printed is not a report | look at that part yourself — with `sudo` where your account may not read it. For the last one, run the audit again by hand |
 | `note: FETCH_HEAD` (`ORIG_HEAD`, `gc.log`) | a file git leaves in the top directory by itself | nothing |
 
+### The ownership pass named something, or the deploy stopped at it
+
+The same script's other mode is what the play applies to the canonical a little later: `python3 -B
+scripts/kontroll-canonical.py --normalise /srv/kontroll.git --owner <uid> --group 1001` (the tasks "Detect canonical
+entries outside hooks/ …" and "Make existing canonical entries operator:1001 …"). It makes every entry outside
+`hooks/` the operator's, group 1001, group-writable and, a directory, setgid — so the operator's push and the
+service's write land beside each other (F-CANON). It walks the canonical as the audit reads it and changes each
+entry through the descriptor of the thing it opened: a symbolic link is named and left as it is, and nothing it
+points at is touched. The detect task runs `--check`, under the dry-run too, and prints what the apply task then
+changes — names only, bounded per kind. A canonical whose entries are already as asked prints nothing, and the
+apply task is skipped. To run it by hand, run the detect form first, as root, from the checkout; the exit status is
+3 when something would change, 0 when nothing would, 1 when a part was not gone over (the lines say which).
+
+| The line | It means | What to do |
+|---|---|---|
+| `owner: <path>` / `mode: <path>` | the entry was not `<operator>:1001`, or lacked the group's write bit (a directory: or the setgid bit) — and was changed by the apply task (the detect task: would be) | nothing. Expected once for a canonical made before the grant, and for what the service wrote while a deploy was armed (its proposals: `refs/heads/proposed/…`, objects). If the same name comes back on every deploy, something resets it between deploys |
+| `link: <path>` | a symbolic link where the pass expected a file or a directory. It was left as it is, its own owner too, and what it points at was not looked at | the tool makes no link in the canonical: find out who did (`stat`), and remove it unless you put it there. The audit above names it too |
+| `not-a-file: <path>` | a pipe, a socket or a device: named, never opened | as above |
+| `unread: <path>` | a part the pass did not go over: a directory it could not list or open, an entry it could not open, a tree with more entries or more levels than it goes. The deploy stops at the detect task (`--check`); a line of the form ``unread: N more `mode` lines are not shown`` is a count, not a part, and stops nothing. An entry git itself removes during a push (`*.lock`, `tmp_obj_*`) is not one: a part that is gone is nothing to change | look at that part yourself, as root. `<directory> (more entries than this reads)` is that directory holding more than 20 000 entries; `the top directory (more entries than this reads)` is a canonical with more than the pass goes over in one run (4 194 304) |
+| `failed: <path>` | the kernel refused the change — an immutable file (`lsattr`), a read-only file system. The deploy stops at the apply task | `chattr -i <path>`, or mount the file system writable, and run the deploy again |
+| the task fails with "nothing was changed" on stderr | the pass could not start: no `python3`, a path that is not a directory, `--owner`/`--group` not numeric — or a platform without descriptor-relative operations (the pass refuses on Windows rather than change anything by path) | run the deploy on the control node, from the checkout |
+
 ## 9. A content clone was made again, or its update failed
 
 The deploy makes and updates the API's and onboard-gui's content clones (`<storage root>/api/repo`,

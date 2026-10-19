@@ -717,9 +717,20 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   output, no link followed and no directory that is exchanged under the reader listed, a pipe not waited on, the
   one process held by a closed list, every kind in both tables, the play's tasks with their conditions evaluated;
   `tests/integration/test_canon_drop.py` for the uid).
-  **`hooks/` is root:root `0755` and pruned from the gid-1001 write-grant** (`local-canonical.yml`; 2026-10-08
+  **`hooks/` is root:root `0755` and passed over by the gid-1001 write-grant** (`local-canonical.yml`; 2026-10-08
   review, finding 2; `tests/unit/test_local_canonical.py`) — kept. A promote does not rest on it: the seam runs
   none of the repository's hooks (`core.hooksPath`), and root's git there is the service.
+  **The write-grant on existing entries is the ownership pass of `scripts/kontroll-canonical.py --normalise`**
+  (2026-10-19): the audit's walker — each directory opened from its parent's descriptor with `O_NOFOLLOW`, each
+  entry opened from the directory it was listed in — and the owner and the mode changed through the descriptor
+  of the regular file or directory that was opened (`fchown`, `fchmod`), so the change lands inside the
+  repository whatever a name in it is exchanged for meanwhile; a symbolic link is named and left as it is, its
+  own owner too, nothing it points at is looked at, and a pipe, a socket or a device is named and never opened.
+  `--check` (the play's detect task, run under the dry-run too when there is a canonical to look at) names what
+  would change and changes nothing; a
+  part the pass could not go over fails the task by name rather than pass in silence; on a platform without
+  descriptor-relative operations the pass refuses instead of changing by path
+  (`tests/unit/test_canonical_normalise.py`; with real uids, `tests/integration/test_canonical_normalise_as_root.py`).
   **After each staged push the service resets its content clone to the
   canonical `main`** (`_reset_content_clone_to_canonical`) so the read-back reflects the source of truth and each
   proposal is independent off `main` — a rejected proposal can't ride along in a later one (F1, dogfood

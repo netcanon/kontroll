@@ -399,14 +399,15 @@ _IMPORTS = {"argparse", "hashlib", "itertools", "os", "re", "stat", "subprocess"
 _FROM_IMPORTS = {("kontroll", "canon")}
 _REACHED = {
     "os": {"path", "open", "read", "close", "fstat", "lstat", "stat", "scandir", "supports_dir_fd", "supports_fd",
-           "environ", "devnull", "sep", "fsencode", "fsdecode", "geteuid", "O_RDONLY", "O_DIRECTORY", "O_NOFOLLOW"},
+           "environ", "devnull", "sep", "fsencode", "fsdecode", "geteuid", "O_RDONLY", "O_DIRECTORY", "O_NOFOLLOW",
+           "fchown", "fchmod"},       # the ownership pass changes an owner and a mode THROUGH A DESCRIPTOR, only
     "subprocess": {"run", "SubprocessError"},
     "sys": {"path", "stdout", "stderr", "exit", "argv"},
     "canon": {"show", "identity_kwargs", "Unreadable", "MAIN", "PROPOSED", "valid_run_id", "SERVICE_UID",
               "SERVICE_GID"},
 }
 # what is asked of `os` by NAME — `hasattr(os, …)`, `getattr(os, …, 0)`: flags and one question, nothing callable
-_ASKED_OF_OS = {"O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK", "O_CLOEXEC", "O_BINARY", "geteuid"}
+_ASKED_OF_OS = {"O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK", "O_CLOEXEC", "O_BINARY", "geteuid", "fchown", "fchmod"}
 # the builtin `open`: the checkout's own hook, and the place nothing is — never a path of the repository
 _OPENED = ["SHIPPED_HOOK", "os.devnull"]
 _NEVER = {"__import__", "eval", "exec", "compile", "globals", "locals", "vars", "importlib", "breakpoint",
@@ -906,7 +907,7 @@ def test_a_hooks_directory_the_service_could_write_is_named(tmp_path, capsys):
 
 def test_a_directory_with_more_entries_than_the_audit_reads_says_so(tmp_path, monkeypatch, capsys):
     """With the limit set to five: eight files in `info/` give `unread: info (more entries than this reads)`
-    beside the entries it did read, and eight files under `refs/tags/` give the same for `refs`.
+    beside the entries it did read, and eight files under `refs/tags/` give the same for `refs/tags`.
 
     Guards the bound on what a directory can make the audit hold — and that reaching it is SAID: a listing
     that stops early and reports the part it saw would read as the whole."""
@@ -920,7 +921,7 @@ def test_a_directory_with_more_entries_than_the_audit_reads_says_so(tmp_path, mo
     for i in range(8):
         os.unlink(os.path.join(r.bare, "info", "extra%d" % i))
         _put(r.bare, "refs/tags/t%d" % i, _ID + "\n")
-    assert "unread: refs (more entries than this reads)" in _report(r.bare, capsys=capsys)[1]
+    assert "unread: refs/tags (more entries than this reads)" in _report(r.bare, capsys=capsys)[1]
 
 
 def test_an_error_of_the_audits_own_ends_in_a_line_of_the_report_and_exit_1(tmp_path, monkeypatch, capsys):

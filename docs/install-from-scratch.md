@@ -157,10 +157,14 @@ Bare repo + HEAD→main + the working tree's `local` remote + the mirror push. N
 `receive.denyNonFastForwards`/`denyDeletes` + the top-dir group-1001 write grant (setgid 2775).
 
 > **[Resolved]:** the **recursive write-grant on EXISTING objects** (a canonical created before the gid-1001
-> grant) is now an **idempotent `local-canonical.yml` task** — it recursively **chowns to `<operator>:1001`** and
-> grants group-write + dir-setgid, but only runs the perm fix when something actually lacks it (a second run
-> reports `0 changed`). On a *fresh* canonical the setgid handles it; on an existing one the task does. No manual
-> `chown -R / chmod -R` step. `hooks/` is pruned from both grants and kept **root:root 0755**: the uid-1001 writer
+> grant) is now an **idempotent `local-canonical.yml` detect-then-apply pair** — the ownership pass of
+> `scripts/kontroll-canonical.py --normalise`, which makes every entry **`<operator>:1001`**, group-writable and
+> (a directory) setgid, and runs only when its `--check` named something (a second run reports `0 changed`; the
+> dry-run prints the same names). It walks the canonical as the audit reads it — every entry opened from the
+> directory it was listed in and changed through its own descriptor; a symbolic link is named and left as it is,
+> and nothing it points at is touched ([troubleshooting.md §8](troubleshooting.md#8-the-audit-of-the-canonical-named-something)).
+> On a *fresh* canonical the setgid handles it; on an existing one the pass does. No manual `chown -R / chmod -R`
+> step. `hooks/` is passed over by the pass and kept **root:root 0755**: the uid-1001 writer
 > that holds the canonical `:rw` must never be able to plant a hook that the next promote runs as root (SECURITY.md C10).
 >
 > **[Resolved — F-CANON, #119]:** the gap that bit the prod cutover is also closed in the same playbook: on a
@@ -307,7 +311,7 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
 | age key-gen (break-glass / Semaphore / rotation) | ~~manual `age-keygen`~~ | ✓ GUI "Keys" dialog (`/api/keygen`, show-once private, additive `.sops.yaml`, staged) |
 | first control key + `GUI_PASSWORD` | ~~manual `age-keygen` / `openssl`~~ | ✓ CLI `scripts/kontroll-init.py` — the bootstrap a running GUI can't do |
 | All service/infra secrets | manual `sops` | **per-domain GUI onboarding forms** (the main ask) |
-| Recursive canonical write-grant | ~~manual `chgrp/chmod`~~ | ✓ idempotent `local-canonical.yml` task (detect-then-fix) |
+| Recursive canonical write-grant | ~~manual `chgrp/chmod`~~ | ✓ idempotent `local-canonical.yml` detect-then-apply pair (`kontroll-canonical.py --normalise`) |
 | C10 token | ~~manual `sops --set`~~ | ✓ guided secret form (`dashboards.kontroll_api_token`, `generate: hex32` — no value in argv, C11) |
 | Promote | ~~manual `sudo kontroll-promote.py`~~ | ✓ `promote-proposal` Semaphore task (run_id survey var; FF-only; gated rw canonical mount, gid-1001, no host root) |
 | onboard-gui staging | gated deploy provisions its clone-remote (uid:gid + mount + remote) | ✓ done |
