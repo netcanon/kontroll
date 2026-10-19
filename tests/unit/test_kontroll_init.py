@@ -164,6 +164,9 @@ def test_fresh_scaffolds_skeleton_without_secrets_and_sets_instance_yml(fresh_re
     # the re-include file: under the root `/instance/*` rule it is what lets this node's canonical (and an instance
     # repository) track the overlay at all — without it `git add -A` commits no overlay and Semaphore reads the example
     assert os.path.exists(os.path.join(inst, ".gitignore"))
+    # the deployment's own ledger template: a rename, or a place on the scaffold's skip list, would leave a new
+    # node without it and nobody would notice
+    assert os.path.exists(os.path.join(inst, "OPERATIONS.md"))
     assert not os.path.exists(os.path.join(inst, "secrets"))         # secret ciphertext is NEVER scaffolded
     iy = open(os.path.join(inst, "instance.yml"), encoding="utf-8").read()
     assert "mgmt_ip: 198.51.100.7" in iy and "domain: lab.test" in iy

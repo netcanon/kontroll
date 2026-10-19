@@ -41,15 +41,8 @@ See PLAN.md §2.5 for the "add an X" test that every change must pass.
 
 ## Current status
 
-**The infrastructure track (PLAN.md §10, phases 0–5) is live on the reference lab:** a
-Debian control VM on a Proxmox node (mgmt VLAN, `<mgmt-ip>`) runs the composed stack —
-Semaphore, Homepage, Prometheus + Grafana, Loki + Vector — with the fleet onboarded through
-the `:8443` GUI and every credential SOPS-encrypted. The dated record is
-[CHANGELOG.md](CHANGELOG.md); the capability track (telemetry, logging, backup, actuation)
-is summarised in PLAN.md §13.
-
-Build order (PLAN.md §10): 0 scaffold → 1 control node + connectivity → 2 secrets +
-config-backup job → 3 Semaphore → 4 Homepage → 5 metrics — all delivered.
+What is released, what works, what is known broken and what is next: **[STATUS.md](STATUS.md)** — one dated page,
+checked against the tree. The dated record of every change is [CHANGELOG.md](CHANGELOG.md).
 
 ## Quickstart
 

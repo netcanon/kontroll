@@ -152,7 +152,8 @@ protection is one mis-click from a merge). A public repository has no such branc
   ansible-core / ansible-lint), so a missing tool is a failure, never a silent skip. Covers yamllint,
   ansible-lint, `--syntax-check`, `docker compose config`, promtool, vector validate, the sops /
   secret-grep / gitleaks gates, every `gen-*.py --check`, the test-docstring, document-link and
-  port-binding guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`).
+  port-binding guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`), and
+  `STATUS.md`'s dates (`tests/check-status.py` — a month-old page is a WARN, which never fails the run).
 - **tests** (matrix Python 3.11–3.14): `pytest -m "not e2e and not slow"` with coverage; the
   shell-outs are mocked (§1), no ansible, no lab.
 - **snmp-modules**: rebuild `modules.generated.yml` with the pinned CGO snmp_exporter generator
@@ -173,6 +174,9 @@ protection is one mis-click from a merge). A public repository has no such branc
 ### `zizmor.yml` — on `[pull_request, push:{branches:[main, homelab*]}]` for `.github/` paths + weekly; workflow-security lint, advisory (log-only; plus a SARIF upload to code scanning where the repository variable `KONTROLL_CODE_SCANNING=true`).
 
 ### `publish-images.yml` — on `[push: tags 'v*']` + `workflow_dispatch` (see §6)
+Its `gate` job refuses the publish when `STATUS.md` is more than a month old or names other images than the
+lock (`tests/check-status.py --release`; a warning never refuses it), beside the read-only pin and the
+baked-code manifest.
 
 ### `.github/dependabot.yml` — pip (gui + api + tests; the `>=` floors use `increase-if-necessary`, so pure floors get no version PRs), github-actions, docker; weekly, 7-day cooldown,
 minor+patch grouped, PR limits (netcanon parity).

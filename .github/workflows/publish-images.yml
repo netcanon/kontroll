@@ -12,7 +12,8 @@ name: publish-images
 #
 # AFTER a publish: `python3 scripts/gen-image-digests.py --refresh <tag>` records the digests into
 # docker/images.lock.yml (anonymous for a public package; `docker login ghcr.io` only while one is private); commit
-# that, then deploy with `-e use_published_images=true` to pull by digest. A NEW package starts PRIVATE whatever the
+# that together with STATUS.md's `**Images:**` line set to the new tag (tests/check-status.py fails a lock and a
+# page that disagree), then deploy with `-e use_published_images=true` to pull by digest. A NEW package starts PRIVATE whatever the
 # repository's visibility (the first publish from this public repository, 2026-10-09, produced private packages); the
 # owner makes it public once, by hand, in the package's settings (no API — docs/public-split.md), and a public
 # container package cannot be made private again. The public tool's three packages are public since 2026-10-11:
@@ -62,6 +63,11 @@ jobs:
         # sha256 floor (docker/code-manifest.lock.yml) matching the source on THIS commit — so a tag can never
         # publish baked code that drifts from the committed, reviewed manifest (phase-b synthesis §3, M6 / M5-adjacent).
         run: python scripts/gen-code-manifest.py --check
+      - name: STATUS.md is current (a release ships the page a stranger reads first)
+        # tests/check-status.py --release: a page more than a month old, or one whose images line is not the
+        # lock's tag, refuses the publish (a warning — an old live run — does not). Elsewhere the page's age is
+        # only a warning; here it is the one reader that cannot look away.
+        run: python tests/check-status.py --release
 
   publish:
     needs: gate                  # M5: no code-baked image publishes unless the read-only pin clears on this commit

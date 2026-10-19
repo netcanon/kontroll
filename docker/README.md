@@ -53,7 +53,8 @@ tool's three packages **are public since 2026-10-11** — every pull is anonymou
   builds + pushes with the built-in `GITHUB_TOKEN`. The runner bakes the **all-modules superset**
   (`gen-requirements.py --all-modules`) — a published image can't know a node's fleet.
 - **Pin the digests:** `python3 scripts/gen-image-digests.py --refresh <tag>` writes `@sha256:` into
-  [`images.lock.yml`](images.lock.yml); commit it. No login — the packages are public (a `docker login ghcr.io`
+  [`images.lock.yml`](images.lock.yml); commit it, with [STATUS.md](../STATUS.md)'s `**Images:**` line set to the
+  new tag in the same commit (`tests/check-status.py` fails a lock and a page that disagree). No login — the packages are public (a `docker login ghcr.io`
   with `read:packages` is needed only for a private package). Docker verifies the digest on every pull (the
   image-world L2b — [SECURITY.md](../SECURITY.md) § Accepted risks, the retired R-IMG-1 row).
 - **Deploy with published images:** `… deploy-stack.yml -e use_published_images=true` — the two image-build tasks

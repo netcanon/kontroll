@@ -11,6 +11,36 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs(repo): one status page, checked against the tree; a template for a deployment's own ledger (2026-10-19)
+
+Where the project stands lived in three places that disagreed: the README's undated "Current status", `PLAN.md`
+§13 ("as of 2026-06-13"), and notes outside every repository. None was checked by anything, so each went stale
+without a sign.
+
+- **`STATUS.md`** (new, the repository root): one page — the release whose images this tree deploys, what works
+  (each line naming its proof), what is known broken or never run live, the next three steps, the decisions that
+  are open, three leading indicators, and where the rest is. The README's status section and `PLAN.md` §13 are now
+  pointers to it.
+- **The commit that re-pins `docker/images.lock.yml` after a release sets `STATUS.md`'s `**Images:**` line** to
+  the new tag in the same commit: the check fails a lock and a page that disagree.
+- **`tests/check-status.py`** (new) compares it with the tree. A missing heading, a page longer than one page, a
+  date in the future, or an `**Images:**` line that is not the tag `docker/images.lock.yml` pins is a failure. A
+  page, or a last live run, more than a month old is a warning.
+- **The gate has a WARN state.** `tests/validate.sh` shows a warning and counts it (`VALIDATE: PASS (0 skipped, 1
+  warned)`), and does not fail the run on it, also under `--strict`: `main` must not turn red by the passage of
+  time alone. The publish workflow runs the check with `--release`, where a stale page refuses the publish; a
+  warning (an old live run, an unfilled ledger) never does.
+- **`instance.example/OPERATIONS.md`** (new): the skeleton of a deployment's own ledger — boxes and roles, what
+  must not be touched, standing rules, access paths, key custody, owed actions, a live-run log. It never ships
+  from an instance and holds no secret. `--fresh` scaffolds it, and `instance.example/.gitignore` re-includes it,
+  so an instance repository and a control node's canonical track it. **An existing instance** copies
+  `instance.example/OPERATIONS.md` to `instance/OPERATIONS.md` and adds `!/OPERATIONS.md` to its
+  `instance/.gitignore`, by hand (`--fresh` refuses a configured node, and the scaffold never overwrites a file you
+  have). The check warns while its as-of date is unfilled.
+- **Tests:** `tests/unit/test_check_status.py` (new); the gate's WARN state and the release refusal
+  (`tests/unit/test_ci_workflows.py`); the scaffold leaves the ledger (`tests/unit/test_kontroll_init.py`); an
+  instance tree tracks it (`tests/unit/test_leak_guard.py`).
+
 ### fix(modules): a device-class module has no lifecycle `status:` — it never gated anything (2026-10-19)
 
 A module's `status: staged` / `status: active` read like a gate between onboarding a class and running it. Nothing

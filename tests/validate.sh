@@ -7,7 +7,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 STRICT="${1:-}"
-fail=0; skip=0
+fail=0; skip=0; warn=0
 
 have() { command -v "$1" >/dev/null 2>&1; }
 step() { # name  present(0/1)  command...
@@ -18,6 +18,17 @@ step() { # name  present(0/1)  command...
   fi
   echo "RUN   $name"
   if "$@"; then echo "ok    $name"; else echo "FAIL  $name"; fail=$((fail+1)); fi
+}
+# A check that can WARN: exit 0 = ok, exit 3 = WARN (counted and shown, never a failure — --strict does not
+# promote it either: `main` must not turn red by the passage of time alone), any other exit = FAIL.
+advise() { # name  command...
+  local name="$1"; shift
+  echo "RUN   $name"; "$@"; local rc=$?
+  case "$rc" in
+    0) echo "ok    $name" ;;
+    3) echo "WARN  $name"; warn=$((warn+1)) ;;
+    *) echo "FAIL  $name"; fail=$((fail+1)) ;;
+  esac
 }
 
 have yamllint; step yamllint $? yamllint .
@@ -125,6 +136,11 @@ if [ -n "$PY" ]; then step mgmt-port-binding 0 "$PY" tests/check-mgmt-port-bindi
 # contract): a relocatable store with no chown would be auto-created root:root 0755 by `up` — a world-readable
 # secret-bearing-log hole (G9). Guards a future ${KONTROLL_*_DIR} bind added without its deploy-stack chown.
 if [ -n "$PY" ]; then step storage-chown 0 "$PY" tests/check-storage-chown.py; fi
+
+# STATUS.md is dated and compared with the tree (tests/check-status.py): a missing heading, a page longer than
+# one page, a future date or an images line the lock does not pin FAIL; a page or a last live run more than a
+# month old WARNs. The release refuses a stale page (publish-images.yml, `--release`).
+if [ -n "$PY" ]; then advise status-as-of "$PY" tests/check-status.py; fi
 
 # generated collection lockfile + never-brick trust sidecar are fresh: modules+units -> requirements.generated.yml +
 # trust.generated.yml. Both are gitignored (regenerated per-node), so --check is a staleness/self-consistency gate
@@ -341,5 +357,5 @@ step tree-holds-regular-files-only 0 bash -c '
   exit 0'
 
 echo "──────────────────────────────────────────"
-if [ "$fail" -ne 0 ]; then echo "VALIDATE: FAIL ($fail failed, $skip skipped)"; exit 1; fi
-echo "VALIDATE: PASS ($skip skipped)"
+if [ "$fail" -ne 0 ]; then echo "VALIDATE: FAIL ($fail failed, $skip skipped, $warn warned)"; exit 1; fi
+echo "VALIDATE: PASS ($skip skipped, $warn warned)"

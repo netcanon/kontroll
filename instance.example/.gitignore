@@ -14,6 +14,9 @@
 !/secrets/
 !/dashboards/
 !/trust/
+# OPERATIONS.md: this deployment's own ledger (boxes, standing rules, owed actions). It holds no secret; it
+# never ships, because nothing under instance/ does.
+!/OPERATIONS.md
 # actuation/<key>/unit.yml + vars.yml: the app-store units the GUI and the API stage. While the directory was
 # ignored, `git add` refused the file and no unit could reach a proposal.
 !/actuation/
