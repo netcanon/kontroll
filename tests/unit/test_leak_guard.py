@@ -173,7 +173,7 @@ def _scratch_tree(where, with_reinclude, with_root_rule=True):
         "trust/observed-digests.yml": "x: 1\n", "control.agekey": "a key file, by suffix\n", "stray.txt": "stray\n",
         "actuation/demo/unit.yml": "key: demo\n", "actuation/demo/vars.yml": "x: 1\n",
         "certs/pve-ca.pem": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
-        "certs/server.key": "a private key, by name\n",
+        "certs/server.key": "a private key, by name\n", "OPERATIONS.md": "# Operations\n",
     }
     for rel, body in files.items():
         p = inst / rel
@@ -207,7 +207,9 @@ def test_public_tree_ignores_the_whole_overlay_and_scans_its_dossiers(tmp_path):
 def test_instance_tree_tracks_exactly_the_reincluded_overlay_entries(tmp_path):
     """INSTANCE state (instance/.gitignore scaffolded from instance.example/.gitignore): `git add -A` — the control
     node's canonical commit in local-canonical.yml — stages every known overlay entry (the app-store units under
-    `actuation/` and a public certificate under `certs/` among them) and NOTHING the root secret patterns cover:
+    `actuation/`, a public certificate under `certs/` and the deployment's ledger `OPERATIONS.md` among them —
+    without its re-include the ledger never reaches the canonical or a recovery clone) and NOTHING the root
+    secret patterns cover:
     `keys.txt` and `*.agekey` inside the overlay, a `*.key` beside the certificate in the re-included `certs/`,
     `trust/observed-digests.yml` and a stray top-level file all stay untracked. The invariant holds and docs/reviews/ is stripped (an instance's dossiers quote its
     deployment). This is the install path the public cut had broken: a public install committed no overlay at all,
@@ -219,7 +221,7 @@ def test_instance_tree_tracks_exactly_the_reincluded_overlay_entries(tmp_path):
         "instance/.gitignore", "instance/.sops.yaml", "instance/fleet.yml", "instance/instance.yml",
         "instance/leak-tokens.txt", "instance/inventory/hosts.yml", "instance/secrets/d.sops.yml",
         "instance/trust/keys/.gitkeep", "instance/actuation/demo/unit.yml", "instance/actuation/demo/vars.yml",
-        "instance/certs/pve-ca.pem"])
+        "instance/certs/pve-ca.pem", "instance/OPERATIONS.md"])
     assert guard.overlay_findings(str(repo)) == []
     files = guard.shippable_files(str(repo))
     assert not any(f.startswith(("instance/", "docs/reviews/")) for f in files)

@@ -475,32 +475,9 @@ fleet, so we de-risk that first.
 
 ## 13. Current state & next step
 
-The §11 decisions are resolved and the build is underway. As of 2026-06-13:
-
-- **Phase 0 ✓** — modular scaffold committed.
-- **Phase 1 (nearly done)** — control VM live + bootstrapped (`<mgmt-ip>` on a
-  Proxmox node); modular fleet bootstrap idempotent; `network` + `proxmox` creds
-  SOPS-encrypted; `ping.yml` reaches the live fleet (7/8 — the OpenWrt AP awaits a
-  mgmt→AP-VLAN firewall rule). Not yet published (Phase 4).
-- **Next (infra track)** — the `compute` secret domain + the AP firewall rule close
-  Phase 1; "real per-class backups" is now delivered as **Capability-track Phase 8**
-  (the backup dialog instance — see below).
-- **Capability track** (a separate axis from the infra Phase 0–6 above) — monitoring's
-  Capability-track Phases 1–4 (the `telemetry/<method>.yml` registry + the generator family
-  + the `telemetry` vector + agent-less SNMP/blackbox for the switch & firewall) have
-  **shipped and are live**. **Capability-track Phase 7 (the generalized secondary-capability
-  dialog seam + monitoring as instance #1) has now SHIPPED** (CI-green): the `capabilities/<cap>.yml`
-  registry, `promote.py`, the neutral `capability.py` spine, `observe.py`, `api/routes/capability.py` +
-  the registry-driven privileged tripwire, `openCapabilityDialog`, and the INVARIANT D\* pins — the
-  *live* promote against the real repo awaits the C9 privileged-mutation enablement. **Capability-track
-  Phase 8 (backup as instance #2) has ALSO shipped** (CI-green): backup registered as a pure drop-in touching
-  **zero spine file** — `registered_capabilities() == ['telemetry','backup']`, the D\* pins auto-cover it, and
-  `gen-backup.py` → `config/semaphore/schedules.generated.yml` (consumed by `configure-semaphore.py`, the
-  hand-listed `nightly-backup` hub removed; every backup-capable class now declares a `backup:` block; the
-  live Semaphore registration is the operator's deploy step). Phasing + acceptance live in
-  [docs/observability-onboarding-flow.md §6](docs/observability-onboarding-flow.md) +
-  [docs/observability/secondary-capability-dialog.md](docs/observability/secondary-capability-dialog.md);
-  the doctrine is §2.5's secondary-capability row.
+The tool's current state — what is released, what works, what is known broken, what is next and which decisions are
+open — is [STATUS.md](STATUS.md), one dated page that `tests/check-status.py` compares with the tree. The dated
+record is [CHANGELOG.md](CHANGELOG.md). This section kept that state until 2026-10-19; the git history has it.
 
 ### Wanted (planning + development needed — not yet designed)
 
@@ -518,5 +495,5 @@ The §11 decisions are resolved and the build is underway. As of 2026-06-13:
   telemetry `target_shape`/`port` render, and the backends' connection params.
 
 Operational source of truth for "how do I stand this up / continue it" is
-[docs/SETUP.md](docs/SETUP.md); current live-state detail lives in the gitignored
-`local/discovery/`.
+[docs/SETUP.md](docs/SETUP.md); a deployment's live state is its own `instance/OPERATIONS.md`
+(template: [instance.example/OPERATIONS.md](instance.example/OPERATIONS.md)).

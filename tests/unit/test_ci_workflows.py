@@ -135,3 +135,35 @@ def test_validate_ps1_is_a_shim_over_validate_sh():
     assert "tests/validate.sh" in ps1
     assert not re.search(r'^\s*Step\s+"', ps1, re.M), "validate.ps1 must not define gate steps of its own"
     assert "$LASTEXITCODE" in ps1, "the gate's exit code must be propagated"
+
+
+def test_validate_has_a_warn_state_that_never_fails_the_run():
+    """`tests/validate.sh` has a third outcome beside ok and FAIL: `advise` maps exit 3 to WARN, counts it, and shows
+    the count in both summary lines, without touching `fail` and without reading `--strict`. Guards a later edit
+    that folds the warning into a failure (`main` red because a date passed, on an unchanged tree) or drops it from
+    the summary (a warning nobody sees), a case label that lets another exit status than 3 be a warning, and the
+    status step leaving `advise` for `step`."""
+    text = _read("tests/validate.sh")
+    body = text.split("advise() {", 1)[1].split("\n}\n", 1)[0]
+    assert '3) echo "WARN  $name"; warn=$((warn+1))' in body and "fail=$((fail+1))" in body
+    assert "STRICT" not in body, "--strict must not promote a warning"
+    assert body.count("fail=") == 1, "only the catch-all branch may count a failure"
+    assert 'advise status-as-of "$PY" tests/check-status.py' in text
+    assert '$warn warned)"; exit 1' in text and 'echo "VALIDATE: PASS ($skip skipped, $warn warned)"' in text
+    labels = re.findall(r"^\s*([^\s()]+)\)\s", body, re.M)
+    assert labels == ["0", "3", "*"], "only exit 3 may be a warning: %s" % labels
+    assert not re.search(r'\$\{?warn\}?"?\s+-(?:ne|gt|ge|eq|lt|le)\b', text), "a warning is counted, never tested"
+    assert 'if [ "$fail" -ne 0 ]; then echo "VALIDATE: FAIL' in text
+
+
+def test_a_release_refuses_a_stale_status_page():
+    """The publish workflow's `gate` job — the one the `publish` job needs — runs `tests/check-status.py --release`,
+    where a stale STATUS.md is a failure. Everywhere else the age is a warning; the release is the one reader that
+    cannot look away, at the moment the page matters most. Guards the step being removed, moved out of the
+    gate, or made unable to fail (`continue-on-error`, an `if:`)."""
+    wf = yaml.safe_load(_read(".github/workflows/publish-images.yml"))
+    runs = [str(s.get("run", "")) for s in wf["jobs"]["gate"]["steps"]]
+    assert "python tests/check-status.py --release" in runs, runs
+    assert "gate" in str(wf["jobs"]["publish"].get("needs"))
+    step = next(s for s in wf["jobs"]["gate"]["steps"] if s.get("run") == "python tests/check-status.py --release")
+    assert "continue-on-error" not in step and "if" not in step, step

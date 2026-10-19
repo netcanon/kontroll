@@ -35,6 +35,10 @@ pwsh tests/validate.ps1                 # Windows: a shim over validate.sh (Git 
 # Linux control VM / CI (use --strict so missing tools fail the run)
 bash tests/validate.sh --strict
 ```
+A step can also **WARN**: `status-as-of` (`tests/check-status.py`) warns when `STATUS.md` or its last live run
+is more than a month old. A warning is counted and shown in the last line (`VALIDATE: PASS (0 skipped, 1
+warned)`) and never fails the run, also under `--strict` — a date must not turn `main` red; the publish
+workflow runs the same check with `--release`, where it does.
 `validate.sh` runs one step as root — `canon-drop-as-root` — directly when it is root, else through `sudo -n`
 when that needs no password (it says which); with neither it is a SKIP, which `--strict` counts as a failure.
 ```bash

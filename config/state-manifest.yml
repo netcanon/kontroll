@@ -19,6 +19,7 @@ state_paths:
   - instance/instance.yml                  # source-of-truth posture + backup targets (this instance)
   - config/state-manifest.yml              # this file — the boundary itself
   - instance/dashboards/homepage/          # portal customization (services/widgets/bookmarks) — instance overlay
+  - instance/OPERATIONS.md                 # this deployment's own ledger (boxes, standing rules, owed actions)
 
 # Caveats, kept honest:
 notes:
