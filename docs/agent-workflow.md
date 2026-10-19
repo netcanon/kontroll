@@ -181,6 +181,12 @@ searches find prior investigations under the same name. Each agent owns a
 - **Keep findings in files, not the main thread.** Agents write full detail to
   their report file and return only a short summary + the path, so the main
   thread's context stays light (this is the whole point of off-thread research).
+- **A reader gets the whole task, not a reading budget.** A "lean" brief (the
+  same task, plus instructions to read less and report shorter) was tried in
+  October 2026 on three scopes. Each scope was read twice, once each way, and
+  neither reader saw the other's report. The lean reader cost more in two of
+  the three (median +20%), and missed minor findings the standard reader made
+  in two. It is not used.
 
 ## Which loop a change gets
 
