@@ -1,7 +1,6 @@
 # Device-class module: FortiGate / FortiOS firewall.
 key: fortigate
 description: FortiGate / FortiOS firewall (httpapi/REST)
-status: active                 # current edge (pre-cutover)
 # F2 (de-bespoke, north-star Rung 4): this class's UNIVERSAL metrics FLOOR is AUTO-DERIVED, not hand-typed —
 # `derived: true` marks the class gen-class-capabilities-owned. scripts/gen-class-capabilities.py --check re-derives
 # the floor from facts.pinned.yml + the registries (fortinet.fortios ships an httpapi plugin → the `api` backend,

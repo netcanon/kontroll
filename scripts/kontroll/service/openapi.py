@@ -117,7 +117,7 @@ def build_openapi_recipe(spec, name=None, port=None):
     auth = derive_auth(spec, name)
     backup, check, actuate = classify_endpoints(spec, base_path)
     recipe = {"name": name,
-              "description": "%s (derived from OpenAPI — VERIFY before active)" % (info.get("title") or name),
+              "description": "%s (derived from OpenAPI — verify before relying on it)" % (info.get("title") or name),
               "port": derived_port, "validate_certs": False,
               "auth": {k: v for k, v in auth.items() if not k.startswith("_")}}
     if check:

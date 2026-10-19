@@ -49,8 +49,7 @@ def build_scaffold(collection, key, group, secrets, backend=None, backends=None)
         params["network_os"] = "%s.%s" % (collection, parts[-1])
     module = {
         "key": key,
-        "description": "%s via %s backend (auto-scaffolded - VERIFY before enabling)" % (collection, backend),
-        "status": "staged",
+        "description": "%s via %s backend (auto-scaffolded)" % (collection, backend),
         "collections": [{"name": collection, "version": ">=%s" % version}],
         "role": _role_of(bdef, backend, key, backend_from_request),
         "backend": backend,
@@ -59,8 +58,8 @@ def build_scaffold(collection, key, group, secrets, backend=None, backends=None)
         module["backend_params"] = params
     module["inventory_group"] = group
     module["secrets_domain"] = secrets
-    text = "# Auto-scaffolded by scripts/galaxy.py. Verify network_os + commands\n" \
-           "# against a real device (live-smoke) before flipping status to active.\n" \
+    text = "# Auto-scaffolded by scripts/galaxy.py. Verify network_os + commands against a real device\n" \
+           "# before you enable it.\n" \
            + yaml.safe_dump(module, sort_keys=False, default_flow_style=False,
                             allow_unicode=True, width=4096)
     return {"error": None, "backend": backend, "module": module, "text": text,

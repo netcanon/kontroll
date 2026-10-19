@@ -100,7 +100,7 @@ def list_services():
 
 
 def list_fleet():
-    """The onboarded fleet, class-centric: a list of {key, group, role, status, collection, capabilities, hosts}
+    """The onboarded fleet, class-centric: a list of {key, group, role, collection, capabilities, hosts}
     — one per ENABLED device-class (instance/fleet.yml) whose modules/<key>/module.yml exists. `hosts` are the
     inventory hosts in the class's `inventory_group` ({name, ansible_host}). Read-only; a class with no module
     file or a malformed one is skipped (never a half-failed view)."""
@@ -122,7 +122,6 @@ def list_fleet():
         hosts = [{"name": h, "ansible_host": (hv or {}).get("ansible_host")}
                  for h, hv in sorted((groups.get(group) or {}).items())]
         out.append({"key": key, "group": group, "role": m.get("role"),
-                    "status": m.get("status", "staged"),
                     "collection": ((m.get("collections") or [{}])[0] or {}).get("name"),
                     "capabilities": _module_capabilities(m), "hosts": hosts})
     return out

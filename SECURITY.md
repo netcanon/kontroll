@@ -463,7 +463,7 @@ the operator, and the honest `capability_gap` names an unresolved selector.
   parity), `tests/e2e/test_secret_rotation_flow.py` (the `secret-overwrite-confirm` gate + the `secret-enact`
   hand-off render).
 - **Heavier reconfigure — module identity + inventory host-var (Phase 4b, #139).** The GUI can now stage a
-  change to a class's **identity** (`secrets_domain`/`inventory_group`/`backend`/`role`/`status` in
+  change to a class's **identity** (`secrets_domain`/`inventory_group`/`backend`/`role` in
   `modules/<key>/module.yml`, via `service/identity.py` + `_blockwrite.upsert_top_level_key`) and to a host's
   **connection vars** (`ansible_host` in the banner-owned inventory drop-in, via `service/hostvars.py` +
   `gitio.owned_merge`). Higher blast — an identity re-point **re-homes hosts / orphans creds** — so the SAME

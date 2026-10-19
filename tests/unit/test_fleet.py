@@ -18,11 +18,11 @@ pytestmark = pytest.mark.unit
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _class(tmp_repo, key, group, caps=("metrics", "backup", "logs"), status="active"):
+def _class(tmp_repo, key, group, caps=("metrics", "backup", "logs")):
     d = tmp_repo / "modules" / key
     d.mkdir(parents=True)
-    body = ("key: %s\nstatus: %s\nrole: %s\ninventory_group: %s\ncollections:\n  - name: ns.%s\n"
-            % (key, status, key, group, key))
+    body = ("key: %s\nrole: %s\ninventory_group: %s\ncollections:\n  - name: ns.%s\n"
+            % (key, key, group, key))
     if "metrics" in caps:
         body += "metrics:\n  - {method: snmp}\n"
     if "backup" in caps:
@@ -47,7 +47,7 @@ def test_list_fleet_groups_hosts_under_their_class_with_caps(tmp_repo):
     _host(tmp_repo, "core_switch", "sw1", "192.0.2.10")
     entry = next(c for c in fleet.list_fleet() if c["key"] == "demo_sw")
     assert entry["capabilities"] == {"telemetry": True, "backup": True, "logging": True}
-    assert entry["group"] == "core_switch" and entry["status"] == "active"
+    assert entry["group"] == "core_switch" and "status" not in entry   # no lifecycle the tool does not track
     assert {"name": "sw1", "ansible_host": "192.0.2.10"} in entry["hosts"]
 
 

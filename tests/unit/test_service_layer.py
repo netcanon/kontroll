@@ -118,12 +118,12 @@ def test_build_onboard_plan_not_installed_error(monkeypatch, make_facts):
 
 # --- scaffold / audit / openapi: structured outcomes ------------------------ #
 def test_build_scaffold_success_then_not_installed(cliconf_probe, monkeypatch, make_facts):
-    """build_scaffold returns a staged module (status: staged, backend role) for a classifiable
+    """build_scaffold returns a module with its backend role for a classifiable
     collection, and error='not_installed' when the probe is empty — the two outcomes cmd_scaffold
     branches on, as data rather than stdout/exit."""
     ok = build_scaffold("cisco.ios", "ios_x", "core_switch", "network")
     assert ok["error"] is None
-    assert ok["module"]["status"] == "staged" and ok["module"]["role"] == "backend_netcommon_cli"
+    assert ok["module"]["role"] == "backend_netcommon_cli"
     assert ok["path"].endswith("module.yml")
     monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(collection=coll))
     assert build_scaffold("ns.absent", "x", "g", "network")["error"] == "not_installed"

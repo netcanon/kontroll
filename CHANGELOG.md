@@ -11,6 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(modules): a device-class module has no lifecycle `status:` — it never gated anything (2026-10-19)
+
+A module's `status: staged` / `status: active` read like a gate between onboarding a class and running it. Nothing
+read it to decide anything: a class runs the moment `instance/fleet.yml` lists it, and the onboard enables it in the
+same change that wrote `status: staged`. The GUI's identity dialog even offered a control to change it. The field,
+its two writers, that control and the fleet card's display are removed, and so are the sentences that told an
+operator to "verify before status: active".
+
+- **The onboard, the scaffold and the identity dialog** no longer write or offer `status`. A selection that asks
+  for it is an unknown field. The fleet card no longer shows it.
+- **The shipped modules** drop the key, and the comments that named one lab's current edge and core.
+- **The docs say what verification exists:** none by the tool. After the promote, run
+  `ansible/playbooks/ping.yml --limit <host>` (or the `ping-fleet` template) and the first backup.
+  `docs/capability-matrix.md` §6 is now "Confidence, and what is *not* verified".
+- **Nothing to do on a box.** A `status:` line in a module you onboarded stays where it is and is read by nothing.
+  Generated targets, schedules and the collection lockfile are unchanged: no generator read the key.
+- **Tests:** no onboard or scaffold writes `status` (`tests/unit/test_invariant_d.py`); no shipped module declares
+  it (`tests/unit/test_module_descriptors.py`, new); the identity dialog refuses it
+  (`tests/unit/test_identity.py`); the fleet card's entry has no `status`, and the browser paint test no longer
+  plants one in the fleet row (`tests/e2e/test_paint_rule.py`).
+
 ### docs: the design records say they are history, on their first line (2026-10-19)
 
 Several design documents still opened with a status that was no longer true: "DESIGN ONLY — not built" above a

@@ -197,7 +197,7 @@ def cmd_scaffold(args):
             fh.write(text)
         print("wrote %s" % rel)
     print("Next: enable '%s' in instance/fleet.yml, add host(s) to inventory with the "
-          "backend params, then live-verify (ping/backup) before status: active." % args.key)
+          "backend params, then run ping.yml / backup-configs.yml against it once." % args.key)
 
 
 def cmd_onboard(args):
@@ -251,7 +251,7 @@ def cmd_onboard(args):
         crc = gitio._run(["git", "commit"] + gitio.commit_message_args([   # + the one configurable trailer
             "feat(onboard): %s -> %s via %s backend" % (args.collection, args.key, backend),
             "Machine-onboarded by scripts/galaxy.py onboard. Host %s in group %s; "
-            "device class staged (verify live before status: active)." % (host_name, plan["group"])]))
+            "run ping.yml --limit %s to verify." % (host_name, plan["group"], host_name)]))
         if crc != 0:                                # never push a stale HEAD on a failed commit
             sys.exit("  ! commit failed (rc=%d) — not pushing; nothing took effect." % crc)
         # Update the LOCAL CANONICAL (the instance source of truth) so Semaphore sees

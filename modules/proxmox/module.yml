@@ -1,7 +1,6 @@
 # Device-class module: Proxmox VE hypervisors.
 key: proxmox
 description: Proxmox VE hypervisors (SSH + API token)
-status: active                 # active | staged
 collections:
   - name: community.proxmox    # dedicated collection (proxmox_* migrated out of community.general)
     version: ">=1.0.0"

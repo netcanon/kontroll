@@ -431,7 +431,7 @@ _IDENTITY_MODULE = (
     "key: demo_id\nstatus: active\ncollections:\n  - name: cisco.ios\n"
     "role: backend_network_cli\nbackend: network_cli\n"
     "inventory_group: core_switch   # the dispatch seam — must survive\nsecrets_domain: network\n")
-_IDENTITY_CUR = {"status": "active", "role": "backend_network_cli", "backend": "network_cli",
+_IDENTITY_CUR = {"role": "backend_network_cli", "backend": "network_cli",
                  "inventory_group": "core_switch", "secrets_domain": "network"}
 
 
