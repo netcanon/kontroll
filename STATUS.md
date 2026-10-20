@@ -23,7 +23,9 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 - A device is onboarded from the GUI or the API with no task code of its own — `tests/e2e/test_onboard_flow.py`,
   `tests/integration/test_api_onboard.py`.
 - Every network-reachable change is a proposal; promoting it to `main` is a second, separate key, and the gate
-  judges the one commit it lands — `tests/unit/test_kontroll_promote.py`, `tests/unit/test_canon.py`.
+  judges the one commit it lands — `tests/unit/test_kontroll_promote.py`, `tests/unit/test_canon.py`. Every other
+  way into `main` (the update scripts, the CLI, the deploy) lands through the same gate; none pushes —
+  `tests/unit/test_land.py`.
 - Secrets are SOPS-encrypted per domain; the secret and onboard routes never return or audit a value —
   `tests/integration/test_api_secrets.py`, `tests/integration/test_api_onboard.py`,
   `tests/integration/test_plaintext_guard_sops.py`.
@@ -40,7 +42,6 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 - There is no break-glass recipient (SECURITY.md, "Break-glass") → T11.
 - No gate checks that a task handling a credential carries `no_log` → SECURITY.md C2 (planned).
 - A second apply reporting `0 changed` is checked by hand, and no run of it is recorded here → not yet scheduled.
-- `scripts/update.sh` and `scripts/update-from-bundle.sh` land on `main` without the promote gate → SECURITY.md C22.
 
 ## Next
 
@@ -53,7 +54,6 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 
 - The composed-plane boundary → ADR-0002 ([docs/adr/README.md](docs/adr/README.md)).
 - How far the generic onboarding path goes → ADR-0003, after the next full re-onboard of a real fleet.
-- The homelab edition's default promotion posture → ADR-0004, in that edition's tree.
 - The upgrade story: in-place update, or rebuild only → ADR-0005.
 
 ## Leading indicators
