@@ -39,8 +39,11 @@ _CREDS = {
 }
 
 
-def _render(snmp):
-    env = jinja2.Environment(loader=jinja2.FileSystemLoader(_SNMP_DIR), keep_trailing_newline=True)
+def _render(snmp, trim_blocks=True):
+    # The template module's own setting (`trim_blocks: true` is its default, and deploy-stack's render task leaves
+    # it): rendering without it is how these rows passed while every deploy rendered `auths:` into a comment.
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(_SNMP_DIR), keep_trailing_newline=True,
+                             trim_blocks=trim_blocks)
     return env.get_template("snmp.yml.j2").render(_snmp=snmp)
 
 
@@ -76,6 +79,24 @@ def test_with_the_domain_the_credentials_are_wired():
     assert auth["password"] == _CREDS["snmp_v3_auth_password"]
     assert auth["priv_password"] == _CREDS["snmp_v3_priv_password"]
     assert auth["auth_protocol"] == "SHA" and auth["priv_protocol"] == "AES"
+
+
+@pytest.mark.parametrize("snmp,label", [({}, "no domain"), (_CREDS, "creds present")])
+def test_the_template_modules_trim_blocks_changes_nothing_the_exporter_reads(snmp, label):
+    """The render the deploy makes (the template module's `trim_blocks: true`) parses to the same document as a
+    render without it, and `auths:` starts its own line — it is never the tail of the comment above it.
+
+    Why: the template opened its explanatory comment with `{#-`. Under trim_blocks the newline after `#}` goes
+    too, so `auths:` was joined onto the comment line above: every deploy from 2026-07-28 to 2026-10-20 wrote an
+    snmp.yml with the credentials commented out and an indented block YAML cannot parse, while these rows —
+    rendering without trim_blocks — passed. A box running an exporter started before then kept working until
+    its next restart (found on the production box's deploy, 2026-10-20)."""
+    trimmed, plain = _render(snmp), _render(snmp, trim_blocks=False)
+    assert yaml.safe_load(trimmed) == yaml.safe_load(plain), "trim_blocks changed the config (%s)" % label
+    lines = trimmed.splitlines()
+    assert not any(line.startswith("#") and line.rstrip().endswith("auths:") for line in lines), \
+        "auths: was joined onto a comment line (%s)" % label
+    assert ("auths:" in lines) is bool(snmp), "auths: must be a line of its own exactly when creds exist (%s)" % label
 
 
 def test_the_render_is_not_gated_on_the_secret_existing():
@@ -177,3 +198,24 @@ def test_the_rendered_file_stays_untracked_and_secret_moded():
     assert "no_log: true" in block, "the render task must never echo the credentials"
     with open(os.path.join(_ROOT, ".gitignore"), encoding="utf-8") as fh:
         assert "prometheus/exporters/snmp/snmp.yml" in fh.read()
+
+
+def test_a_changed_render_restarts_a_running_exporter_after_up():
+    """When the render changed snmp.yml and snmp-exporter is in the up-list, the deploy restarts the exporter
+    after `up`; it does nothing when the render changed nothing.
+
+    Why: the render writes a new file under the same name, and a running container's file bind keeps the one it
+    started with; `up` recreates only on a changed service definition. So a rotated credential, or the corrected
+    template above, reached the exporter only at its next restart — on the production box, a reboot weeks after
+    the deploy that broke it (2026-10-20)."""
+    tasks = list(_tasks(yaml.safe_load(_deploy_text())))
+    names = [str(t.get("name", "")) for t in tasks]
+    render = tasks[next(i for i, n in enumerate(names) if n.startswith("Render the snmp_exporter config"))]
+    assert render.get("register") == "_snmp_render", "the render's change is what the restart keys on"
+    up = next(i for i, n in enumerate(names) if n.startswith("Bring up the selected stack"))
+    hits = [i for i, n in enumerate(names) if n.startswith("Restart snmp-exporter when its rendered config")]
+    assert len(hits) == 1 and hits[0] > up, "one restart, after `up` (so it acts on the container `up` left)"
+    restart = tasks[hits[0]]
+    assert restart.get("when") == ["_snmp_render is changed", "'snmp-exporter' in _up_services"]
+    cmd = " ".join(restart["ansible.builtin.command"]["cmd"].split())
+    assert cmd.endswith("restart snmp-exporter") and "--env-file {{ stack_dir }}/.env" in cmd
