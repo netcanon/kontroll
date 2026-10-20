@@ -68,7 +68,7 @@ mkdir -p "$HOME/.config/sops/age" "$HOME/.ssh" "$HOME/.config/semaphore"
 chmod 0700 "$HOME/.config/sops/age" "$HOME/.ssh" 2>/dev/null || true
 
 # The C10 canonical group (gid 1001): the in-container deploy (KONTROLL_IN_CONTAINER=1) SKIPS provisioning it, so
-# without this a later push of the operator's own into the canonical (scripts/update.sh, an onboard from the CLI)
+# without this a later landing of the operator's own on the canonical (scripts/update.sh, an onboard from the CLI)
 # fails 'Permission denied' beside what uid 1001 wrote there (F-CANON, task_51334deb). A promote is not the
 # reason any more: `sudo kontroll-promote` runs its git as the service uid. Ensure it here (sudo if available) or
 # print the exact one-liner; never fatal.
@@ -80,9 +80,9 @@ fi
 # The verb, read here because the capture below is not for every one of them.
 verb="${1:-init}"
 
-# The C10 canonical is seeded from THIS working tree's git (local-canonical adds a `local` remote to it + pushes). A
+# The C10 canonical is seeded from THIS working tree's git (local-canonical adds a `local` remote to it + lands HEAD). A
 # launch kit is a tarball extract with NO .git, so git-init it (the step scripts/install.sh does for the bundle path)
-# and capture the current tree — including a freshly-scaffolded instance/ — so the canonical seed has a HEAD to push.
+# and capture the current tree — including a freshly-scaffolded instance/ — so the canonical seed has a HEAD to land.
 # Operator-owned, local-only, no remote. Idempotent: re-commits only when the tree changed (e.g. after fresh-init).
 # `shell` deploys nothing and captures nothing. It is the break-glass verb, and the only way to the image's sops on a
 # host that has none — so a refusal of the gate below must not lock it out.

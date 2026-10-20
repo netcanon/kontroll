@@ -71,11 +71,14 @@ image builds (from the local checkout). Only **canonical-state distribution** is
   container at `/srv/kontroll.git`.
 - Semaphore's **Repository → `file:///srv/kontroll.git`** (key `none`); the GitHub
   deploy key is no longer required to operate. (`configure-semaphore.py`.)
-- The working tree gains a `local` remote → the bare repo; `onboard`/GUI **push the
-  local canonical** after commit, so the instance sees the change with **no GitHub**.
+- The working tree gains a `local` remote → the bare repo; `onboard`/GUI **land on the
+  local canonical** after commit (`gitio.land_main` → `land_commit`: judged by the promote gate, a pack on a pipe,
+  one compare-and-swap — never a `git push`, which the canonical's hook refuses for `main` from everyone;
+  SECURITY.md C10), so the instance sees the change with **no GitHub**.
 - `onboard --push` is repurposed to the **optional** GitHub (offsite backup) step.
-- A `local-canonical.yml` play (idempotent) ensures the bare repo exists + mirrors the
-  working tree (used after a developer code-pull; the operator never needs it).
+- A `local-canonical.yml` play (idempotent) ensures the bare repo exists + lands the
+  working tree's HEAD on it (`scripts/kontroll-land.py`, `--check` first under the dry-run; used after a
+  developer code-pull; the operator never needs it).
 
 **Phase-A exit:** a Semaphore job (ping/backup) runs end-to-end from the local repo;
 onboarding a device + running it requires zero GitHub.
@@ -87,13 +90,15 @@ onboarding a device + running it requires zero GitHub.
 - **The instance never `reset --hard` again.** [scripts/update.sh](../scripts/update.sh)
   pulls upstream code and **merges** it, preserving instance state (the merge is
   conflict-free because code & state don't share files; a genuine conflict means a
-  *code* file was edited locally — surfaced, never silently lost), then re-seeds the
-  local canonical. This kills the Phase-A caveat (a dev code-push clobbering state).
+  *code* file was edited locally — surfaced, never silently lost), then lands the merged
+  HEAD on the local canonical through the promote gate (`scripts/kontroll-land.py`; a tree
+  the gate refuses stays in the checkout, exit 2, with the sentence). This kills the Phase-A
+  caveat (a dev code-push clobbering state).
 - **Remoteless boxes** (a production instance with no upstream remote — the whole point
   of this doc) can't `fetch origin`, so [scripts/update-from-bundle.sh](../scripts/update-from-bundle.sh)
   applies a `git bundle` of new product code (built `git bundle create … <box-HEAD>..main`
-  on a connected machine, `scp`'d over) and then reuses the **identical** merge + canonical
-  re-seed body. This codifies the #145 bundle-merge sync that was previously hand-run on the
+  on a connected machine, `scp`'d over) and then reuses the **identical** merge + landing
+  body. This codifies the #145 bundle-merge sync that was previously hand-run on the
   prod box; the conflict semantics (a *code* file edited locally) are the same as `update.sh`.
 - *Deferred to Phase C (it couples with git-free install):* making the base
   (roles/playbooks/galaxy/gui) come **physically from the image** so an operator gets

@@ -7,15 +7,18 @@
 # What it allows:
 #   uid 1001 (the network service)   CREATE refs/heads/proposed/<run id>     — and nothing else: not main, not a
 #                                    tag, not refs/replace/*, not a move or a delete of a proposal that exists.
-#   any other uid (the operator's    refs/heads/main, and refs/heads/proposed/<run id>     — and nothing else.
-#   mirror, root in the installer)
-# A push can therefore leave two kinds of ref in the canonical. A release tag, or a tag named like a branch, is
-# refused from everyone: every reader names its ref in full, and this keeps the short names unambiguous for a
-# person at a shell.
+#   any other uid                    refs/heads/proposed/<run id> (create or move) — and nothing else.
+# refs/heads/main is refused from EVERYONE: nothing legitimate pushes it. It moves through two functions only —
+# the promote (gitio.promote_commit) and a landing (gitio.land_commit: scripts/kontroll-land.py, which
+# scripts/update.sh, scripts/update-from-bundle.sh, the operator CLI's onboard and the deploy's mirror task call) —
+# a commit id, judged by the promote gate, brought in as a pack on a pipe, compare-and-swapped; neither is a push,
+# so neither runs this hook, nor any program the canonical's config names. A release tag, or a tag named like a
+# branch, is refused from everyone too: every reader names its ref in full, and this keeps the short names
+# unambiguous for a person at a shell.
 #
 # What it does NOT stop: a write that is not a push. `git update-ref`, or a file written under refs/heads/ through
-# the :rw mount, runs no hook (the promote is such a write, on purpose). That is SECURITY.md's accepted-risk row
-# for an armed box.
+# the :rw mount, runs no hook (the promote and the landing are such writes, on purpose). That is SECURITY.md's
+# accepted-risk row for an armed box.
 #
 # Keyed on the uid `id -u` prints; the hook reads no variable of its own, so there is no switch that turns it off.
 # It runs as the pusher and in the pusher's environment: it binds a pusher that does not lie about itself (the
@@ -38,11 +41,11 @@ refuse() { echo "C10: refused $ref — $1" >&2; exit 1; }
 [ -n "$uid" ] || refuse "the pusher's uid could not be read (nothing is allowed without it)."
 is_id "$old" && is_id "$new" || refuse "the hook was not handed two object ids (nothing is allowed without them)."
 is_zero "$new" && refuse "a push never deletes a ref on the canonical."
+[ "$ref" = "refs/heads/main" ] && refuse "refs/heads/main is never pushed, by anyone: it is landed (python3 scripts/kontroll-land.py — judged by the promote gate) or promoted."
 if [ "$uid" = "1001" ]; then
     is_proposal "$ref" || refuse "uid 1001 may only create refs/heads/proposed/<run id>."
     is_zero "$old"     || refuse "a proposal is created once; uid 1001 may not move one that exists (stage a new run id)."
     exit 0
 fi
-[ "$ref" = "refs/heads/main" ] && exit 0
 is_proposal "$ref" && exit 0
-refuse "the canonical holds refs/heads/main and refs/heads/proposed/<run id> and nothing else."
+refuse "a push may create or move refs/heads/proposed/<run id> and nothing else (main is landed or promoted, never pushed)."

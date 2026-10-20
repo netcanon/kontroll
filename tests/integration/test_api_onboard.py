@@ -35,6 +35,7 @@ def onb(tmp_repo, tmp_path, monkeypatch, make_facts):
     repoints paths.ROOT so the module/inventory/fleet writes land in a throwaway tree."""
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
+    monkeypatch.setattr(gitio, "land_main", lambda run_id=None, skip_gate=False: calls.append(["kontroll-land", "main"]) or 0)
     # the cred write now goes whole-domain decrypt -> merge -> stdin re-encrypt (no sops binary in CI/Windows)
     monkeypatch.setattr(gitio, "sops_decrypt_domain", lambda d: {})
     monkeypatch.setattr(gitio, "sops_write_domain", lambda d, m: True)
@@ -79,8 +80,9 @@ def test_onboard_dryrun_creds_are_names_not_values(onb):
 
 
 def test_onboard_apply_writes_commits_pushes(onb):
-    """apply writes the three artifacts (module + drop-in host + fleet-enable), commits, and pushes
-    the LOCAL canonical (git mocked) — the full self-completing onboard, audited."""
+    """apply writes the three artifacts (module + drop-in host + fleet-enable), commits, and LANDS on the LOCAL
+    canonical through `gitio.land_main` (both seams mocked: `_run` and `land_main`) — never a `git push` of `main`,
+    which the canonical's hook refuses from everyone — the full self-completing onboard, audited."""
     r = onb.client.post("/onboard", headers=AUTH, json=_body(apply=True))
     assert r.status_code == 200
     b = r.json()
@@ -90,7 +92,7 @@ def test_onboard_apply_writes_commits_pushes(onb):
     assert "- edgeos" in (onb.repo / "config" / "fleet.yml").read_text(encoding="utf-8")
     joined = [" ".join(c) for c in onb.calls]
     assert any("git add" in j for j in joined) and any("git commit" in j for j in joined)
-    assert any("push local HEAD:refs/heads/main" in j for j in joined)
+    assert "kontroll-land main" in joined and not any("push local" in j for j in joined)
     assert any(row["action"] == "onboard-apply" for row in read_audit(onb.audit_log))
 
 

@@ -48,10 +48,20 @@ if [ "$(git rev-parse HEAD)" = "$before" ]; then
   echo "==> Already up to date."
 fi
 
-echo "==> Re-seeding the local canonical (what the instance runs)…"
+echo "==> Landing HEAD on the local canonical (what the instance runs)…"
+# Not a push — the same landing as scripts/update.sh: judged by the promote gate first, a pack on a pipe, one
+# compare-and-swap (SECURITY.md C10). The canonical's hook refuses a push of `main` from everyone. Exit 2 =
+# refused (nothing moved; fix the tree and re-run, or --skip-conflict-check as the human's override); exit 1 =
+# nothing to land (no `local` remote, not a fast-forward: the sentence says).
 if git remote get-url local >/dev/null 2>&1; then
-  git push --quiet local HEAD:refs/heads/main
-  echo "    Local canonical updated — Semaphore runs the new code on its next job."
+  if python3 -B scripts/kontroll-land.py --repo "$(git remote get-url local)"; then
+    echo "    Local canonical updated — Semaphore runs the new code on its next job."
+  else
+    rc=$?
+    echo "!! The landing did not happen (exit $rc) — the canonical is untouched; the merged code is in this" >&2
+    echo "   checkout only. Read the sentence above, correct it, and re-run (docs/troubleshooting.md §10)." >&2
+    exit "$rc"
+  fi
 else
   echo "    No 'local' remote yet — run: ansible-playbook ansible/playbooks/local-canonical.yml"
 fi

@@ -2,10 +2,11 @@
 #
 # WHY this is a shared HOST gesture: the canonical bare repo /srv/kontroll.git is group-gid-1001 (the uid:gid the
 # privileged api/onboard-gui write proposals as). The operator WRITES it too — scripts/update.sh,
-# scripts/update-from-bundle.sh and an onboard from the CLI push `main` there as the operator, beside files uid
+# scripts/update-from-bundle.sh and an onboard from the CLI LAND `main` there as the operator (a pack and a ref
+# transaction through scripts/kontroll-land.py, judged by the promote gate; never a push), beside files uid
 # 1001 wrote (its proposals; what a promote leaves) — and can only do that as a member of that group, else the
 # write fails "Permission denied" (live-caught 2026-06-29 on the .52 baked prod box, F-CANON; task_51334deb). A
-# DEPLOY does not depend on it (the play makes the canonical the operator's before it pushes), and the PROMOTE is
+# DEPLOY does not depend on it (the play makes the canonical the operator's before it lands), and the PROMOTE is
 # no longer the reason: `sudo kontroll-promote` runs its git as the service uid itself (SECURITY.md C10), and
 # without `sudo` an account that is not the service is refused whatever its groups.
 # ansible/playbooks/local-canonical.yml provisions the named group + the operator's membership on a

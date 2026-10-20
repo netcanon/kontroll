@@ -117,6 +117,17 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   `promote-proposal` job's log also carries the job's OWN stamp from `_log-run-id.yml`
   (`kontroll_run_id=<UTC stamp>`), printed first; the promoter's line is the one that ends in
   `commits=<n>`.
+- ✅ **The landing's own line** — `scripts/kontroll-land.py` (what `scripts/update.sh`, `update-from-bundle.sh`,
+  the operator CLI's `--commit` and the deploy's `local-canonical.yml` run to take a commit to the canonical's
+  `main`, SECURITY.md C10) prints, before it judges anything, `kontroll_run_id=<id> land [--check] HEAD of
+  <worktree> -> refs/heads/main of <canonical>` — the id is a minted stamp (`<UTC stamp>-<6 hex>`, the same
+  shape as a request's), or the run id of the proposal `--propose` makes — and then its verdict on one line:
+  `landed refs/heads/main <commit> (was <commit>)`, `up to date`, `would land` (`--check`), or `REFUSED: …` /
+  `kontroll-land: …` on stderr with the exit status the caller reads (0 / 2 / 1). It goes to the deploy's
+  Ansible log (the play's `--check` task and its landing task both register it), to the update script's
+  run-log (`scripts/lib/run-log.sh`), or to the operator's terminal. No credential is in it; the gate's
+  sentence can name a module file and, for a `signature_policy` that is not a word it takes, repeat the
+  value — as the promote's does.
 - ✅ **Capture history** — `backup-configs.yml`'s final play commits a timestamped
   snapshot of the captures dir into a **local-only git history** (no remote, inside the
   0700/uid-1001 dir, never pushed — as protected as the captures). `git diff` now answers

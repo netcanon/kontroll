@@ -260,11 +260,15 @@ def test_staging_push_origin_never_advances_canonical_main(content_clone_with_or
 
 def test_operator_cli_push_origin_still_advances_main(content_clone_with_origin, monkeypatch):
     """The positive control for the C10 origin-push fix (constraint C3): with KONTROLL_STAGE_PUSHES UNSET (the
-    operator-CLI / non-staging path, target == main) commit_and_push(push_origin=True) MUST still push origin and
-    advance canonical `main` — the fix suppresses the origin push ONLY under staging, never the legitimate direct-main
-    path. Guards an over-correction (a blanket 'never push origin') that would silently break the operator's
-    offsite/canonical backup push. Real-git so 'advanced main' is observed on a real object DB — the exact contrast to
-    test_staging_push_origin_never_advances_canonical_main."""
+    GUI run from a checkout / a non-staging deploy, target == main) commit_and_push(push_origin=True) MUST still
+    advance canonical `main` — by a LANDING now (`land_main`: judged, a pack on a pipe, compare-and-swapped; the
+    canonical's `main` moves and `pushed_canonical` is True) — and still push origin: the fix suppresses the
+    origin push ONLY under staging, never the legitimate non-staging path. Guards an over-correction (a blanket
+    'never push origin') that would silently break the operator's offsite backup push, and that the landing
+    reaches `main` where the push used to. Real-git so 'advanced main' is observed on a real object DB — the exact
+    contrast to test_staging_push_origin_never_advances_canonical_main. (Here `origin` IS the canonical, so the
+    origin push of a `main` that the landing already moved is a no-op: with the canonical's hook installed it would
+    be refused — `tests/unit/test_land.py` holds that door with the hook in place.)"""
     clone, canonical = content_clone_with_origin
     monkeypatch.delenv("KONTROLL_STAGE_PUSHES", raising=False)          # CLI / non-staging deploy -> target == main
     main_before = _git(canonical, "rev-parse", "refs/heads/main", capture=True)
@@ -276,7 +280,7 @@ def test_operator_cli_push_origin_still_advances_main(content_clone_with_origin,
     assert out["pushed_canonical"] is True and out["pushed_origin"] is True   # the sharp C3 guard: origin push fired
     main_after = _git(canonical, "rev-parse", "refs/heads/main", capture=True)
     assert main_after != main_before, \
-        "the operator-CLI direct-main push must still advance main (C3) — the fix must scope suppression to staging"
+        "the non-staging path must still advance main (C3) — by the landing; the fix must scope suppression to staging"
     assert _show(canonical, "main:state.yml") == "remotes: [cli]\n"
 
 
@@ -320,9 +324,11 @@ _HOOK_TABLE = [
     ("1001", _P + "*", _Z, _A, False),                             # a ref name that is itself a pattern
     ("1001", _P + "????????????", _Z, _A, False),
     ("1001", _P + "[0-9a-f]" * 1 + "bc123def456", _Z, _A, False),
-    # any other uid — the operator's mirror, root in the installer: main and proposals, nothing else
-    ("1000", "refs/heads/main", _A, _B, True),
-    ("0", "refs/heads/main", _Z, _A, True),
+    # any other uid — the operator, root in the installer: a proposal (create or move) and nothing else; main from
+    # NOBODY (it is landed or promoted — ref transactions, never a push)
+    ("1000", "refs/heads/main", _A, _B, False),
+    ("0", "refs/heads/main", _Z, _A, False),
+    ("0", "refs/heads/main", _A, _B, False),
     ("1000", _P + "abc123def456", _Z, _A, True),
     ("1000", _P + "abc123def456", _A, _B, True),
     ("1000", "refs/heads/main", _A, _Z, False),                    # a push never deletes
@@ -338,15 +344,15 @@ _HOOK_TABLE = [
     ("1001", _P + "abc123def456", "", _A, False),
     ("1000", "refs/heads/main", _A, "1" * 39, False),
     ("1000", "refs/heads/main", "refs/heads/main", _B, False),
-    ("1000", "refs/heads/main", "a" * 64, "b" * 64, True),          # a sha256 repository's ids
-    ("1000", "refs/heads/main", _A, "A" * 40, False),               # an id is LOWER-case hex
-    ("1000", "refs/heads/main", _A, "1" * 41, False),               # forty or sixty-four digits, nothing between
-    ("1000", "refs/heads/main", "1" * 63, _B, False),
+    ("1000", _P + "abc123def456", "a" * 64, "b" * 64, True),        # a sha256 repository's ids
+    ("1000", _P + "abc123def456", _A, "A" * 40, False),             # an id is LOWER-case hex
+    ("1000", _P + "abc123def456", _A, "1" * 41, False),             # forty or sixty-four digits, nothing between
+    ("1000", _P + "abc123def456", "1" * 63, _B, False),
     # the names and the uid are compared whole
     ("1000", "refs/heads/mainx", _Z, _A, False),
     ("1000", "refs/heads/main/x", _Z, _A, False),
-    ("10010", "refs/heads/main", _A, _B, True),                     # not uid 1001: the other list
-    ("01001", "refs/heads/main", _A, _B, True),
+    ("10010", _P + "abc123def456", _A, _B, True),                   # not uid 1001: the other list (a move is allowed)
+    ("01001", _P + "abc123def456", _A, _B, True),
     # a delete, whoever asks and whatever it names (git's own receive.denyDeletes answers first on a node)
     ("1000", _P + "abc123def456", _A, _Z, False),
     ("1001", _P + "abc123def456", _Z, _Z, False),                   # … of a ref that is not there
@@ -381,6 +387,11 @@ def _shells(tmp_path):
     return kept
 
 
+def _an_id(s):
+    """A lower-case object id of forty or sixty-four digits — what the hook's `is_id` takes."""
+    return len(s) in (40, 64) and set(s) <= set("0123456789abcdef")
+
+
 def _run_hook(tmp_path, uid, ref, old, new, shell=("sh",), id_rc="0"):
     fakebin = _fake_id_bin(tmp_path) if not (tmp_path / "fakebin").exists() else tmp_path / "fakebin"
     env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", ""), "FAKE_UID": uid,
@@ -407,7 +418,8 @@ def test_the_hook_is_an_allow_list(tmp_path):
     """The committed hook, run over a table of pushes with a PATH-shadowed `id`: as uid 1001 it allows the CREATION
     of `refs/heads/proposed/<run id>` (either minted shape) and nothing else — not `main`, not a tag, not
     `refs/replace/*`, not `refs/proposed/…`, not a ref name that is itself a pattern, not a move or a delete of a
-    proposal that exists; as any other uid it allows `refs/heads/main` and a proposal and nothing else; a delete
+    proposal that exists; as any other uid it allows a proposal (create or move) and nothing else; `refs/heads/main`
+    is refused from EVERY uid — 1001, the operator's, root's — with a sentence that names the landing; a delete
     is refused from everyone; and when the uid cannot be read, or the hook is not handed two object ids, nothing is
     allowed — under every POSIX shell installed here in which the tests' own `id` is the one that runs (`_shells`);
     and an `id` that prints a uid and fails has not said who is pushing. Every refusal names the ref and the rule on stderr.
@@ -415,8 +427,10 @@ def test_the_hook_is_an_allow_list(tmp_path):
     WHY: the hook used to refuse ONE thing — uid 1001 pushing `refs/heads/main` — so the service's uid could push
     a tag called `main`, a replace ref, or the same proposal name a second time, and each of those changed what a
     later reader or the promote saw under a name a human had already looked at. A deny-list of one name is a list
-    of everything else that is allowed. (What the hook does NOT stop is said in its own header: a write that is
-    not a push runs no hook.)"""
+    of everything else that is allowed. And `main` from another uid was allowed while the operator's and the
+    installer's doors pushed it; since those doors LAND (`gitio.land_commit`, `tests/unit/test_land.py`) nothing
+    legitimate pushes `main`, and a hook that still let it through would let a hand-run push skip the gate. (What
+    the hook does NOT stop is said in its own header: a write that is not a push runs no hook.)"""
     _needs_sh()
     wrong = []
     for shell in _shells(tmp_path):
@@ -426,6 +440,10 @@ def test_the_hook_is_an_allow_list(tmp_path):
                 wrong.append((shell, uid, ref, old[:4], new[:4], p.returncode, p.stderr.strip()))
             if not allowed:
                 assert p.stderr.startswith("C10: refused " + ref + " "), (shell, uid, ref, p.stderr)
+                # a well-formed push of main (a uid, two ids, not a delete — those sentences come first) is
+                # refused with the sentence that names the door
+                if ref == "refs/heads/main" and uid and _an_id(old) and _an_id(new) and set(new) != {"0"}:
+                    assert "kontroll-land.py" in p.stderr, "the refusal of main names the door: " + p.stderr
         # an `id` that prints a uid and FAILS has not said who is pushing: nothing is allowed
         p = _run_hook(tmp_path, "0", "refs/heads/main", _A, _B, shell=shell, id_rc="1")
         assert p.returncode == 1 and "could not be read" in p.stderr, (shell, p.returncode, p.stderr)
@@ -453,14 +471,16 @@ def test_the_hook_takes_exactly_the_run_ids_the_validator_takes(tmp_path):
 
 
 def test_a_real_push_meets_the_hook(tmp_path):
-    """Installed in a bare repository and reached through real pushes: a non-1001 push seeds `main`; as uid 1001 a
-    push to `main` is refused and `main` does not move, a NEW proposal is accepted, a second push to the SAME
-    proposal name is refused and the proposal keeps its first commit, a tag called `main` and a `refs/replace/*`
-    are refused; one push that carries a new proposal AND a tag lands the proposal and not the tag; a non-1001
-    push advances `main`. Guards what the argument table cannot show — that git calls the hook with the arguments
-    the table assumes, once per ref, and that a refusal leaves every ref as it was (the objects of a refused push
-    stay in the object store, unreachable). The second-push row is the one the promote relies on: a proposal a human has read cannot be
-    re-pointed by the service through a push."""
+    """Installed in a bare repository and reached through real pushes: `main` is SEEDED by a landing
+    (`gitio.land_commit` — the deploy's mirror task), never by a push; a push to `main` is refused from uid 1001,
+    from the operator's uid and from root alike, and `main` does not move; as uid 1001 a NEW proposal is accepted,
+    a second push to the SAME proposal name is refused and the proposal keeps its first commit, a tag called `main`
+    and a `refs/replace/*` are refused; one push that carries a new proposal AND a tag lands the proposal and not
+    the tag; and after all that a landing still advances `main` (the hook does not see it). Guards what the
+    argument table cannot show — that git calls the hook with the arguments the table assumes, once per ref, and
+    that a refusal leaves every ref as it was (the objects of a refused push stay in the object store, unreachable).
+    The second-push row is the one the promote relies on: a proposal a human has read cannot be re-pointed by the
+    service through a push; the main-from-everyone rows are what lets the gate be the only way in."""
     _needs_sh()
     fakebin = _fake_id_bin(tmp_path)
     env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", "")}
@@ -489,15 +509,22 @@ def test_a_real_push_meets_the_hook(tmp_path):
                            capture_output=True, text=True)
         return p.stdout.strip() or None
 
-    assert push("HEAD:refs/heads/main", 1000).returncode == 0, "a non-1001 push must seed main (the mirror)"
+    for uid in (1000, 0, 1001):
+        refused = push("HEAD:refs/heads/main", uid)
+        assert refused.returncode != 0 and "never pushed, by anyone" in refused.stderr, (uid, refused.stderr)
+    assert at("refs/heads/main") is None, "a push seeded main"
+    rc, said = gitio.land_commit(str(clone), str(canonical), gate=lambda c, g, m: None)
+    assert rc == 0, said
     seed = at("refs/heads/main")
+    assert seed == _git(clone, "rev-parse", "HEAD", capture=True), "the landing seeds main (the mirror task)"
     (clone / "f").write_text("2\n", encoding="utf-8")
     _git(clone, "add", "-A")
     _git(clone, "commit", "-m", "next")
     first = _git(clone, "rev-parse", "HEAD", capture=True)
 
-    assert push("HEAD:refs/heads/main", 1001).returncode != 0, "git must reject the uid-1001 push to main"
-    assert at("refs/heads/main") == seed, "main unchanged after the refusal"
+    for uid in (1001, 1000, 0):
+        assert push("HEAD:refs/heads/main", uid).returncode != 0, "git must reject a push to main from uid %s" % uid
+    assert at("refs/heads/main") == seed, "main unchanged after the refusals"
     assert push("HEAD:refs/heads/proposed/0123456789ab", 1001).returncode == 0, "a new proposal is accepted"
     assert at(_P + "0123456789ab") == first
 
@@ -520,8 +547,10 @@ def test_a_real_push_meets_the_hook(tmp_path):
                           capture_output=True, text=True).stdout.split()
     assert sorted(refs) == ["refs/heads/main", _P + "0123456789ab", _P + "0123456789cd"]
 
-    assert push("HEAD:refs/heads/main", 1000).returncode == 0, "the non-1001 (mirror) push to main is accepted"
-    assert at("refs/heads/main") != seed
+    assert push("HEAD:refs/heads/main", 1000).returncode != 0, "the operator's push to main is refused too"
+    assert at("refs/heads/main") == seed
+    rc, said = gitio.land_commit(str(clone), str(canonical), gate=lambda c, g, m: None)
+    assert rc == 0 and at("refs/heads/main") == _git(clone, "rev-parse", "HEAD", capture=True), said
 
     # The promote is a ref update, not a push: the hook is not what bounds it, and does not stand in its way.
     (clone / "f").write_text("4\n", encoding="utf-8")

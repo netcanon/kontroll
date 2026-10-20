@@ -86,10 +86,12 @@ def _streams_never_raise():
             pass
 
 
-class GateCouldNotRun(Exception):
+class GateCouldNotRun(gitio.GateCouldNotRun):
     """The gate did not judge the tree: git could not read the repository, this checkout has no generator, the
     generator could not start or did not finish. NOT a verdict on the proposal — and not a pass either: the promote
-    is refused with this sentence, and `--skip-conflict-check` is the human's way past a gate that cannot run."""
+    is refused with this sentence, and `--skip-conflict-check` is the human's way past a gate that cannot run.
+    A subclass of `gitio.GateCouldNotRun`: a landing (`gitio.land_commit`) runs this same gate over the commit
+    it lands and catches the base."""
 
 
 _SAID_LINES, _SAID_CHARS = 12, 600
@@ -117,7 +119,10 @@ def _reads_the_example(files):
 
 def _tree_refusal(commit_id, gitdir, main_id=None):
     """FIX-M9 — the promote-time resolve gate, for ONE commit of the repository at `gitdir`: why its tree is
-    refused, or None. The commit is the one the promote will land (a fast-forward makes it `main`); the gate runs
+    refused, or None. The commit is the one the promote will land (a fast-forward makes it `main`) — or the one a
+    LANDING brings in (`gitio.land_commit`, which loads this function and judges the worktree's commit, read from
+    the worktree's own repository, before anything touches the canonical: every way into `main` passes this gate).
+    The gate runs
     THIS tree's `gen-requirements.py --conflict-check --root <copy>` over it and reports anything the collection
     generator would REFUSE there — two conflicting `==` pins for one collection, a bad `signature_policy`, a
     collection entry or a trust statement it cannot render, a fleet whose `enabled_modules` is not a list of class

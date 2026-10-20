@@ -116,19 +116,21 @@ def test_make_launch_kit_strips_crlf_and_deploy_check_runs_digest_read():
 # original "4-file slice" missed — the promote gate runs THIS checkout's copy of it over the proposal's files, and
 # absent it the never-brick FIX-M9 gate cannot run (it refuses, and says so).
 _PROMOTE_SLICE = ("scripts/kontroll-promote.py", "scripts/gen-requirements.py",
+                  "scripts/kontroll-land.py",           # the landing: every door into `main` passes the same gate
                   "scripts/kontroll/__init__.py", "scripts/kontroll/paths.py", "scripts/kontroll/gitio.py",
                   "scripts/kontroll/canon.py",          # the gate reads the proposal's commit through it
                   "scripts/kontroll/yamlscalar.py")     # imported by gen-requirements.py (the sidecar's keyring)
 
 
 def test_the_promote_slice_names_everything_the_promote_gate_imports():
-    """Every `kontroll.*` module that scripts/gen-requirements.py and scripts/kontroll-promote.py import — the two
-    scripts the promote gate runs from the canonical clone — is listed in `_PROMOTE_SLICE`, and every listed file
-    exists. Guards the slice going stale the day one of them gains an import: the list is what the next test
+    """Every `kontroll.*` module that scripts/gen-requirements.py, scripts/kontroll-promote.py and
+    scripts/kontroll-land.py import — the scripts the promote gate and the landing run from the canonical clone
+    (the deploy's mirror task runs the landing from the kit tree) — is listed in `_PROMOTE_SLICE`, and every listed
+    file exists. Guards the slice going stale the day one of them gains an import: the list is what the next test
     protects from being stripped out of the launch kit, and a module that is imported and not listed could be
     stripped with every test green — the promote gate would then fail to start on a kit-installed node."""
     import ast
-    roots = ["scripts/gen-requirements.py", "scripts/kontroll-promote.py"]
+    roots = ["scripts/gen-requirements.py", "scripts/kontroll-promote.py", "scripts/kontroll-land.py"]
     imported, queue = set(), list(roots)
     while queue:                                              # transitively: a listed module's own imports count
         script = queue.pop()
@@ -221,11 +223,12 @@ def test_launch_kit_assembles_without_instance_leak():
         for d in ("api", "gui", "tests"):
             assert d not in top_level, "the minimized kit must NOT ship the baked/dev dir %s/ (it runs baked)" % d
         for keep in ("scripts/kontroll-promote.py", "scripts/gen-requirements.py", "scripts/lib/plaintext-guard.sh",
-                     "scripts/kontroll-canonical.py", "ansible/playbooks/files/canonical-update-hook.sh"):
+                     "scripts/kontroll-canonical.py", "scripts/kontroll-land.py",
+                     "ansible/playbooks/files/canonical-update-hook.sh"):
             assert any(n.endswith("/" + keep) for n in names), \
                 ("the kit must KEEP the canonical-run file %s (promote / FIX-M9 / the capture's plaintext gate / "
-                 "the canonical's audit, which every deploy runs, and the hook it compares the canonical's with)"
-                 % keep)
+                 "the canonical's audit, which every deploy runs, the landing the deploy's mirror task runs, and "
+                 "the hook it compares the canonical's with)" % keep)
         for keep in ("ansible", "modules", "scripts"):
             assert keep in top_level, "the kit must KEEP the canonical-run dir %s/ (promote / deploy-stack)" % keep
     finally:

@@ -367,11 +367,12 @@ def test_deploy_checks_the_fleet_before_any_generator_and_stops_on_it():
 def test_the_canonical_checks_the_fleet_before_it_commits_the_worktree():
     """`local-canonical.yml` — which every deploy imports — runs the check, unconditionally and also under
     `--check`, before the task that stages the whole worktree (`git add -A`), and the task after the check fails
-    the play on ANY non-zero exit — nothing softens it — saying that nothing was staged, committed or pushed.
+    the play on ANY non-zero exit — nothing softens it — saying that nothing was staged, committed or landed.
 
-    Guards a way into the canonical's `main` that passes no promote gate: that commit and the mirror take the
-    operator's worktree as it is — on a node whose overlay git tracks, a hand-edited line would be on `main` when
-    the deploy ends, and from then on the gate refuses every proposal, whatever it changes."""
+    Guards the first of two refusals in front of the canonical's `main`: that commit takes the operator's worktree
+    as it is — on a node whose overlay git tracks, a hand-edited line would be committed, and the landing after it
+    (`scripts/kontroll-land.py`, which judges the whole tree with the promote gate — `tests/unit/test_land.py`)
+    would then refuse it with a sentence about the tree; this check names the entry's place BEFORE the commit."""
     tasks = _tasks("local-canonical.yml")
     check = [n for n, t in enumerate(tasks) if _is_fleet_check(t)]
     commit = [n for n, t in enumerate(tasks) if "git add -A" in str(t.get("ansible.builtin.shell"))]
@@ -379,7 +380,7 @@ def test_the_canonical_checks_the_fleet_before_it_commits_the_worktree():
     task, refuse = tasks[check[0]], tasks[check[0] + 1]
     assert task.get("check_mode") is False and task.get("register") == "_fleet_check_canonical", task
     assert "ansible.builtin.fail" in refuse and refuse.get("when") == "_fleet_check_canonical.rc != 0", refuse
-    assert "staged, committed and pushed nothing" in refuse["ansible.builtin.fail"]["msg"]
+    assert "staged, committed and landed nothing" in refuse["ansible.builtin.fail"]["msg"]
     assert not {"ignore_errors", "failed_when"} & set(refuse), refuse       # nothing softens the refusal
     assert not {"when", "ignore_errors"} & set(task), task                  # and the check itself is unconditional
     assert task["ansible.builtin.command"]["cmd"] == "python3 -B scripts/gen-requirements.py --fleet-check", task
@@ -656,7 +657,7 @@ def test_the_canonical_refusal_tells_a_bad_fleet_from_a_check_that_did_not_run()
     """The message of `local-canonical.yml`'s refusal, rendered: for a finding of the fleet check it repeats the
     check's own sentence and says to correct `instance/fleet.yml` in the worktree; for a check that printed nothing,
     or died of something else (no PyYAML for `python3`, no fleet file), it says that nothing was checked and what
-    has to run — and in every case that nothing was staged, committed or pushed.
+    has to run — and in every case that nothing was staged, committed or landed.
 
     Guards the refusal sending an operator to edit a fleet file that is fine: the task refuses on ANY non-zero
     exit, so "correct instance/fleet.yml" under a traceback about a missing module is advice for another fault."""
@@ -673,7 +674,7 @@ def test_the_canonical_refusal_tells_a_bad_fleet_from_a_check_that_did_not_run()
                    {"stderr": "Traceback\n" + died, "stderr_lines": ["Traceback", died]}):
         said = render(_fleet_check_canonical=result, worktree="/w")
         assert "Nothing was checked" in said and "Correct instance/fleet.yml" not in said, said
-        assert "staged, committed and pushed nothing" in said, said
+        assert "staged, committed and landed nothing" in said, said
 
 
 def test_the_refusal_says_the_fault_is_on_main_exactly_when_main_itself_is_refused(tmp_path, capsys):

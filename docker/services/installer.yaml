@@ -40,7 +40,7 @@ services:
       KONTROLL_IN_CONTAINER: "1"
       # MF-1: the INVOKING host operator's identity (the launcher exports these from id -un/-u/-g + $HOME). The
       # playbooks chown the canonical + render docker/.env to THIS uid/gid (numeric, user-DB-free) instead of the
-      # in-container root, so the operator's `git push local` + a non-root `docker compose up` work.
+      # in-container root, so the operator's own landings (`kontroll-land.py`) + a non-root `docker compose up` work.
       KONTROLL_OPERATOR_USER: ${KONTROLL_OPERATOR_USER:?run via scripts/kontroll-installer.sh}
       KONTROLL_OPERATOR_UID: ${KONTROLL_OPERATOR_UID:?run via scripts/kontroll-installer.sh}
       KONTROLL_OPERATOR_GID: ${KONTROLL_OPERATOR_GID:?run via scripts/kontroll-installer.sh}

@@ -92,8 +92,10 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
   # the change of identity, with REAL uids (rule 5 of kontroll.canon). The rows of tests/integration/test_canon_drop.py
   # chown a canonical to the play's layout and start git as the service, and those of
   # tests/integration/test_content_clone_as_service.py run the deploy's content-clone tasks with ansible-playbook
-  # (root's git, and the service uid's), and those of tests/integration/test_canonical_normalise_as_root.py chown a
-  # canonical to another uid through the play's ownership pass, so they need root — and every one of them
+  # (root's git, and the service uid's), those of tests/integration/test_canonical_normalise_as_root.py chown a
+  # canonical to another uid through the play's ownership pass, and those of
+  # tests/integration/test_local_canonical_as_root.py run local-canonical.yml itself (a dry-run, three applies,
+  # a dry-run: the second apply after a landing is 0 changed), so they need root — and every one of them
   # was SKIPPED in the suite above unless this gate itself runs as root. So: as root, directly; else through
   # `sudo -n` (never a prompt) where that works; else the step is skipped, which --strict counts as a failure — a
   # gate that cannot be root has not shown that root's git is the service's. No row may be skipped (as for the sops
@@ -112,7 +114,7 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
       out="$($1 PYTEST_ADDOPTS= PATH="$PATH" HOME="$HOME" LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}" \
              PYTHONPATH="${PYTHONPATH-}" PYTHONDONTWRITEBYTECODE=1 \
              "$0" -B -m pytest tests/integration/test_canon_drop.py tests/integration/test_content_clone_as_service.py \
-               tests/integration/test_canonical_normalise_as_root.py \
+               tests/integration/test_canonical_normalise_as_root.py tests/integration/test_local_canonical_as_root.py \
                -p no:cacheprovider -rs --color=no 2>&1)"; rc=$?
       printf "%s\n" "$out"
       [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY" "$as_root"
