@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a second deploy reports 0 changed (2026-10-20)
+
+`deploy-stack.yml`'s header said a second run reports no change, and CLAUDE.md holds every play to it. On the
+floating box's deploy a second apply that changed nothing — every container kept the start time of the first —
+reported the runner image's build (`rebuild: always` makes the module report a change on every run) and the
+stack's `up` (`changed_when: true`). A report that is always "changed" cannot tell anyone the run that did change
+something.
+
+- **The image builds** (the runner, and the custom Vector image) are each preceded by a look at the image they
+  replace and report a change only when the image id moved, or there was none; a preview still says it would build.
+- **`up`** reports a change only when compose printed a container, network or volume it created, recreated,
+  started, stopped or removed — a second apply prints one `Running` line per container and nothing else.
+- **`tests/unit/test_deploy_stack_idempotence.py`** (new) evaluates the play's own expressions against compose's
+  measured lines and the build module's results.
+- Not changed: the installer's `bootstrap.yml` installs the fleet's collections into its own container, which is
+  thrown away after the run, so it reports that install on every run.
+
 ### fix(prometheus): the rendered snmp.yml keeps its credentials block (2026-10-20)
 
 `prometheus/exporters/snmp/snmp.yml.j2` opened its explanatory comment with a whitespace-stripping `{#-`. The
