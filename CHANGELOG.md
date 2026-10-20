@@ -11,6 +11,74 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible, scripts): every way into the canonical's `main` lands through the promote gate — none pushes (2026-10-19)
+
+Four doors put a commit on the canonical's `main` with `git push … HEAD:refs/heads/main`: `scripts/update.sh` and
+`scripts/update-from-bundle.sh` after a code update, the operator CLI's onboard and capture-exception commits
+(`scripts/galaxy.py … --commit`), and the deploy's mirror task (`ansible/playbooks/local-canonical.yml`); a fifth,
+`gitio.commit_and_push` outside staging (the GUI run from a checkout), did the same. A push runs the canonical's
+`update` hook and whatever its config names, as the pusher — root in the installer container, the operator on a
+host-direct run — in a repository whose config a network service writes when the deploy is armed; and it passed
+no gate, so a fleet line or a collection pin the promote refuses was on `main` the moment a deploy ended, and
+every proposal was refused from then on. `refs/heads/main` now moves through two functions only: the promote, and
+the landing (SECURITY.md C10, "Every way into `main` lands").
+
+- **`gitio.land_commit(worktree, canonical, target, skip_gate, check)`** (new): the worktree's HEAD as a commit
+  id; the canonical's `main` read once, by its full name, in the seam; the fast-forward question asked in the
+  worktree (a canonical with commits the worktree lacks — a promote — refuses, with the play's remedy and never
+  `--force`); **the same gate the promote runs** (`kontroll-promote.py`'s `_tree_refusal`, loaded from the script
+  beside the package so no second copy can drift) over the commit's files, read from the caller's own repository
+  and re-hashed, BEFORE anything touches the canonical; then a pack on a pipe (`pack-objects --revs --stdout`, no
+  `--thin`, into `index-pack --stdin` in the seam), a connectivity check (`rev-list --objects`: a pack short of
+  an object is refused before any ref names it), and one `update-ref --stdin` compare-and-swap under `option
+  no-deref` (the zero id on a first seed: `main` is created once). No hook and no config-named program of the
+  canonical runs; as root, the canonical's side is the service uid (rule 5). `gitio.land_main()` is the door the
+  CLI and a non-staging `commit_and_push` call where they pushed; both are registered write verbs.
+- **`scripts/kontroll-land.py [--worktree .] [--repo <canonical>] [--check] [--skip-conflict-check] [--propose
+  <run id>]`** (new; the launch kit ships it with `scripts/`): `--repo` defaults to the worktree's `local`
+  remote; `--check` judges and says what would land, changing nothing; `--skip-conflict-check` is the human's
+  override, as for the promote, and nothing automatic passes it; `--propose` makes a proposal by hand (created
+  once). Exit 0 landed / up to date / would land; **2 refused** by the gate, or the gate could not run; 1 nothing
+  to land as asked. It prints `kontroll_run_id=… land …` first. The doors: `update.sh` and `update-from-bundle.sh`
+  run it (and stop with its status; the merged code is then in the checkout only), `galaxy.py` and
+  `commit_and_push` call `land_main`, `local-canonical.yml` runs it twice — `--check` under the dry-run too
+  (`check_mode: false`), so the mandated `--check --diff` names a refusal and its sentence before the real run —
+  and then for real (`changed` when it says `landed`). The play's `ls-remote`, `merge-base` and `fail` tasks are
+  gone (the command does the same, without running git's serving side in the canonical as the caller), and its
+  first task refuses an operator whose uid is 1001 (the canonical cannot tell such an operator from the service).
+- **The canonical's `update` hook refuses `refs/heads/main` from everyone**, with a sentence that names the door:
+  nothing legitimate pushes it any more. As any other uid than 1001 a push may create or move a proposal, and
+  nothing else.
+- **On a box that runs the previous build:** before the first deploy of this build, run
+  `python3 scripts/kontroll-land.py --check` in the node's checkout (or let the deploy's dry-run do it): a tree
+  the promote gate refuses — a fleet line that is not a class key, two units pinning one collection differently,
+  a fleet-wide `signature_policy` outside the closed set, a link — used to be mirrored and is now REFUSED at the
+  deploy, with the generator's sentence (docs/troubleshooting.md §10); correct it in the checkout, or land once
+  with `--skip-conflict-check`. A hand-run `git push … HEAD:refs/heads/main` into the canonical is refused by
+  the hook from then on — `kontroll-land.py` is the door. `update.sh` and `update-from-bundle.sh` exit with the
+  landing's status instead of pushing. The hook file is replaced at the next deploy. A landing adds one pack to
+  the canonical's `objects/pack/` where a push of fewer than a hundred objects wrote loose objects.
+- **Two things the play's runs show (measured in the gate image as root, 2026-10-20):** the mandated `--check
+  --diff` of a FRESH node skips the landing's judgement — there is no canonical to judge against yet (the `file`
+  and `git init` tasks are only simulated) — and a debug task says so; every run after judges. And the
+  ownership pass runs a SECOND time, after the landing, on what the landing left: run by root (the installer)
+  the landing's canonical-side git is the service uid (rule 5), so the pack, `refs/heads/main` and the reflog it
+  leaves are the service's; run by the operator they are the operator's; and git writes the pack and its index
+  read-only either way — all of which the pass names. Done in the same run, the deploy after a landing reports
+  0 changed (it used to report the pass `changed` once, re-owning them then).
+  `tests/integration/test_local_canonical_as_root.py` runs the play in the gate's root step — a fresh node's
+  dry-run, three applies, a dry-run — and holds the counts.
+- Tests: `tests/unit/test_land.py` (new: every door against real git; canary hooks and a
+  `core.alternateRefsCommand` in the canonical do not run at any door, with a push as the control; the commit
+  landed is the commit judged; a race on `main`; a pack short of an object; the pin on the canonical-side
+  verbs; the two shell doors under bash), `tests/unit/test_local_canonical.py` (the play's two tasks, the uid
+  assertion), `tests/unit/test_staging_isolation.py` (`main` refused from every uid, through the table and real
+  pushes), `tests/unit/test_privmut_staging.py`, `tests/unit/test_launch_kit.py`, the API/CLI integration tests
+  (the `land_main` seam patched beside `_run`), `tests/integration/test_canon_drop.py` (a landing by root runs
+  the canonical's git as the service and leaves the service's files; the reflog-link row held back from the
+  previous change). Docs: SECURITY.md C10 and C22, docs/troubleshooting.md §6 and §10,
+  docs/local-source-of-truth.md, docs/privileged-mutation-enablement.md, docs/install-from-scratch.md,
+  docs/trust-mode.md, docs/logging-architecture.md, scripts/README.md, tests/README.md.
 ### fix(ansible): the canonical's ownership pass changes what it opened — `kontroll-canonical.py --normalise` replaces the play's four `find` tasks (2026-10-19)
 
 `local-canonical.yml` brings the entries of an existing canonical to `<operator>:1001`, group-writable, directories

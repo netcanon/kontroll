@@ -32,6 +32,7 @@ def priv(tmp_repo, tmp_path, monkeypatch):
     paths.ROOT) and nothing installed. Yields client + token + audit-log path + repo root + git calls."""
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
+    monkeypatch.setattr(gitio, "land_main", lambda run_id=None, skip_gate=False: calls.append(["kontroll-land", "main"]) or 0)
     monkeypatch.setattr(catalog, "local_installed", lambda: {})
     audit_log = str(tmp_path / "audit" / "api-audit.log")
     app = create_app(Settings(api_token=TOKEN, audit_log=audit_log))
@@ -91,7 +92,7 @@ def test_capture_exception_adds_commits_pushes(priv):
     assert "Acme_*" in _matrix_matches(priv)
     joined = [" ".join(c) for c in priv.calls]
     assert any("git add" in j for j in joined) and any("git commit" in j for j in joined)
-    assert any("push local HEAD:refs/heads/main" in j for j in joined)
+    assert "kontroll-land main" in joined and not any("push local" in j for j in joined)   # landed, never pushed
     assert any(row["action"] == "capture-exception" for row in read_audit(priv.audit_log))
 
 

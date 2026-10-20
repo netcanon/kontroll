@@ -7,9 +7,11 @@ place. Every write + git op targets `paths.write_root()` (the WRITE root) read D
 so the tmp_repo fixture's repoint diverts it; a BAKED deploy points it at the propose clone
 (the read-only image at ROOT has no .git, so git MUST run in the clone). Verbatim from galaxy.py.
 """
+import importlib
 import json
 import os
 import subprocess
+import sys
 
 from kontroll import canon, paths
 
@@ -245,11 +247,12 @@ def age_keygen():
 
 
 def _push_target(run_id=None):
-    """The branch `commit_and_push` pushes the canonical to. A network service deployed with
+    """The branch `commit_and_push` takes the commit to on the canonical. A network service deployed with
     `KONTROLL_STAGE_PUSHES=1` (the propose-then-promote posture, SECURITY.md C10) pushes a per-request STAGING
     ref `proposed/<run_id>` — never `main` — that the trusted `promote_ref` step fast-forwards into `main`; so a
     leaked token can only STAGE a proposal: the token never pushes `main` and cannot promote — only a trusted
-    promoter can. Unset env (the operator CLI / a non-staging deploy) ⇒ direct to `main`.
+    promoter can. Unset env (the operator CLI / a non-staging deploy) ⇒ `main` — which is not pushed either: it
+    is LANDED through the promote gate (`land_main`), the one way `refs/heads/main` moves.
 
     FAIL-CLOSED: when staging is on but no `run_id` is supplied, this RAISES — it never silently falls back to a
     direct `main` push. The whole job of this primitive is to be fail-closed; an unnamed proposal from a staging
@@ -343,7 +346,7 @@ def _unstage(rel_paths, run_id=None):
 
 
 def commit_and_push(paths, message_lines, push_origin=False, run_id=None):
-    """Stage `paths`, commit with the given -m `message_lines`, push the LOCAL canonical, and
+    """Stage `paths`, commit with the given -m `message_lines`, take the commit to the LOCAL canonical, and
     optionally push origin. Returns {"committed","pushed_canonical","pushed_origin","commit_rc","target_ref",
     "staged"} (+ "add_rc" when the stage itself was refused). A failed commit pushes NOTHING (never a stale
     HEAD), and so does a refused `git add`: git exits non-zero for a path a .gitignore rule ignores (having staged
@@ -351,10 +354,13 @@ def commit_and_push(paths, message_lines, push_origin=False, run_id=None):
     proposal that is MISSING a file and report it as staged. All of `paths` land, or none; and a request that
     does not commit leaves nothing of itself in the index: the staging service's clone is rolled back (below),
     any other caller gets the request's paths taken back out of its index (`_unstage`) and keeps its working
-    tree. The canonical push targets `main` by default, OR a `proposed/<run_id>` STAGING ref when the caller is a
-    staging network service (`KONTROLL_STAGE_PUSHES=1`, C10) — pass `run_id` so the operator can promote the
-    exact proposal. The API + GUI routes share this; the CLI keeps its own inline gate. Goes through _run, so
-    tests patch the one seam.
+    tree. A staging network service (`KONTROLL_STAGE_PUSHES=1`, C10) PUSHES a `proposed/<run_id>` STAGING ref —
+    pass `run_id` so the operator can promote the exact proposal. Any other caller (the GUI run from a checkout,
+    a non-staging deploy) LANDS the commit on `main` through `land_main`: judged by the promote gate, brought
+    across as a pack on a pipe, compare-and-swapped — never a push (the canonical's hook refuses a push of `main`
+    from everyone). `pushed_canonical` is then "the commit is `main`" (landed, or there already). The API + GUI
+    routes share this; the CLI keeps its own inline gate. Goes through _run (and `land_main`), so tests patch
+    the two seams.
 
     The optional `origin` push is the OPERATOR CLI's offsite backup ONLY: it is unreachable while STAGING
     (target != main, `and not staging`), so a staging network service can never push HEAD (-> main) to any remote —
@@ -390,7 +396,9 @@ def commit_and_push(paths, message_lines, push_origin=False, run_id=None):
                 "commit_rc": crc, "target_ref": None, "staged": False}
     if staging:                     # rebase the proposal onto CURRENT canonical main so it stays a FF even after an
         _rebase_proposal_onto_canonical()   # out-of-band promote moved main between this stage and the last (see helper)
-    canonical = _run(["git", "push", "local", "HEAD:refs/heads/%s" % target]) == 0
+        canonical = _run(["git", "push", "local", "HEAD:refs/heads/%s" % target]) == 0
+    else:                           # main is never pushed: it is landed, judged first (rule 8 of the canonical's doors)
+        canonical = land_main(run_id=run_id) == 0
     # C10 (dogfood VM 144, 2026-07-05): a STAGING network service must have NO reachable path to push HEAD (-> its
     # checked-out `main`) to ANY remote. On the content clone `origin` IS the canonical (git clone file:///srv/
     # kontroll.git; deploy-stack.yml api ~812/836, gui ~931/955), so `git push origin HEAD` fast-forwarded canonical
@@ -516,3 +524,248 @@ def _what_moved(repo, ref, oid, main_id):
     return ("git refused the transaction although both refs are as they were read: a lock file is held in the "
             "canonical (another promote is running — run this one again; or a git that was stopped left one "
             "behind — docs/troubleshooting.md §7), or this user cannot write the canonical")
+
+
+# ---- the landing: the one way `main` moves that is not a promote (C10, rule 8 of the canonical's doors) ----------- #
+
+class GateCouldNotRun(Exception):
+    """The promote gate did not judge a tree: this checkout has no generator, git could not read the repository,
+    the generator could not start or did not finish. Not a verdict — and not a pass: a landing is refused with
+    this sentence (exit 2), and `--skip-conflict-check` is the human's way past a gate that cannot run.
+    `scripts/kontroll-promote.py`'s own class is a subclass, so one `except` here catches the gate's own raise."""
+
+
+NOT_A_FAST_FORWARD = ("the canonical (%s) has commit(s) your worktree (%s) does not, so this landing would discard "
+                      "them. That is normal once propose-then-promote is in use: a promote advances canonical "
+                      "`main` directly. Bring the worktree forward first — `git -C %s fetch local && git -C %s "
+                      "rebase local/main` — then run again. Nothing was packed and the canonical is untouched.")
+_LAND_SECONDS = 600          # a pack of the whole shipped tree takes a second; this is the bound, not the budget
+
+
+def _the_gate():
+    """The promote gate — `scripts/kontroll-promote.py`'s `_tree_refusal(commit_id, gitdir, main_id)`, the one
+    judge of a tree this tool has (it runs THIS checkout's collection generator over the commit's files, read
+    object by object and re-hashed). Loaded from the script beside this package, so that the gate the landing
+    runs is the gate the promote runs and no second copy of it can drift. Raises `GateCouldNotRun` when the
+    script is not there to load: a checkout without it cannot judge, and a landing that cannot judge refuses."""
+    scripts = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        return importlib.import_module("kontroll-promote")._tree_refusal
+    except Exception:                                          # ImportError, or a script that does not import
+        raise GateCouldNotRun("this checkout has no scripts/kontroll-promote.py to judge the tree with") from None
+
+
+def _wt(worktree, argv, stdin=None, timeout=60):
+    """Plain git in the CALLER'S OWN repository — the worktree a landing takes its commit from. Not the seam: the
+    seam is for the canonical, which somebody else writes; this repository is the caller's, and git runs in it as
+    it does for the caller's own `git commit`. Returns the completed process (stdout and stderr captured)."""
+    return subprocess.run(["git", "-C", worktree] + list(argv), input=stdin, capture_output=True, timeout=timeout)
+
+
+def _pack(worktree, oid, old):
+    """Start `git pack-objects --revs --stdout` in the worktree: a pack of every object reachable from `oid` and
+    not from `old` (every object, when `old` is None — a first seed), on its standard output. No `--thin`: a thin
+    pack would be made of deltas against objects the packer ASSUMES the canonical holds, and nothing here reads
+    the canonical's store to find out. The canonical holds `old` whole (it is its own `main`), so the pack holds
+    exactly what it lacks."""
+    revs = (oid + "\n" + ("^" + old + "\n" if old else "")).encode("ascii")
+    p = subprocess.Popen(["git", "-C", worktree, "pack-objects", "--revs", "--stdout", "-q"],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    p.stdin.write(revs)
+    p.stdin.close()
+    return p
+
+
+def _land_in_canonical(gitdir, target, oid, old, base, packer):
+    """The canonical's side of a landing, every git of it in the seam (`canon.git_kwargs`): read the pack
+    `packer` writes into the canonical's object store (`git index-pack --stdin`, which refuses a pack whose
+    checksum or whose objects do not hash to their names); check that `oid` and everything it names is now
+    reachable there (`git rev-list --objects --quiet oid ^base`, `base` being the canonical's `main` the pack was
+    made against — a pack short of an object is refused before any ref names it); then ONE ref transaction under
+    `option no-deref`: `target` becomes `oid` provided it is still `old` (`old` None, the zero id: provided it
+    does not exist — a proposal, or `main` on a first seed), or nothing changes. Returns `(rc, message)`.
+
+    No transport. A push or a fetch into the canonical would run its hooks and the programs its config names, as
+    the pusher (`core.hooksPath`, `receive.*`, `uploadpack.*`, `remote.<name>.uploadpack`) — this reads a pipe
+    and writes a pack, and the seam points every such key at nothing and runs root's git as the service. The
+    first seed (`old` None) creates the ref with the zero id as its old value: a second seed answers "exists"."""
+    zero = "0" * len(oid)
+    try:
+        received = subprocess.run(["git", "index-pack", "--stdin"], stdin=packer.stdout, capture_output=True,
+                                  timeout=_LAND_SECONDS, **canon.git_kwargs(gitdir, fed=True))
+    except canon.Unreadable as e:
+        packer.kill()
+        return 1, "the canonical could not be written to (%s)" % e
+    except (OSError, subprocess.SubprocessError):
+        packer.kill()
+        return 1, "git could not receive the pack into the canonical, or did not finish; nothing was landed"
+    finally:
+        packer.stdout.close()
+        packer.wait()
+    if packer.returncode != 0:
+        return 1, "the worktree could not pack the commit (is `%s` a commit of it?); nothing was landed" % oid
+    if received.returncode != 0:
+        return 1, ("the canonical refused the pack (an object in it is not what its name says, or the pack is cut "
+                   "short); nothing was landed")
+    try:                                                       # two literal argv: the seam pin reads each as written
+        if base:
+            whole = subprocess.run(["git", "rev-list", "--objects", "--quiet", oid, "^" + base],
+                                   capture_output=True, timeout=_LAND_SECONDS, **canon.git_kwargs(gitdir))
+        else:
+            whole = subprocess.run(["git", "rev-list", "--objects", "--quiet", oid],
+                                   capture_output=True, timeout=_LAND_SECONDS, **canon.git_kwargs(gitdir))
+    except (OSError, subprocess.SubprocessError, canon.Unreadable):
+        return 1, "the canonical could not be read back after the pack was received; nothing was landed"
+    if whole.returncode != 0:
+        return 1, ("the commit is not whole in the canonical after the pack was received (an object it names is "
+                   "missing there); nothing was landed")
+    txn = ("start\noption no-deref\nupdate %s %s %s\nprepare\ncommit\n" % (target, oid, old or zero)).encode("ascii")
+    try:
+        moved = subprocess.run(["git", "update-ref", "--stdin"], input=txn, capture_output=True, timeout=30,
+                               **canon.git_kwargs(gitdir, fed=True))
+    except (OSError, subprocess.SubprocessError, canon.Unreadable):
+        moved = None
+    try:
+        now = canon.read_ref(gitdir, target)
+    except canon.Unreadable:
+        now = None
+    if now == (oid, "commit", ""):
+        return 0, "landed %s %s (was %s)" % (target, oid, old or "nothing: a first seed")
+    if moved is None:
+        return 1, ("git could not run the transaction on the canonical, or did not finish — %s is not this commit"
+                   % target)
+    if old is None:
+        return 1, "%s exists already (%s): it is created once, and this canonical has it" % (
+            target, now[0] if now else "it could not be read")
+    if now is None or now[2] or now[0] != old:
+        return 1, ("%s moved while this landing was being judged (%s); nothing was landed — run again to judge "
+                   "against it as it is now" % (target, "it is %s now" % now[0] if now and not now[2] else
+                                                "it is gone, or symbolic"))
+    return 1, ("git refused the transaction although %s is as it was read: a lock file is held in the canonical "
+               "(another landing or promote is running — run this one again; or a git that was stopped left one "
+               "behind — docs/troubleshooting.md §7), or this user cannot write the canonical" % target)
+
+
+def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=False, gate=None):
+    """Bring the commit at `worktree`'s HEAD into the canonical at `canonical` and make `target` name it — the one
+    way into `refs/heads/main` that is not a promote, and the only way a proposal is made by hand (`target` a
+    `refs/heads/proposed/<run id>`, created). Returns `(rc, message)`: 0 landed, or up to date, or (`check`) would
+    land; 1 nothing to land as asked (not a repository, no HEAD, the canonical unreadable or its `main` not a
+    branch, not a fast-forward, the ref moved meanwhile, git failed); 2 REFUSED by the gate, or the gate could
+    not run — `skip_gate` is the human's override and nothing automatic passes it. After any rc but 0 the
+    worktree keeps its commit, the canonical its refs, and the running stack is as it was.
+
+    THE RULE (SECURITY.md C10): a commit id, judged by the gate, brought across as a pack on a pipe,
+    compare-and-swapped. In order: C = HEAD's commit (`rev-parse`, in the worktree); M = the canonical's
+    `refs/heads/main`, read once by its full name in the seam (`canon.read_ref`; None on a first seed; a
+    symbolic ref or a non-commit refuses); M must be an ancestor of C IN THE WORKTREE (`merge-base
+    --is-ancestor`: rc 1 — a real divergence — and rc 128 — M never fetched — both refuse, with the sentence the
+    play printed before); `gate(C, <the worktree's git dir>, M)` judges C's tree as the promote would judge a
+    proposal's — read object by object from the CALLER'S repository, re-hashed, this checkout's generator over
+    the files — before anything touches the canonical; `check` stops here. Then `_land_in_canonical`.
+
+    What this is not: a push. `scripts/update.sh`, `scripts/update-from-bundle.sh`, the operator CLI's onboard
+    and the deploy's mirror used to `git push … HEAD:refs/heads/main`, which ran the canonical's `update` hook
+    and whatever its config named, as the pusher (the operator, or root in the installer) — and passed no gate,
+    so a fleet line the promote refuses was on `main` the moment a deploy ended. Now the canonical's hook refuses
+    a push of `main` from everyone, and the four doors call this. `gate` is the promote's own (`_the_gate`),
+    unless a caller hands one in."""
+    worktree = os.path.abspath(worktree)
+    gitdir = canon.git_dir(os.path.abspath(canonical))
+    if target != canon.MAIN:
+        run_id = target[len(canon.PROPOSED):] if target.startswith(canon.PROPOSED) else ""
+        if not canon.valid_run_id(run_id):
+            return 1, "the target must be refs/heads/main or refs/heads/proposed/<a minted run id>"
+    try:
+        head = _wt(worktree, ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"])
+        where = _wt(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    except (OSError, subprocess.SubprocessError):
+        return 1, "git could not be run in the worktree %s; nothing was landed" % worktree
+    commit_id = head.stdout.decode("ascii", "replace").strip()
+    if head.returncode != 0 or not canon.valid_oid(commit_id) or where.returncode != 0:
+        return 1, ("the worktree %s has no commit at HEAD (is it a repository, with a commit?); nothing was landed"
+                   % worktree)
+    wt_gitdir = where.stdout.decode("utf-8", "replace").strip()
+    try:
+        main_ref = canon.read_ref(gitdir, canon.MAIN)
+        existing = main_ref if target == canon.MAIN else canon.read_ref(gitdir, target)
+    except canon.Unreadable as e:
+        return 1, "the canonical could not be read (%s); nothing was landed" % e
+    if main_ref is not None and (main_ref[2] or main_ref[1] != "commit"):
+        return 1, ("refs/heads/main of the canonical is a symbolic ref, or names no commit: there is nothing to "
+                   "land on, and nothing is landed beside it")
+    main_id = main_ref[0] if main_ref else None
+    if target != canon.MAIN and existing is not None:
+        return 1, "%s exists already: a proposal is created once (stage a new run id)" % target
+    if main_id:
+        if main_id == commit_id:
+            if target == canon.MAIN:
+                return 0, "up to date — refs/heads/main is %s already" % commit_id
+            return 1, "HEAD is the canonical's main already (%s): there is nothing to propose" % commit_id
+        try:
+            behind = _wt(worktree, ["merge-base", "--is-ancestor", main_id, commit_id]).returncode
+        except (OSError, subprocess.SubprocessError):
+            behind = -1
+        if behind != 0:
+            return 1, NOT_A_FAST_FORWARD % (gitdir, worktree, worktree, worktree)
+    if not skip_gate:
+        try:
+            verdict = (gate or _the_gate())(commit_id, wt_gitdir, main_id)
+        except GateCouldNotRun as e:
+            return 2, ("the gate could not run, so the tree was not judged: %s. Nothing was landed. Correct what "
+                       "that names and run again (--skip-conflict-check lands WITHOUT the gate — the human's "
+                       "override, for a node that must move while the gate cannot run)." % e)
+        if verdict:
+            return 2, ("the tree does not resolve, so the next bootstrap (and, for a fleet line, the next deploy) "
+                       "would stop: %s. Nothing was landed; the fix is a commit in the worktree "
+                       "(--skip-conflict-check overrides this gate)." % verdict)
+    if check:
+        return 0, "would land %s %s (was %s); nothing was changed" % (target, commit_id,
+                                                                      main_id or "nothing: a first seed")
+    try:
+        packer = _pack(worktree, commit_id, main_id)
+    except OSError:
+        return 1, "git could not be run in the worktree %s; nothing was landed" % worktree
+    return _land_in_canonical(gitdir, target, commit_id, main_id if target == canon.MAIN else None, main_id, packer)
+
+
+def _canonical_of(worktree):
+    """The canonical the worktree's `local` remote names, as a directory: `git remote get-url local`, a path or a
+    `file://` URL (what `local-canonical.yml` adds, and what a content clone's `origin` is). None when there is
+    no such remote, or it is not a directory on this machine — the canonical is on the node by definition, and
+    a landing uses no transport."""
+    try:
+        p = _wt(worktree, ["remote", "get-url", "local"], timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    url = p.stdout.decode("utf-8", "replace").strip()
+    if p.returncode != 0 or not url:
+        return None
+    if url.startswith("file://"):
+        url = url[len("file://"):]
+    if "://" in url:
+        return None                                            # ssh://, https://: not on this machine
+    if not os.path.isabs(url):
+        url = os.path.join(worktree, url)                      # git takes a relative URL from the worktree
+    return os.path.abspath(url) if os.path.isdir(url) else None
+
+
+def land_main(run_id=None, skip_gate=False):
+    """Land the write root's HEAD on the canonical its `local` remote names — what the operator CLI and a
+    non-staging `commit_and_push` do where they pushed `HEAD:refs/heads/main` before. Narrated like `_run` (a
+    `$` line, then the verdict), so an operator at the CLI reads what happened; `run_id` ties the line to the
+    request's audit entry. Returns the landing's rc (0 landed or up to date; 1 nothing to land, or no `local`
+    remote; 2 refused by the gate). The second seam tests patch beside `_run`: a test that lets this run would
+    land on whatever canonical the checkout's `local` remote names."""
+    worktree = paths.write_root()
+    canonical = _canonical_of(worktree)
+    if canonical is None:
+        print("  ! the worktree has no `local` remote naming a canonical on this machine — nothing landed; run "
+              "playbooks/local-canonical.yml (it sets the 'local' remote)%s" % _for_run(run_id))
+        return 1
+    print("  $ kontroll-land --repo %s   (refs/heads/main <- HEAD, judged first; never a push)" % canonical)
+    rc, said = land_commit(worktree, canonical, skip_gate=skip_gate)
+    print("  %s %s%s" % ("+" if rc == 0 else "!", said, _for_run(run_id)))
+    return rc

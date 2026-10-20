@@ -1,6 +1,7 @@
 """Onboard route — POST /onboard. The operator's one-shot over HTTP: a dry-run returns the plan;
 apply performs the repo mutation (module + drop-in host + fleet-enable + creds→SOPS) and commits +
-pushes the local canonical. Privileged (token + audit). The highest-blast-radius route, so: dry-run
+takes the commit to the local canonical (a staging push of a proposal when armed; a landing through the promote
+gate otherwise — never a push of `main`). Privileged (token + audit). The highest-blast-radius route, so: dry-run
 by default, credentials are accepted but NEVER returned or logged (only their var names appear), a
 failed commit pushes nothing, and bootstrap (collection install + live-verify) is DELEGATED to
 Semaphore — the API does not run Ansible (docs/api-architecture.md §8).
@@ -70,7 +71,8 @@ def onboard(body: OnboardIn, request: Request,
             principal: Principal = Depends(require_token),
             cat: Catalog = Depends(get_catalog)) -> dict:
     """Dry-run (default) returns the onboard PLAN; `apply: true` writes the module + drop-in host +
-    fleet-enable + encrypts creds to SOPS, then commits + pushes the local canonical (audited).
+    fleet-enable + encrypts creds to SOPS, then commits + stages a proposal on the local canonical (or, outside
+    staging, lands on `main` through the promote gate — `gitio.commit_and_push`) (audited).
     404 if the collection isn't installed; 422 if no backend auto-matches. A 409 is told apart by its `code`:
     a drop-in that exists with different content (no `code`; retry with `overwrite`), or `repository_data` — the
     repository's own data or layout stopped the request, and a retry will not help. A re-onboard with no change

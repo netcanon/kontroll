@@ -2,16 +2,22 @@
 # Ensure the LOCAL CANONICAL git — the instance's source of truth (Phase A of
 # docs/local-source-of-truth.md). A bare repo on the control node that Semaphore
 # reads instead of GitHub, so the running instance needs no remote git. The working
-# tree gains a `local` remote pointing at it; onboard/GUI push here (offline, free)
-# so changes are visible to Semaphore with zero GitHub dependency.
+# tree gains a `local` remote pointing at it; the operator's own changes LAND here
+# (offline, free; judged by the promote gate first — scripts/kontroll-land.py) so they
+# are visible to Semaphore with zero GitHub dependency; the network service stages
+# proposals here by push.
 #
 # Access chain used:   localhost (the control node itself)
 # May break:           nothing on the lab — control-node git only
 # Fallback required:   no
 # Blast radius:        this VM only
 # Idempotence:         re-runnable; init is `creates:`-guarded, remote add tolerated,
-#                      the mirror push is a fast-forward (no-op if already current);
-#                      the fleet check and the plaintext gate in front of the commit are read-only.
+#                      the landing is a fast-forward compare-and-swap ("up to date" if already current);
+#                      the fleet check, the plaintext gate and the landing's `--check` in front of
+#                      the commit and the landing are read-only. The ownership pass runs again AFTER the
+#                      landing, on what the landing left (the service's, when root landed — rule 5; and git's
+#                      read-only pack files either way), so the deploy that follows a landing reports 0 changed
+#                      (measured in the gate image, 2026-10-20: tests/integration/test_local_canonical_as_root.py).
 
 - name: Ensure the local canonical bare repo
   hosts: localhost
@@ -27,8 +33,9 @@
     worktree: "{{ playbook_dir }}/../.."
     # MF-1 (compose-native installer — docs/reviews/2026-06-29-compose-native-install/99-synthesis.md): inside the
     # ephemeral installer container this play runs as root (user:0:0), so ansible_user_id is 'root' and a fact-derived
-    # chown would make the canonical root-owned — breaking the (non-root) operator's `git push local` (the F-CANON
-    # bug). The launcher passes the INVOKING host operator's identity in KONTROLL_OPERATOR_{USER,UID}; on a host-direct
+    # chown would make the canonical root-owned — breaking the (non-root) operator's own landings (`kontroll-land.py`;
+    # the F-CANON bug, when they were pushes). The launcher passes the INVOKING host operator's identity in
+    # KONTROLL_OPERATOR_{USER,UID}; on a host-direct
     # run those env vars are absent ⇒ fall back to the gathered facts (the SAME value), so off-container is unchanged.
     operator: "{{ lookup('env', 'KONTROLL_OPERATOR_USER') or ansible_user_id }}"
     # Chowns use the NUMERIC uid, not the name: in-container the host operator is absent from /etc/passwd, so a
@@ -40,9 +47,23 @@
     in_container: "{{ (lookup('env', 'KONTROLL_IN_CONTAINER') | default('', true)) | length > 0 }}"
 
   tasks:
+    # Q-6 of the canonical's doors: the canonical's hook and the seam tell the network service from everyone else by
+    # ONE number, uid 1001. An operator whose login uid IS 1001 would be taken for the service — the landing below
+    # would run as "the service", and this play's chown would hand the service the operator's grant. Say so first,
+    # in a sentence, instead of failing later with a message about something else.
+    - name: Refuse an operator whose uid is the service's (1001) — the canonical cannot tell the two apart
+      ansible.builtin.assert:
+        that: operator_uid | string != "1001"
+        fail_msg: >-
+          local-canonical: the operator ({{ operator }}) has uid 1001, which is the uid the network service runs as
+          and the canonical's grant and hook are keyed on. The canonical cannot tell such an operator from the
+          service, so this play refuses to make a canonical for them. Deploy as an account with another uid
+          (KONTROLL_OPERATOR_UID on a launcher run). Nothing was changed.
+        quiet: true
+
     # F-CANON (#119): the canonical is group-1001 (the runtime uid:gid the privileged API/runner writes as), but a
     # FRESH control node has no NAMED group at gid 1001 AND the operator is not a member of it — so the operator's
-    # Mirror push below (run as the operator, no become) hits "Permission denied" the moment any canonical object
+    # landing below (run as the operator, no become) hits "Permission denied" the moment any canonical object
     # is group-1001-owned but not operator-owned. Create the group + add the operator here, BEFORE the canonical is
     # touched. (Old `.10` never hit this — it ran no onboard-gui that staged gid-1001 objects.) Both tasks are
     # idempotent. The owner-side half lands on the recursive grant below.
@@ -57,7 +78,7 @@
         state: present
       when: not in_container
 
-    - name: Add the operator to the gid-1001 group (so its `git push local` can write the canonical)
+    - name: Add the operator to the gid-1001 group (so its landings — `kontroll-land.py` — can write the canonical)
       become: true
       ansible.builtin.user:
         name: "{{ operator }}"
@@ -65,8 +86,8 @@
         append: true            # supplementary only — never touches the operator's primary group
       when: not in_container
       # A newly-added supplementary group is NOT effective in the operator's CURRENT login session, so on the very
-      # first run the Mirror push can't rely on group membership yet. The recursive grant below makes the canonical
-      # OPERATOR-OWNED, so that push succeeds via OWNER perms regardless; this membership is the runtime/future
+      # first run the landing can't rely on group membership yet. The recursive grant below makes the canonical
+      # OPERATOR-OWNED, so that landing succeeds via OWNER perms regardless; this membership is the runtime/future
       # half (effective on the operator's next login).
 
     # ── THE AUDIT COMES FIRST: before this play writes anything into a canonical that is already there ──────────
@@ -148,6 +169,30 @@
         mode: "0664"            # group-writable, consistent with the C10 gid-1001 grant below — a 0644 here
                                 #  would oscillate with the recursive `chmod g+w` (each run re-fighting HEAD)
 
+    - name: Read which of the play's config keys the canonical holds already  # noqa: command-instead-of-module
+      # `--file`: the config file read BY ITS PATH — no repository is opened, so nothing in the canonical decides
+      # what this runs, and a canonical another uid owns needs no `safe.directory` for it. (Not quite the audit's
+      # read, which hands git the file's BYTES on stdin: here a `config` that is a symbolic link is read through
+      # the link — the audit names such a link, `link`, before this task runs.) `--no-includes`: an `[include]`
+      # directive in the file names another file to read; git does not follow one under `--file` by default
+      # (measured), and this says so where the default could change. rc 1 and no line for a key that is absent
+      # (a fresh canonical: the file is not there yet under --check, which is the same answer); rc 128 and no line
+      # for a file that is not config syntax; never a failure. The values it prints are the play's own five, never
+      # a secret. Its loop and the harden task's below are THE SAME LIST IN THE SAME ORDER: the harden reads this
+      # task's result by index (tests/unit/test_local_canonical.py holds the two equal).
+      ansible.builtin.command:
+        cmd: "git config --no-includes --file {{ bare }}/config --get-all {{ item.key }}"
+      loop:
+        - {key: receive.denyNonFastForwards, value: "true"}
+        - {key: receive.denyDeletes, value: "true"}
+        - {key: core.sharedRepository, value: "group"}
+        - {key: gc.writeCommitGraph, value: "false"}
+        - {key: repack.updateServerInfo, value: "false"}
+      register: _canonical_config
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
     - name: Harden the bare repo — deny non-FF/deletes; group-share new objects  # noqa: command-instead-of-module
       # receive.deny*: no force-push / history rewrite on the canonical, from ANY writer (the staging API —
       # which can only push a proposed/<run_id> ref anyway — the runner, or an accidental operator `-f`).
@@ -164,7 +209,14 @@
       # --replace-all: a key that is in the file TWICE is one git will not set with a single value (exit 5), so one
       # more line in `config` stopped every deploy at this task. Replaced, the key is there once, with this value —
       # and the audit above has named it (`config-value`) before this task put it right.
-      # Idempotent (set-or-replace). SECURITY.md C10 / docs/privileged-mutation-enablement.md.
+      # SET ONLY WHAT IS NOT SO ALREADY. `git config --replace-all` rewrites the file through a lock and a rename
+      # even when the value is the one it holds (measured: a new inode each time), and this task runs as root in
+      # the installer — so every real apply left `config` root's, and the ownership pass below re-owned it to the
+      # operator and reported `changed`, on every run. The read above (`--file`, the audit's way: the file by its
+      # path, no repository opened) says which keys hold exactly the one value asked; only the others are
+      # written — a first run, a key that is missing, turned, or there twice. A second apply writes nothing,
+      # `config` keeps its owner, and the pass has nothing to do: 0 changed. SECURITY.md C10 /
+      # docs/privileged-mutation-enablement.md.
       ansible.builtin.command:
         cmd: "git -C {{ bare }} config --replace-all {{ item.key }} {{ item.value }}"
       loop:
@@ -173,17 +225,23 @@
         - {key: core.sharedRepository, value: "group"}
         - {key: gc.writeCommitGraph, value: "false"}
         - {key: repack.updateServerInfo, value: "false"}
-      changed_when: false
+      loop_control:
+        index_var: _key_index
+      # the read registers one result per key, in this loop's order; a key that is absent reads as no line (rc 1),
+      # one there twice as two lines — neither is the one value, so it is written
+      when: (_canonical_config.results[_key_index].stdout_lines | default([])) != [item.value]
+      changed_when: true
 
     - name: Install the C10 update-hook — an allow-list of what a push may do to the canonical (defence-in-depth)
       become: true
       # Belt-and-braces with gitio.commit_and_push's `and not staging` guard (the code boundary): what a PUSH may do
       # to the canonical is decided HERE, by the canonical itself, and it is an allow-list. As uid 1001 (the network
       # service): create refs/heads/proposed/<run id>, and nothing else — not main, not a tag, not refs/replace/*,
-      # not a second push to a proposal that exists. As any other uid (the Mirror push below: uid 0 in the installer
-      # container, or the operator uid on a host-direct run — NEVER 1001): refs/heads/main and a proposal, and
-      # nothing else. A delete is refused from everyone. A human promote is a ref update, not a push (C2): the hook
-      # is not what bounds it. The hook body is the committed files/canonical-update-hook.sh (one source of truth
+      # not a second push to a proposal that exists. As any other uid: a proposal (create or move), and nothing
+      # else. refs/heads/main is refused from EVERYONE — nothing legitimate pushes it: the landing below
+      # (scripts/kontroll-land.py) and the promote are ref transactions, not pushes (C2), so the hook is not what
+      # bounds them. A delete is refused from everyone. The hook body is the committed
+      # files/canonical-update-hook.sh (one source of truth
       # the tests read too — no twin drift). Idempotent (fixed file). Runs in BOTH container + host modes (a
       # canonical-config gesture, not a host gesture — no KONTROLL_IN_CONTAINER skip). Closes the dogfood VM-144
       # breach's push half. SECURITY.md C10 / docs/privileged-mutation-enablement.md.
@@ -194,7 +252,7 @@
 
     # The top-dir grant (above) + setgid cover a FRESH canonical (objects inherit gid 1001); an EXISTING
     # canonical created before the grant has objects still on the operator's primary group / not group-writable /
-    # owned by a different actor (e.g. uid-1001 staged a proposal), so the operator's push can't write near them.
+    # owned by a different actor (e.g. uid-1001 staged a proposal), so the operator's landing can't write near them.
     # Fix the existing objects — the one-time manual `chown -R <operator>:1001 + chmod -R g+w + find -type d
     # setgid` step (F-CANON, #119), now an idempotent detect-then-apply pair: THE OWNERSHIP PASS of
     # scripts/kontroll-canonical.py (`--normalise`), which under `--check` names what it would change and,
@@ -273,13 +331,13 @@
       changed_when: _remote.rc == 0
       failed_when: _remote.rc != 0 and 'already exists' not in _remote.stderr
 
-    - name: Check the fleet list before it is committed and mirrored (scripts/gen-requirements.py --fleet-check)
-      # The commit and the mirror below are a way into the canonical's `main` that passes no promote gate: they take
-      # the operator's worktree as it is. A fleet line that is not a device-class key would be on `main` when this
-      # play ends — and from then on the promote gate refuses EVERY proposal, not only one that touches the fleet.
-      # One rule (kontroll.paths), asked before the commit. Read-only: it runs under --check too, so the mandated
-      # dry-run names the entry's place before the real run does. (Not the only such way: scripts/update.sh,
-      # scripts/update-from-bundle.sh and the operator CLI's onboard push HEAD to `main` unchecked — SECURITY.md C22.)
+    - name: Check the fleet list before it is committed and landed (scripts/gen-requirements.py --fleet-check)
+      # The commit below takes the operator's worktree as it is. A fleet line that is not a device-class key would be
+      # committed — and the landing after it would then be REFUSED by the promote gate (which judges the whole tree),
+      # leaving the canonical behind the checkout. This asks one rule (kontroll.paths) before the commit, so the
+      # refusal comes before anything is committed and names the entry's place. Read-only: it runs under --check too,
+      # so the mandated dry-run names it before the real run does. (The landing's own `--check` below judges the
+      # rest of what the gate judges: a collection pin conflict, a signature policy, a link in the tree.)
       ansible.builtin.command:
         cmd: python3 -B scripts/gen-requirements.py --fleet-check   # -B: a read leaves no __pycache__ behind
         chdir: "{{ worktree }}"
@@ -296,7 +354,7 @@
           local-canonical: REFUSING to commit —
           {{ _fleet_check_canonical.stderr_lines | default([]) | last
           | default('the fleet check printed nothing.', true) }}
-          This play staged, committed and pushed nothing: no ref of the canonical moved.
+          This play staged, committed and landed nothing: no ref of the canonical moved.
           {{ 'Correct instance/fleet.yml in'
           if 'gen-requirements: instance/fleet.yml' in (_fleet_check_canonical.stderr | default(''))
           else 'Nothing was checked: make `python3 scripts/gen-requirements.py --fleet-check` run in' }}
@@ -327,7 +385,7 @@
         msg: >-
           local-canonical: REFUSING to commit —
           {{ (_plaintext_guard.stderr_lines | default([]) | join('; ')) or 'the plaintext guard could not run' }}.
-          This run staged, committed and pushed nothing.
+          This run staged, committed and landed nothing.
           {{ 'Move the named file out of the repository, or see' if 'REFUSED' in (_plaintext_guard.stderr | default(''))
           else 'Nothing was checked: see' }}
           docs/install-from-scratch.md ("REFUSING to commit") for the fix that fits.
@@ -337,7 +395,7 @@
 
     - name: Commit uncommitted instance state into the canonical  # noqa: command-instead-of-module
       # kontroll-init --fresh scaffolds instance/ AFTER install.sh's initial commit, so on a fresh node the
-      # overlay (inventory, fleet, .sops.yaml, ENCRYPTED secrets) is untracked — the mirror below pushes HEAD,
+      # overlay (inventory, fleet, .sops.yaml, ENCRYPTED secrets) is untracked — the landing below takes HEAD,
       # which would omit it, leaving Semaphore's canonical clone without any instance config. Commit it here (the
       # operator needs no git knowledge — local-source-of-truth goal). "Everything committed is ciphertext or
       # public" is CHECKED by the two tasks above, not asserted. Idempotent: a no-op when the tree is already clean.
@@ -354,69 +412,117 @@
       register: _state_commit
       changed_when: "'committed' in _state_commit.stdout"
 
-    # Where the canonical stands relative to the worktree. The mirror is a FAST-FORWARD-ONLY push, and the two can
-    # legitimately diverge the moment propose-then-promote is in use: a promote advances canonical `main` with a
-    # commit the operator's worktree has never seen. Ask first, so the failure below can say something true.
-    - name: Read the canonical's current main — WITHOUT writing to the worktree  # noqa: command-instead-of-module
-      # `ls-remote`, deliberately NOT `fetch`. This play runs as ROOT inside the installer container, and a fetch
-      # writes `.git/FETCH_HEAD` into the OPERATOR's worktree — root-owned. The operator's own next `git fetch`
-      # then dies with "cannot open '.git/FETCH_HEAD': Permission denied", i.e. the remedy this task's own error
-      # message tells them to run. (Live-caught 2026-07-28: the first cut of this check did exactly that, and the
-      # printed remedy failed when followed verbatim.) ls-remote writes nothing anywhere.
+    # THE LANDING (SECURITY.md C10, rule 8 of the canonical's doors). The worktree's HEAD goes into the canonical's
+    # `main` as a LANDING, never a push: scripts/kontroll-land.py reads the canonical's `main` once, by its full
+    # name, in the seam (kontroll.canon — as root in the installer container that git is the service uid, never
+    # root); refuses when that commit is not an ancestor of HEAD (rc 1 — a real divergence — and rc 128 — the
+    # canonical's commit was never fetched — alike: a promote advances canonical `main` with a commit this worktree
+    # has never seen, and a landing must not discard it); judges HEAD's tree with the promote gate (this
+    # checkout's gen-requirements.py --conflict-check over the commit's files, read object by object from the
+    # worktree's own repository and re-hashed) BEFORE anything touches the canonical; then brings the commit across
+    # as a pack on a pipe (pack-objects --stdout here, index-pack --stdin there) and moves `main` in one
+    # compare-and-swap transaction. No hook of the canonical runs, and no program its config names — a push ran
+    # both, as the pusher: root in the installer, the operator host-direct. The canonical's hook now refuses a
+    # push of `main` from everyone. Nothing here fetches into the worktree (a root fetch leaves a root-owned
+    # `.git/FETCH_HEAD` in the operator's worktree — live-caught 2026-07-28) and nothing runs git's serving side in
+    # the canonical (an `ls-remote` did, as the caller, under the canonical's config).
+    #
+    # Two tasks. The first runs `--check` — ALWAYS, `check_mode: false`, read-only: it judges and prints what would
+    # land, so the mandated `--check --diff` dry-run names a refusal (and its sentence) before the real run does,
+    # and so does the real run, before it lands. Exit 0 = would land, or up to date; exit 2 = REFUSED (the gate
+    # refused the tree, or could not run); exit 1 = nothing to land as asked (not a fast-forward: the sentence names
+    # the remedy — `git -C <worktree> fetch local && git -C <worktree> rebase local/main` — never `--force`, which
+    # would delete every promoted proposal; REBASE, not `merge --ff-only`: this play commits an instance-state
+    # commit of its own on each run, so the histories genuinely diverge). The second lands, and is "changed" when
+    # it says so. On a box that ran the previous build, a tree the promote gate refuses used to be mirrored and
+    # is now refused HERE, with the generator's sentence: correct it in the checkout, or
+    # `python3 scripts/kontroll-land.py --skip-conflict-check` as the human's override (docs/troubleshooting.md §10).
+    - name: Say that the dry-run of a FRESH node cannot judge the landing yet (the real run seeds the canonical)
+      # The judgement below needs a canonical to judge against (`--repo {{ bare }}`), and under --check on a node
+      # that has none the `file` and `git init` tasks above were only simulated: the command would exit 1 ("--repo
+      # must name a bare repository on this machine") and the refusal task would stop the mandated dry-run of
+      # every first install (measured 2026-10-20, in the gate image as root). So it is skipped there, as the
+      # ownership pass's detect is, and this says so instead of nothing.
+      ansible.builtin.debug:
+        msg: >-
+          local-canonical: {{ bare }} does not exist yet, so under --check the landing's judgement is skipped —
+          the real run creates the canonical and lands HEAD as a first seed, judged then. To judge HEAD's tree
+          now: in {{ worktree }}, `git init -q --bare /tmp/empty.git && python3 -B scripts/kontroll-land.py
+          --check --repo /tmp/empty.git`.
+      when: ansible_check_mode and not _canonical_before.stat.exists
+
+    - name: Judge the working tree's commit as the landing would, and say what would land (nothing is changed)
       ansible.builtin.command:
-        cmd: "git ls-remote local refs/heads/main"
+        cmd: python3 -B scripts/kontroll-land.py --worktree {{ worktree }} --repo {{ bare }} --check
         chdir: "{{ worktree }}"
-      register: _canon_ref
+      register: _land_check
       changed_when: false
       failed_when: false
+      check_mode: false
+      # Always on a real run; under --check whenever there is a canonical to judge against (the same condition
+      # as the ownership pass's detect): the one case left out is the dry-run of a fresh node, said above.
+      when: _canonical_before.stat.exists or not ansible_check_mode
 
-    - name: Note the canonical's main sha (empty on a first run — no main there yet)
-      ansible.builtin.set_fact:
-        canonical_main: "{{ (_canon_ref.stdout | default('')).split()[0] | default('', true) }}"
-
-    - name: Check whether the canonical has commits the worktree does not  # noqa: command-instead-of-module
-      # rc 0 = that sha is an ancestor of HEAD: a clean fast-forward (or identical) — mirror away.
-      # ANY non-zero = it is not provably an ancestor, and BOTH failure modes mean the same thing here: rc 1 is a
-      # real divergence, and rc 128 ("Not a valid object name") is the promote case — the canonical's commit was
-      # never fetched, so its objects are absent from the worktree entirely. Fail closed on both: this gates a push
-      # that would otherwise discard promoted work.
-      ansible.builtin.command:
-        cmd: "git merge-base --is-ancestor {{ canonical_main }} HEAD"
-        chdir: "{{ worktree }}"
-      register: _canon_behind
-      changed_when: false
-      failed_when: false
-      when: canonical_main | length > 0
-
-    - name: Refuse to mirror over promoted work, and say so  # noqa: command-instead-of-module
-      # rc 1 = canonical main is NOT an ancestor of HEAD, i.e. it holds commits this worktree lacks. The push would
-      # be rejected anyway — this exists so the operator reads an actionable sentence instead of git's generic
-      # "Updates were rejected... fetch first" hint, which on a control plane sounds like a transient git problem
-      # rather than "your promoted proposals live only here". Live-caught 2026-07-28: after promoting an onboard
-      # bundle by hand, the next deploy died on this task with no indication that promoted state was the cause.
-      # NEVER force: the canonical is where promotes land, and --force would silently delete them.
-      # REBASE, not `merge --ff-only`: the two histories genuinely DIVERGE, they do not merely lag. This
-      # play commits an "instance state" commit of its own on each run, so the moment a promote lands in the
-      # canonical the worktree also has a commit the canonical lacks — neither is an ancestor of the other and
-      # a fast-forward is impossible. `rebase` is correct in BOTH cases: with no local commits to replay it
-      # simply fast-forwards. (Live-caught 2026-07-28: the first message said `--ff-only`, and following it
-      # verbatim gave "fatal: Not possible to fast-forward, aborting" — an actionable message that was not.)
+    - name: Refuse to land what the promote gate refuses, or what would discard promoted work — and say which
       ansible.builtin.fail:
         msg: >-
-          local-canonical: REFUSING to mirror — the canonical ({{ bare }}) has commit(s) your worktree
-          ({{ worktree }}) does not, so this push would discard them. That is normal once propose-then-promote is
-          in use: a promote advances canonical `main` directly. Bring the worktree forward first —
-          `git -C {{ worktree }} fetch local && git -C {{ worktree }} rebase local/main` — then re-run.
-          Nothing was pushed and the canonical is untouched.
-      when: canonical_main | length > 0 and (_canon_behind.rc | default(0)) != 0
+          local-canonical: REFUSING to land (exit {{ _land_check.rc }}) —
+          {{ _land_check.stderr_lines | default([]) | join(' ') | default('kontroll-land printed nothing.', true) }}
+          Nothing was landed: the canonical is untouched and this checkout keeps its commit.
+          {{ 'Correct the tree in ' + worktree + ' (the sentence names what), or land with --skip-conflict-check as the
+          human override, then run again.'
+          if _land_check.rc == 2 else 'Do what the sentence says in ' + worktree + ', then run again.' }}
+      # `default(0)`: a skipped judgement (the fresh node's dry-run) registers no `rc`, and is not a refusal
+      when: (_land_check.rc | default(0)) != 0
 
-    - name: Mirror the working tree's commit into the canonical  # noqa: command-instead-of-module
+    - name: Land the working tree's commit on the canonical's main (judged above; a pack on a pipe, one CAS)
       ansible.builtin.command:
-        cmd: "git push local HEAD:refs/heads/main"
+        cmd: python3 -B scripts/kontroll-land.py --worktree {{ worktree }} --repo {{ bare }}
         chdir: "{{ worktree }}"
-      register: _mirror
-      changed_when: "'->' in _mirror.stderr or 'new branch' in _mirror.stderr"
-      failed_when: _mirror.rc != 0 and 'up-to-date' not in _mirror.stdout + _mirror.stderr
+      register: _land
+      changed_when: "'landed refs/heads/main' in _land.stdout"
+      failed_when: _land.rc != 0
+
+    # THE OWNERSHIP PASS, AGAIN, AFTER THE LANDING — so that the deploy after this one reports 0 changed. What a
+    # landing leaves in the canonical is not the operator's: run by root (the installer), its canonical-side git is
+    # the service uid (rule 5 of kontroll.canon), so the pack, its index, `refs/heads/main` and the reflog are
+    # 1001's; run by the operator (host-direct), they are the operator's — and either way git writes the pack and
+    # its index READ-ONLY (`0444`), which the pass's group-write rule names. Left for the next deploy, the pass
+    # there would re-own and re-mode them and report `changed`, once, after every landing (measured: `changed=1`
+    # on the run after a landing by root — CLAUDE.md's rule is that a second apply reports 0 changed). So the
+    # same pair runs here, on what this run left, and the next run finds nothing to do. The first pair above stays:
+    # on a first run it is what lets a landing by root write into a canonical `git init --bare` left root's.
+    # Under --check the landing was skipped, so this detect names only what was already there (and the first
+    # pair named); a second detect on the same tree is read-only and cheap. hooks/ is passed over by the pass,
+    # so the re-own above stays the last word on it.
+    - name: Detect what the landing left that is not operator:1001 or lacks group-write (names only)
+      become: true
+      ansible.builtin.command:
+        cmd: >-
+          python3 -B scripts/kontroll-canonical.py --normalise {{ bare }}
+          --owner {{ operator_uid }} --group 1001 --check
+        chdir: "{{ worktree }}"
+      register: _normalise_after
+      changed_when: false
+      failed_when: _normalise_after.rc not in [0, 3]
+      check_mode: false
+      when: _canonical_before.stat.exists or not ansible_check_mode
+
+    - name: Show what the ownership pass names after the landing
+      ansible.builtin.debug:
+        msg: "{{ _normalise_after.stdout_lines | default([]) }}"
+      when: _normalise_after.stdout_lines | default([]) | length > 0
+
+    - name: Make what the landing left operator:1001 and group-writable — hooks/ passed over (0 changed next run)
+      become: true
+      ansible.builtin.command:
+        cmd: >-
+          python3 -B scripts/kontroll-canonical.py --normalise {{ bare }}
+          --owner {{ operator_uid }} --group 1001
+        chdir: "{{ worktree }}"
+      register: _normalised_after
+      when: (_normalise_after.rc | default(0)) == 3
+      changed_when: true
 
     - name: Report
       ansible.builtin.debug:

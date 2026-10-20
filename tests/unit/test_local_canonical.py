@@ -3,9 +3,10 @@ membership + operator OWNERSHIP — not just the group.
 
 WHY (the failure this guards — hit LIVE during the #119 prod cutover, "F-CANON"): the canonical
 `/srv/kontroll.git` is group-1001 (the runtime uid:gid the privileged API/runner writes as), but a FRESH
-control node has no NAMED group at gid 1001 and the operator is not a member of it. The Mirror push at the end
-of local-canonical.yml runs AS THE OPERATOR (no become); the moment a canonical object is group-1001-owned but
-not operator-owned, that push dies with "Permission denied: unable to write objects" and the whole deploy fails.
+control node has no NAMED group at gid 1001 and the operator is not a member of it. The landing at the end of
+local-canonical.yml (`scripts/kontroll-land.py`, once a mirror push) runs AS THE OPERATOR (no become); the moment a
+canonical object is group-1001-owned but not operator-owned, it dies with "Permission denied: unable to write
+objects" and the whole deploy fails.
 The #119 box needed a manual `groupadd -g 1001 kontroll; usermod -aG 1001 admin; chown -R admin:1001 <canonical>`.
 
 The fix lands those three as idempotent tasks: (1) ensure the gid-1001 group, (2) add the operator to it, and
@@ -15,8 +16,11 @@ directory it was listed in and changed through its own descriptor — `tests/uni
 PASSES OVER `hooks/`, which stays root:root 0755 so the uid-1001 writer can never plant a hook (finding 2). The owner half is load-bearing: a freshly
 added supplementary group is NOT effective in the operator's current login session, so on the very first run the
 push can't rely on membership yet — operator OWNERSHIP makes it succeed via OWNER perms regardless. This test
-pins all three, plus the ordering (group/membership before the operator's push), so a refactor that drops any
-half silently re-breaks a fresh install's first deploy.
+pins all three, plus the ordering (group/membership before the operator's landing), so a refactor that drops any
+half silently re-breaks a fresh install's first deploy. And it pins the landing itself as the play's LAST write
+into the canonical: two tasks that run `kontroll-land.py` (`--check` first, read-only, under the dry-run too), no
+`git push`, no `ls-remote`, no `fetch` — `main` moves through the gate or not at all (C10, rule 8;
+`tests/unit/test_land.py` holds the command).
 """
 import os
 
@@ -58,8 +62,9 @@ def test_group_gid_1001_is_created():
 
 
 def test_operator_is_added_to_gid_1001_group():
-    """A `user` task appends the operator to the gid-1001 group (append=true, become) so its `git push local`
-    can write the group-1001 canonical. Guards the second half of the F-CANON manual fix (`usermod -aG`)."""
+    """A `user` task appends the operator to the gid-1001 group (append=true, become) so its landings
+    (`kontroll-land.py`, run as the operator) can write the group-1001 canonical. Guards the second half of the
+    F-CANON manual fix (`usermod -aG`)."""
     hits = [t for t in _tasks() if _mod(t, "ansible.builtin.user", "user")]
     assert hits, "no user task — the operator is never added to the gid-1001 group"
     u = _mod(hits[0], "ansible.builtin.user", "user")
@@ -81,10 +86,51 @@ def _cmd(task):
 
 
 def _pass_tasks():
-    """(the detect task, the apply task): the two command tasks that run `kontroll-canonical.py --normalise`."""
+    """The ownership pass's command tasks, in order: (detect, apply) before the landing, (detect, apply) after it —
+    the four tasks that run `kontroll-canonical.py --normalise`."""
     hits = [t for t in _tasks() if "--normalise" in _cmd(t)]
-    assert len(hits) == 2, "a detect task and an apply task run the ownership pass: %r" % [t.get("name") for t in hits]
-    return hits[0], hits[1]
+    assert len(hits) == 4, ("a detect-then-apply pair before the landing and one after it run the ownership pass: %r"
+                            % [t.get("name") for t in hits])
+    return hits[0], hits[1], hits[2], hits[3]
+
+
+def test_the_harden_task_sets_only_a_key_the_config_does_not_hold_already():
+    """The "Harden the bare repo" task is preceded by a READ task — `git config --no-includes --file {{ bare }}/config
+    --get-all <key>` over the same five keys (`check_mode: false`, `failed_when: false`, `changed_when: false`,
+    registered as `_canonical_config`) — and writes a key only when that read did not return exactly the one value
+    asked: `loop_control.index_var: _key_index`, `when: (_canonical_config.results[_key_index].stdout_lines |
+    default([])) != [item.value]`, `changed_when: true`, no `check_mode`. The two loops are the SAME list in the
+    SAME order, because the harden reads the read's results by index.
+
+    WHY: `git config --replace-all` rewrites the file through a lock and a rename even when the value is the one
+    it holds, and the task runs as root in the installer — so every real apply left `config` root's, and the
+    ownership pass re-owned it and reported `changed` on every run (the second cause behind `changed=1`, found in
+    the fix round of 2026-10-20). The root row `tests/integration/test_local_canonical_as_root.py` holds what a run
+    reports; this row holds the shape, so that a reversion is named at the task and not at a count: with the
+    harden unconditional again (20-review-land reversion RB), or the read's loop in another order (RC — every key
+    then compares with another key's value and is rewritten on every run), the parsed-task rows were all green and
+    only the root row failed. `--no-includes` is pinned because the read hands git a PATH: an `[include]` line a
+    writer of the canonical puts in `config` must not have this task read a second file (git's default under
+    `--file` is already not to; the flag says so)."""
+    tasks = _tasks()
+    read = [t for t in tasks if "--get-all" in _cmd(t)]
+    assert len(read) == 1, "one read task over the config keys: %r" % [t.get("name") for t in read]
+    read = read[0]
+    harden = next(t for t in tasks if "config --replace-all" in _cmd(t))
+    assert tasks.index(read) == tasks.index(harden) - 1, "the read stands directly before the harden"
+    assert _cmd(read).startswith("git config --no-includes --file {{ bare }}/config "), _cmd(read)
+    assert _cmd(read).rstrip().endswith("--get-all {{ item.key }}"), _cmd(read)
+    assert "-C" not in _cmd(read).split(), "the read opens no repository: the file by its path only"
+    assert read.get("register") == "_canonical_config" and read.get("check_mode") is False
+    assert read.get("changed_when") is False and read.get("failed_when") is False
+    assert "become" not in read and "chdir" not in _mod(read, "ansible.builtin.command", "command")
+    assert read["loop"] == harden["loop"], "the harden reads the read's results BY INDEX: the two loops must be equal"
+    assert [sorted(i) for i in read["loop"]] == [["key", "value"]] * 5
+    assert harden.get("loop_control") == {"index_var": "_key_index"}, harden.get("loop_control")
+    assert str(harden.get("when")).replace(" ", "") == \
+        "(_canonical_config.results[_key_index].stdout_lines|default([]))!=[item.value]", harden.get("when")
+    assert harden.get("changed_when") is True and "check_mode" not in harden, \
+        "a write that is skipped when nothing is to write is `changed` when it runs, and never runs under --check"
 
 
 def test_the_ownership_pass_sets_operator_owner_and_is_a_detect_then_apply_pair():
@@ -97,23 +143,38 @@ def test_the_ownership_pass_sets_operator_owner_and_is_a_detect_then_apply_pair(
     owner half is what lets the operator's first-run push succeed before the just-added group membership becomes
     effective (next login). No task of the play runs `find`, `chown` or `chmod` over the canonical any more, and
     none recurses the `file` module over it. Guards a regression to group-only (re-breaks F-CANON), to a path-based
-    grant, to a detect task the dry-run skips, or to an apply that runs — and reports a change — on every run."""
-    detect, apply = _pass_tasks()
-    for task in (detect, apply):
+    grant, to a detect task the dry-run skips, or to an apply that runs — and reports a change — on every run.
+
+    The pair runs TWICE: once before the landing (the first run's F-CANON grant), and once after it, on what the
+    landing left — the service's files when root landed (rule 5), git's `0444` pack files either way — so that the
+    deploy after a landing reports 0 changed instead of re-owning them then (`tests/integration/
+    test_local_canonical_as_root.py` runs the play and holds the count). Both pairs are the same two commands
+    with the same conditions; the second follows the landing task, and the detect of the second registers its own
+    name (`_normalise_after`) so its apply is gated on it and not on the first detect's answer."""
+    detect, apply, detect_after, apply_after = _pass_tasks()
+    tasks = _tasks()
+    land = next(i for i, t in enumerate(tasks) if "kontroll-land.py" in _cmd(t) and "--check" not in _cmd(t))
+    assert tasks.index(detect_after) == land + 1 and tasks.index(apply_after) == land + 3, \
+        "the second pair (detect, show, apply) follows the landing task"
+    assert detect_after["register"] == "_normalise_after" and detect_after["register"] != detect["register"]
+    assert str(apply_after.get("when")).replace(" ", "") == "(%s.rc|default(0))==3" % detect_after["register"]
+    assert apply_after["register"] != apply["register"]
+    for task in (detect, apply, detect_after, apply_after):
         cmd = _cmd(task)
         assert cmd.split()[:3] == ["python3", "-B", "scripts/kontroll-canonical.py"], cmd
         assert "--normalise {{ bare }}" in cmd and "--owner {{ operator_uid }} --group 1001" in cmd, cmd
         assert _mod(task, "ansible.builtin.command", "command").get("chdir") == "{{ worktree }}"
         assert task.get("become") is True, "the pass opens entries nobody else may open: become"
         assert "no_log" not in task, "the pass prints names only — hiding them hides what the operator must read"
-    assert _cmd(detect).rstrip().endswith("--check") and "--check" not in _cmd(apply)
-    assert detect.get("check_mode") is False and detect.get("changed_when") is False
-    assert str(detect.get("failed_when")).replace(" ", "") == "%s.rcnotin[0,3]" % detect["register"]
-    assert str(apply.get("when")).replace(" ", "") == "(%s.rc|default(0))==3" % detect["register"]
-    assert str(detect.get("when")).replace(" ", "") == "_canonical_before.stat.existsornotansible_check_mode", (
-        "the detect must be skipped under the dry-run of a node with no canonical yet (its path is not there), and "
-        "run everywhere else")
-    assert apply.get("changed_when") is True and "check_mode" not in apply
+    for d, a in ((detect, apply), (detect_after, apply_after)):
+        assert _cmd(d).rstrip().endswith("--check") and "--check" not in _cmd(a)
+        assert d.get("check_mode") is False and d.get("changed_when") is False
+        assert str(d.get("failed_when")).replace(" ", "") == "%s.rcnotin[0,3]" % d["register"]
+        assert str(a.get("when")).replace(" ", "") == "(%s.rc|default(0))==3" % d["register"]
+        assert str(d.get("when")).replace(" ", "") == "_canonical_before.stat.existsornotansible_check_mode", (
+            "the detect must be skipped under the dry-run of a node with no canonical yet (its path is not there), "
+            "and run everywhere else")
+        assert a.get("changed_when") is True and "check_mode" not in a
     for task in _tasks():
         words = _cmd(task).split()
         assert not {"find", "chown", "chmod"} & set(words), "a path-based grant is back: %s" % task.get("name")
@@ -128,7 +189,9 @@ def test_hooks_stay_root_owned_and_outside_every_grant():
     into the uid-1001 service (api_privileged); with a group-writable hooks/ that writer could plant a
     `reference-transaction` or `update` hook that the next `sudo kontroll-promote` runs as ROOT (2026-10-08
     review, finding 2). Every git actor only needs to READ hooks. Guards the grant growing back over hooks/, the
-    re-own going missing, or it running before a grant that would undo it."""
+    re-own going missing, or it running before a grant that would undo it. (The pass's second pair, after the
+    landing, passes hooks/ over as the first does — `_HOOKS` is the script's, not a task's — so it needs no re-own
+    after it.)"""
     import importlib.util
     spec = importlib.util.spec_from_file_location("kontroll_canonical_for_hooks",
                                                   os.path.join(ROOT, "scripts", "kontroll-canonical.py"))
@@ -137,7 +200,9 @@ def test_hooks_stay_root_owned_and_outside_every_grant():
     assert tool._HOOKS == b"hooks", "the pass must pass over the top directory's `hooks` entry"
     tasks = _tasks()
     grants = [i for i, t in enumerate(tasks) if "--normalise" in _cmd(t)]
-    assert len(grants) == 2, "the grant tasks must exist"
+    assert len(grants) == 4, "the grant tasks must exist: a pair before the landing and a pair after it"
+    land = next(i for i, t in enumerate(tasks) if "kontroll-land.py" in _cmd(t) and "--check" not in _cmd(t))
+    grants = [i for i in grants if i < land]                    # the pair the first run's grant rests on
     hooks = [i for i, t in enumerate(tasks)
              if (m := _mod(t, "ansible.builtin.file", "file")) and str(m.get("path")) == "{{ bare }}/hooks"]
     assert len(hooks) == 1, "exactly one task owns hooks/"
@@ -145,27 +210,28 @@ def test_hooks_stay_root_owned_and_outside_every_grant():
     assert m.get("owner") == "root" and m.get("group") == "root", "hooks/ is root:root"
     assert str(m.get("mode")) == "0755" and m.get("recurse") is True, "0755 recursively — readable+executable, never writable"
     assert tasks[hooks[0]].get("become") is True
-    assert hooks[0] > max(grants), "the hooks re-own must be the last word, after every grant"
+    assert hooks[0] > max(grants), "the hooks re-own must follow the first pair (the pass passes hooks/ over, so " \
+                                   "the pair after the landing cannot touch it)"
     install = [t for t in tasks if (m := _mod(t, "ansible.builtin.copy", "copy"))
                and str(m.get("dest", "")).endswith("/hooks/update")]
     assert install and str(_mod(install[0], "ansible.builtin.copy", "copy").get("mode")) == "0755", \
         "the update hook is installed 0755 (readable + executable by every git actor, writable by none but root)"
 
 
-def test_group_and_membership_precede_the_operator_push():
-    """The group + membership tasks must come BEFORE the Mirror push (`git push local …`, run as the operator) —
-    provisioning the write-grant after the push that needs it would be useless. Pins the ordering."""
+def test_group_and_membership_precede_the_operator_landing():
+    """The group + membership tasks must come BEFORE the landing (`kontroll-land.py`, run as the operator) —
+    provisioning the write-grant after the write that needs it would be useless. Pins the ordering."""
     tasks = _tasks()
     def _idx(pred):
         return next((i for i, t in enumerate(tasks) if pred(t)), None)
-    def _is_push(t):                                      # the Mirror push COMMAND only — not a task whose NAME
-        m = _mod(t, "ansible.builtin.command", "command")  # merely mentions "git push local" (e.g. the user task)
-        return bool(m) and "push local" in str(m.get("cmd", "")).lower()
+    def _is_landing(t):                                   # the landing COMMAND only — not a task whose NAME
+        m = _mod(t, "ansible.builtin.command", "command")  # merely mentions it (e.g. the user task)
+        return bool(m) and "kontroll-land.py" in str(m.get("cmd", ""))
     grp = _idx(lambda t: _mod(t, "ansible.builtin.group", "group"))
     usr = _idx(lambda t: _mod(t, "ansible.builtin.user", "user"))
-    push = _idx(_is_push)
-    assert grp is not None and usr is not None and push is not None, "missing group/user/push task"
-    assert grp < push and usr < push, "the gid-1001 group + operator membership must be provisioned before the push"
+    land = _idx(_is_landing)
+    assert grp is not None and usr is not None and land is not None, "missing group/user/landing task"
+    assert grp < land and usr < land, "the gid-1001 group + operator membership must be provisioned before the landing"
 
 
 def _cmd_text(task):
@@ -178,39 +244,95 @@ def _cmd_text(task):
     return ""
 
 
-def test_the_canonical_mirror_refuses_to_discard_promoted_work():
-    """The mirror is a fast-forward-only push, and worktree/canonical diverge the moment propose-then-promote is
-    used — a promote advances canonical `main` with a commit the worktree never had. The push then fails with
-    git's generic "Updates were rejected... fetch first", which on a control plane reads like a transient git
-    problem rather than "your promoted proposals live only in the canonical" (live-caught 2026-07-28: a deploy
-    died here right after a hand-promote, with no indication why).
+def test_the_mirror_is_a_landing_judged_first_and_never_a_push():
+    """The play's way into the canonical's `main` is `scripts/kontroll-land.py`, twice: a `--check` task — run
+    from the worktree with `--repo {{ bare }}`, `check_mode: false` (the mandated `--check --diff` dry-run names
+    a refusal first), `changed_when: false`, `failed_when: false` — followed by a `fail` task on any non-zero
+    status whose message quotes the command's stderr, says nothing was landed, and names the override for a
+    gate refusal (rc 2) — and then the landing task, same command without `--check`, "changed" when its stdout
+    says `landed refs/heads/main`. No task of the play runs `git push`, `git ls-remote` or `git fetch`: the push
+    ran the canonical's hooks and config as the pusher (root in the installer), the `ls-remote` ran git's serving
+    side there as the caller, and a root fetch leaves a root-owned `.git/FETCH_HEAD` in the operator's worktree
+    (live-caught 2026-07-28). The never-discard rule — a canonical with commits the worktree lacks (a promote)
+    refuses the landing, with the remedy `fetch local && rebase local/main` and never `--force` — now lives in
+    the command and is held by `tests/unit/test_land.py`; here the play must not carry a `--force` or a `-f`
+    anywhere near the landing. Guards the reversion of rule 8 at this door (a push coming back, the dry-run
+    skipping the judgement, a landing task that runs under check mode), which the hook would then refuse at
+    every deploy.
 
-    Pins the actionable refusal AND, more importantly, that the remedy is never `--force`: force-pushing here
-    would silently delete every promoted proposal the canonical holds.
-
-    The check's own two faults, found by running it (the tine's 2026-07-28 follow-up, ported): it must READ the
-    canonical with `ls-remote` — a `git fetch` as root inside the installer container leaves a root-owned
-    `.git/FETCH_HEAD` in the operator's worktree, breaking the very `git fetch` the remedy prescribes — and the
-    remedy must be `rebase local/main`, because this play commits an instance-state commit of its own on every run,
-    so the two histories genuinely diverge and `merge --ff-only` cannot work. An ancestry check that cannot PROVE
-    the ancestor (rc 128: objects never fetched) refuses like a real divergence (rc 1) — fail closed, both ways."""
+    The `--check` task's CONDITION is pinned to the ownership pass's — `_canonical_before.stat.exists or not
+    ansible_check_mode` — and the refusal's to `(<register>.rc | default(0)) != 0`. WHY: the judgement needs a
+    canonical to judge against (`--repo {{ bare }}`), and under the dry-run of a FRESH node the `file` and `git
+    init` tasks are only simulated, so the command exits 1 ("--repo must name a bare repository") and the refusal
+    stops the mandated `--check --diff` of every first install (measured 2026-10-20 in the gate image: `failed=1`
+    at the refusal task). The exact condition is held, not merely "a when": a `when: not ansible_check_mode` on
+    the same task would make EVERY dry-run skip the judgement with the rest of this row green (the 20-review-land
+    reversion R06 survived before this pin). And `default(0)`: a skipped judgement registers no `rc`, and the
+    refusal must read that as "nothing to refuse", not fail on an undefined attribute. The debug task before the
+    judgement says, under that one dry-run, why nothing was judged."""
+    tasks = _tasks()
+    landing = [t for t in tasks if "kontroll-land.py" in _cmd_text(t)]
+    assert len(landing) == 2, "a --check task and a landing task: %r" % [t.get("name") for t in landing]
+    check, land = landing
+    for task in (check, land):
+        m = _mod(task, "ansible.builtin.command", "command")
+        assert m and m.get("chdir") == "{{ worktree }}", task.get("name")
+        text, words = _cmd_text(task), _cmd_text(task).split()
+        assert words[:3] == ["python3", "-B", "scripts/kontroll-land.py"], words
+        assert "--worktree {{ worktree }}" in text and "--repo {{ bare }}" in text, text
+        assert "--force" not in words and "-f" not in words and "--skip-conflict-check" not in words, \
+            "the play never forces and never skips the gate: the override is the operator's, by hand"
+        assert "become" not in task, "the landing runs as the caller (root drops to the service in the seam)"
+    assert _cmd_text(check).rstrip().endswith("--check") and "--check" not in _cmd_text(land)
+    assert check.get("check_mode") is False and check.get("changed_when") is False and check.get("failed_when") is False
+    assert str(check.get("when")).replace(" ", "") == "_canonical_before.stat.existsornotansible_check_mode", (
+        "the judgement runs on every real run and on the dry-run of a node that HAS a canonical; only the dry-run "
+        "of a fresh node skips it (there is nothing to judge against yet): %r" % check.get("when"))
+    detect = next(t for t in tasks if "--normalise" in _cmd_text(t) and "--check" in _cmd_text(t))
+    assert str(check.get("when")).replace(" ", "") == str(detect.get("when")).replace(" ", ""), \
+        "the judgement's condition is the ownership pass's detect condition, in the same words"
+    note = tasks[tasks.index(check) - 1]
+    assert _mod(note, "ansible.builtin.debug", "debug") and "ansible_check_mode" in str(note.get("when")) \
+        and "not _canonical_before.stat.exists" in str(note.get("when")), \
+        "the task before the judgement says, under the fresh node's dry-run, why nothing is judged"
+    assert "{{ bare }}" in str(_mod(note, "ansible.builtin.debug", "debug").get("msg")) and "first seed" in \
+        str(_mod(note, "ansible.builtin.debug", "debug").get("msg"))
+    refuse = tasks[tasks.index(check) + 1]
+    assert _mod(refuse, "ansible.builtin.fail", "fail"), "the task after the --check must be the refusal"
+    assert str(refuse.get("when")).replace(" ", "") == "(%s.rc|default(0))!=0" % check["register"], \
+        "a skipped judgement registers no rc: the refusal reads it as 0, never as an undefined attribute"
+    message = str(_mod(refuse, "ansible.builtin.fail", "fail").get("msg"))
+    assert "REFUSING to land" in message and check["register"] + ".stderr_lines" in message
+    assert "Nothing was landed" in message and "skip-conflict-check" in message and "rc == 2" in message
+    assert "\n" not in message, "the message is ONE folded paragraph"
+    assert tasks.index(land) == tasks.index(refuse) + 1, "the landing follows its own dry-run and refusal"
+    assert "check_mode" not in land, "a command that writes is skipped under --check by Ansible itself"
+    assert "landed refs/heads/main" in str(land.get("changed_when")) and land["register"] in str(land.get("changed_when"))
+    assert str(land.get("failed_when")).replace(" ", "") == "%s.rc!=0" % land["register"]
+    for t in tasks:
+        text = _cmd_text(t)
+        assert "git push" not in text and "ls-remote" not in text and "git fetch" not in text and "FETCH_HEAD" not in text, \
+            "a transport into or out of the canonical is back: %s" % t.get("name")
     with open(PLAYBOOK, encoding="utf-8") as fh:
         src = fh.read()
-    assert "git ls-remote local refs/heads/main" in src, "the canonical is READ with ls-remote (writes nothing)"
-    assert all("FETCH_HEAD" not in _cmd_text(t) for t in _tasks()), \
-        "no command may use FETCH_HEAD — a root fetch leaves it root-owned in the operator's worktree"
-    assert "merge-base --is-ancestor {{ canonical_main }} HEAD" in src, "the divergence check runs on the read sha"
-    assert "REFUSING to mirror" in src and "would discard them" in src
-    assert "rebase local/main" in src and "merge --ff-only local/main" not in src, \
-        "the remedy is a rebase — the histories diverge (instance-state commits), a fast-forward cannot work"
-    assert "(_canon_behind.rc | default(0)) != 0" in src, "any non-zero ancestry rc refuses (rc 128 = unproven)"
-    fetches = [t for t in _tasks() if "git fetch" in _cmd_text(t)]
-    assert fetches == [], "no task may `git fetch` into the operator's worktree: %r" % [t.get("name") for t in fetches]
-    pushes = [str(_mod(t, "ansible.builtin.command", "command").get("cmd", "")) for t in _tasks()
-              if _mod(t, "ansible.builtin.command", "command") and "git push" in
-              str(_mod(t, "ansible.builtin.command", "command").get("cmd", ""))]
-    assert pushes, "the mirror push task must exist"
-    assert all("--force" not in cmd and " -f " not in cmd for cmd in pushes),         "the mirror must never force-push the canonical: %r" % pushes
+    assert "git push local HEAD:refs/heads/main" not in src and "REFUSING to mirror" not in src
+    commit = next(i for i, t in enumerate(tasks) if "git add -A" in _cmd_text(t))
+    assert commit < tasks.index(check), "the instance-state commit comes before the landing that takes HEAD"
+
+
+def test_the_play_refuses_an_operator_whose_uid_is_the_services():
+    """The play's FIRST task asserts `operator_uid` is not `1001`, with a sentence that says the canonical cannot
+    tell such an operator from the network service (the hook and the seam are keyed on that one number). Guards
+    the gap the hook's reader named (Q-6): an operator whose login uid is 1001 would have the landing run "as the
+    service", the hook refuse its proposals' moves, and the chown hand the service the operator's grant — each
+    failing later with a message about something else."""
+    tasks = _tasks()
+    first = tasks[0]
+    m = _mod(first, "ansible.builtin.assert", "assert")
+    assert m, "the first task must be the uid assertion: %r" % first.get("name")
+    assert "1001" in str(m.get("that")) and "operator_uid" in str(m.get("that"))
+    assert "uid 1001" in str(m.get("fail_msg")) and "cannot tell" in str(m.get("fail_msg"))
+    assert "Nothing was changed" in str(m.get("fail_msg"))
 
 
 def test_the_plaintext_gate_precedes_the_instance_state_commit():

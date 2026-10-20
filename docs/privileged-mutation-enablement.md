@@ -70,7 +70,8 @@ hook, set by `local-canonical.yml` on every install) and the operator's CLI prom
    `local` remote → `/srv/kontroll.git`. It is **never** a writable mount of the canonical itself.
 3. **Staging-ref push** — when the service runs (`KONTROLL_STAGE_PUSHES=1`, set only in the container env),
    `gitio.commit_and_push` pushes `HEAD:refs/heads/proposed/<run_id>` instead of `main`. The operator's CLI (no
-   such env) still pushes `main` directly. The bare repo gets `receive.denyNonFastForwards` +
+   such env) takes its commit to `main` directly — as a LANDING since 2026-10-19 (`gitio.land_main`: the promote
+   gate, a pack on a pipe, one compare-and-swap; never a push). The bare repo gets `receive.denyNonFastForwards` +
    `receive.denyDeletes` (recommended **unconditionally** — protects your own pushes too; kills history rewrite).
    **After a staged push the service resets its clone to the canonical `main`** (`git fetch local && git reset
    --hard local/main`) so its read-back ("current") always reflects the source of truth and each proposal is
@@ -82,7 +83,8 @@ hook, set by `local-canonical.yml` on every install) and the operator's CLI prom
    this posture forbids (closed 2026-07-05, dogfood VM 144; `tests/unit/test_staging_isolation.py`
    `test_staging_push_origin_never_advances_canonical_main`). The canonical's `update` hook
    (`ansible/playbooks/files/canonical-update-hook.sh`) refuses such a push at the canonical as belt-and-braces:
-   it is an allow-list — as uid 1001 a push may create `refs/heads/proposed/<run id>` and nothing else.
+   it is an allow-list — as uid 1001 a push may create `refs/heads/proposed/<run id>` and nothing else, and
+   `refs/heads/main` is refused from everyone.
 4. **The promote action** — `kontroll-promote.py <run_id>@<commit_id>` (CLI verb, operator-run = trusted)
    fast-forwards `main ← proposed/<run_id>` **only if it is a fast-forward** and **only if the proposal is still
    the commit named** (else it refuses), then deletes the proposal — see "The promote lands one commit" below.
@@ -203,6 +205,17 @@ another commit, so what was previewed, what was judged and what landed could be 
   `sudo` — run as themselves, git would open that store with their account. Letting group members through is
   the one refusal in `kontroll-promote.py` that says so, printed as a note instead, and the row of
   `tests/unit/test_kontroll_promote.py` that holds it.
+- **Every way into `main` lands; none is a push (2026-10-19).** The doors that pushed `HEAD:refs/heads/main` —
+  `scripts/update.sh`, `scripts/update-from-bundle.sh`, the operator CLI's onboard and capture-exception commits,
+  the deploy's mirror task, and `commit_and_push` outside staging — call `gitio.land_commit`
+  (`scripts/kontroll-land.py`): the same gate the promote runs judges the worktree's commit before anything
+  touches the canonical, the commit crosses as a pack on a pipe, and `main` moves in one compare-and-swap. No
+  hook and no config-named program of the canonical runs, and as root the canonical's side is the service uid.
+  The canonical's hook refuses a push of `main` from everyone; `--check` is the dry-run, `--skip-conflict-check`
+  the human's override, `--propose <run id>` the hand-made proposal. Who may land: the operator from their own
+  checkout without `sudo` (the canonical's side then runs as them, in the seam — strictly less than the push it
+  replaces, which ran the canonical's hooks as them; the residual is written in SECURITY.md C10), and root in the
+  installer. H2 below is closed by it.
 
 ## 6. What's deferred (named, not silently dropped)
 
@@ -221,8 +234,9 @@ another commit, so what was previewed, what was judged and what landed could be 
   else (no tag, no `refs/replace/*`, no second push to a proposal that exists); from any other uid, `main` and a
   proposal. The remaining residual is specifically a direct `update-ref`/`packed-refs` rewrite (not a push — the hook
   fires only on receive-pack, the same reason it never blocks a legit `promote_ref` update-ref), which the
-  offsite-mirror-fsck check would make detectable. (H2 — converting the deploy mirror to `update-ref` so the hook
-  can be unconditional rather than uid-scoped — is a tracked follow-on; not in this change.)
+  offsite-mirror-fsck check would make detectable. **Update 2026-10-19:** H2 is done — the deploy's mirror, the
+  update scripts and the CLI land through `gitio.land_commit` (a ref transaction, never a push), and the hook
+  refuses `main` from everyone.
 - **Onboard-apply's cred-encryption over HTTP.** With no key in the service, an HTTP onboard that carries creds
   stages the host block + cred *names* only; the encrypt happens at promote by a trusted runner. The
   out-of-band encrypt step is **not built yet** — until it is, HTTP onboard-*with-creds* is incomplete (the

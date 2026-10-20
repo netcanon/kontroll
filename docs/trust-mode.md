@@ -69,9 +69,10 @@ multi-tenant or internet-adjacent deployment.** Prod uses `separated`.
 > edge-firewall/core-switch change could auto-land ungated. The fix (`and not staging` in `gitio.commit_and_push`)
 > routes **every** `main` advance on `solo` back through `promote_ref` (and thus the blast gate) — restoring the
 > residual to exactly what this section describes; the fix makes `solo` *strictly more correct*. **Fork note:** the
-> canonical `update` hook refuses every uid-1001 push but the creation of a proposal (so: any push to `main`), so the homelab auto-promoter MUST keep
-> advancing `main` via `promote_ref`/`update-ref` (it does — `update-ref` is not receive-pack, so the hook never
-> fires on it); never switch the auto-promoter to a raw `git push …:main`.
+> canonical `update` hook refuses every uid-1001 push but the creation of a proposal, and a push of `main` from
+> EVERYONE (2026-10-19: every way into `main` is a promote or a landing — `gitio.land_commit`, SECURITY.md C10),
+> so the homelab auto-promoter MUST keep advancing `main` via `promote_ref`/`update-ref` (it does — `update-ref`
+> is not receive-pack, so the hook never fires on it); never switch the auto-promoter to a raw `git push …:main`.
 
 ## "Never a silent default" — defended in three places
 

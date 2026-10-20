@@ -264,8 +264,9 @@ def test_promote_ref_reads_each_ref_once_and_refuses_what_is_not_a_proposal(tmp_
 def test_the_promote_is_a_registered_write_and_every_git_of_it_runs_in_the_seam():
     """`promote_commit` is in `WRITE_VERBS` (a read view that reached it would fail its pin), and inside it and
     `_what_moved` every process is `git update-ref …` passing `**canon.git_kwargs(…)` with a timeout. Guards the
-    one function that moves `main`: a git of it that inherited the caller's environment, or named the repository
-    some other way, would run the canonical's hooks and config as whoever promotes."""
+    one function that moves `main` by a promote: a git of it that inherited the caller's environment, or named the
+    repository some other way, would run the canonical's hooks and config as whoever promotes. (The other way
+    `main` moves — a landing — has the same pin in `tests/unit/test_land.py`.)"""
     assert "promote_commit" in WRITE_VERBS
     assert_git_runs_in_the_seam("scripts/kontroll/gitio.py", verbs={"update-ref"},
                                 functions=("promote_commit", "_what_moved", "promote_ref"))

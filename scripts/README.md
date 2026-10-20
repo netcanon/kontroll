@@ -235,9 +235,12 @@ the prior:
 - `--commit` — rationale-first commit (plus the one configurable attribution trailer: the CLI reads
   `KONTROLL_COMMIT_TRAILER` from the calling shell — the containers take it from `docker/.env`, see
   [`docker/.env.example`](../docker/.env.example)), including the
-  re-encrypted secrets file, then **pushes the local canonical** (`file:///srv/kontroll.git`)
-  so **Semaphore sees the new host with no GitHub** (the instance is the source of truth —
-  [docs/local-source-of-truth.md](../docs/local-source-of-truth.md)).
+  re-encrypted secrets file, then **lands on the local canonical** (`/srv/kontroll.git` — `gitio.land_main`:
+  judged by the promote gate first, a pack on a pipe, one compare-and-swap; never a `git push`, which the
+  canonical's hook refuses for `main` from everyone — SECURITY.md C10) so **Semaphore sees the new host with no
+  GitHub** (the instance is the source of truth — [docs/local-source-of-truth.md](../docs/local-source-of-truth.md)).
+  A tree the gate refuses (a fleet line that is not a class key, two units pinning one collection differently)
+  stays committed in the checkout and is NOT landed: the printed sentence names what to correct (rc 2).
 - `--push` — **optional** offsite backup to GitHub `origin`; not needed to operate. Fails
   clean (the instance is unaffected) if there's no write-capable remote.
 - `--bootstrap` — installs the new collection + live-verifies via `ping --limit`.

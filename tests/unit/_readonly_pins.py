@@ -98,6 +98,12 @@ WRITE_VERBS = frozenset({
     # after the staging roll-back); `_unstage` takes a request's paths back out of the index of a caller that is
     # not the staging service (a path-scoped `git reset`). Each registered in the same commit as the verb (P0b/#134).
     "write_module", "_drop_refused", "_unstage",
+    # The landing (2026-10-19, rule 8 of the canonical's doors): `land_commit` moves `refs/heads/main` (or creates a
+    # proposal) — a commit id judged by the promote gate, brought across as a pack on a pipe (`index-pack`), one
+    # compare-and-swap (`update-ref`); `_land_in_canonical` is its canonical-side half, `_pack` starts the
+    # worktree's `pack-objects`; `land_main` is the door the operator CLI and a non-staging `commit_and_push` call
+    # where they pushed `main`. Each registered in the same commit as the verb (P0b/#134).
+    "land_commit", "_land_in_canonical", "_pack", "land_main",
 })
 
 

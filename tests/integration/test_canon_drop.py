@@ -28,7 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, os.path.join(ROOT, "tests", "unit"))      # the canonical builder lives beside the unit rows
 
 import _canon_repo as R  # noqa: E402
-from kontroll import canon  # noqa: E402
+from kontroll import canon, gitio  # noqa: E402
 from kontroll.service import discard, pending  # noqa: E402
 
 pytestmark = [
@@ -742,3 +742,114 @@ def test_the_audits_one_git_is_the_service_when_root_audits_the_canonical(world,
     open(canary, "w", encoding="utf-8").close()
     assert "config-unread: config" not in tool.audit(own.bare).lines()
     assert _lines(canary) == ["0"]
+
+
+# ---- the landing (rule 8): as root on the play's layout, the canonical's side runs as the service ---------------- #
+
+def _a_worktree_of_the_operators(world, r, monkeypatch):
+    """The operator's checkout beside the canonical: a clone of `main` owned by uid 1000, with a `local` remote,
+    `core.autocrlf` off, and one commit on top of `main` (a file added; the tree holds no `modules/`, so the gate
+    has nothing to check and judges it clean). Returns (its path, the new commit's id).
+
+    Root's git in a repository another uid owns is refused as "dubious ownership" (git 2.35.2 and later; a local
+    clone of one, 2.45.1 and later) unless `safe.directory` names it. The installer image, where the deploy's
+    landing runs as root in the operator's worktree, sets `safe.directory '*'` system-wide
+    (`docker/installer/Dockerfile`; pinned by `tests/unit/test_local_canonical.py`). This row stands in for that
+    with a global config of its own — for the builder's gits here and for the landing's worktree-side git, which
+    is plain git in the caller's environment — in place of the empty one `isolated_git` names."""
+    wt = os.path.join(world, "checkout")
+    gitconfig = os.path.join(world, "gitconfig")
+    with open(gitconfig, "w", encoding="utf-8") as fh:
+        fh.write("[safe]\n\tdirectory = *\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", gitconfig)
+    env = dict({"PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": gitconfig}, **_WHO)
+    subprocess.run(["git", "clone", "-q", r.bare, wt], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", wt, "remote", "add", "local", r.bare], check=True, capture_output=True, env=env)
+    with open(os.path.join(wt, "operator.txt"), "w", encoding="utf-8") as fh:
+        fh.write("the operator's own change\n")
+    subprocess.run(["git", "-C", wt, "add", "-A"], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", wt, "commit", "-q", "-m", "the operator's change"], check=True, capture_output=True, env=env)
+    oid = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], check=True, capture_output=True, env=env).stdout.decode().strip()
+    for here, _dirs, files in os.walk(wt):
+        os.chown(here, OPERATOR, OPERATOR)
+        for name in files:
+            os.chown(os.path.join(here, name), OPERATOR, OPERATOR)
+    return wt, oid
+
+
+def test_a_landing_by_root_runs_the_canonicals_git_as_the_service_and_leaves_the_services_files(world, monkeypatch):
+    """On the play's layout, a landing run by ROOT (the deploy's mirror task in the installer container) with a
+    `reference-transaction` hook the service planted through `core.hooksPath` and the seam's own answer to hooks
+    taken out by this row: `main` becomes the worktree's commit, every line the hook wrote is `1001` — never `0`
+    — and what the landing left in the canonical is the service's (uid and gid 1001): the pack and its index
+    under `objects/pack/` read-only and group-readable, as git writes every pack, the ref writable for the
+    canonical's group. The worktree's own git (the pack) ran as
+    root in the operator's checkout and wrote nothing there but what `pack-objects --stdout` writes to a pipe.
+
+    Guards rule 7 at the door the installer runs: the mirror used to be `git push` as root, which ran the
+    canonical's `update` hook — a program a writer of the canonical can replace — as ROOT. A landing's
+    canonical-side gits (`index-pack`, `rev-list`, `update-ref`) are the seam's, and the seam drops."""
+    r = _as_the_play_leaves_it(_build(world))
+    wt, oid = _a_worktree_of_the_operators(world, r, monkeypatch)
+    canary = _canary(world)
+    # the service plants its hooks directory INSIDE the canonical (group 1001, `2775` — the play's layout), as the
+    # promote row above does: `world` is root's `0755`, where uid 1001 may create nothing
+    _a_hook_that_says_who(os.path.join(r.bare, "h"), canary, as_service=r.bare)
+    _seam_minus(monkeypatch, "core.hooksPath")
+    rc, said = gitio.land_commit(wt, r.bare)
+    assert rc == 0, said
+    assert canon.read_ref(r.bare, canon.MAIN)[0] == oid
+    ran_as = _lines(canary)
+    assert ran_as and set(ran_as) == {"1001"}, ran_as
+    packs = os.listdir(os.path.join(r.bare, "objects", "pack"))
+    assert any(n.endswith(".pack") for n in packs), packs
+    # git writes every pack and its index READ-ONLY (`0444`; a push's `receive-pack` leaves the same), so the
+    # group's bit to look for on those is read; the ref file is written `0664` under `core.sharedRepository=group`
+    for rel, want in ([(os.path.join("objects", "pack", n), 0o040) for n in packs]
+                      + [(os.path.join("refs", "heads", "main"), 0o060)]):
+        st = os.lstat(os.path.join(r.bare, rel))
+        assert (st.st_uid, st.st_gid) == (1001, 1001), (rel, st.st_uid, st.st_gid)
+        assert stat.S_IMODE(st.st_mode) & want == want, (rel, oct(st.st_mode))
+    assert os.lstat(os.path.join(wt, "operator.txt")).st_uid == OPERATOR, "the worktree is still the operator's"
+    status = subprocess.run(["git", "-C", wt, "status", "--porcelain"], capture_output=True,
+                            env=dict({"PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1",
+                                      "GIT_CONFIG_GLOBAL": os.environ["GIT_CONFIG_GLOBAL"]}, **_WHO))
+    assert status.returncode == 0 and status.stdout == b"", status.stderr
+
+
+def test_a_reflog_link_to_a_file_only_root_may_write_is_not_appended_to(world, monkeypatch, capsys):
+    """The service makes `logs/refs/heads/main` a symbolic link to a file only root may write. A promote by
+    root leaves that file as it was — empty — and ends ONE of two ways, each said in full: it promoted (exit 0,
+    `main` is the proposal), or git refused the transaction (exit 1, the sentence "git refused the transaction",
+    `main` where it was, the proposal still staged). The control beside it is the same canonical with the change
+    of identity switched off: there the promote succeeds and the file gains a line.
+
+    Guards the thing no entry of the environment answers: git appends to a reflog that is there, and follows a
+    link to do it — as whoever it runs as. And it holds HOW the promote ended: an exit status of 1 with an empty
+    file is also what a promote shows that was refused before it reached the transaction, for any reason at
+    all — a row that accepted that would pass without git ever having been asked to write. (Held back from the
+    change that made root's git the service's until the doors stopped pushing: a push of `main` by root would
+    have appended through the same link, as root, on every deploy.)"""
+    outcomes = {}
+    for case in ("dropped", "as-root"):
+        home = os.path.join(world, case)
+        os.mkdir(home, 0o755)
+        r = _as_the_play_leaves_it(_build(home))
+        oid = _stage_as_the_service(r)
+        victim = os.path.join(home, "only-root-may-write")
+        open(victim, "w", encoding="utf-8").close()
+        os.chmod(victim, 0o600)
+        subprocess.run(["sh", "-c", 'mkdir -p "$0/logs/refs/heads" && ln -s "$1" "$0/logs/refs/heads/main"',
+                        r.bare, victim], check=True, **SERVICE)
+        with monkeypatch.context() as inner:
+            if case == "as-root":
+                inner.setattr(canon, "service_writable", lambda repo: False)
+            rc = _promote().main(["%s@%s" % (STAGED, oid), "--skip-conflict-check", "--repo", r.bare])
+        outcomes[case] = (rc, os.path.getsize(victim), canon.read_ref(r.bare, canon.MAIN)[0] == oid,
+                          canon.read_ref(r.bare, canon.PROPOSED + STAGED) is not None, capsys.readouterr().out)
+    rc, size, landed, staged, said = outcomes["as-root"]
+    assert (rc, landed) == (0, True) and size > 0, "control: as root the line IS appended through the link"
+    rc, size, landed, staged, said = outcomes["dropped"]
+    assert size == 0, outcomes["dropped"]
+    assert (rc, landed) == (0, True) or ((rc, landed, staged) == (1, False, True)
+                                         and "git refused the transaction" in said), outcomes["dropped"]

@@ -153,7 +153,10 @@ offline break-glass backup):
 
 ## 3. The local canonical `/srv/kontroll.git` — **[A]** `ansible-playbook playbooks/local-canonical.yml`
 
-Bare repo + HEAD→main + the working tree's `local` remote + the mirror push. Now also (C10): sets
+Bare repo + HEAD→main + the working tree's `local` remote + the landing of the working tree's HEAD on `main`
+(`scripts/kontroll-land.py`: judged by the promote gate first — its `--check` runs under the dry-run too — then a
+pack on a pipe and one compare-and-swap; never a push, which the canonical's hook refuses for `main` from everyone;
+SECURITY.md C10). Now also (C10): sets
 `receive.denyNonFastForwards`/`denyDeletes` + the top-dir group-1001 write grant (setgid 2775).
 
 > **[Resolved]:** the **recursive write-grant on EXISTING objects** (a canonical created before the gid-1001

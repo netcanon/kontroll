@@ -582,8 +582,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
 
 **Implements (gated by `api_privileged`; a deploy without it is read-only):**
 - **The service only PROPOSES.** When it runs (`KONTROLL_STAGE_PUSHES=1`), `gitio.commit_and_push` pushes a
-  **staging ref** `refs/heads/proposed/<run_id>`, never `main`; the operator's CLI (no such env) still pushes
-  `main` directly (the trusted human). `kontroll promote <run_id>` fast-forwards `main` (FF-only; refuses
+  **staging ref** `refs/heads/proposed/<run_id>`, never `main`; the operator's CLI (no such env) takes its
+  commit to `main` directly (the trusted human) — as a **landing** through the promote gate, never a push (see
+  "Every way into `main` lands" below). `kontroll promote <run_id>` fast-forwards `main` (FF-only; refuses
   otherwise). The in-GUI follow-on is now the **`promote-proposal` Semaphore task** (item C, 2026-06-15;
   `config/semaphore/templates/promote-proposal.yml` → `ansible/playbooks/promote.yml`) — a `run_id` survey var,
   FF-only, **reachable only by a Semaphore admin on the mgmt VLAN, never the API token** (the promote lives
@@ -611,12 +612,14 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   push may **create** `refs/heads/proposed/<run id>` — a minted run id, the same rule as `canon.valid_run_id` — and
   nothing else: not `refs/heads/main`, not a tag (a tag called `main` is what a short name finds first), not
   `refs/replace/*`, and not a second push to a proposal that exists (a proposal a human has read cannot be
-  re-pointed by a push; a re-propose mints a new id). As **any other uid** — the legit mirror push, uid **0** in
-  the installer container or the operator uid on a host-direct run, **never 1001** — `refs/heads/main` and a
-  proposal, and nothing else. A delete is refused from everyone, and so is every push when the pusher's uid cannot
-  be read. A push can therefore leave two kinds of ref there (a ref already in the canonical, or one written
-  without a push, is not the hook's to refuse). The promote's `update-ref` is not a push, so the hook
-  never fires on it — a human promote is untouched. **What the hook does not stop** is said in its own header: a
+  re-pointed by a push; a re-propose mints a new id). As **any other uid** — the operator, root in the installer
+  container — a proposal (created or moved), and nothing else. **`refs/heads/main` is refused from everyone**
+  (2026-10-19): nothing legitimate pushes it any more, so a hook that still let it through from some uid would
+  let a hand-run `git push` skip the gate every other way in passes. A delete is refused from everyone, and so
+  is every push when the pusher's uid cannot be read. A push can therefore leave one kind of ref there (a ref
+  already in the canonical, or one written without a push, is not the hook's to refuse). The promote's
+  `update-ref` is not a push, and neither is a landing's, so the hook never fires on either — a human promote
+  and the deploy's landing are untouched. **What the hook does not stop** is said in its own header: a
   write that is not a push — `git update-ref`, or a file written under `refs/` through the `:rw` mount — runs no
   hook; that is the accepted-risk row for an armed box (`tests/unit/test_staging_isolation.py`: the argument
   table, the run-id samples fed to the hook and to the validator alike, and real pushes). **The promote is one ref transaction over two ids** (`gitio.promote_commit`): it
@@ -803,6 +806,51 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   that record is the terminal's and nothing keeps it: an approval that must be on file goes through the job.
   `tests/unit/test_promote_cas.py`, `tests/unit/test_kontroll_promote.py`,
   `tests/e2e/test_pending_changes.py` (the copy control).
+  **Every way into `main` lands; none is a push** (2026-10-19; rule 8 of the canonical's doors). `refs/heads/main`
+  moves through two functions and no other: the promote (`gitio.promote_commit`, above) and the landing
+  (`gitio.land_commit`). The doors that used to `git push … HEAD:refs/heads/main` — `scripts/update.sh` and
+  `scripts/update-from-bundle.sh` after a code update, the operator CLI's onboard and capture-exception commits
+  (`scripts/galaxy.py`), the deploy's mirror task (`ansible/playbooks/local-canonical.yml`), and
+  `gitio.commit_and_push` outside staging (the GUI run from a checkout) — call it, through
+  `scripts/kontroll-land.py` or `gitio.land_main`. A landing is: the worktree's HEAD as a commit id; the
+  canonical's `main` read once, by its full name, in the seam; the fast-forward question asked IN THE WORKTREE
+  (`merge-base --is-ancestor`: a canonical that holds commits the worktree does not — a promote — refuses, with the
+  remedy and never `--force`); **the same gate the promote runs** (`_tree_refusal`: this checkout's collection
+  generator over the commit's files, read object by object from the CALLER'S repository and re-hashed) judging
+  the commit BEFORE anything touches the canonical — a fleet line, a collection pin conflict, a signature policy,
+  a link in the tree, that used to be mirrored by every deploy and then refused every promote, is refused at the
+  door, with the generator's sentence and exit 2; then the commit brought across as a **pack on a pipe**
+  (`pack-objects --revs --stdout` in the worktree, no `--thin`; `index-pack --stdin` in the canonical, in the
+  seam — which verifies every object's hash), checked whole there (`rev-list --objects` — a pack short of an
+  object is refused before any ref names it), and **one compare-and-swap** (`update-ref --stdin`, `option
+  no-deref`, from the commit `main` was read as; the zero id on a first seed, which creates `main` once). Why not
+  a push: a push into the canonical runs its `update` hook and whatever its config names — `core.hooksPath`,
+  `receive.*`, `uploadpack.*`, `remote.<name>.uploadpack` — as the **pusher**: root in the installer container, the
+  operator on a host-direct run, in a repository whose config a network service writes when the deploy is armed
+  (and a push passed no gate at all). A landing uses no transport: nothing of the canonical's runs
+  (`tests/unit/test_land.py`: canary hooks and a `core.alternateRefsCommand` planted in the canonical do not run at
+  any door, and the control shows a push runs them), and as root the canonical's side is the service uid (rule 5;
+  `tests/integration/test_canon_drop.py`). The canonical's hook refuses a push of `main` from everyone, so a push
+  by hand is refused too, with a sentence that names the door. `--check` judges and says what would land without
+  changing anything — the deploy's dry-run runs it, so the mandated `--check --diff` names a refusal before the
+  real run; `--skip-conflict-check` is the human's override, as for the promote, and nothing automatic passes it;
+  `--propose <run id>` makes a proposal by hand (created once) — what the troubleshooting table used to do with a
+  push. **What it does not cover:** the worktree's own git (`rev-parse`, `merge-base`, `pack-objects`) runs as the
+  caller in the caller's repository — the operator's checkout, or the kit tree, which is the caller's to
+  trust; a landing run by an operator without root on a host-direct deploy runs the canonical's side as that
+  operator, in the seam, with no change of identity (strictly less than the push it replaces, which ran the
+  canonical's hooks as them); a refused or failed landing leaves the received pack in the canonical's object
+  store, unreachable, as a refused push did; and each landing adds one pack (`objects/pack/`) rather than loose
+  objects — the canonical's garbage collection is the tool's to run, not a person's (`gc.auto` is off in the seam).
+  Two more, measured on the play itself (Linux, as root, 2026-10-20): the mandated `--check --diff` of a FRESH
+  node cannot judge the landing (there is no canonical to judge against until the real run creates one) — the
+  play says so and judges on every run after; and what a landing by root leaves is the service's (rule 5) — the
+  pack, the ref, the reflog — so the ownership pass runs a second time, after the landing, and re-owns them to the
+  operator in the same run: the deploy after a landing reports 0 changed
+  (`tests/integration/test_local_canonical_as_root.py`, the play run by ansible-playbook as root).
+  `tests/unit/test_land.py` (real git at every door: the library, the command, `land_main`, `commit_and_push`
+  outside staging, the two shell scripts under bash), `tests/unit/test_local_canonical.py` (the play's two
+  tasks), `tests/unit/test_staging_isolation.py` (the hook: `main` from every uid).
 - **Every GUI write surface rides this propose-only staging — including the Homepage editor (#136).** The
   onboard/capability/secret/keygen writes and the new `:8443` **Homepage editor** (`POST /api/homepage` — rearrange
   the portal tiles) all go through `gitio.commit_and_push(run_id=…)` → `proposed/<run_id>`; **none imports
@@ -936,8 +984,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   write the canonical there (the `:rw` access needed for the proposal push / the promote exists only when armed).
   **No host root:** the promote rides the gid-1001 group-write grant + `core.sharedRepository=group`
   (local-canonical.yml). The promoter is **Semaphore, not the API** — by design the promote lives outside the
-  token's reach. **The operator's own pushes into the canonical need the same grant** — `scripts/update.sh`,
-  `scripts/update-from-bundle.sh` and an onboard from the CLI push `main` as the operator, beside files uid 1001
+  token's reach. **The operator's own landings on the canonical need the same grant** — `scripts/update.sh`,
+  `scripts/update-from-bundle.sh` and an onboard from the CLI land `main` as the operator (a pack and a ref
+  transaction, never a push — C10 "Every way into `main` lands"), beside files uid 1001
   wrote there (the service's proposals; what a promote leaves is the service's too), which fails `Permission
   denied` unless the operator is a member of gid 1001. The CLI promote is no longer a reason: `sudo
   kontroll-promote` runs its git as the service uid, and without `sudo` an account that is not the service is
@@ -1864,13 +1913,14 @@ tell). An EMPTY fleet file — no bytes, comments only, `~`, `[]` — is a fleet
 passes the check and the promote gate, and every renderer then prunes what it generated, without a word ("a file
 with no list" above stops one shape short of a truncated file; whether an absent `enabled_modules` key should
 count as no list is a rule of its own, not built). The plays' check is the fleet LIST's rule and no more: a
-fleet-wide `signature_policy` outside the closed set, or two units that pin one collection differently, pass it,
-are committed and mirrored by a deploy, and are then refused by every promote.
-The deploy's commit-and-mirror is not the only push into the canonical's `main` that passes no promote gate, and
-it is the only one that asks the fleet check: `scripts/update.sh` and `scripts/update-from-bundle.sh` push the
-checkout's HEAD after a code update, and the operator CLI's onboard (`scripts/galaxy.py onboard --apply
---commit`) commits the fleet file as it stands and pushes it; on the launch kit the launcher commits the kit
-tree — a hand-edited line included — into the kit's own repository before the play refuses to mirror it. A line
+fleet-wide `signature_policy` outside the closed set, or two units that pin one collection differently, pass it
+and are committed — and are then **refused by the landing** that follows the commit (every way into the
+canonical's `main` passes the promote gate since 2026-10-19 — C10, "Every way into `main` lands": the deploy's
+mirror task, `scripts/update.sh`, `scripts/update-from-bundle.sh` and the operator CLI's onboard each judge the
+commit before anything touches the canonical, and a refusal says what to correct), so such a line stays in the
+checkout, one commit ahead of a canonical that did not take it, until it is corrected there; on the launch kit the
+launcher commits the kit tree — a hand-edited line included — into the kit's own repository before the play refuses
+to land it. A line
 that reaches `main` one of those ways is met by the next deploy's check and by every promote. A lookup that finds nothing still quotes the
 unvalidated value it was asked for back to its sender (it belongs with the work on error bodies, which rewrites
 those answers). The Tier-cap compares group NAMES: a parent group an instance defines over `edge_firewall` or

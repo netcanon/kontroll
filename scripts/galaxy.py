@@ -239,7 +239,7 @@ def cmd_onboard(args):
 
     if not apply:
         print("[5] Then: --apply [--commit] [--push] [--bootstrap] does 1-4 + commit/push/verify.")
-        print("    Once applied + pushed + bootstrapped, %s is live in ping/backup + Semaphore.\n" % host_name)
+        print("    Once applied + landed + bootstrapped, %s is live in ping/backup + Semaphore.\n" % host_name)
         return
 
     print("--- applying ---")
@@ -254,11 +254,15 @@ def cmd_onboard(args):
             "run ping.yml --limit %s to verify." % (host_name, plan["group"], host_name)]))
         if crc != 0:                                # never push a stale HEAD on a failed commit
             sys.exit("  ! commit failed (rc=%d) — not pushing; nothing took effect." % crc)
-        # Update the LOCAL CANONICAL (the instance source of truth) so Semaphore sees
-        # it — offline, no GitHub needed (docs/local-source-of-truth.md).
-        lrc = gitio._run(["git", "push", "local", "HEAD:refs/heads/main"])
-        print("  pushed to local canonical — Semaphore will see %s next job." % host_name if lrc == 0
-              else "  ! local-canonical push failed (rc=%d) — run playbooks/local-canonical.yml (sets the 'local' remote)." % lrc)
+        # Land on the LOCAL CANONICAL (the instance source of truth) so Semaphore sees it — offline, no GitHub
+        # needed (docs/local-source-of-truth.md). A LANDING, not a push: judged by the promote gate first (a
+        # fleet file this onboard just wrote is judged as a proposal's would be), then a pack on a pipe and one
+        # compare-and-swap (SECURITY.md C10). rc 2 = refused, the gate's sentence was printed above it.
+        lrc = gitio.land_main()
+        print("  landed on the local canonical — Semaphore will see %s next job." % host_name if lrc == 0
+              else "  ! the landing on the local canonical did not happen (rc=%d) — read the line above; a refusal "
+                   "(rc 2) names what to correct in the checkout, rc 1 what is missing (playbooks/local-canonical.yml "
+                   "sets the 'local' remote)." % lrc)
         if args.push:                       # OPTIONAL offsite backup, not required to operate
             grc = gitio._run(["git", "push", "origin", "HEAD"])
             print("  also pushed to origin (offsite backup)." if grc == 0
@@ -328,8 +332,8 @@ def cmd_openapi(args):
 
 def cmd_capture_exception_add(args):
     """Declare a misbehaving capture in the sparse matrix. Dry-run prints the plan;
-    --commit appends + commits + pushes the LOCAL CANONICAL so it takes effect on the
-    next backup; --push also backs it up to origin. Mirrors onboard's commit/push gate —
+    --commit appends + commits + LANDS on the LOCAL CANONICAL (judged by the promote gate; never
+    a push) so it takes effect on the next backup; --push also backs it up to origin. Mirrors onboard's commit/land gate —
     this is the CLI foundation the GUI calls to save an exception to git."""
     if args.push and not args.commit:
         args.commit = True                                  # push needs a commit to push
@@ -342,7 +346,7 @@ def cmd_capture_exception_add(args):
     if args.observed:
         print("    observed=%s" % (args.observed[:70] + ("…" if len(args.observed) > 70 else "")))
     if not args.commit:
-        print("\n[2] Then: --commit appends + commits + pushes the local canonical "
+        print("\n[2] Then: --commit appends + commits + lands on the local canonical (judged by the promote gate) "
               "(--push also backs up to origin). Effective on the next backup run.\n")
         return
     print("\n--- applying ---")
@@ -359,9 +363,10 @@ def cmd_capture_exception_add(args):
     if crc != 0:                                    # never push a stale HEAD on a failed commit
         print("  ! commit failed (rc=%d) — not pushing; nothing took effect." % crc)
         return
-    lrc = gitio._run(["git", "push", "local", "HEAD:refs/heads/main"])
-    print("  pushed to local canonical — effective on the next backup run." if lrc == 0
-          else "  ! local-canonical push failed (rc=%d) — run playbooks/local-canonical.yml." % lrc)
+    lrc = gitio.land_main()                             # a landing, judged first — never a push (SECURITY.md C10)
+    print("  landed on the local canonical — effective on the next backup run." if lrc == 0
+          else "  ! the landing on the local canonical did not happen (rc=%d) — read the line above (rc 2: the gate "
+               "refused the tree; rc 1: playbooks/local-canonical.yml sets the 'local' remote)." % lrc)
     if args.push:
         grc = gitio._run(["git", "push", "origin", "HEAD"])
         print("  also pushed to origin (offsite backup)." if grc == 0
@@ -437,7 +442,7 @@ def main():
                      help="how backup-configs treats it (default: exclude_from_history)")
     cea.add_argument("--observed", default="", help="when + what you saw")
     cea.add_argument("--source", default="user", help="user | derived (default: user)")
-    cea.add_argument("--commit", action="store_true", help="apply + commit + push the local canonical")
+    cea.add_argument("--commit", action="store_true", help="apply + commit + land on the local canonical (judged by the promote gate)")
     cea.add_argument("--push", action="store_true",
                      help="also push to origin (OPTIONAL offsite backup; implies --commit)")
     cea.set_defaults(func=cmd_capture_exception_add)
