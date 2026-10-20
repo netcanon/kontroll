@@ -11,6 +11,18 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): Vector's health check runs a program its image ships (2026-10-20)
+
+`docker/services/vector.yaml`'s health check was `wget -qO- http://127.0.0.1:8686/health`, and the Vector image —
+Debian, the stock tag and `kontroll/vector` built from it — ships neither wget nor curl. Every run failed with
+`wget: not found`, so Vector showed `unhealthy` on every box from its first deploy on, and a state that is always
+there cannot tell anyone the day Vector really stops (found on the floating box's deploy). The check now asks the
+same loopback `/health` with bash's `/dev/tcp` over HTTP/1.0 and passes on a `200` status line only.
+
+- **`tests/unit/test_compose_logging.py`**: one row pins that bash runs the check, never wget or curl, against the
+  loopback API; a second runs the check's own command against a local server — exit 0 on `200`, non-zero on `503`
+  and on a closed port.
+
 ### fix(ansible, scripts): every way into the canonical's `main` lands through the promote gate — none pushes (2026-10-19)
 
 Four doors put a commit on the canonical's `main` with `git push … HEAD:refs/heads/main`: `scripts/update.sh` and

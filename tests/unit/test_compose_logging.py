@@ -6,9 +6,15 @@ docker fragments + Loki config as data and assert the C12/C3/C8 posture the desi
 empty/infinite retention) fails loudly in CI rather than on a live deploy.
 """
 import glob
+import http.server
 import os
 import re
+import shutil
+import socket
+import subprocess
+import threading
 
+import pytest
 import yaml
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -248,3 +254,77 @@ def test_socket_proxy_lives_on_its_own_network_with_vector_as_sole_peer():
                     created[net.get("name")] = net
     assert created.get("kontroll-socket", {}).get("internal") is True, \
         "deploy-stack must create kontroll-socket as an internal network: %r" % created
+
+
+def _vector_health_command():
+    test = _load("docker/services/vector.yaml")["services"]["vector"]["healthcheck"]["test"]
+    return test
+
+
+class _Health(http.server.BaseHTTPRequestHandler):
+    status = 200
+
+    def do_GET(self):  # noqa: N802 — the stdlib's name
+        body = b'{"ok":true}' if self.status == 200 else b'{"ok":false}'
+        self.send_response(self.status if self.path == "/health" else 404)
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _probe(command, port):
+    return subprocess.run(["bash", "-c", command.replace("127.0.0.1/8686", "127.0.0.1/%d" % port)],
+                          capture_output=True, timeout=20).returncode
+
+
+def test_vector_health_check_runs_a_program_its_image_ships():
+    """Vector's compose health check is run by bash (exec form), never by wget or curl, and it asks Vector's own
+    loopback API (127.0.0.1:8686, the address Vector's own config gives its API) for /health; and the image it
+    runs in is a Debian tag.
+
+    Why: the Vector image is Debian with neither wget nor curl. The check was `wget -qO- …/health`, which failed
+    with `wget: not found` on every run, so every box showed Vector `unhealthy` from its first deploy on —
+    found on the floating box's deploy, 2026-10-20 — and an unhealthy state that is always there hides the day
+    Vector really stops. bash ships in the stock tag and in kontroll/vector (built FROM it, in lockstep); an
+    alpine or distroless tag has no bash and would bring the always-`unhealthy` state back, as would an API moved
+    off the address the check asks."""
+    test = _vector_health_command()
+    assert test[:3] == ["CMD", "bash", "-c"], \
+        "the check must be run by bash, which the Debian image ships (got %r)" % test
+    command = test[3]
+    assert not re.search(r"\b(wget|curl)\b", command), "the Vector image ships neither wget nor curl"
+    assert "/dev/tcp/127.0.0.1/8686" in command and "GET /health " in command, \
+        "the check asks Vector's loopback API (8686, never published) for /health"
+    image = re.search(r":-([^}]+)}", _load("docker/services/vector.yaml")["services"]["vector"]["image"]).group(1)
+    assert image.endswith("-debian"), "the health check runs bash; a non-Debian tag (%s) ships none" % image
+    assert _load("docker/vector/vector.yaml")["api"]["address"] == "127.0.0.1:8686", \
+        "the health check asks 127.0.0.1:8686 — move both together"
+
+
+@pytest.mark.skipif(os.name != "posix" or shutil.which("bash") is None, reason="runs the check with bash's /dev/tcp")
+def test_vector_health_check_passes_on_200_and_fails_otherwise():
+    """The health check's own command, run with bash against a local server, exits 0 when /health answers 200 and
+    non-zero when it answers 503 or nothing listens.
+
+    Why: the row above pins the program; this one proves the command works — a check that can never pass (the old
+    `wget` in an image without it) or never fail (a probe that ignores the status) both leave the container's
+    health state meaning nothing."""
+    command = _vector_health_command()[3]
+    for status, want_ok in ((200, True), (503, False)):
+        handler = type("H%d" % status, (_Health,), {"status": status})
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            rc = _probe(command, server.server_address[1])
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert (rc == 0) is want_ok, "status %d: the check exited %d" % (status, rc)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        closed = sock.getsockname()[1]
+    assert _probe(command, closed) != 0, "nothing listening must fail the check"
