@@ -8,7 +8,7 @@
 # no secret). To change the scraped OIDs, edit generator.yml and regenerate (CI/VM, CGO); do NOT hand-edit the
 # modules. SNMPv3 authPriv (SHA-1 / AES-128; `SHA` = SHA-1 in snmp_exporter). The `network` job's per-target
 # __param_module + __param_auth labels select the module + auth.
-{#- The auths: block is EMITTED ONLY when the snmp_observability domain exists. On a fresh node it does not
+{# The auths: block is EMITTED ONLY when the snmp_observability domain exists. On a fresh node it does not
     (creds arrive later via the GUI Secrets dialog), and this file is a FILE-bind into snmp-exporter — so it
     must still be rendered, or `compose up` auto-creates the bind source as a root:root DIRECTORY and the
     container dies with "not a directory" (the G9 hole; live-caught 2026-07-28 on a fresh box). Same shape as
@@ -18,16 +18,25 @@
     "Configuration is missing Auths." (also live-caught, the same day — rendering it was not enough). So
     deploy-stack drops snmp-exporter from the up-list until credentials exist, and says so. This render still
     happens in that state, deliberately: the bind source must exist for the day someone brings the container up
-    by hand, and a missing file fails far more confusingly than an inert one. #}
+    by hand, and a missing file fails far more confusingly than an inert one.
+
+    No dash on this comment's opening tag: the template module renders with trim_blocks, which already eats the
+    newline after the closing tag, so a dash that also ate the one before it joined `auths:` onto the comment
+    line above — every deploy from 2026-07-28 to 2026-10-20 rendered the credentials commented out and the file
+    unparseable (tests/unit/test_snmp_config_render.py renders with the module's settings).
+
+    The credentials go in as JSON strings, which YAML reads as quoted strings: written bare, a password holding
+    a space and a hash was cut short there, one opening with an exclamation mark or an at sign, or holding a
+    colon and a space, made the file unparseable, and `yes` read as a boolean. #}
 {% if _snmp %}
 auths:
   v3_kontroll:
     version: 3
-    username: {{ _snmp.snmp_v3_username }}
+    username: {{ _snmp.snmp_v3_username | string | to_json }}
     security_level: authPriv
-    password: {{ _snmp.snmp_v3_auth_password }}
+    password: {{ _snmp.snmp_v3_auth_password | string | to_json }}
     auth_protocol: SHA
     priv_protocol: AES
-    priv_password: {{ _snmp.snmp_v3_priv_password }}
+    priv_password: {{ _snmp.snmp_v3_priv_password | string | to_json }}
 {% endif %}
 {% include 'modules.generated.yml' %}

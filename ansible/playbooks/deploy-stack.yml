@@ -652,6 +652,7 @@
         src: "{{ playbook_dir }}/../../prometheus/exporters/snmp/snmp.yml.j2"
         dest: "{{ playbook_dir }}/../../prometheus/exporters/snmp/snmp.yml"
         mode: "0600"
+      register: _snmp_render                # a change restarts a running exporter after `up` (below)
       become: false
       no_log: true
       # ALWAYS rendered when the exporter is deployed — the template omits the auths: block when _snmp is absent.
@@ -1145,6 +1146,21 @@
           docker compose --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
           --env-file {{ stack_dir }}/.env restart
           {{ (_clones_replaced | default([])) | intersect(_up_services) | join(' ') }}
+      changed_when: true
+
+    - name: Restart snmp-exporter when its rendered config changed (its file bind holds the file it started with)
+      # The render writes a new snmp.yml under the same name. A running container's file bind keeps the file it
+      # started with, and `up` recreates a container only when its service definition changed — so a new
+      # credential, or a corrected template, reached the exporter only at its next restart (a reboot, weeks later).
+      # A container `up` just made is restarted once more: harmless. A run started past the render
+      # (--start-at-task) has no render to read, so it restarts nothing.
+      when:
+        - _snmp_render is defined and _snmp_render is changed
+        - "'snmp-exporter' in _up_services"
+      ansible.builtin.command:  # noqa: command-instead-of-module
+        cmd: >-
+          docker compose --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
+          --env-file {{ stack_dir }}/.env restart snmp-exporter
       changed_when: true
 
     - name: Collect the running stack containers

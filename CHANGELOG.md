@@ -11,6 +11,29 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(prometheus): the rendered snmp.yml keeps its credentials block (2026-10-20)
+
+`prometheus/exporters/snmp/snmp.yml.j2` opened its explanatory comment with a whitespace-stripping `{#-`. The
+template module renders with `trim_blocks`, which already removes the newline after the comment, so the two
+together joined `auths:` onto the comment line above: since 2026-07-28 every deploy with SNMP credentials wrote an
+`snmp.yml` whose credentials were commented out and whose indented `v3_kontroll:` block YAML cannot parse. An
+exporter started before then keeps the config it loaded and works until it restarts; one started since has not
+started. The tests rendered the template without `trim_blocks` and passed. Found on the production box's deploy.
+
+- **The template:** the comment no longer strips the newline before it. The credentials go in through `to_json`:
+  written bare, a password holding ` #` was cut short there, one opening with `!` or `@` or holding `: ` made the
+  file unparseable, and `yes` read as a boolean.
+- **`tests/unit/test_snmp_config_render.py`:** every row renders with the template module's `trim_blocks`; a new
+  row pins that `trim_blocks` changes nothing the exporter reads and that `auths:` is a line of its own exactly
+  when credentials exist, and another that any credential reads back as the same string.
+- **`deploy-stack.yml`:** a render that changed `snmp.yml` now restarts a running snmp-exporter after `up`. The
+  render writes a new file under the same name and the container's file bind keeps the one it started with, so a
+  rotated credential — or this fix — reached the exporter only at its next restart. A run started past the render
+  (`--start-at-task`) restarts nothing. A row pins the task.
+- **`prometheus/exporters/snmp/README.md`** says all three to whoever edits the template next.
+- **Operator:** deploy again with `snmp-exporter` in `stack_services`; the deploy restarts the exporter on the
+  corrected file.
+
 ### fix(docker): Vector's health check runs a program its image ships (2026-10-20)
 
 `docker/services/vector.yaml`'s health check was `wget -qO- http://127.0.0.1:8686/health`, and the Vector image —
