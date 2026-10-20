@@ -22,6 +22,7 @@ Note this file is NOT covered by `tests/check-storage-chown.py`: that guard deli
 repo-tree binds (`../`) and only sees storage-root-derived sources. Repo-tree file binds have no general guard —
 which is why this one needed its own.
 """
+import json
 import os
 
 import jinja2
@@ -44,6 +45,7 @@ def _render(snmp, trim_blocks=True):
     # it): rendering without it is how these rows passed while every deploy rendered `auths:` into a comment.
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(_SNMP_DIR), keep_trailing_newline=True,
                              trim_blocks=trim_blocks)
+    env.filters["to_json"] = json.dumps     # Ansible's to_json is json.dumps (with its own encoder for its types)
     return env.get_template("snmp.yml.j2").render(_snmp=snmp)
 
 
@@ -79,6 +81,20 @@ def test_with_the_domain_the_credentials_are_wired():
     assert auth["password"] == _CREDS["snmp_v3_auth_password"]
     assert auth["priv_password"] == _CREDS["snmp_v3_priv_password"]
     assert auth["auth_protocol"] == "SHA" and auth["priv_protocol"] == "AES"
+
+
+@pytest.mark.parametrize("secret", ["abc #def", "!bang", "@at", "'quoted", 'say "hi"', "a: b", "- dash", "yes",
+                                    "0123", 12345678, "pässwörd", "back" + chr(92) + "slash", "{x}", "*star"])
+def test_any_credential_reaches_the_exporter_as_the_same_string(secret):
+    """Whatever a username or password holds, the rendered config reads back as that exact string.
+    Why: the template wrote the credentials bare, and YAML reads a bare value its own way — a password with ` #`
+    was cut short at the hash, one opening with `!`, `@`, `'`, `*` or holding `: ` made the file unparseable, and
+    `yes` became a boolean (found by the review of the trim_blocks fix, 2026-10-20). The same class of loss that
+    fix closes — the credential silently gone, or the exporter unable to start — through a different door."""
+    creds = {key: secret for key in _CREDS}
+    auth = yaml.safe_load(_render(creds))["auths"]["v3_kontroll"]
+    for field in ("username", "password", "priv_password"):
+        assert auth[field] == str(secret), "%s read back as %r" % (field, auth[field])
 
 
 @pytest.mark.parametrize("snmp,label", [({}, "no domain"), (_CREDS, "creds present")])
@@ -202,12 +218,13 @@ def test_the_rendered_file_stays_untracked_and_secret_moded():
 
 def test_a_changed_render_restarts_a_running_exporter_after_up():
     """When the render changed snmp.yml and snmp-exporter is in the up-list, the deploy restarts the exporter
-    after `up`; it does nothing when the render changed nothing.
+    after `up`; it does nothing when the render changed nothing, or never ran (a `--start-at-task` run past it).
 
     Why: the render writes a new file under the same name, and a running container's file bind keeps the one it
     started with; `up` recreates only on a changed service definition. So a rotated credential, or the corrected
     template above, reached the exporter only at its next restart — on the production box, a reboot weeks after
-    the deploy that broke it (2026-10-20)."""
+    the deploy that broke it (2026-10-20). And a condition that reads an unregistered render fails the play after
+    a good `up` (both ansible-core 2.18 and 2.19, measured by the fix's review)."""
     tasks = list(_tasks(yaml.safe_load(_deploy_text())))
     names = [str(t.get("name", "")) for t in tasks]
     render = tasks[next(i for i, n in enumerate(names) if n.startswith("Render the snmp_exporter config"))]
@@ -216,6 +233,7 @@ def test_a_changed_render_restarts_a_running_exporter_after_up():
     hits = [i for i, n in enumerate(names) if n.startswith("Restart snmp-exporter when its rendered config")]
     assert len(hits) == 1 and hits[0] > up, "one restart, after `up` (so it acts on the container `up` left)"
     restart = tasks[hits[0]]
-    assert restart.get("when") == ["_snmp_render is changed", "'snmp-exporter' in _up_services"]
+    assert restart.get("when") == ["_snmp_render is defined and _snmp_render is changed",
+                                   "'snmp-exporter' in _up_services"]
     cmd = " ".join(restart["ansible.builtin.command"]["cmd"].split())
     assert cmd.endswith("restart snmp-exporter") and "--env-file {{ stack_dir }}/.env" in cmd

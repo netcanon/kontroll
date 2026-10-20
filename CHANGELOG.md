@@ -20,13 +20,17 @@ together joined `auths:` onto the comment line above: since 2026-07-28 every dep
 exporter started before then keeps the config it loaded and works until it restarts; one started since has not
 started. The tests rendered the template without `trim_blocks` and passed. Found on the production box's deploy.
 
-- **The template:** the comment no longer strips the newline before it.
+- **The template:** the comment no longer strips the newline before it. The credentials go in through `to_json`:
+  written bare, a password holding ` #` was cut short there, one opening with `!` or `@` or holding `: ` made the
+  file unparseable, and `yes` read as a boolean.
 - **`tests/unit/test_snmp_config_render.py`:** every row renders with the template module's `trim_blocks`; a new
   row pins that `trim_blocks` changes nothing the exporter reads and that `auths:` is a line of its own exactly
-  when credentials exist.
+  when credentials exist, and another that any credential reads back as the same string.
 - **`deploy-stack.yml`:** a render that changed `snmp.yml` now restarts a running snmp-exporter after `up`. The
   render writes a new file under the same name and the container's file bind keeps the one it started with, so a
-  rotated credential — or this fix — reached the exporter only at its next restart. A row pins the task.
+  rotated credential — or this fix — reached the exporter only at its next restart. A run started past the render
+  (`--start-at-task`) restarts nothing. A row pins the task.
+- **`prometheus/exporters/snmp/README.md`** says all three to whoever edits the template next.
 - **Operator:** deploy again with `snmp-exporter` in `stack_services`; the deploy restarts the exporter on the
   corrected file.
 

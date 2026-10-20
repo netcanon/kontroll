@@ -31,6 +31,14 @@ the **gitignored, 0600** `snmp.yml` by the `deploy-stack.yml` render task (`no_l
 generator's verbatim-copied `auths:` block, so no credential can ever reach the committed artifact. The generated
 module carries no auth reference; auth binds at scrape time via `__param_auth=v3_kontroll` (`telemetry/snmp.yml`).
 
+Editing `snmp.yml.j2`: the template module renders it with `trim_blocks`, so never put a `-` on a tag next to
+`auths:` — one that also ate the newline before it joined `auths:` onto the comment line above, and every deploy
+from 2026-07-28 to 2026-10-20 rendered the credentials commented out. The credentials go in through `to_json`, so a
+password holding `#`, `!`, `: ` or `yes` reads back as itself. A render that changed the file restarts a running
+`snmp-exporter` after `up`: the file bind holds the file the container started with.
+[`tests/unit/test_snmp_config_render.py`](../../../tests/unit/test_snmp_config_render.py) renders with the module's
+settings.
+
 ## Pinned versions (bump together)
 
 - **snmp_exporter generator: `v0.30.1`** (built from source — it is NetSNMP/CGO, no static binary / no reliable

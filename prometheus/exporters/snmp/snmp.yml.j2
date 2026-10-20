@@ -23,16 +23,20 @@
     No dash on this comment's opening tag: the template module renders with trim_blocks, which already eats the
     newline after the closing tag, so a dash that also ate the one before it joined `auths:` onto the comment
     line above — every deploy from 2026-07-28 to 2026-10-20 rendered the credentials commented out and the file
-    unparseable (tests/unit/test_snmp_config_render.py renders with the module's settings). #}
+    unparseable (tests/unit/test_snmp_config_render.py renders with the module's settings).
+
+    The credentials go in as JSON strings, which YAML reads as quoted strings: written bare, a password holding
+    a space and a hash was cut short there, one opening with an exclamation mark or an at sign, or holding a
+    colon and a space, made the file unparseable, and `yes` read as a boolean. #}
 {% if _snmp %}
 auths:
   v3_kontroll:
     version: 3
-    username: {{ _snmp.snmp_v3_username }}
+    username: {{ _snmp.snmp_v3_username | string | to_json }}
     security_level: authPriv
-    password: {{ _snmp.snmp_v3_auth_password }}
+    password: {{ _snmp.snmp_v3_auth_password | string | to_json }}
     auth_protocol: SHA
     priv_protocol: AES
-    priv_password: {{ _snmp.snmp_v3_priv_password }}
+    priv_password: {{ _snmp.snmp_v3_priv_password | string | to_json }}
 {% endif %}
 {% include 'modules.generated.yml' %}
