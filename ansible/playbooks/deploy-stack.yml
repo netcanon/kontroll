@@ -11,7 +11,10 @@
 # May break:           the control node's own Docker stack (not the lab fabric)
 # Fallback required:   no — re-runnable; `docker compose down` to revert
 # Blast radius:        control node only (installs packages, starts containers)
-# Idempotence:         apt + compose are idempotent; a second run reports no change
+# Idempotence:         a second run reports no change: the image builds report one only when the image id moved
+#                      (built without an attestation, so a cached build keeps its id on either image store), `up`
+#                      only when compose touched a container (tests/unit/test_deploy_stack_idempotence.py);
+#                      a task that runs only because something changed (a restart) reports what it did
 
 - name: Stamp the run correlation id
   ansible.builtin.import_playbook: _log-run-id.yml
@@ -788,6 +791,15 @@
         - "(_file_tail_ssh_decls.matched | default(0)) | int > 0"
         - "_known_hosts_paths | length == 0"
 
+    - name: Look at the custom Vector image before the build (the build's change is its id moving)
+      community.docker.docker_image_info:
+        name: kontroll/vector:latest
+      register: _vector_image_before
+      when:
+        - "'vector' in stack_services"
+        - "(_file_tail_ssh_decls.matched | default(0)) | int > 0"
+        - not use_published_images
+
     - name: Build the custom Vector image (stock + openssh-client) for the file_tail_ssh exec-ssh source
       # ONLY when a class declares file_tail_ssh — the stock image has no ssh client (bench-verified). .env points
       # KONTROLL_VECTOR_IMAGE at kontroll/vector:latest under the SAME condition, so compose runs this image; every
@@ -798,6 +810,14 @@
         dockerfile: Dockerfile
         pull: false
         rebuild: always
+      environment:
+        BUILDX_NO_DEFAULT_ATTESTATIONS: "1"   # as the runner's build below: the id stays put on a cached build
+      register: _vector_build
+      # As the runner's build below: a change is the id moving (the look before it is the task above).
+      changed_when: >-
+        ansible_check_mode
+        or (_vector_build.image.Id | default('')) != (_vector_image_before.images | default([])
+        | map(attribute='Id') | first | default(''))
       when:
         - "'vector' in stack_services"
         - "(_file_tail_ssh_decls.matched | default(0)) | int > 0"
@@ -818,6 +838,14 @@
         - ('semaphore' in stack_services) or ('api' in stack_services) or ('onboard-gui' in stack_services)
         - not use_published_images          # C0: a published runner bakes the all-modules superset in CI, not here
 
+    - name: Look at the Semaphore runner image before the build (the build's change is its id moving)
+      community.docker.docker_image_info:
+        name: kontroll/semaphore:latest
+      register: _runner_image_before
+      when:
+        - ('semaphore' in stack_services) or ('api' in stack_services) or ('onboard-gui' in stack_services)
+        - not use_published_images
+
     - name: Build the Semaphore runner image (stock + sops/age + baked collections)
       community.docker.docker_image_build:
         name: kontroll/semaphore:latest
@@ -825,6 +853,20 @@
         dockerfile: docker/semaphore-runner/Dockerfile
         pull: false
         rebuild: always          # pick up Dockerfile/lockfile changes (layer cache keeps it fast)
+      environment:
+        # Docker's containerd image store (both lab boxes, 2026-10-20) keeps a build's provenance attestation, a new
+        # manifest list each build: a build the cache answers whole still got a new id (measured, Docker 29.6.2), so
+        # the build reported a change and compose recreated what runs the image. Without the attestation the id
+        # stays put; the classic image store keeps none either way.
+        BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+      register: _runner_build
+      # `rebuild: always` reports a change on every run. A build the layer cache answers whole yields the image it
+      # had, so the change is the id moving — a second apply reports 0 changed (the header); a preview, which
+      # builds nothing, still says it would build. A run started past the look (--start-at-task) finds no look.
+      changed_when: >-
+        ansible_check_mode
+        or (_runner_build.image.Id | default('')) != (_runner_image_before.images | default([])
+        | map(attribute='Id') | first | default(''))
       when:
         - ('semaphore' in stack_services) or ('api' in stack_services) or ('onboard-gui' in stack_services)
         - not use_published_images          # C0: pull kontroll-control by digest instead (use_published_images)
@@ -1131,9 +1173,19 @@
     - name: Bring up the selected stack service(s)
       ansible.builtin.command:  # noqa: command-instead-of-module
         cmd: >-
-          docker compose --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
+          docker compose --progress plain --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
           --env-file {{ stack_dir }}/.env up -d {{ _up_services | join(' ') }}
-      changed_when: true
+      register: _stack_up
+      # compose prints a line per container, network and volume it touches — Creating/Created, Recreate/Recreated,
+      # Starting/Started, Stopping/Stopped, Removing/Removed, Restarting — and `Running` for a container it left
+      # alone (a second apply, measured 2026-10-20: one `Running` line per container and nothing else). The play
+      # reports a change only when compose made one, so a second apply reports 0 changed (the header). `--progress
+      # plain` pins the lines this reads: a COMPOSE_PROGRESS of quiet or json would print none, and a change
+      # would read as none.
+      changed_when: >-
+        (_stack_up.stdout_lines + _stack_up.stderr_lines)
+        | select('search', '^ *(Container|Network|Volume) +[^ ]+ +(Creat|Recreat|Start|Stopp|Remov|Restart)')
+        | list | length > 0
 
     - name: Restart a service whose content clone was made again (its bind mount still holds the removed directory)
       # tasks/content-clone.yml removes a clone held by the wrong uid and its owner makes it again — a NEW directory.
