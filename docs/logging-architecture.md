@@ -202,6 +202,10 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   `container_name`. It drops lines that name the rule itself (Grafana logs its uid at every evaluation) and
   ansible's `TASK [` / `RUNNING HANDLER [` banners; its query is pinned as measured on real traffic, and
   `docs/troubleshooting.md` §2 carries it. The tests hold every rule to selecting only a service some shape emits.
+  Each rule counts lines, and nothing matching returns no series, so each sets `noDataState: OK`: under the
+  default (NoData) every logging alert showed as live on the Alerting page. Each also sets `execErrState: Error`,
+  so a query that fails (Loki down) shows the rule as Error; under the default (Alerting) a Loki outage fired the
+  crash-storm and auth-denied alerts as if they had happened.
 
 ---
 

@@ -33,6 +33,11 @@ def _rules():
     return out
 
 
+def _load_sink():
+    with open(os.path.join(_ROOT, "docker", "vector", "config.d", "sinks", "loki.yaml"), encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
 def _constant_services():
     """Every `service` a Vector shape sets to a fixed string. A shape whose service comes from the event (the
     container's name, the systemd unit, the script's run-log name) adds none: no rule can name it in advance."""
@@ -70,6 +75,21 @@ def test_every_rule_has_a_debounce_and_a_bounded_window():
                 r.get("title"), d.get("refId"))
 
 
+def test_every_rule_reads_no_lines_as_ok_and_a_failed_query_as_an_error():
+    """Every rule sets `noDataState: OK` and `execErrState: Error`. Why: each rule is a `sum(count_over_time(...))`
+    over matching lines, and when nothing matches Loki returns no series at all, not a 0. Under Grafana's default
+    (NoData) all four rules sat in NoData on two boxes (2026-10-21) and sent a DatasourceNoData alert every minute, so
+    the Alerting page showed every logging alert as live whether anything had happened or not. A failed query (Loki
+    down) counts nothing either: under the default (Alerting) each rule fired under its own name once its `for` ran
+    out, so a Loki outage read as a crash storm (Grafana 13.0.2, datasource on a closed port, scratch box,
+    2026-10-21); with Error the rule shows Error, which is what happened."""
+    for r in _rules():
+        assert r.get("noDataState") == "OK", "rule %r must set noDataState: OK (no lines matched is not an alert)" % (
+            r.get("title"))
+        assert r.get("execErrState") == "Error", (
+            "rule %r must set execErrState: Error (a failed query is not a crash storm)" % r.get("title"))
+
+
 def test_every_service_a_rule_selects_is_one_a_vector_shape_emits():
     """Every `service="x"` / `service=~"a|b"` a rule selects is a service some Vector shape sets as a fixed
     string. Why: the crash-storm rule selected `service="containers"`, but the containers shape sets `service` to
@@ -86,6 +106,85 @@ def test_every_service_a_rule_selects_is_one_a_vector_shape_emits():
                 for one in (value.split("|") if op == "=~" else [value]):
                     assert one in services, "rule %r selects service %r, which no Vector shape emits (fixed: %s)" % (
                         r.get("title"), one, sorted(services))
+
+
+def _selectors(expr):
+    """The stream selectors of a LogQL expression: the `{…}` a range function opens on (not a `{{.x}}` template)."""
+    return re.findall(r"(?:count_over_time|rate|bytes_over_time|bytes_rate)\(\s*\{([^{}]*)\}", expr)
+
+
+def test_every_label_a_rule_selects_is_one_the_sink_sets():
+    """Every matcher in a rule's stream selector names a label the internal Loki sink sets, and a `source` matcher
+    names the sink's own fixed value. Why: since each rule reads no matching lines as OK, a selector that matches
+    no stream reads Normal for good, and a typo in a label name (`servce="ansible"`) or a value no stream carries
+    (`source="internals"`) is valid LogQL that returns nothing. A round-2 reader's mutants of both kinds passed every
+    other test (2026-10-21); a wrong `service` value is held by the test above."""
+    sink = _load_sink()
+    labels = set(sink["labels"])
+    for r in _rules():
+        for d in r["data"]:
+            expr = " ".join(d.get("model", {}).get("expr", "").split())
+            if not expr:
+                continue
+            selectors = _selectors(expr)
+            assert selectors, "rule %r: no stream selector found in %r" % (r.get("title"), expr)
+            for sel in selectors:
+                matchers = re.findall(r'(\w+)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"', sel)
+                assert matchers and re.sub(r'\w+\s*(=~|!~|!=|=)\s*"(?:[^"\\]|\\.)*"|[\s,]', "", sel) == "", (
+                    "rule %r: a selector this test cannot read: {%s}" % (r.get("title"), sel))
+                for name, _op, value in matchers:
+                    assert name in labels, "rule %r selects label %r, which the Loki sink never sets (sets: %s)" % (
+                        r.get("title"), name, sorted(labels))
+                    if name == "source":
+                        assert value == sink["labels"]["source"], "rule %r selects source=%r; the sink sets %r" % (
+                            r.get("title"), value, sink["labels"]["source"])
+
+
+def _levels_by_service():
+    """For each fixed `service` a Vector shape sets, the levels that shape sets: its fixed `.level = "x"` strings, or
+    None when it also sets `level` from the event (any value can arrive then)."""
+    out = {}
+    for name in sorted(os.listdir(_TRANSFORMS)):
+        with open(os.path.join(_TRANSFORMS, name), encoding="utf-8") as fh:
+            text = fh.read()
+        values = re.findall(r"^\s*\.level\s*=\s*(.+?)\s*(?:#.*)?$", text, re.M)
+        sets = [re.fullmatch(r'"([^"]+)"', v) for v in values]
+        levels = {m.group(1) for m in sets} if sets and all(sets) else None
+        for service in re.findall(r'^\s*\.service\s*=\s*"([^"]+)"\s*(?:#.*)?$', text, re.M):
+            prior = out.get(service, set())
+            out[service] = None if levels is None or prior is None else prior | levels
+    return out
+
+
+def _matches(op, value, candidate):
+    """Whether a LogQL label matcher `<op> "value"` holds for a label equal to `candidate` (regexes are anchored)."""
+    hit = candidate == value if op in ("=", "!=") else bool(re.fullmatch(value, candidate))
+    return hit == (op in ("=", "=~"))
+
+
+def test_every_level_a_rule_selects_is_one_its_services_emit():
+    """A `level` matcher on a rule whose selected services each set `level` only to fixed strings matches one of
+    those strings. Why: the audit shapes set `level="audit"` and the ansible shape `level="info"`, so an added
+    `level="error"` on the auth-denied or the backup rule matches no stream, and since each rule reads no matching
+    lines as OK it reads Normal for good. A round-2 reader asked for this clause; a round-4 reader added that matcher
+    to the auth-denied rule and every test passed (2026-10-21). A rule that selects a service whose level comes from
+    the event (containers, journald) is not held here: any level can arrive on it."""
+    levels_by_service = _levels_by_service()
+    assert levels_by_service.get("api-audit") == {"audit"}, levels_by_service
+    for r in _rules():
+        for d in r["data"]:
+            for sel in _selectors(" ".join(d.get("model", {}).get("expr", "").split())):
+                matchers = re.findall(r'(\w+)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"', sel)
+                services = [one for name, op, value in matchers if name == "service"
+                            for one in (value.split("|") if op == "=~" else [value])]
+                if not services or any(levels_by_service.get(one) is None for one in services):
+                    continue
+                emitted = set().union(*(levels_by_service[one] for one in services))
+                for name, op, value in matchers:
+                    if name == "level":
+                        assert any(_matches(op, value, one) for one in emitted), (
+                            "rule %r selects level %s%r, but %s only emit %s" % (
+                                r.get("title"), op, value, services, sorted(emitted)))
 
 
 _CRASH_UID = "kontroll-log-container-restart"
