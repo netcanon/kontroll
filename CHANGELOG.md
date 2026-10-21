@@ -11,6 +11,15 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): install-prereqs.sh run alone says what it needs, instead of a bare "No such file" (2026-10-20)
+
+Piped to a host on its own (`cat scripts/install-prereqs.sh | ssh host sudo bash`), the script died with
+`line 35: /tmp/lib/pkg.sh: No such file or directory` (seen on a scratch box): nothing said it sources helpers from
+the `scripts/lib/` beside it. It now checks for `lib/pkg.sh` and `lib/canonical-group.sh` first, before the root
+check, and names the missing file and where to run it from (a checkout or the unpacked launch kit).
+`tests/unit/test_install_prereqs_alone.py` runs it copied alone and piped (both fail on the previous script), and
+with `lib/pkg.sh` alone beside it (fails if only the first lib is checked).
+
 ### fix(docker): the socket proxy no longer cuts a quiet container's log stream every ten minutes (2026-10-20)
 
 Vector follows each container's logs through `docker-socket-proxy`, whose HAProxy template holds every request to

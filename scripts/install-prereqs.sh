@@ -23,6 +23,19 @@ for arg in "$@"; do
   esac
 done
 
+# It sources helpers from lib/ beside itself, so it runs from a kontroll checkout or the unpacked launch kit. Piped
+# or copied alone (`cat install-prereqs.sh | ssh host sudo bash`) it would die on a bare "No such file": say what is
+# missing and where to run it, before anything else (no root needed to learn that).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+for lib in pkg.sh canonical-group.sh; do
+  if [ ! -r "$SCRIPT_DIR/lib/$lib" ]; then
+    echo "install-prereqs.sh: $SCRIPT_DIR/lib/$lib not found. It needs the scripts/lib/ beside it:" >&2
+    echo "run it from a kontroll checkout or the unpacked launch kit (sudo bash scripts/install-prereqs.sh)," >&2
+    echo "not piped or copied alone." >&2
+    exit 1
+  fi
+done
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "install-prereqs.sh needs root (it installs system packages). Re-run: sudo bash $0 $*" >&2
   exit 1
@@ -30,7 +43,6 @@ fi
 
 # Package-manager + init-system dispatch (nixflavor-agnostic) — apt/dnf/zypper/pacman. The compose-native floor is
 # the SAME everywhere ("Docker + git"); only HOW it's installed differs by distro. See scripts/lib/pkg.sh.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/pkg.sh
 . "$SCRIPT_DIR/lib/pkg.sh"
 PKG_MGR="$(pkg_detect)"
