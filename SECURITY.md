@@ -1219,7 +1219,18 @@ pinned `tecnativa/docker-socket-proxy:0.3.0` renders its shipped `haproxy.cfg.te
 own root fs at start, so `read_only:true` crash-loops it on every deploy (a committed-config bug an uncommitted
 workaround masked until the VM-148 clean-redeploy detonated it); the real controls — the `POST=0` GET/HEAD filter,
 `no-new-privileges`, portless kontroll-net-only reach, and the socket `:ro` mount — are unchanged, so the writable
-container-private root adds no reachability. Pinned by `test_service_writable_root.py`. Host journald is read via
+container-private root adds no reachability. Pinned by `test_service_writable_root.py`. The proxy's start script
+adds one route to the template: every `/containers/<id>/logs` request (Vector's follow streams) goes to its own
+`docker-events` backend (`timeout server 0`), since the stock `timeout server 10m` cut every idle stream. HAProxy
+applies the frontend's allow/deny filter before it picks a backend, so the grant is unchanged and `POST` is still
+refused (403 on a scratch box). `test_compose_logging.py::test_socket_proxy_is_read_only_filtered` pins `POST=0`;
+the script rewrites the filter's own config, so `test_socket_proxy_log_streams.py` runs it on the pinned image's
+whole template (vendored as a fixture) and holds it to adding that one route and changing no other line; at run
+time the script moves its copy over the template only if the copy is the template plus that line, after the events
+route, so a write awk did not report (a full disk), a misplaced route or any other changed line starts the stock
+template instead. Overriding
+the entrypoint drops the image's CMD, so the script restates it, and a test ties that line and the fixture to the
+pinned tag: a bump fails until the new image is inspected and its template vendored. Host journald is read via
 `group_add: ${KONTROLL_JOURNAL_GID}` (the host
 `systemd-journal` GID, discovered by deploy-stack); the audit/run-log dirs via their `o+r` world-read — **NOT** via
 `group_add: 1001`, which would over-grant read of the `0640 1001:1001` API/GUI TLS private keys (the MF-1 catch).
