@@ -32,7 +32,7 @@ labels:
   source: "internal"                     # static: distinguishes internal from capability-derived streams
   host: "{{ host }}"                      # low-cardinality: a few VMs
   service: "{{ service }}"                # low-cardinality: container/unit/audit-surface/script name
-  level: "{{ level }}"                    # bounded: info|warn|error|debug|audit
+  level: "{{ level }}"                    # syslog names (journald), `audit`, `info`, or a JSON line's own level
   run_id: "{{ run_id }}"                  # bounded: set on correlated streams; "" elsewhere = no label in Loki
 batch:
   max_events: 5000

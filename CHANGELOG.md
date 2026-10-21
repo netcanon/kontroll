@@ -11,6 +11,43 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(dashboards, docker): journald lines ship at their real level, the error panel counts them, and the crash alert can fire (2026-10-20)
+
+A scratch Vector 0.56 + Loki 3.4.2 stack showed three ways the logs surface misread what it was shipping. Each is
+valid config that returns plausible output, so no check failed.
+
+- **A journald entry with no `PRIORITY` shipped as `emerg`.** VRL's `to_int(null)` is 0, not an error, so the `?? 6`
+  fallback never applied. Kernel-audit lines carry no `PRIORITY`, and AppArmor writes one per profile it loads: a
+  burst at every boot, and Docker's `docker-default` when the daemon first starts a container. On a scratch box each
+  boot shipped about a dozen emergencies. No `PRIORITY` is now `info`; a real 0 is still `emerg`, and an unparseable
+  one is `info`.
+- **The error/warn panel and the troubleshooting "Anything wrong" query matched `error|warn` only.** journald's
+  levels are syslog names (`err`, `warning`, `crit`, …), so a failed systemd unit never counted, and neither did a
+  JSON line's `"level":"ERROR"`. Both now match the syslog names from `warning` up and the common
+  `warn`/`error`/`critical`/`fatal`/`panic` spellings, any case (not `severe`, numeric or one-letter levels). The
+  dashboard's `level` picker offers every syslog name. A plain-text container line is still `info` whatever it
+  says, Grafana's and Prometheus's own `level=error` lines among them.
+- **Lines already in Loki keep the level they shipped with** until retention ages them out (30 days): past boots'
+  kernel-audit lines stay `emerg`, and the widened panel now counts them.
+- **The container restart / crash storm alert could never fire.** It selected `service="containers"`, but a
+  container stream's `service` is the container's own name, so no stream matched. It now picks container lines by
+  the body's `container_name` (only `docker_logs` sets it) and searches their message. On the scratch Loki the old
+  query returned nothing while a container crash-looped; the new one counts its lines. **Two kinds of container
+  line say the words without a crash, and are dropped:** Grafana logs the rule's own uid
+  (`kontroll-log-container-restart`) at every evaluation, and each deploy's ansible prints `TASK [Restart …]`
+  banners. Measured over 7 days of two boxes' Loki, the query without that stage counted Grafana's lines in every
+  5-minute window (it would have fired for good); with it, one line a box (Grafana's plugin exiting at a deploy's
+  restart). `docs/troubleshooting.md` §2 has the query, to run before any change to the rule.
+- **Tests.** `docker/vector/tests/internal_levels.yaml` (`vector test`) pins the journald levels;
+  `test_every_service_a_rule_selects_is_one_a_vector_shape_emits`,
+  `test_the_error_panel_counts_every_error_and_warning_spelling_and_nothing_milder` and
+  `test_the_level_picker_offers_every_level_a_shape_can_ship` each fail on the previous tree, and
+  `test_the_troubleshooting_error_query_uses_the_panels_level_regex` fails when only one copy changes.
+  `test_the_crash_rule_counts_crash_lines_and_not_grafana_on_itself_or_deploy_banners` runs the rule's line
+  filters over measured lines; `test_the_crash_rules_query_is_the_one_measured_on_real_traffic` pins the whole
+  query (a `json` typo, a dropped `container_name != ""` or a `line_format` on a missing field each made it dead or
+  loose with every other test green); `test_the_runbooks_crash_query_is_the_rules` keeps the runbook's copy whole.
+
 ### fix(docker): every event Vector ships carries the labels its Loki sink templates (2026-10-20)
 
 Both boxes' Vector logged a warning for nearly every event: the internal Loki sink templates `run_id` and
@@ -25,8 +62,8 @@ the sink would fill a default, and the sink has none. Reproduced on a scratch Ve
 - **A plain-text container line is `level=info`**; a JSON line's own `level` (or `severity`) still wins.
 - **`test_every_input_of_the_loki_sink_sets_each_field_it_templates_as_a_label`** reads the sink's templated
   fields and holds every transform it reads to setting each one outside any `if` (or by an `!exists` default).
-  `vector validate` compiles the VRL but cannot see a field set only sometimes. Three reversions (either
-  container default, the audit transform's) each fail it.
+  `vector validate` compiles the VRL but cannot see a field set only sometimes. Each of seven reversions (each
+  shape's `run_id` default alone, and the containers `level`) fails it.
 - **`vector test` now runs in `tests/validate.sh` (step `vector-test`).** `docker/vector/tests/internal_labels.yaml`
   feeds one crafted event into each internal shape and asserts the label fields that come out; six of its eight
   cases fail on the transforms before this fix. One event per case: a check over several events passes when

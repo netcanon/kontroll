@@ -1,0 +1,57 @@
+# Vector unit tests for the internal shapes' `level` — `vector test`, run by tests/validate.sh's vector-test step.
+# Not loaded at runtime: the compose command loads only vector.yaml, config.d/ and generated/.
+#
+# What they verify: a journald entry's level is its PRIORITY's syslog name, and an entry with no PRIORITY is `info`.
+# Why: VRL's `to_int(null)` is 0, so a missing PRIORITY used to become `emerg` — every kernel-audit line (AppArmor's
+# profile loads: a burst at boot, Docker's `docker-default`) shipped as an emergency (measured on a scratch box,
+# 2026-10-20), which an error panel or alert would count. One event per test (a check over several passes when ANY
+# one meets it).
+tests:
+  - name: "journald: no PRIORITY (a kernel-audit line) is info, not emerg"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: 'AVC apparmor="STATUS" operation="profile_load" name="docker-default"',
+                     _TRANSPORT: "audit", SYSLOG_IDENTIFIER: "audit"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "journald: PRIORITY 3 is err"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "failed to start", PRIORITY: "3", _SYSTEMD_UNIT: "docker.service"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "err")
+
+  - name: "journald: a real PRIORITY 0 is still emerg"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "kernel panic", PRIORITY: "0"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "emerg")
+
+  - name: "journald: an unparseable PRIORITY is info"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "odd entry", PRIORITY: "high"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")

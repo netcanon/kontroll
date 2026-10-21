@@ -33,7 +33,7 @@ the dashboard panels are kept in sync on purpose.
 {source="internal", service=~"api-audit|gui-audit"}
 
 # Anything wrong, across the whole stack:
-{source=~".+", level=~"error|warn"}
+{source=~".+", level=~"(?i)(warn|warning|err|error|crit|critical|alert|emerg|fatal|panic)"}
 
 # One device class's ingested logs (the logging capability):
 {source="capability", device="cisco_ios"}
@@ -43,6 +43,13 @@ the dashboard panels are kept in sync on purpose.
 
 # Volume of a chatty emitter (sizing-lever input; pairs with the dashboard "Top services" panel):
 topk(10, sum by (service) (count_over_time({source="internal"} [1h])))
+
+# What the "Container restart / crash storm" alert counts, by container (its rule sums the same over 5m). Run it
+# when the alert fires, and over the last 7 days before changing the rule: Grafana logs the rule's uid at every
+# evaluation and each deploy prints `TASK [Restart …]` banners, so a looser filter counts lines that are no crash.
+sum by (container_name) (count_over_time({source="internal"} | json container_name, message | __error__=""
+  | container_name != "" | line_format "{{.message}}" |~ "(?i)restart|panic|exited"
+  !~ `kontroll-log-container-restart|^(TASK|RUNNING HANDLER) \[` [5m]))
 ```
 
 ## 3. The degrade path — debugging when Loki/Vector is down
