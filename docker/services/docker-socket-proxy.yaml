@@ -19,9 +19,43 @@
 services:
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0   # pinned tag (consistent with the rest of the stack; the one
-                                                 # load-bearing assertion — POST=0 + no ports — is test-pinned)
+                                                 # load-bearing assertion — POST=0 + no ports — is test-pinned).
+                                                 # A bump must re-check the start script's exec line below against
+                                                 # the new image's ENTRYPOINT + CMD (0.4.x renders /tmp/haproxy.cfg)
     container_name: docker-socket-proxy
     restart: unless-stopped
+    # Vector's log streams (`GET /containers/<id>/logs?follow=1`; the route cannot see the query, so every `/logs`
+    # request takes it) go to the template's own
+    # `docker-events` backend, which differs from the default one only by `timeout server 0`. On the default route
+    # the template's `timeout server 10m` cut every stream idle for ten minutes (`sD--`): Vector logged an ERROR and
+    # re-attached, once per quiet container every ten minutes (scratch box, 2026-10-20; nothing lost or doubled).
+    # The allow/deny filter runs in the frontend before a backend is chosen, so the route changes the timeout only:
+    # POST=0 and the CONTAINERS-only grant still hold. The entrypoint renders the template, so the line goes in
+    # first, once: a restart finds it there. The edit is written beside the template and moved over it only if the
+    # copy is the template plus that one line, after the events route. So a failed write leaves the stock template,
+    # even one awk does not report (busybox awk exits 0 on a full disk, leaving an empty copy), and so does an edit
+    # that changed any other line. If the edit fails or an image drops the events route, the proxy starts on the
+    # stock template (its streams cut at ten minutes again) and says so. Overriding the entrypoint drops the image's
+    # CMD, so the exec line restates 0.3.0's ENTRYPOINT + CMD. `timeout client 10m` still holds: a stream Vector
+    # stops reading for ten minutes (Loki down long enough to fill the sink's buffer) is still cut, and that ERROR is
+    # real. Vector excludes this container, so the script's lines are in `docker logs docker-socket-proxy` only.
+    # tests/unit/test_socket_proxy_log_streams.py
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        t=/usr/local/etc/haproxy/haproxy.cfg.template
+        L='    use_backend docker-events if { path,url_dec -m reg -i ^(/v[\d\.]+)?/containers/[a-zA-Z0-9_.-]+/logs }'
+        if grep -qxF "$$L" "$$t"; then echo "kontroll: log-stream route already present"
+        elif m=$$(awk '/^    use_backend docker-events if/{print NR + 1; exit}' "$$t") && [ -n "$$m" ]; then
+          L="$$L" awk '{print} !d && /^    use_backend docker-events if/{print ENVIRON["L"]; d=1}' "$$t" \
+            > "$$t.kontroll" && [ "$$(sed -n "$${m}p" "$$t.kontroll")" = "$$L" ] \
+            && sed "$${m}d" "$$t.kontroll" | cmp -s - "$$t" \
+            && chmod 644 "$$t.kontroll" && mv -f "$$t.kontroll" "$$t" &&
+            echo "kontroll: log streams routed to the no-timeout backend" || {
+            rm -f "$$t.kontroll"
+            echo "kontroll: WARNING could not add the log-stream route; log streams keep the 10m timeout"; }
+        else echo "kontroll: WARNING the events route is gone from the template; log streams keep the 10m timeout"; fi
+        exec docker-entrypoint.sh haproxy -f /usr/local/etc/haproxy/haproxy.cfg
     environment:
       CONTAINERS: "1"          # list/inspect/logs — the ONLY grant docker_logs needs
       EVENTS: "1"              # the container lifecycle stream docker_logs watches (Tecnativa default 1; explicit)

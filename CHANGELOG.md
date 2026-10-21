@@ -11,6 +11,52 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): the socket proxy no longer cuts a quiet container's log stream every ten minutes (2026-10-20)
+
+Vector follows each container's logs through `docker-socket-proxy`, whose HAProxy template holds every request to
+`timeout server 10m` except `/events`. A container that logged nothing for ten minutes had its stream cut (`sD--`):
+Vector logged `ERROR … Error in communication with Docker daemon` and re-attached, once per quiet container every
+ten minutes. Measured on a scratch box: nothing lost or doubled, but the errors buried real ones.
+
+- **The proxy's start script routes `/containers/<id>/logs` to the template's own `docker-events` backend**, which
+  differs only by `timeout server 0`, then runs the stock entrypoint. HAProxy applies the allow/deny filter before
+  it picks a backend, so `POST=0` and the CONTAINERS-only grant are unchanged (`POST` still 403). On the scratch box
+  the streams stayed open past the ten-minute mark, with no cut and every line delivered once.
+- A restart finds the route (an exact-line match) and adds none. The edit is written beside the template and
+  moved over it only if the copy is the template plus that one line, on the line after the events route, so a
+  failed write leaves the stock template. That includes a write awk does not report: busybox awk exits 0 on a full
+  disk, and in the image the empty copy replaced the template, which then stayed empty across restarts until the
+  check went in. On a failed write, a copy with the route missing, misplaced or garbled or any other line changed,
+  or an image whose template lacks the events route, the proxy starts on the stock template and prints a WARNING
+  (its streams are cut again; the proxy still runs). Vector excludes the proxy, so the WARNING is in `docker logs docker-socket-proxy` only;
+  `docs/troubleshooting.md` §4 says where to look. `timeout client 10m` still cuts a stream Vector stops reading
+  (Loki down long enough to fill the buffer): that ERROR is real.
+- **An image bump must re-check the exec line.** Overriding the entrypoint drops the image's CMD, so the script
+  restates 0.3.0's (`docker-entrypoint.sh haproxy -f /usr/local/etc/haproxy/haproxy.cfg`). 0.4.x renders
+  `/tmp/haproxy.cfg`, so that line would crash-loop it; a test fails on any tag it has no record of.
+- **`tests/unit/test_socket_proxy_log_streams.py`** runs the script from the compose file against the pinned
+  image's whole template, vendored unmodified as a fixture
+  (`tests/fixtures/docker-socket-proxy/0.3.0/haproxy.cfg.template`, Apache-2.0), under `sh` and, where installed,
+  busybox `sh` (the container's). It checks:
+  - it adds exactly one line, after the events route, and changes no other;
+  - the path regex matches log streams only, not the list, an inspect or events;
+  - the restart case;
+  - an allow line that names the logs path;
+  - a failed write, and a copy that is not the template plus the route in its place (empty, cut short, widening a
+    grant, the route garbled, left out or on line 1). The awk stand-ins that write those copies are a shell
+    function, which a shell runs before any awk on `PATH` or busybox applet, and a row whose stand-in never ran
+    fails;
+  - the fallback.
+
+  Eighteen mutants of the script each fail it: the route step removed; an added `http-request allow`; an
+  `allow if TRUE` slipped in ahead of a grant the compose file leaves off; an `env(IMAGES)` rewritten to
+  `env(CONTAINERS)`; a loose "already present" match; the route twice, or before the events route; its line number
+  off by one, or left unchecked when empty; either half of the copy check dropped, or both; a count of the route
+  in place of its position; the rejected copy left behind; a route failure that stops the proxy; the 0.4.x exec
+  path; a bumped tag; and the awk call respelled so the stand-ins no longer match it. A fixture holding only the
+  filter lines the compose file uses let the two keyed on other lines pass. A new tag fails until
+  its template is vendored and its CMD recorded.
+
 ### fix(dashboards, docker): journald lines ship at their real level, the error panel counts them, and the crash alert can fire (2026-10-20)
 
 A scratch Vector 0.56 + Loki 3.4.2 stack showed three ways the logs surface misread what it was shipping. Each is

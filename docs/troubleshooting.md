@@ -76,6 +76,10 @@ re-ships from where it stopped rather than re-reading everything.
 - **No logs in Grafana at all** → confirm the Loki datasource provisioned (`uid: loki`); confirm Vector is
   Up and shipping (`docker logs vector | grep -i "Listening\|Healthcheck"`); confirm Loki `/ready`
   (`curl -s ${KONTROLL_MGMT_IP}:3100/ready`).
+- **Vector logs `Error in communication with Docker daemon` about every ten minutes** → the socket proxy is
+  cutting idle log streams: its log-stream route is missing. `docker logs docker-socket-proxy | grep kontroll:`
+  says why (Vector excludes the proxy, so its WARNING never reaches Loki). Now and then the error is real:
+  `timeout client 10m` still cuts a stream Vector stopped reading, e.g. while Loki was down.
 - **A device's syslog never arrives** (`{source="capability"}` empty) → confirm `docker/services/vector.yaml`
   publishes the mgmt-bound `:5514`, the device is configured to ship there (the `logging_syslog_push` wiring
   role), and the device can reach the collector on the mgmt VLAN.
