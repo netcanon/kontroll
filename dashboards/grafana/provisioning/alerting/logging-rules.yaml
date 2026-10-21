@@ -30,7 +30,17 @@ groups:
               datasource: {type: loki, uid: loki}
               editorMode: code
               queryType: instant
-              expr: 'sum(count_over_time({source="internal", service="containers"} |~ "(?i)restart|panic|exited" [5m]))'
+              # A container stream's `service` is the container's own name, so no one label picks them all:
+              # the body's `container_name` (docker_logs sets it, nothing else does) does; `container_name != ""`
+              # keeps journald's "Main process exited" and the ansible log's handler lines out. Each line is JSON.
+              # Two kinds of container line say the words without a crash, measured over 7 days on two boxes
+              # (2026-10-21): Grafana logs this rule's uid at every evaluation (every minute: it would fire for
+              # good), and each deploy's ansible prints `TASK [Restart …]` banners. Both are dropped. A change here
+              # is re-measured that way first (docs/troubleshooting.md); tests/unit/test_alerting_logging.py pins it.
+              expr: >-
+                sum(count_over_time({source="internal"} | json container_name, message | __error__=""
+                | container_name != "" | line_format "{{.message}}" |~ "(?i)restart|panic|exited"
+                !~ `kontroll-log-container-restart|^(TASK|RUNNING HANDLER) \[` [5m]))
               intervalMs: 1000
               maxDataPoints: 43200
               refId: A

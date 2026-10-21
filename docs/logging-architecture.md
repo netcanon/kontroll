@@ -163,7 +163,9 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   choke-point. Every shape sets each field the sink templates as a label: `run_id` defaults to `""`, which
   Loki stores as no label, and a plain-text container line is `level=info`. A missing field fails the label
   template on every event — a WARN per event and the label dropped — so `tests/unit/test_compose_logging.py`
-  holds every input of the sink to it. Promtail avoided (deprecated). (Built on branch; pending the dogfood deploy.)
+  holds every input of the sink to it. A journald entry's `level` is its `PRIORITY`'s syslog name (`err`,
+  `warning`, …) and one without a `PRIORITY` is `info` (`docker/vector/tests/internal_levels.yaml`). Promtail
+  avoided (deprecated). (Built on branch; pending the dogfood deploy.)
 
 ### Layer 2 — Store + query: Loki  🟡 built (`feat/logging-vector`)
 - **Loki**, single-binary, **filesystem** store (`docker/services/loki.yaml` + `docker/loki/loki-config.yml`),
@@ -191,7 +193,13 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   contact point): container restart, backup-config failure, onboard error, `auth-denied`
   spike (**G6 CLOSED**). NO separate Loki ruler — Grafana-managed unified alerting. Grafana is
   already the Phase-5 metrics UI → metrics + logs in **one pane**, correlated by time +
-  `run_id`. Hermetic shape tests run in CI; live rendering is verified post-deploy.
+  `run_id`. Hermetic shape tests run in CI; live rendering is verified post-deploy. Levels arrive in more
+  than one spelling (syslog `err`/`warning` from journald, a JSON line's own `ERROR`/`warn`), so the error/warn
+  panel matches all of them, case-insensitive (a plain-text container line is `info`, whatever it says). A
+  container stream's `service` is the container's name, so the crash rule picks container lines by the body's
+  `container_name`. It drops lines that name the rule itself (Grafana logs its uid at every evaluation) and
+  ansible's `TASK [` / `RUNNING HANDLER [` banners; its query is pinned as measured on real traffic, and
+  `docs/troubleshooting.md` §2 carries it. The tests hold every rule to selecting only a service some shape emits.
 
 ---
 
