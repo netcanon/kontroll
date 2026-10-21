@@ -11,6 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): every event Vector ships carries the labels its Loki sink templates (2026-10-20)
+
+Both boxes' Vector logged a warning for nearly every event: the internal Loki sink templates `run_id` and
+`level` as labels, and a template whose field is absent fails, so Vector warned (rate-suppressed, hundreds an
+hour) and shipped the event without that label. `run_id` is absent from every container, journald and file line
+that carries no run id; `level` from every plain-text container line — the containers transform's comment said
+the sink would fill a default, and the sink has none. Reproduced on a scratch Vector 0.56 + Loki 3.4.2.
+
+- **Each internal transform ends with `if !exists(.run_id) { .run_id = "" }`.** Loki stores an empty label as no
+  label (measured: the stream reads back without `run_id`, `{run_id=""}` and `run_id=~".*"` match it as before),
+  so no stream, query or dashboard changes — only the warnings stop.
+- **A plain-text container line is `level=info`**; a JSON line's own `level` (or `severity`) still wins.
+- **`test_every_input_of_the_loki_sink_sets_each_field_it_templates_as_a_label`** reads the sink's templated
+  fields and holds every transform it reads to setting each one outside any `if` (or by an `!exists` default).
+  `vector validate` compiles the VRL but cannot see a field set only sometimes. Three reversions (either
+  container default, the audit transform's) each fail it.
+- **`vector test` now runs in `tests/validate.sh` (step `vector-test`).** `docker/vector/tests/internal_labels.yaml`
+  feeds one crafted event into each internal shape and asserts the label fields that come out; six of its eight
+  cases fail on the transforms before this fix. One event per case: a check over several events passes when
+  any one meets it (measured), so it would prove nothing about the rest.
+
 ### fix(ansible): a second deploy reports 0 changed (2026-10-20)
 
 `deploy-stack.yml`'s header said a second run reports no change, and CLAUDE.md holds every play to it. On the

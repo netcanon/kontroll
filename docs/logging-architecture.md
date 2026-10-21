@@ -160,7 +160,10 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   **drop-in config files** under `docker/vector/config.d/sources/<source>.yaml` (+ a sibling
   `transforms/<source>.yaml` shaping to the label schema), loaded by `--config-dir` implicit namespacing —
   add a source = add a file, never edit a hub. The one Loki sink (`config.d/sinks/loki.yaml`) is the label
-  choke-point. Promtail avoided (deprecated). (Built on branch; pending the dogfood deploy.)
+  choke-point. Every shape sets each field the sink templates as a label: `run_id` defaults to `""`, which
+  Loki stores as no label, and a plain-text container line is `level=info`. A missing field fails the label
+  template on every event — a WARN per event and the label dropped — so `tests/unit/test_compose_logging.py`
+  holds every input of the sink to it. Promtail avoided (deprecated). (Built on branch; pending the dogfood deploy.)
 
 ### Layer 2 — Store + query: Loki  🟡 built (`feat/logging-vector`)
 - **Loki**, single-binary, **filesystem** store (`docker/services/loki.yaml` + `docker/loki/loki-config.yml`),

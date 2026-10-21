@@ -6,3 +6,6 @@ source: |
   .service = string(._SYSTEMD_UNIT) ?? "host"              # e.g. docker.service, sshd.service
   .host = string(.host) ?? string(._HOSTNAME) ?? "control-vm"
   .level = to_syslog_level(to_int(.PRIORITY) ?? 6) ?? "info"
+  # Every field the loki sink templates as a label must exist, or the sink warns on each event and drops the
+  # label. An empty run_id is no label to Loki: the stream is stored without it, as before.
+  if !exists(.run_id) { .run_id = "" }

@@ -13,3 +13,6 @@ source: |
     .action = fields[2]
     .audit_ip = fields[1]
   }
+  # Every field the loki sink templates as a label must exist, or the sink warns on each event and drops the
+  # label. An empty run_id is no label to Loki: the stream is stored without it, as before.
+  if !exists(.run_id) { .run_id = "" }

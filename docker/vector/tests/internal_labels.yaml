@@ -1,0 +1,116 @@
+# Vector unit tests for the internal shapes' LABELS — `vector test`, run by tests/validate.sh's vector-test step.
+# Not loaded at runtime: the compose command loads only vector.yaml, config.d/ and generated/.
+#
+# What they verify: every event leaving an internal shape carries each field the Loki sink templates as a label
+# (`level` and `run_id` above all) with the value a query expects. Why: a field absent from an event fails its
+# label template, so Vector warns on every such event and ships it without the label (measured on both boxes and
+# on a scratch Vector 0.56 + Loki 3.4.2, 2026-10-20). tests/unit/test_compose_logging.py checks the VRL's shape
+# statically; these run it. One event per test: a check over several events passes when ANY one meets it, so it
+# would prove nothing about the others (measured).
+tests:
+  - name: "containers: a plain-text line is level=info with an empty run_id"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: "listening on :8080", container_name: "grafana"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+              assert_eq!(.run_id, "")
+              assert_eq!(.service, "grafana")
+              assert_eq!(.source, "internal")
+
+  - name: "containers: a JSON line keeps its own level; a kontroll_run_id token becomes run_id"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: '{"level":"error","msg":"stage failed kontroll_run_id=20261020T120000Z"}',
+                     container_name: "onboard-gui"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "error")
+              assert_eq!(.run_id, "20261020T120000Z")
+
+  - name: "journald: run_id is empty, the level comes from PRIORITY"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "disk almost full", PRIORITY: "4", _SYSTEMD_UNIT: "docker.service"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.run_id, "")
+              assert_eq!(.level, "warning")
+              assert_eq!(.service, "docker.service")
+
+  - name: "api-audit: a six-field line labels its run_id"
+    inputs:
+      - insert_at: internal_api_audit_shape
+        type: log
+        log_fields: {message: "2026-10-20T12:00:00Z	api-token	192.0.2.10	onboard-stage	RUN42	ok"}
+    outputs:
+      - extract_from: internal_api_audit_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "audit")
+              assert_eq!(.run_id, "RUN42")
+
+  - name: "api-audit: a short line still carries run_id (empty)"
+    inputs:
+      - insert_at: internal_api_audit_shape
+        type: log
+        log_fields: {message: "truncated"}
+    outputs:
+      - extract_from: internal_api_audit_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.run_id, "")
+
+  - name: "gui-audit: run_id is empty (its log has no run id)"
+    inputs:
+      - insert_at: internal_gui_audit_shape
+        type: log
+        log_fields: {message: "2026-10-20T12:00:00Z	192.0.2.10	login	ok"}
+    outputs:
+      - extract_from: internal_gui_audit_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.run_id, "")
+              assert_eq!(.level, "audit")
+
+  - name: "ansible: a line without kontroll_run_id has an empty run_id"
+    inputs:
+      - insert_at: internal_ansible_shape
+        type: log
+        log_fields: {message: "TASK [deploy : up] ok"}
+    outputs:
+      - extract_from: internal_ansible_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.run_id, "")
+              assert_eq!(.level, "info")
+
+  - name: "scripts: run_id is empty, the service comes from the run-log name"
+    inputs:
+      - insert_at: internal_scripts_shape
+        type: log
+        log_fields: {message: "done", file: "/host/operator-runs/kontroll-installer-20261020.log"}
+    outputs:
+      - extract_from: internal_scripts_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.run_id, "")
+              assert_eq!(.service, "kontroll-installer")

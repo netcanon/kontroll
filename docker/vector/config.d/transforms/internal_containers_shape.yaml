@@ -7,7 +7,9 @@ source: |
   .source = "internal"
   .service = string(.container_name) ?? "unknown"          # low-cardinality: the container name
   .host = string(.host) ?? get_env_var("HOSTNAME") ?? "control-vm"
-  # Promote a structured `level` ONLY if the line is JSON with one; else leave unset (sink default).
+  # A JSON line's own `level` (or `severity`) wins; a plain-text line is "info". The sink has no default: an
+  # unset `level` fails its label template on every event.
+  .level = "info"
   parsed, err = parse_json(.message)
   if err == null && is_object(parsed) {
     .level = string(parsed.level) ?? string(parsed.severity) ?? "info"
@@ -15,3 +17,6 @@ source: |
   # run_id correlation: many container lines carry a kontroll_run_id token; extract it best-effort.
   rid = parse_regex(.message, r'kontroll_run_id[=:]\s*(?P<rid>[A-Za-z0-9._-]+)') ?? {}
   if rid.rid != null { .run_id = rid.rid }
+  # Every field the loki sink templates as a label must exist, or the sink warns on each event and drops the
+  # label. An empty run_id is no label to Loki: the stream is stored without it, as before.
+  if !exists(.run_id) { .run_id = "" }

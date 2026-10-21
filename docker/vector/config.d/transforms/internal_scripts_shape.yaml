@@ -8,3 +8,6 @@ source: |
   .service = string(name.n) ?? "script"   # string() makes the infallible path access fallible (VRL E651 guard)
   .host = get_env_var("HOSTNAME") ?? "control-vm"
   .level = "info"
+  # Every field the loki sink templates as a label must exist, or the sink warns on each event and drops the
+  # label. An empty run_id is no label to Loki: the stream is stored without it, as before.
+  if !exists(.run_id) { .run_id = "" }
