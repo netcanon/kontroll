@@ -167,8 +167,10 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   template on every event — a WARN per event and the label dropped — so `tests/unit/test_compose_logging.py`
   holds every input of the sink to it. A journald entry's `level` is its `PRIORITY`'s syslog name (`err`,
   `warning`, …) and one without a `PRIORITY` is `info` (`docker/vector/tests/internal_levels.yaml`). Promtail
-  avoided (deprecated). Container logs come through the read-only `docker-socket-proxy`, which routes their
-  `/logs` streams to its no-timeout backend, so a quiet container's stream is not cut every ten minutes.
+  avoided (deprecated). Container logs come through the read-only `docker-socket-proxy`. It passes only the
+  container list, an inspect and the logs under `/containers/` (and does not start if it cannot add that limit),
+  and routes the `/logs` streams to its no-timeout backend, so a quiet container's stream is not cut every ten
+  minutes.
   (Built on branch; pending the dogfood deploy.)
 
 ### Layer 2 — Store + query: Loki  🟡 built (`feat/logging-vector`)

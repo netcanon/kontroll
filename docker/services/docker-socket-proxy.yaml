@@ -10,8 +10,9 @@
 # asked (2026-10-08 review, finding 4). Now only Vector can reach the proxy at all; tests/unit/test_compose_logging.py
 # pins that no other fragment joins `kontroll-socket`.
 #
-# Access chain used:   holds /var/run/docker.sock (:ro) and exposes a GET/HEAD-only Docker API (CONTAINERS reads
-#                      only) on `kontroll-socket`; Vector targets http://docker-socket-proxy:2375, never the raw socket.
+# Access chain used:   holds /var/run/docker.sock (:ro) and exposes a GET/HEAD-only Docker API (the container list,
+#                      inspect and logs, plus events/_ping/version) on `kontroll-socket`; Vector targets
+#                      http://docker-socket-proxy:2375, never the raw socket.
 # May break:           nothing — a read-only API filter; if the proxy is down, docker_logs blanks (others fine).
 # Fallback required:   no.
 # Blast radius:        control node only — NO host port (C3), NOT on the shared stack network (only Vector can reach
@@ -32,19 +33,42 @@ services:
     # The allow/deny filter runs in the frontend before a backend is chosen, so the route changes the timeout only:
     # POST=0 and the CONTAINERS-only grant still hold. The entrypoint renders the template, so the line goes in
     # first, once: a restart finds it there. The edit is written beside the template and moved over it only if the
-    # copy is the template plus that one line, after the events route. So a failed write leaves the stock template,
-    # even one awk does not report (busybox awk exits 0 on a full disk, leaving an empty copy), and so does an edit
-    # that changed any other line. If the edit fails or an image drops the events route, the proxy starts on the
-    # stock template (its streams cut at ten minutes again) and says so. Overriding the entrypoint drops the image's
-    # CMD, so the exec line restates 0.3.0's ENTRYPOINT + CMD. `timeout client 10m` still holds: a stream Vector
-    # stops reading for ten minutes (Loki down long enough to fill the sink's buffer) is still cut, and that ERROR is
-    # real. Vector excludes this container, so the script's lines are in `docker logs docker-socket-proxy` only.
-    # tests/unit/test_socket_proxy_log_streams.py
+    # copy is the template plus that one line, after the events route. So a failed write leaves the template as it was,
+    # even one awk does not report (busybox awk exits 0 on a full disk, leaving an empty or short copy), and so does an
+    # edit that changed any other line. If the edit fails or an image drops the events route, the proxy starts without
+    # the route (its streams cut at ten minutes again) and says so. Overriding the entrypoint drops the image's CMD, so
+    # the exec line restates 0.3.0's ENTRYPOINT + CMD. `timeout client 10m` still holds: a stream Vector stops reading
+    # for ten minutes (Loki down long enough to fill the sink's buffer) is still cut, and that ERROR is real. Vector
+    # excludes this container, so the script's lines are in `docker logs docker-socket-proxy` only.
+    # tests/unit/test_socket_proxy_start_script.py
+    #
+    # The stock CONTAINERS grant passes every GET/HEAD under `/containers`, and three of those reads go far past
+    # logs: `/containers/<id>/archive` returns a file from a container, `/export` its whole filesystem, and
+    # `/attach/ws` (a GET websocket) writes to the stdin of a container started with stdin open. Vector needs only
+    # the list, an inspect and the logs. So the script first adds one deny line ahead of every allow line: under
+    # `/containers/` only `json` and `<id>/json` / `<id>/logs` pass, for an id that starts with a letter or digit
+    # (so not `..`). It fails closed, with the same check on its copy: if that line cannot go in, or the copy is
+    # anything but the template plus that line before the first allow line, the proxy does not start (its ERROR is
+    # in `docker logs docker-socket-proxy`; Vector's container logs stop until it does). `<id>/json` still returns
+    # the container's inspect JSON, its Config (Env among it) and Mounts, which is why the proxy has its own network
+    # (above).
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         t=/usr/local/etc/haproxy/haproxy.cfg.template
+        p='{ path,url_dec -m reg -i ^(/v[\d\.]+)?/containers/'
+        R="    http-request deny if $$p } !$$p"'(json|[a-zA-Z0-9][a-zA-Z0-9_.-]*/(json|logs))$$ }'
         L='    use_backend docker-events if { path,url_dec -m reg -i ^(/v[\d\.]+)?/containers/[a-zA-Z0-9_.-]+/logs }'
+        if R="$$R" awk '/^    http-request allow /{ok = (p == ENVIRON["R"]); exit} {p = $$0} END {exit !ok}' "$$t"; then
+          echo "kontroll: container read limit already present"
+        elif n=$$(awk '/^    http-request allow /{print NR; exit}' "$$t") && [ -n "$$n" ] \
+            && R="$$R" awk '!d && /^    http-request allow /{print ENVIRON["R"]; d=1} {print} END {exit !d}' "$$t" \
+            > "$$t.kontroll" && [ "$$(sed -n "$${n}p" "$$t.kontroll")" = "$$R" ] \
+            && sed "$${n}d" "$$t.kontroll" | cmp -s - "$$t" \
+            && chmod 644 "$$t.kontroll" && mv -f "$$t.kontroll" "$$t"; then
+          echo "kontroll: container reads limited to the list, inspect and logs"
+        else rm -f "$$t.kontroll"
+          echo "kontroll: ERROR could not limit container reads to the list, inspect and logs; not starting"; exit 1; fi
         if grep -qxF "$$L" "$$t"; then echo "kontroll: log-stream route already present"
         elif m=$$(awk '/^    use_backend docker-events if/{print NR + 1; exit}' "$$t") && [ -n "$$m" ]; then
           L="$$L" awk '{print} !d && /^    use_backend docker-events if/{print ENVIRON["L"]; d=1}' "$$t" \
