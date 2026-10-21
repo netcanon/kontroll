@@ -7,13 +7,24 @@ source: |
   .source = "internal"
   .service = string(.container_name) ?? "unknown"          # low-cardinality: the container name
   .host = string(.host) ?? get_env_var("HOSTNAME") ?? "control-vm"
-  # A JSON line's own `level` (or `severity`) wins; a plain-text line is "info". The sink has no default: an
-  # unset `level` fails its label template on every event.
-  .level = "info"
+  # A line's own level: a JSON line's `level` (or `severity`), or a logfmt/slog line's `level` key (Grafana,
+  # Prometheus, Semaphore and blackbox all print one). parse_logfmt reads the line's own keys, so a `level=` inside
+  # a quoted value, a URL's `?level=` or a `--log.level=` flag is not it. The value counts only if it names a known
+  # level, lowercased, so the label stays the closed set below on both branches; any other line is "info". The sink
+  # has no default: an unset or empty `level` fails its label template, or ships the stream with no `level` label.
+  known_levels = ["trace", "debug", "info", "notice", "warning", "warn", "error", "err", "critical", "crit",
+                  "alert", "emerg", "fatal", "panic"]
+  lv = ""
   parsed, err = parse_json(.message)
   if err == null && is_object(parsed) {
-    .level = string(parsed.level) ?? string(parsed.severity) ?? "info"
+    lv = string(parsed.level) ?? string(parsed.severity) ?? ""
+  } else {
+    kv = parse_logfmt(.message) ?? {}
+    lv = string(kv.level) ?? ""
   }
+  lv = downcase(lv)
+  .level = "info"
+  if includes(known_levels, lv) { .level = lv }
   # run_id correlation: many container lines carry a kontroll_run_id token; extract it best-effort.
   rid = parse_regex(.message, r'kontroll_run_id[=:]\s*(?P<rid>[A-Za-z0-9._-]+)') ?? {}
   if rid.rid != null { .run_id = rid.rid }

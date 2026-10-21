@@ -1,11 +1,13 @@
 # Vector unit tests for the internal shapes' `level` — `vector test`, run by tests/validate.sh's vector-test step.
 # Not loaded at runtime: the compose command loads only vector.yaml, config.d/ and generated/.
 #
-# What they verify: a journald entry's level is its PRIORITY's syslog name, and an entry with no PRIORITY is `info`.
+# What they verify: a journald entry's level is its PRIORITY's syslog name, and an entry with no PRIORITY is `info`;
+# a plain-text container line's `level=` token, when it names a level, is its level, lowercased.
 # Why: VRL's `to_int(null)` is 0, so a missing PRIORITY used to become `emerg` — every kernel-audit line (AppArmor's
 # profile loads: a burst at boot, Docker's `docker-default`) shipped as an emergency (measured on a scratch box,
 # 2026-10-20), which an error panel or alert would count. One event per test (a check over several passes when ANY
-# one meets it).
+# one meets it). The container cases: the stack's own services (Grafana, Prometheus, Semaphore, blackbox) print
+# logfmt/slog text, so their errors shipped as `info` and no error panel counted them (reader run, 2026-10-21).
 tests:
   - name: "journald: no PRIORITY (a kernel-audit line) is info, not emerg"
     inputs:
@@ -51,6 +53,164 @@ tests:
         log_fields: {message: "odd entry", PRIORITY: "high"}
     outputs:
       - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a slog line's level token is its level, lowercased (Prometheus's level=ERROR)"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: 'time=2026-10-21T06:00:00Z level=ERROR source=manager.go:1 msg="Error sending alert"',
+                     container_name: "prometheus"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "error")
+
+  - name: "containers: a logfmt line's level token is its level (Grafana's level=warn)"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: 'logger=context t=2026-10-21T06:00:00Z level=warn msg="Request Completed"',
+                     container_name: "grafana"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "warn")
+
+  - name: "containers: a level token that names no level leaves the line info"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: "set log level=verbose for the session", container_name: "semaphore"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a level word that is only the start of another word is not a level"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: "level=debugging enabled", container_name: "semaphore"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a JSON line with an empty level is info"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: '{"level":"","msg":"started"}', container_name: "kontroll-api"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a later level= inside a quoted value is not the line's level"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: 'level=verbose msg="child said level=error"', container_name: "semaphore"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a level= that is only inside a quoted value is not a level"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: 'msg="previous level=error"', container_name: "semaphore"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a URL's ?level= is not a level"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: '"GET /x?level=error HTTP/1.1" 200', container_name: "kontroll-api"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: the line's own level key wins over a ?level= before it"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: 'msg="GET /api?level=error" level=info', container_name: "grafana"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: another key ending in level is not the level key"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: 'loglevel=error', container_name: "semaphore"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a JSON line's level is lowercased into the closed set"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: '{"level":"ERROR","msg":"x"}', container_name: "kontroll-api"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "error")
+
+  - name: "containers: a JSON level of only spaces is info"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: '{"level":" ","msg":"x"}', container_name: "kontroll-api"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.level, "info")
+
+  - name: "containers: a JSON level that names no level is info"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: '{"level":"verbose","msg":"x"}', container_name: "kontroll-api"}
+    outputs:
+      - extract_from: internal_containers_shape
         conditions:
           - type: vrl
             source: |

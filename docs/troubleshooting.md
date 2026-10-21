@@ -35,6 +35,13 @@ the dashboard panels are kept in sync on purpose.
 # Anything wrong, across the whole stack:
 {source=~".+", level=~"(?i)(warn|warning|err|error|crit|critical|alert|emerg|fatal|panic)"}
 
+# The same, leaving out blackbox-exporter (a target that does not answer logs two lines per probe; see §4):
+{source=~".+", service!="blackbox-exporter", level=~"(?i)(warn|warning|err|error|crit|critical|alert|emerg|fatal|panic)"}
+
+# Which blackbox targets do not answer (each failed probe logs `Probe failed`, an error):
+sum by (target) (count_over_time({source="internal", service="blackbox-exporter"}
+  | json message | line_format "{{.message}}" | logfmt | msg="Probe failed" [1h]))
+
 # One device class's ingested logs (the logging capability):
 {source="capability", device="cisco_ios"}
 
@@ -80,6 +87,11 @@ re-ships from where it stopped rather than re-reading everything.
   cutting idle log streams: its log-stream route is missing. `docker logs docker-socket-proxy | grep kontroll:`
   says why (Vector excludes the proxy, so its WARNING never reaches Loki). Now and then the error is real:
   `timeout client 10m` still cuts a stream Vector stopped reading, e.g. while Loki was down.
+- **The error/warn panel is full of blackbox-exporter lines** → a probe target does not answer: each failed probe
+  logs `Probe failed` (error) and `Timeout reading from socket` (warn). §2 has the query that names the targets,
+  and an "Anything wrong" query that leaves blackbox out. A device that is gone comes out of the inventory (its
+  probe target goes with it); a box run from the example inventory probes its TEST-NET addresses, which never
+  answer.
 - **A device's syslog never arrives** (`{source="capability"}` empty) → confirm `docker/services/vector.yaml`
   publishes the mgmt-bound `:5514`, the device is configured to ship there (the `logging_syslog_push` wiring
   role), and the device can reach the collector on the mgmt VLAN.
