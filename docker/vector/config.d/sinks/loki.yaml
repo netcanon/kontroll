@@ -26,12 +26,14 @@ healthcheck:
   enabled: true                          # Vector validates Loki reachability at startup
 # THE CANONICAL LABEL SET (C12): source, host, service, level, run_id  (+ device on the capability sink only).
 # Low-cardinality, structural, never a credential. gen-logging.py + the method descriptors assert the same set.
+# Every input sets each templated field on every event (a missing one fails the template: a WARN per event and
+# the label dropped) — tests/unit/test_compose_logging.py holds each input to it.
 labels:
   source: "internal"                     # static: distinguishes internal from capability-derived streams
   host: "{{ host }}"                      # low-cardinality: a few VMs
   service: "{{ service }}"                # low-cardinality: container/unit/audit-surface/script name
   level: "{{ level }}"                    # bounded: info|warn|error|debug|audit
-  run_id: "{{ run_id }}"                  # bounded: present only on correlated streams; absent => empty label
+  run_id: "{{ run_id }}"                  # bounded: set on correlated streams; "" elsewhere = no label in Loki
 batch:
   max_events: 5000
   timeout_secs: 2

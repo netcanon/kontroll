@@ -127,6 +127,31 @@ def test_vector_internal_source_transform_ids_disjoint_and_sink_resolves():
         assert inp in xfm_ids, "loki sink input %r is not a transform component (it must consume shaped events)" % inp
 
 
+def test_every_input_of_the_loki_sink_sets_each_field_it_templates_as_a_label():
+    """Every transform the internal Loki sink reads sets each field the sink templates as a label
+    (`"{{ field }}"`) on EVERY event: an unconditional top-level assignment, or an `if !exists(.field)` default.
+    Guards the warning flood measured on both boxes and reproduced on a scratch Vector 0.56 + Loki 3.4.2
+    (2026-10-20): a field absent from an event fails its label template, so Vector logs a WARN per event
+    (rate-suppressed) and ships the event without that label — `run_id` on container/journald/file lines, `level`
+    on every plain-text container line. `vector validate` compiles the VRL but cannot see a field that is only
+    set inside an `if`; this is the CI guard. (An empty `run_id` is stored by Loki as no label — measured — so the
+    default changes no stream and no query.)"""
+    sink = _load("docker/vector/config.d/sinks/loki.yaml")
+    fields = sorted({f for v in sink["labels"].values()
+                     for f in re.findall(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", str(v))})
+    assert {"host", "service", "level", "run_id"} <= set(fields), "the sink templates the canonical labels"
+    for inp in sink["inputs"]:
+        vrl = _load("docker/vector/config.d/transforms/%s.yaml" % inp)["source"]
+        top = [line for line in vrl.splitlines() if line and not line[0].isspace()]   # outside every block
+        for f in fields:
+            sets = re.compile(r"^\.%s\s*=(?!=)" % f)
+            default = re.compile(r"^if\s+!exists\(\.%s\)\s*\{\s*\.%s\s*=" % (f, f))
+            assert any(sets.match(line) or default.match(line) for line in top), (
+                "%s can leave the sink's label field %r unset: assign it at the top level or add "
+                "`if !exists(.%s) { .%s = ... }` (a missing field fails the label template on every event)"
+                % (inp, f, f, f))
+
+
 def test_every_logging_token_env_is_passed_through_to_vector():
     """Every env var a LOGGING source interpolates (a `${ENV}` in a logging/<m>.yml `source.auth.value` — the
     credentialed-pull token) is passed through to the Vector container in docker/services/vector.yaml as a

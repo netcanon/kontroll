@@ -19,6 +19,7 @@ test-doc + data-testid + test-after-change discipline is
 |---|---|---|---|
 | **L1 lint** | YAML/Ansible/compose/Prometheus syntax + secret hygiene | `validate.ps1` / `validate.sh` | every commit (pre-commit + CI) |
 | **L2 validate** | playbooks parse against a mock inventory | `--syntax-check` | on change, CI |
+| **L2 vector test** | the internal Vector shapes' VRL run on crafted events — each field the Loki sink templates as a label is set (`docker/vector/tests/*.yaml`, one event per test) | `validate.sh` step `vector-test` (`vector test`) | CI (`validate --strict`), the gate container |
 | **L2 pytest** | `galaxy.py` + GUI logic, shell-outs mocked (no lab) | `pytest` (`unit/` + `integration/`) | on change, CI |
 | **L2 as root** | the canonical's git as the service uid, with real uids on a canonical laid out as the play leaves one (`integration/test_canon_drop.py`), and the deploy's content-clone tasks run by ansible-playbook as root (`integration/test_content_clone_as_service.py`); skipped unless root on Linux. A row there that starts a child as ANOTHER uid starts `sh` or a system program, or picks an account that can run the suite's interpreter (`_a_third_account`): a runner's Python may live where only its owner goes | `validate.sh` step `canon-drop-as-root` (directly as root, or through `sudo -n`; a skipped row fails it) | CI (`validate --strict`), the gate container |
 | **L3 GUI e2e** | the GUI in a headless browser over the real booted app | Playwright (`tests/e2e/`, `e2e` marker) | a dedicated CI job |
@@ -83,9 +84,12 @@ validate's `sops-encrypted` step.
 2. **L2 syntax**: a new playbook is picked up by `validate` automatically.
 3. **L2 pytest**: drop a `test_*.py` under `unit/` (pure logic) or `integration/`
    (a command driven as a black box). Mark it `@pytest.mark.unit`/`integration`.
-4. **L2 check mode**: give the role's class a host in `mock-inventory.yml` and dry-run
+4. **L2 vector test**: a new internal Vector shape (`docker/vector/config.d/transforms/`) gets a case in
+   `docker/vector/tests/` — one event in, the label fields asserted out. The static row in
+   `unit/test_compose_logging.py` already holds it to setting every templated label.
+5. **L2 check mode**: give the role's class a host in `mock-inventory.yml` and dry-run
    the play against it (the `--check --diff` command above).
-5. **L3 smoke**: add a read-only assertion play (service responds / target `up`)
+6. **L3 smoke**: add a read-only assertion play (service responds / target `up`)
    under `ansible/playbooks/` and tag it `smoke`.
 
 ## Code-half pytest

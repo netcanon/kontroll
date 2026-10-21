@@ -46,6 +46,13 @@ have vector; step vector-config $? bash -c '
   set -a; . docker/.env.example; set +a
   vector validate --no-environment -C docker/vector/config.d docker/vector/vector.yaml'
 
+# the internal shapes' VRL, RUN: docker/vector/tests/*.yaml feed crafted events into each transform and assert the
+# fields the Loki sink templates as labels (`vector validate` compiles VRL; it cannot see a field set only
+# sometimes). Same env as the step above.
+have vector; step vector-test $? bash -c '
+  set -a; . docker/.env.example; set +a
+  vector test -C docker/vector/config.d docker/vector/vector.yaml docker/vector/tests/*.yaml'
+
 # every file under the secrets directories is a FULLY sops-encrypted document (every value ciphertext — not merely
 # "has a `sops:` block"), nothing else sits there, and none holds a private key. The same guard gates the commits
 # that take a whole worktree into the canonical (local-canonical.yml, scripts/kontroll.sh). Needs no sops binary

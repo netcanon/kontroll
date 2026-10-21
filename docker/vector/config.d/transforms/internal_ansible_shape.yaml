@@ -9,3 +9,6 @@ source: |
   # The run carries `kontroll_run_id=<id>` (stamped by ansible/playbooks/_log-run-id.yml); extract best-effort.
   rid = parse_regex(.message, r'kontroll_run_id[=:]\s*(?P<rid>[A-Za-z0-9._-]+)') ?? {}
   if rid.rid != null { .run_id = rid.rid }
+  # Every field the loki sink templates as a label must exist, or the sink warns on each event and drops the
+  # label. An empty run_id is no label to Loki: the stream is stored without it, as before.
+  if !exists(.run_id) { .run_id = "" }
