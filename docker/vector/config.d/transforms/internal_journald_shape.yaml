@@ -3,7 +3,22 @@ type: remap
 inputs: [internal_journald]
 source: |
   .source = "internal"
-  .service = string(._SYSTEMD_UNIT) ?? "host"              # e.g. docker.service, sshd.service
+  # The unit is the label, kept to a closed set: a name systemd mints per login, per transient run or per
+  # container scope (session-42.scope, run-r1a2b3c4.scope, docker-<64 hex>.scope) or per socket connection or
+  # crash (sshd@0-….service, systemd-coredump@….service) would start a new Loki stream at each one. Every
+  # template instance is dropped, the fixed ones (getty@tty1, wg-quick@wg0) too, so the set stays closed with no
+  # list to keep. The unit as journald gave it stays in the body: pick one with `| json | _SYSTEMD_UNIT="…"`.
+  # The four `unit = replace` rules are also the journald capability methods' (logging/journald_remote.yml,
+  # logging/file_tail_ssh.yml); tests/unit/test_gen_logging.py holds the three equal.
+  # `$${1}` is a capture group, its `$` doubled: Vector expands environment variables anywhere in its config
+  # text, comments included, and reads a doubled `$` as one.
+  unit = string(._SYSTEMD_UNIT) ?? ""                      # e.g. docker.service, sshd.service
+  if unit == "" { unit = "host" }                          # a kernel line has none; an empty one is no label
+  unit = replace(unit, r'^([^@.]+)@.*\.([a-z]+)$', "$${1}@.$${2}")  # getty@tty1.service → getty@.service
+  unit = replace(unit, r'^session-c?[0-9]+\.scope$', "session.scope")  # c<N>: a session with no audit id
+  unit = replace(unit, r'^(docker|libpod|crio|cri-containerd)-[0-9a-f]{12,}\.scope$', "$${1}.scope")
+  unit = replace(unit, r'^run-.*\.([a-z]+)$', "run.$${1}")  # systemd-run's units and the /run mounts: run.<type>
+  .service = unit
   .host = string(.host) ?? string(._HOSTNAME) ?? "control-vm"
   # No PRIORITY is info (6). `to_int(null)` is 0 (emerg), not an error, so a bare `?? 6` never applied: every
   # kernel-audit line (AppArmor's profile loads at boot, Docker's `docker-default` — no PRIORITY) shipped as emerg.

@@ -44,12 +44,21 @@ source:
     codec: json
 labels: [host, service, level]
 # Data-driven shaping (S9) — the SAME journald derivation journald_remote uses: the remote host's ._HOSTNAME ->
-# .host (the source serves ONE host but the record carries the canonical name), ._SYSTEMD_UNIT -> .service, and
+# .host (the source serves ONE host but the record carries the canonical name), ._SYSTEMD_UNIT -> .service (folded), and
 # the numeric PRIORITY (0-7) -> an RFC-keyword .level via to_syslog_level (mirrors the live internal journald
 # transform, config.d/transforms/internal_journald_shape.yaml).
 transform_vrl:
   - '.host = string(._HOSTNAME) ?? .host'
   - '.service = string(._SYSTEMD_UNIT) ?? .service'
+  # The unit folded as the internal journald transform folds it — what systemd mints per login, run, container
+  # scope or template instance — so one receiver's many hosts do not each open a stream per login. The rules are
+  # internal_journald_shape.yaml's; tests/unit/test_gen_logging.py holds them equal. The body keeps _SYSTEMD_UNIT.
+  - unit = string(.service) ?? ""
+  - unit = replace(unit, r'^([^@.]+)@.*\.([a-z]+)$', "$${1}@.$${2}")
+  - unit = replace(unit, r'^session-c?[0-9]+\.scope$', "session.scope")
+  - unit = replace(unit, r'^(docker|libpod|crio|cri-containerd)-[0-9a-f]{12,}\.scope$', "$${1}.scope")
+  - unit = replace(unit, r'^run-.*\.([a-z]+)$', "run.$${1}")
+  - if unit != "" { .service = unit }
   - 'if exists(.PRIORITY) { .level = to_syslog_level(to_int(.PRIORITY) ?? 6) ?? .level }'
 # NO applies_when -> UNIVERSAL (any host has a journal); never AUTO-suggested, only offerable/declared.
 params:

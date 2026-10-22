@@ -5,8 +5,11 @@ non-zero, never reaching the generated config).
 """
 import importlib.util
 import os
+import shutil
+import subprocess
 
 import pytest
+import yaml
 
 from kontroll import paths
 
@@ -360,3 +363,59 @@ def test_no_logs_block_contributes_no_source():
     fleet = {"enabled_modules": ["openwrt"]}
     files = gen.logging_files(fleet, gen._load(_EX_INV))
     assert not any("openwrt" in p for p in files)
+
+
+_JOURNALD_METHODS = ("journald_remote", "file_tail_ssh")
+_INTERNAL_JOURNALD = os.path.join(paths.ROOT, "docker", "vector", "config.d", "transforms",
+                                  "internal_journald_shape.yaml")
+
+
+def _fold_rules(path):
+    """The `unit = replace(…)` lines of a file, its comment and a list item's `- ` stripped, in order."""
+    with open(path, encoding="utf-8") as fh:
+        lines = [ln.split("  #")[0].strip() for ln in fh]
+    return [ln[2:] if ln.startswith("- ") else ln for ln in lines if ln.lstrip("- ").startswith("unit = replace(")]
+
+
+def test_the_journald_methods_fold_the_unit_by_the_internal_transforms_rules():
+    """journald_remote and file_tail_ssh fold `.service` by the internal journald transform's rules — what systemd
+    mints per login, run, container scope or template instance — line for line, and each rule reaches the rendered
+    shaping transform. WHY: one journald_remote receiver serves many hosts, so a rule missing there opens a Loki
+    stream per login on every one of them; the rules live in three files, and the fix that first folded the
+    internal transform's (2026-10-22) left both methods raw while their comments still claimed parity."""
+    internal = _fold_rules(_INTERNAL_JOURNALD)
+    assert len(internal) >= 4, internal
+    gen = _gen()
+    methods = {m["name"]: m for m in gen.catalog.load_logging()}
+    for name in _JOURNALD_METHODS:
+        assert _fold_rules(os.path.join(paths.ROOT, "logging", name + ".yml")) == internal, name
+        _tid, frag = gen._render_fragment(methods[name], "host_node", "g", {"h1": "198.51.100.2"})
+        body = frag["transforms"][name + "_host_node_shape"]["source"]
+        assert all(rule in body for rule in internal), (name, body)
+
+
+@pytest.mark.skipif(shutil.which("vector") is None, reason="needs the vector binary (the gate image has it)")
+@pytest.mark.parametrize("name", _JOURNALD_METHODS)
+def test_a_rendered_journald_method_folds_the_unit_under_vector(tmp_path, name):
+    """Each journald method's rendered fragment, run under `vector test`: a login's scope folds to
+    `session.scope`, a template's instance is dropped, a plain unit is kept. WHY: nothing else compiles a rendered
+    capability fragment's VRL (SECURITY.md C22, known gaps), and the fold reaches it from YAML through the
+    generator with its `$` doubled for Vector's env interpolation — a slip there would compile nowhere until a box
+    enabled the method."""
+    gen = _gen()
+    method = {m["name"]: m for m in gen.catalog.load_logging()}[name]
+    _tid, frag = gen._render_fragment(method, "host_node", "g", {"h1": "198.51.100.2"})
+    shape = name + "_host_node_shape"
+    cases = [("session-42.scope", "session.scope"), ("getty@tty1.service", "getty@.service"),
+             ("sshd.service", "sshd.service")]
+    frag["tests"] = [{
+        "name": "%s: %s" % (name, unit),
+        "inputs": [{"insert_at": shape, "type": "log",
+                    "log_fields": {"message": "x", "PRIORITY": "6", "_SYSTEMD_UNIT": unit}}],
+        "outputs": [{"extract_from": shape, "conditions": [
+            {"type": "vrl", "source": 'assert_eq!(.service, "%s")' % want}]}],
+    } for unit, want in cases]
+    cfg = tmp_path / "fragment.yaml"
+    cfg.write_text(yaml.safe_dump(frag, sort_keys=False), encoding="utf-8")
+    r = subprocess.run(["vector", "test", str(cfg)], capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-3000:]

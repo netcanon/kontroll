@@ -15,13 +15,21 @@ the dashboard panels are kept in sync on purpose.
 
 | Surface | `source` | `service` | Notes |
 |---|---|---|---|
-| Container stdout/stderr (every stack service) | `internal` | the **container name** (`vector`, `loki`, `semaphore`, `api`, …) | from the Docker source |
-| Host journald (systemd) | `internal` | the **unit** (`docker.service`, `sshd.service`, …), else `host` | persistent journal |
+| Container stdout/stderr (every stack service) | `internal` | the **container name**¹ (`vector`, `loki`, `semaphore`, `kontroll-api`, …) | from the Docker source |
+| Host journald (systemd) | `internal` | the **unit**² (`docker.service`, `sshd.service`, …), else `host` | persistent journal |
 | API audit (who/when/what on the API) | `internal` | `api-audit` | kept **90d**; never the credential |
 | GUI audit (onboard-GUI actions) | `internal` | `gui-audit` | kept **90d** |
 | Ansible run-log (playbook runs) | `internal` | `ansible` | carries the `run_id` of the run |
 | Script run-logs (CLI helpers) | `internal` | the **script name**, else `script` | from `~/.local/state/kontroll/runs` |
 | A device/service's own logs (logging capability) | `capability` | the **method** (`syslog_push`, …) | + `device=<module key>` (e.g. `cisco_ios`) |
+
+¹ A compose one-off is labelled without its run hash: the installer's `services-init-run-<hash>` is
+`services-init`. A bare `docker run` with no `--name` gets a random name, and so a stream of its own.
+² Less what systemd mints per login, run, container scope or instance: `session.scope`, `run.<type>`,
+`docker.scope`, and every template's instance dropped (`getty@.service`, `wg-quick@.service`). The journald
+capability methods fold the same way. The full name stays in the body — pick one with
+`{source="internal", service="services-init"} | json | container_name="services-init-run-<hash>"` or
+`… | json | _SYSTEMD_UNIT="wg-quick@wg1.service"`.
 
 ## 2. Common LogQL queries (Grafana → Explore → Loki, or `logcli`)
 
@@ -67,7 +75,7 @@ source logs — every surface persists locally and is readable without the stack
 
 | You want… | When the stack is up | When Loki/Vector is down |
 |---|---|---|
-| A container's logs | the `internal` stream by container name | `docker logs <name>` (bounded by daemon.json `max-size 10m ×5`) |
+| A container's logs | the `internal` stream by container name (a one-off: less its `-run-<hash>`) | `docker logs <name>` (bounded by daemon.json `max-size 10m ×5`) |
 | Host/systemd logs | the journald `internal` stream | `journalctl -u <unit>` on the control VM |
 | API audit | `{service="api-audit"}` | the flat TSV at `/var/lib/kontroll/api/audit/` |
 | GUI audit | `{service="gui-audit"}` | the flat TSV at `/var/lib/kontroll/onboard-gui/audit/` (M11 — off the `/repo` code/propose clone) |

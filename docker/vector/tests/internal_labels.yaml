@@ -51,6 +51,210 @@ tests:
               assert_eq!(.level, "warning")
               assert_eq!(.service, "docker.service")
 
+  # The service label is a closed set: a unit name systemd mints per login, transient run, container scope or
+  # template instance — and a compose one-off's container name — would each start a new Loki stream (found live,
+  # 2026-10-22: a stream per SSH login and one per installer run). The label drops what is minted; the body keeps
+  # the name as it came, so a query can still pick one. The rows that keep a name hold each rule from growing to
+  # one it would fold. One event per test, as above.
+  - name: "journald: a login's scope is session.scope"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "session-42.scope"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "session.scope")
+              assert_eq!(._SYSTEMD_UNIT, "session-42.scope")
+
+  - name: "journald: a template's instance is dropped"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "getty@tty1.service"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "getty@.service")
+              assert_eq!(._SYSTEMD_UNIT, "getty@tty1.service")
+
+  - name: "journald: an instance with dots in it is dropped whole"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "ifup@eth0.100.service"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "ifup@.service")
+              assert_eq!(._SYSTEMD_UNIT, "ifup@eth0.100.service")
+
+  - name: "journald: a container's scope is docker.scope"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "docker-0123456789abcdef.scope"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "docker.scope")
+              assert_eq!(._SYSTEMD_UNIT, "docker-0123456789abcdef.scope")
+
+  - name: "journald: a systemd-run transient unit is run.<type>"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "run-r1a2b3c4d5e6f.scope"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "run.scope")
+              assert_eq!(._SYSTEMD_UNIT, "run-r1a2b3c4d5e6f.scope")
+
+  - name: "journald: a plain unit is kept as it is"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "sshd.service"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "sshd.service")
+              assert_eq!(._SYSTEMD_UNIT, "sshd.service")
+
+  - name: "journald: a login's scope with no audit id is session.scope too"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "session-c1.scope"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "session.scope")
+
+  - name: "journald: a /run mount unit is run.mount"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "run-user-1000.mount"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "run.mount")
+
+  - name: "journald: a unit that only starts like run- is kept"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "runner-agent.service"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "runner-agent.service")
+
+  - name: "journald: a scope named docker- with no hash is kept"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: "docker-cleanup.scope"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "docker-cleanup.scope")
+
+  - name: "journald: an empty unit is host, not an empty label"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6", _SYSTEMD_UNIT: ""}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "host")
+
+  - name: "journald: no unit (a kernel line) is host"
+    inputs:
+      - insert_at: internal_journald_shape
+        type: log
+        log_fields: {message: "x", PRIORITY: "6"}
+    outputs:
+      - extract_from: internal_journald_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "host")
+
+  - name: "containers: a compose one-off drops its run hash from the label, not from the body"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: "PLAY RECAP", container_name: "services-init-run-0123456789ab"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "services-init")
+              assert_eq!(.container_name, "services-init-run-0123456789ab")
+
+  - name: "containers: a name that only ends like a one-off is kept"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: "x", container_name: "backup-run-nightly"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "backup-run-nightly")
+
+  - name: "containers: a run hash that is not compose's twelve hex is kept"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: "x", container_name: "x-run-0123456789abc"}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "x-run-0123456789abc")
+
+  - name: "containers: an empty name is unknown, not an empty label"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {message: "x", container_name: ""}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.service, "unknown")
+
   - name: "api-audit: a six-field line labels its run_id"
     inputs:
       - insert_at: internal_api_audit_shape
