@@ -275,10 +275,11 @@ def module_for_collection(collection):
 
     Resolved by SCANNING modules/*/module.yml + matching the collection NAME (not a path-join by key — the module key
     `proxmox` ≠ its collection `community.proxmox`). README.md and other non-YAML are ignored; a malformed module.yml is
-    skipped (a typo in one class can't blank another) — one that does not parse, is not UTF-8, holds a value YAML cannot
-    build (`2026-02-30`) or nests past the recursion limit. The shared scan `module_provisioning` reuses. Scans BOTH
-    module roots via paths.module_keys()/module_file() (Phase-B Fork B): pristine SHIPPED classes baked at ROOT +
-    operator-onboarded ones in the write_root clone, so a newly-onboarded class resolves post-promote."""
+    skipped (a typo in one class can't blank another) — whatever its parse raises: a file that does not parse, is not
+    UTF-8, holds a date no calendar has, nests past the recursion limit, or tags a scalar YAML cannot build
+    (`!!bool maybe`). The shared scan `module_provisioning` reuses. Scans BOTH module roots via
+    paths.module_keys()/module_file() (Phase-B Fork B): pristine SHIPPED classes baked at ROOT + operator-onboarded
+    ones in the write_root clone, so a newly-onboarded class resolves post-promote."""
     for key in paths.module_keys():
         mp = paths.module_file(key)
         if not os.path.exists(mp):
@@ -286,7 +287,7 @@ def module_for_collection(collection):
         try:
             with open(mp, encoding="utf-8") as fh:
                 doc = yaml.safe_load(fh) or {}
-        except (OSError, ValueError, RecursionError, yaml.YAMLError):
+        except Exception:                          # noqa: BLE001 — a module file is data: a bad one declares nothing
             continue
         # a file that parses to a list or a scalar, or whose `collections` is not a list, declares nothing here —
         # skipped like a file that does not parse (a no_backend answer reads this scan for EVERY refusal, S24)

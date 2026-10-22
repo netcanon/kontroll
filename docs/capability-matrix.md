@@ -192,8 +192,8 @@ returns. The card's collection, `ansible.builtin`, ships inside ansible-core: it
 probed and never pinned (a class onboarded from it carries `collections: []`, and a second
 host reuses that class). A collection that classifies to no backend kontroll can run is
 answered `no_backend` with what it showed — its plugin types and module count, never a
-plugin's name — and, when a class already declares the collection with a backend this
-install ships and an onboard under its key would plan, that class's key.
+plugin's name — and, when the first class that declares the collection names a backend
+this install ships and an onboard under its key would plan, that class's key.
 
 ### 5.1 How many backends? ~a handful — bounded by execution *paradigm*, not vendor
 

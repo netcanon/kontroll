@@ -101,31 +101,35 @@ def test_a_collection_a_class_declares_is_pointed_at_that_class(monkeypatch):
 
 def test_the_declaring_class_hint_survives_malformed_module_files(monkeypatch, tmp_repo):
     """The `no_backend` answer's declaring-class lookup reads past a module file that is a list, whose `collections` is
-    not a list, that is not UTF-8, that holds a date no calendar has, or that nests past the recursion limit — named to
-    sort before every other class, so the scan opens each — and names no class for a collection none declares (a full
-    scan), nor for one declared by a file whose `key` is not a class key or is a word YAML reads as another type (the
-    class `null`), whose `key` names a class whose own file declares another collection, or whose `key` names a class
-    whose own file is not UTF-8. Guards every refusal turning into a 500 (or a 422 naming the codec) because one
-    onboarded class's file is malformed — the lookup runs on each `no_backend` plan; a list file's first `.get` was an
-    AttributeError — and the hint naming a key a request could not send, or one whose onboard would not reuse the class
-    that declares the collection (it would answer `no_backend` and point at that key again)."""
+    not a list, that is not UTF-8, that holds a date no calendar has, that nests past the recursion limit, or that tags
+    a scalar YAML cannot build (`!!bool maybe`) — named to sort before every other class, so the scan opens each — and
+    names no class for a collection none declares (a full scan), nor for one declared by a file whose `key` is not a
+    class key or is a word YAML reads as another type (the class `null`), whose `key` names a class whose own file
+    declares another collection, or whose `key` names a class whose own file is not UTF-8 or nests past the recursion
+    limit. Guards every refusal turning into a 500 (or a 422 naming the codec) because one onboarded class's file is
+    malformed — the lookup runs on each `no_backend` plan; a list file's first `.get` was an AttributeError — and the
+    hint naming a key a request could not send, or one whose onboard would not reuse the class that declares the
+    collection (it would answer `no_backend` and point at that key again)."""
     mods = tmp_repo / "modules"
     for key, text in (("aa_listy", "- a\n- b\n"), ("aa_odd", "key: aa_odd\ncollections: 5\n"),
                       ("aa_cp1252", b"key: aa_cp1252\ndescription: Caf\xe9\n"),
                       ("aa_baddate", "key: aa_baddate\nadded: 2026-02-30\n"),
                       ("aa_deep", "key: aa_deep\nx: " + "[" * 5000 + "]" * 5000 + "\n"),
+                      ("aa_tagged", "key: aa_tagged\nx: !!bool maybe\n"),
                       ("aa_spaced", "key: a b\ncollections:\n  - {name: acme.spaced}\nbackend: raw_ssh\n"),
                       ("null", "key: 'null'\ncollections:\n  - {name: acme.null}\nbackend: raw_ssh\n"),
                       ("aa_elsewhere", "key: acme_other\ncollections:\n  - {name: acme.other}\nbackend: raw_ssh\n"),
                       ("acme_other", "key: acme_other\ncollections:\n  - {name: acme.z}\nbackend: raw_ssh\n"),
                       ("aa_pointer", "key: acme_garbled\ncollections:\n  - {name: acme.ptr}\nbackend: raw_ssh\n"),
-                      ("acme_garbled", b"key: acme_garbled\ndescription: Caf\xe9\n")):
+                      ("acme_garbled", b"key: acme_garbled\ndescription: Caf\xe9\n"),
+                      ("aa_pointer2", "key: acme_deep\ncollections:\n  - {name: acme.ptr2}\nbackend: raw_ssh\n"),
+                      ("acme_deep", "key: acme_deep\nx: " + "[" * 5000 + "]" * 5000 + "\n")):
         (mods / key).mkdir()
         if isinstance(text, bytes):
             (mods / key / "module.yml").write_bytes(text)
         else:
             (mods / key / "module.yml").write_text(text, encoding="utf-8")
-    for collection in ("acme.nothing", "acme.spaced", "acme.null", "acme.other", "acme.ptr"):
+    for collection in ("acme.nothing", "acme.spaced", "acme.null", "acme.other", "acme.ptr", "acme.ptr2"):
         plan = _blind_plan(monkeypatch, {}, ["thing_info"], collection=collection, key="thing_auto")
         assert plan["error"] == "no_backend" and plan["declaring_class"] is None, collection
 
@@ -161,7 +165,8 @@ def test_the_declaring_class_is_named_only_when_its_reuse_would_plan(monkeypatch
     are not named, so the hint fails closed: a backend this install does not ship (the reuse plans with the class's
     own role — a fault the planner does not check yet), and no backend with the class's own role where the
     collection's one match is a backend that declares no role (the reuse takes that match, S26). Guards the hint
-    sending the operator to a refusal of its own, and withholding a key that would plan without saying so."""
+    sending a request without credentials to a refusal of its own, and withholding a key that would plan without
+    saying so."""
     (tmp_repo / "modules" / "acme_thing").mkdir()
     (tmp_repo / "modules" / "acme_thing" / "module.yml").write_text(_ACME + extra, encoding="utf-8")
     plan = _blind_plan(monkeypatch, {}, ["thing_info"], collection="acme.thing", key="thing_auto", options=options)

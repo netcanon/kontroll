@@ -198,20 +198,24 @@ def _declaring_class(collection, backends):
     onboarded, the first that declares it) when an onboard of the collection under that key would plan, or None. A
     reuse onboard of that class adopts its backend and its role, so it is where a `no_backend` answer for the
     collection under another key points: `community.proxmox` classifies to nothing, but the proxmox class declares
-    `backend: raw_ssh`. Named by the rules the reuse path holds the class to, so the hint never sends the operator
-    to a refusal of its own: the key is one a request may send, and the file under it is the one that declares the
-    collection; each name the reuse adopts passes `_adopted`; the backend is one this install ships; and the class
-    brings a role that is not a made-up one, or its backend declares one (`_role_of`). Two classes whose reuse
-    plans are not named, so the hint fails closed: one that names a backend this install does not ship (its reuse
-    plans with its own role and no connection shape — not a fault the planner checks yet), and one that names no
-    backend but brings its own role, whose reuse takes the collection's first match (S26) — a backend that declares
-    no role, which is why the answer is `no_backend` under another key. A malformed module file declares nothing,
-    the class's own included."""
+    `backend: raw_ssh`. Named by the rules the reuse path holds the class to, so the hint never sends a request
+    without credentials to a refusal of its own (a fault in the class's own `auth:` block is met only when a value
+    is): the key is one a request may send, and the file under it is the one that declares the collection; each name
+    the reuse adopts passes `_adopted`; the backend is one this install ships; and the class brings a role that is
+    not a made-up one, or its backend declares one (`_role_of`). Classes whose reuse would plan but that are not
+    named, so the hint fails closed, include one that names a backend this install does not ship (its reuse plans
+    with its own role and no connection shape — not a fault the planner checks yet); one that names no backend but
+    brings its own role, whose reuse takes the collection's first match (S26) — a backend that declares no role,
+    which is why the answer is `no_backend` under another key; a later class the first declaring one shadows; and
+    one whose directory and `key` disagree. A malformed module file declares nothing, the class's own included."""
     key = (catalog.module_for_collection(collection) or {}).get("key")
     if not (paths.is_component(key) and plain_scalar(key)):
         return None
     try:
         existing = _existing_module(key)
+    except Exception:                                    # noqa: BLE001 — the class's own file is data, as in the scan
+        return None
+    try:
         if existing is None or collection not in _module_collections(existing):
             return None
         backend = existing.get("backend")
@@ -222,7 +226,7 @@ def _declaring_class(collection, backends):
         _no_made_up_role(existing.get("role"), key, backends)
         if existing.get("role") is None:
             _role_of(next(b for b in backends if b.get("name") == backend), key, False)
-    except (paths.RepositoryDataError, ValueError, RecursionError):
+    except paths.RepositoryDataError:
         return None
     return key
 
