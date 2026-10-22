@@ -67,12 +67,15 @@ route writes none (C22). On `POST /onboard` the line is `onboard-refuse`, with `
 field=<name>` for a refused field and `reason=planner-guard` (body `code: invalid_request`) for a planner refusal
 that is not about one field, such as a partially filled credential set. When what stops a request is the
 repository's own data or layout — a class's module file holds a group, domain, backend or role that is not a name; a
-credential field is declared with a name that is not one; a backend names no role and none can be derived from its
-name (or its registry entry holds a role that is not a name); a write target does not resolve inside the repository;
-a block of a module file is written with its value on the key's line, or twice
-— the answer is **409** `repository_data` with a sentence that says where to look, and the audit action is
-`repository-refuse`: nothing in the request is wrong, and the remedy is the file or the layout. `POST /onboard`'s
-other 409 — a drop-in that exists with different content, answered without a `code` and retried with `overwrite` —
+credential field is declared with a name that is not one; a class's module file names no role and its backend
+declares none (or the backend's registry entry holds a role that is not a name); a write target does not resolve
+inside the repository; a block of a module file is written with its value on the key's line, or twice — the answer
+is **409** `repository_data` with a sentence that says where to look, and the audit action is `repository-refuse`:
+nothing in the request is wrong, and the remedy is the file or the layout. A `backend` an onboard sends must be one
+this install ships whose registry entry declares a `role:` (`ansible/backends/<name>/`) — a second device of a class
+whose module file declares its own role keeps that role, so there the entry needs none; any other is **422**
+`invalid_backend`, answered before the collection is probed. `POST /onboard`'s other 409 — a drop-in that exists
+with different content, answered without a `code` and retried with `overwrite` —
 is a different answer: key on `code`, not on the status.
 
 ```bash

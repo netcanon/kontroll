@@ -215,6 +215,23 @@ def test_onboard_refuses_a_path_shaped_field_before_any_write(onb, field, value)
     assert value not in audit, "the audit line names the FIELD, never the refused value"
 
 
+@pytest.mark.parametrize("apply", [False, True], ids=["dry-run", "apply"])
+@pytest.mark.parametrize("backend", ["napalm", "vendor_config", "zzz"])
+def test_onboard_a_backend_nothing_can_run_is_a_422_and_audited(onb, backend, apply):
+    """A `backend` that declares no execution role (`napalm`, `vendor_config`) or that the registry does not
+    ship (`zzz`) is answered 422 with the code `invalid_backend`, a message that does not quote it, nothing written and
+    git untouched — on a dry-run and on an apply — and leaves one `onboard-refuse` audit line naming the field, never
+    the value. Guards API parity with the planner's refusal (S26): the route answered 200 with a plan whose
+    `device_role` (`backend_napalm`) no play can include, and an apply wrote it."""
+    r = onb.client.post("/onboard", headers=AUTH, json=_body(backend=backend, apply=apply))
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "invalid_backend" and backend not in r.json()["detail"]
+    assert onb.calls == [] and not (onb.repo / "modules" / "edgeos").exists()
+    audit = open(onb.audit_log, encoding="utf-8").read()
+    assert "onboard-refuse" in audit and "reason=request-boundary field=backend" in audit
+    assert backend not in audit.replace("onboard-refuse", "")
+
+
 def _damage_a_class(repo, **identity_keys):
     """Seed an onboarded class (`edgeos`, acme.edgeos) whose module file holds the given identity keys."""
     import yaml

@@ -5,6 +5,10 @@
 name: napalm
 label: NAPALM multi-vendor (select by driver)
 order: 4
+# No `role:` — no execution role ships for this backend yet. It is manual (never auto-matched, so no search
+# record names it), and the onboard planner and the scaffold refuse a request that names it (S26) — except for a
+# class that brings its own role. Give it a role with tasks/check.yml + tasks/backup.yml under ansible/roles/ to
+# make it runnable.
 classify: {manual: true}          # never auto-matched; chosen explicitly
 # F2 confers: NAPALM targets network gear — the same agent-less floor as netcommon_cli (snmp + blackbox + syslog).
 # Derivation still gates on applies_when, so a method only attaches when the device's facts support it.

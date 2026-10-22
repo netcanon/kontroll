@@ -1817,10 +1817,21 @@ anything is written, to the rule of the request field of the same meaning — fo
 the rule of a name (`onboard._adopted`): the adopted domain is formatted into that same lookup expression, the role
 is a host var Ansible templates, the group is the drop-in's top-level key. A module file that fails — or that is not
 a mapping at all — is not a request refusal (below). The role a class gets when its module file names none is the
-backend registry entry's own or, where that names none either, derived from the backend (`backend_<name>`); either
-is held to the same rule where it is taken, by the planner and by the scaffold (`onboard._role_of`) — a derived name
-that fails is a refusal of the `backend` field when the request sent that backend and repository data when a file
-did, as a registry role that is not a name is: what one request writes into a module file, the next one adopts. An
+backend registry entry's own, never one made from a name (S26: the planner and the scaffold made `backend_<name>` up
+for a backend that declared none, and wrote it into the module file and every host's `device_role`, where
+`ping.yml` and `backup-configs.yml` then included a role that does not exist). A `backend` a request names must be
+one this install ships (`onboard._registered`) whose entry declares a `role:` (`onboard._role_of`) — a second
+device of a class whose module file declares its own role keeps that role, so there the entry needs none; any other
+is a refusal of the `backend` field, before the collection is probed. A backend the classifier matches is chosen
+only when its entry declares one (`catalog.runnable`) — for a new class; a reused class with its own role falls back
+to the first match when none declares one — and a search record's `suggested_backend`, which the GUI's onboard form
+sends, is that same choice. The registry role is held to the name rule where it is taken, by the planner and by the
+scaffold; one that
+fails is repository data, and so is a reused class whose module file names no role and whose backend — from the
+file — declares none, or names the role the planner used to make up for a backend that declares none
+(`backend_vendor_config`, `backend_napalm`; `onboard._no_made_up_role`, which the identity knob also refuses to
+store): what one request writes into a module file, the next one adopts. Each of these faults of a reused class's
+file is answered before the collection is probed. An
 inventory group a class is ATTACHED to — the onboard field, the identity knob, the scaffold's argument, a group
 adopted from a module file — is additionally none of `all`, `ungrouped`, `localhost` (`paths.inventory_group()`): a
 class's group is a play's pattern — `hosts:` in the logging wiring play and a unit's play, the limit of the backup
@@ -1900,11 +1911,11 @@ rule applied to inventory bytes).
 A refusal that is not about anything the caller sent — a module file whose adopted name is not a name, or that is
 not a mapping (at the onboard and at an identity edit; the other readers of a module file — the capability dialogs,
 the Fleet index, classify, the cred-fields route — still answer 500 for such a file), a credential field that the
-backend registry or a module file declares with a name that is not one, a backend that names no role and has a name
-none can be derived from (or whose registry entry holds a role that is not a name), a write target that does not
-resolve under the write root, a block of a module file that the block writer cannot edit where it stands (its value
-on the key's own line, the key held twice, or a block whose edit would not read back from YAML as the change that
-was planned) — is a `RepositoryDataError`, deliberately NOT a `ValueError`, so a handler written for
+backend registry or a module file declares with a name that is not one, a class whose module file names no role and
+whose backend declares none (or whose backend's registry entry holds a role that is not a name), a write target that
+does not resolve under the write root, a block of a module file that the block writer cannot edit where it stands
+(its value on the key's own line, the key held twice, or a block whose edit would not read back from YAML as the
+change that was planned) — is a `RepositoryDataError`, deliberately NOT a `ValueError`, so a handler written for
 the planner's guards cannot answer it as a refused field. It is mapped once per app to **409** `repository_data`,
 with a sentence that says where to look — the class and its module file with the rule the value breaks, the class
 and the backend whose credential field it is, the class whose backend needs a `role:` or whose registry entry holds
@@ -1970,9 +1981,14 @@ inventory defines (the example's `network_devices`, `compute`) is a group like a
 attached to one addresses its children wherever the class's group is a pattern. The identity dialog's charset for a
 NEW value is narrower than the onboard field's — no hyphen, no leading digit: a class onboarded with such a group or
 domain keeps it and stays editable (a value read back unchanged is not judged), and the dialog cannot set one. The
-`backend` knob is bounded like a backend, not like the role derived from one: on a class whose module file names no
-`role:` — a hand-made file; the tool always writes one — a backend of fifty-seven to sixty-four characters is
-stored, and the next onboard answers 409, saying to give it a `role:`. A backend the classifier chooses is written
+`backend` knob is bounded like a name, not checked against the registry: on a class whose module file names no
+`role:` — a hand-made file; the tool always writes one — a backend the registry does not ship, or one that declares
+no role, is stored, and the next onboard that names no backend answers 409, saying to give the class a `role:` (one
+that names a backend the registry runs plans with that backend's role). The `role` knob is bounded like a name too,
+not checked against `ansible/roles/`: a role that does not exist is stored, adopted by the next onboard and written
+as every new host's `device_role`, and its plays fail where they include it — the closed-set check is the linker's
+(S36), the step that already reads both trees. (The two names kontroll itself made up before S26,
+`backend_vendor_config` and `backend_napalm`, the knob refuses.) A backend the classifier chooses is written
 into a new class's module file under the registry entry's own `name`, which nothing holds to the name rule: an entry
 named outside it yields a module file whose next onboard answers 409 (shipped data; a test holds every shipped
 entry's name). And `plain_scalar` is a rule about how YAML reads a word, not about how a person reads it: characters
@@ -2028,9 +2044,15 @@ read back through the real file), `tests/unit/test_paths_overlay.py` (the overla
 a symlinked overlay is found), `tests/unit/test_repository_data.py` (each adopted name against the hostile table;
 the refusal naming the class, the file and the rule and never the value; a module file that is not a mapping; every
 shipped module and backend passing the adoption rule; a module file with a malformed block degrading, not crashing;
-a credential field's `maps_to`, and an inline field's host var; the role a class gets — the registry's own or the
-derived one — by whose fault, and that the role a new class's plan or the scaffold writes is one the next onboard
-adopts; that no word the identity knob accepts is refused by the adoption rule; the reserved names at every seam
+a credential field's `maps_to`, and an inline field's host var; the role a class gets — the registry's own, never
+one made from a name — by whose fault, a matched backend that declares none passed over, and that the role a new
+class's plan or the scaffold writes is one the next onboard adopts), `tests/unit/test_backend_registry.py` (every
+role a backend declares has a check and a backup; each backend that declares none, and one the registry does not
+ship, refused before anything is probed; the auto path, the search record's suggestion and `galaxy classify`'s
+`best` choosing only a backend that runs; a reused class keeping its own role whatever shipped backend is named,
+an unshipped one still refused, and one naming the role the planner used to make up refused); that no word the
+identity knob accepts is refused by the
+adoption rule; the reserved names at every seam
 that chooses a group or names a host, the loopback addresses among the host's; the targets an apply asks about
 before its first write, and the apply not shadowing a class the code root ships; the scaffold refusing what the
 planner refuses, writing under the write root and not shadowing a shipped class; the recipe name; `confined()`'s

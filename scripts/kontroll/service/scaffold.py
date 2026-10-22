@@ -9,19 +9,20 @@ import os
 import yaml
 
 from kontroll import catalog, paths, predicate, probe
-from kontroll.service.onboard import _plain_name, _role_of
+from kontroll.service.onboard import _plain_name, _registered, _role_of
 
 
 def build_scaffold(collection, key, group, secrets, backend=None, backends=None):
     """Compute the scaffolded device-class module for `collection`. Returns a dict with
-    "error": "not_installed" (probe found nothing) | "no_backend" (none auto-matched and
-    none given) | None; on success {"error":None,"backend","module","text","path"} where
+    "error": "not_installed" (probe found nothing) | "no_backend" (no backend that declares a role
+    auto-matched, and none given) | None; on success {"error":None,"backend","module","text","path"} where
     `text` is the YAML to write and `path` is repo-relative.
 
-    The names are held to the onboard planner's own rules, in its order, before anything is probed — and the
-    role it takes from the registry or derives to the role's, like the planner's: this is another writer of a
-    class's identity keys (with the onboard and the identity reconfigure), and the file it writes is what a later
-    onboard ADOPTS."""
+    The names are held to the onboard planner's own rules, in its order, before anything is probed — a `backend`
+    must be one the registry ships — and the role is the one the backend's registry entry declares, held to the
+    role's rule, like the planner's: this is another writer of a class's identity keys (with the onboard and the
+    identity reconfigure), and the file it writes is what a later onboard ADOPTS. With no `backend`, it chooses as
+    the planner does: the first match that declares a role."""
     paths.collection_fqcn(collection)
     paths.component(key, "device-class key")
     _plain_name(key, "device-class key")
@@ -34,13 +35,16 @@ def build_scaffold(collection, key, group, secrets, backend=None, backends=None)
         paths.component(backend, "backend")
         _plain_name(backend, "backend")
     backends = backends if backends is not None else catalog.load_backends()
+    if backend_from_request:
+        _registered(backend, backends)
+        _role_of(next((b for b in backends if b.get("name") == backend), {}), key, True)   # before the probe
     f = probe.deep_probe(collection)
     if not f["modules"] and not f["plugins"]:
         return {"error": "not_installed"}
-    backend = backend or (predicate.classify(f, backends)[:1] or [None])[0]
+    backend = backend or next(iter(catalog.runnable(predicate.classify(f, backends), backends)), None)
     if not backend:
         return {"error": "no_backend"}
-    bdef = next((b for b in backends if b["name"] == backend), {})
+    bdef = next((b for b in backends if b.get("name") == backend), {})
     requires = bdef.get("requires") or []
     parts = collection.split(".")
     version = catalog.local_installed().get(collection) or f["version"] or "0.0.0"
@@ -51,7 +55,7 @@ def build_scaffold(collection, key, group, secrets, backend=None, backends=None)
         "key": key,
         "description": "%s via %s backend (auto-scaffolded)" % (collection, backend),
         "collections": [{"name": collection, "version": ">=%s" % version}],
-        "role": _role_of(bdef, backend, key, backend_from_request),
+        "role": _role_of(bdef, key, backend_from_request),
         "backend": backend,
     }
     if params:

@@ -103,6 +103,11 @@ def build_plan(key, selection):
         bad = validate_value(dict(knob, key=field), value)   # the P0a config-injection guard, server-side
         if bad:
             return {"error": "bad_value", "key": key, "field": field, "detail": bad}
+        if field == "role" and value in catalog.made_up_roles():
+            # the role kontroll made up, before S26, for a backend that declares none: no play can include it, and
+            # the next onboard of the class refuses to adopt it (onboard._no_made_up_role) — so it is not stored
+            return {"error": "bad_value", "key": key, "field": field,
+                    "detail": "role names a backend that declares no execution role — no play can include it"}
         if field == "inventory_group" and value in paths.RESERVED_NAMES:
             # the same deny-list the onboard field gets (paths.inventory_group): this knob re-homes a class, and
             # a class on `all` addresses every host wherever its group is a play's pattern

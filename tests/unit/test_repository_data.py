@@ -151,9 +151,10 @@ def test_a_module_file_that_is_not_a_mapping_is_repository_data(reuse, tmp_repo,
 
 
 def test_every_shipped_class_and_backend_passes_the_adoption_rule():
-    """Every shipped module file passes the adoption rule for the names it holds, and every credential field a shipped
-    module or backend declares maps to nothing or to an identifier. Guards the re-check refusing a healthy shipped
-    class: this is the corpus the rule was measured against, kept in the suite."""
+    """Every shipped module file passes the adoption rule for the names it holds, every credential field a shipped
+    module or backend declares maps to nothing or to an identifier, and every role a shipped backend declares passes
+    the adopted role's rule. Guards the re-check refusing a healthy shipped class: this is the corpus the rule was
+    measured against, kept in the suite."""
     seen = 0
     for path in sorted(glob.glob(os.path.join(ROOT, "modules", "*", "module.yml"))):
         with open(path, encoding="utf-8") as fh:
@@ -166,7 +167,8 @@ def test_every_shipped_class_and_backend_passes_the_adoption_rule():
     for backend in catalog.load_backends():
         for entry in backend.get("auth") or []:
             assert entry.get("maps_to") is None or onboard._STEM_RE.fullmatch(entry["maps_to"]), backend.get("name")
-        assert onboard._role_of(backend, backend["name"], "x", False)     # its own role, or the derived one: a name
+        if catalog.backend_role(backend) is not None:                    # one with none is never chosen (S26)
+            assert onboard._role_of(backend, "x", False)
         assert paths.is_component(backend["name"]) and onboard.plain_scalar(backend["name"]), backend.get("name")
     assert seen > 0, "no shipped module file was read"
 
@@ -220,71 +222,71 @@ def test_an_inline_credential_field_names_the_host_var_it_is_written_under(reuse
     assert plan["error"] is None and None not in plan["host_block"]["core_switch"]["hosts"]["sw2"]
 
 
-@pytest.mark.parametrize("length,ok", [(56, True), (57, False), (64, False)])
-def test_no_request_stores_a_role_the_next_onboard_refuses(reuse, length, ok):
-    """A backend so long that the role derived from it (`backend_<name>`) is not one path component is refused as
-    the `backend` field, by the planner and by the scaffold; the longest backend that still derives a valid role
-    is accepted, and everything such a plan writes into the module file passes the adoption rule.
+@pytest.mark.parametrize("name", ["raw_thing", "b" * 56, "b" * 57, "b" * 64])
+def test_no_request_stores_a_role_the_next_onboard_refuses(reuse, name):
+    """A `backend` the registry does not ship is refused as the `backend` field, by the planner and by the scaffold,
+    whatever its length; the value is not in the message. Nothing is derived from a request's backend any more, so
+    no request can write a module file whose role the next onboard refuses.
 
-    Guards a request writing a module file that every later onboard of the class answers 409 for: the role is the
-    one adopted name no request field carries, and it was derived unchecked — the eighty-letter domain's fault,
-    one field along."""
-    name = "b" * length
-    if ok:
-        plan = onboard.build_onboard_plan("cisco.ios", "newcls", "core_switch", "192.0.2.41", backend=name)
-        assert plan["error"] is None and plan["module_reuse"] is False and plan["role"] == "backend_" + name
-        for field in onboard._ADOPTED:                # what this plan writes is what the next onboard adopts
-            onboard._adopted(plan["module"], field, "newcls")
-        made = scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", name, backends=[])
-        assert onboard._adopted(made["module"], "role", "scaf") == "backend_" + name
-        return
-    with pytest.raises(paths.RequestBoundaryError) as stop:
-        onboard.build_onboard_plan("cisco.ios", "newcls", "core_switch", "192.0.2.41", backend=name)
-    assert stop.value.field == "backend" and name not in str(stop.value)
-    with pytest.raises(paths.RequestBoundaryError) as stop:
-        scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", name, backends=[])
-    assert stop.value.field == "backend" and name not in str(stop.value)
+    Guards the role as a request-made name. The planner made `backend_<name>` up for any backend a request named
+    (S26), and the earlier rule here refused only a name too long to make one from: `raw_thing` (or any name up to
+    fifty-six letters) still wrote a role no play could include into the module file and every host's
+    `device_role`."""
+    for call in (lambda: onboard.build_onboard_plan("cisco.ios", "newcls", "core_switch", "192.0.2.41", backend=name),
+                 lambda: scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", name, backends=[])):
+        with pytest.raises(paths.RequestBoundaryError) as stop:
+            call()
+        assert stop.value.field == "backend" and name not in str(stop.value)
 
 
-def test_a_role_derived_from_a_backend_the_request_did_not_send_is_the_files_fault(reuse):
-    """A class whose module file holds a long backend and no role: the role would be derived from that backend,
-    is too long to be a name, and the plan stops with `RepositoryDataError` naming the class and what to add —
-    not with a refusal of a `backend` field the request never carried.
+@pytest.mark.parametrize("backend", ["b" * 60, "vendor_config", "napalm"])
+def test_a_role_the_module_file_does_not_give_is_the_files_fault(reuse, backend):
+    """A class whose module file names no role and a backend that declares none — one this install does not ship,
+    or a shipped one with no execution role — stops the plan with `RepositoryDataError` naming the class and what to
+    add, not with a refusal of a `backend` field the request never carried; the backend is not in the message.
 
-    Guards the fault this change exists to remove, at the one place the change itself could have re-created it:
-    answering a file's fault as a field's."""
-    reuse(backend="b" * 60, role=ABSENT)
+    Guards answering a file's fault as a field's, at the place the role is taken: the request sent no backend, so
+    a 422 would tell the caller to correct a value they never typed."""
+    reuse(backend=backend, role=ABSENT)
     with pytest.raises(paths.RepositoryDataError) as stop:
         _plan()
     assert stop.value.what == "backend" and "demo_sw" in str(stop.value) and "role:" in str(stop.value)
-    assert "b" * 60 not in str(stop.value)
+    assert backend not in str(stop.value)
 
 
-def test_a_long_backend_the_request_sent_is_the_requests_fault_on_a_reuse_too(reuse):
-    """A second device of a class whose module file names no role, onboarded with a `backend` too long to derive
-    one from, is refused as the `backend` field — the request sent that backend, whatever the file holds.
+@pytest.mark.parametrize("backend", ["b" * 60, "napalm"])
+def test_a_backend_the_request_sent_is_the_requests_fault_on_a_reuse_too(reuse, backend):
+    """A second device of a class whose module file names no role, onboarded with a `backend` the registry does not
+    ship or one that declares no role, is refused as the `backend` field — the request sent that backend, whatever
+    the file holds.
 
     Guards the fault being decided by the PATH (reuse or not) instead of by who supplied the backend: a caller
     would be told to correct a file for a value they typed."""
     reuse(role=ABSENT)
     with pytest.raises(paths.RequestBoundaryError) as stop:
-        _plan(backend="b" * 60)
+        _plan(backend=backend)
     assert stop.value.field == "backend"
 
 
-_CLI = {"name": "netcommon_cli", "requires": [], "classify": {"plugin": "cliconf"}}     # a registry entry
+_CLI = {"name": "netcommon_cli", "requires": [], "classify": {"plugin": "cliconf"},    # a registry entry that
+        "role": "backend_netcommon_cli"}                                                # runs (it declares a role)
 
 
-def test_scaffold_with_a_backend_the_registry_chose_is_the_registrys_fault(reuse):
-    """`build_scaffold` with no `--backend`, where the registry entry the classifier picks has a name no role can
-    be derived from, stops with `RepositoryDataError` (`what == "backend"`) — not with a refusal of a `backend`
-    argument nobody passed.
+@pytest.mark.parametrize("name", ["r" * 60, "Weird.Name", "x y", "netcommon_cli"])
+@pytest.mark.parametrize("role", [None, ""], ids=["no-role", "empty-role"])
+def test_a_matched_backend_that_declares_no_role_is_passed_over(reuse, name, role):
+    """With no `backend` asked for, a registry entry the classifier matches that declares no role (none, or an empty
+    one) is passed over by the planner and by the scaffold: alone, the answer is `no_backend`; nothing is made up
+    from its name, whatever that name is.
 
-    Guards the scaffold answering a registry's fault as an argument's."""
-    registry = [dict(_CLI, name="r" * 60)]
-    with pytest.raises(paths.RepositoryDataError) as stop:
-        scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", backends=registry)
-    assert stop.value.what == "backend" and "r" * 60 not in str(stop.value)
+    Guards the auto path writing a class nobody named a backend for: a collection whose only match was
+    `vendor_config` was planned with the made-up role `backend_vendor_config` (S26), and a match whose name no role
+    could be made from stopped the plan as repository data instead of being passed over."""
+    registry = [dict(_CLI, name=name, role=role)]
+    plan = onboard.build_onboard_plan("cisco.ios", "newcls", "core_switch", "192.0.2.41", backends=registry, vectors=[])
+    assert plan == {"error": "no_backend"}
+    assert scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", backends=registry) == {
+        "error": "no_backend"}
 
 
 @pytest.mark.parametrize("role", [123, ["x"], "Bad Role }}", "r" * 80, "null", 0, False], ids=repr)
@@ -305,33 +307,18 @@ def test_a_registry_role_that_is_not_a_name_is_repository_data(reuse, role):
         scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", backends=registry)
 
 
-@pytest.mark.parametrize("name", ["Weird.Name", "x y"])
-def test_a_registry_backend_whose_name_derives_no_role_is_repository_data(reuse, name):
-    """A registry entry with no `role` whose NAME is outside the charset — a capital and a dot, a space — stops
-    the plan and the scaffold with `RepositoryDataError` (`what == "backend"`), the name not in the message.
-
-    Guards the derived role being checked for its length only: a registry name has passed no validator, so
-    `backend_<name>` can fail the charset, and such a role would be written into the module file and into the
-    `device_role` host var."""
-    registry = [dict(_CLI, name=name)]
-    with pytest.raises(paths.RepositoryDataError) as stop:
-        onboard.build_onboard_plan("cisco.ios", "newcls", "core_switch", "192.0.2.41", backends=registry, vectors=[])
-    assert stop.value.what == "backend" and name not in str(stop.value)
-    with pytest.raises(paths.RepositoryDataError):
-        scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", backends=registry)
-
-
 @pytest.mark.parametrize("registry,backend", [
-    ([dict(_CLI, role="my_role")], None), ([dict(_CLI)], None), ([dict(_CLI, role="")], None), ([], "raw_thing"),
-], ids=["registry-role", "registry-no-role", "registry-empty-role", "request-backend"])
+    ([dict(_CLI, role="my_role")], None),
+    ([dict(_CLI, name="meta_only", order=0, role=None), dict(_CLI, role="my_role")], None),
+    ([dict(_CLI, name="meta_only", order=0, role=None), dict(_CLI, role="my_role")], "netcommon_cli"),
+], ids=["registry-role", "passed-over", "request-backend"])
 def test_what_a_new_class_plan_writes_the_next_onboard_adopts(reuse, registry, backend):
-    """The role the planner writes into a NEW class's module file — and the other adopted keys, for a registry
-    entry with an ordinary name — passes the adoption rule, whether the role is the registry entry's own, derived
-    from a registry backend that names none (or names an empty one), or derived from a backend the request sent.
-    The scaffold's module passes it too.
+    """The role the planner writes into a NEW class's module file — and the other adopted keys — passes the adoption
+    rule, and is the registry entry's own, whether the classifier chose the backend (past a match that declares no
+    role) or the request named it. The scaffold's module passes it too, with the same role.
 
-    Guards the invariant behind the derived-role rule, for every source of a role and not for one length: a
-    request must not be able to write a module file that the next onboard of the class answers 409 for."""
+    Guards the invariant behind the role rule, for every way a backend is chosen: a request must not be able to write
+    a module file that the next onboard of the class answers 409 for."""
     plan = onboard.build_onboard_plan("cisco.ios", "newcls", "core_switch", "192.0.2.41", backend=backend,
                                       backends=registry, vectors=[])
     assert plan["error"] is None and plan["module_reuse"] is False
@@ -339,7 +326,7 @@ def test_what_a_new_class_plan_writes_the_next_onboard_adopts(reuse, registry, b
     for field in onboard._ADOPTED:
         assert onboard._adopted(plan["module"], field, "newcls") == plan["module"][field]
         assert onboard._adopted(made["module"], field, "scaf") == made["module"][field]
-    assert plan["module"]["role"] == made["module"]["role"]            # the two writers agree on the role
+    assert plan["module"]["role"] == made["module"]["role"] == "my_role"    # the two writers agree on the role
 
 
 def test_no_identity_knob_stores_a_name_the_adoption_rule_refuses(reuse, monkeypatch):
@@ -349,9 +336,11 @@ def test_no_identity_knob_stores_a_name_the_adoption_rule_refuses(reuse, monkeyp
     the bound — and each knob accepts the shortest name and the longest, so the comparison is not empty.
 
     Guards the fault this change is named for, as a property instead of one example: a request storing, through
-    the identity knob, a name the next onboard of that class then refuses to adopt. It does NOT cover the role
-    DERIVED from a stored backend: on a class whose module file names no role, a backend of fifty-seven to
-    sixty-four characters is accepted here and answered 409 at the next onboard (SECURITY.md C22, limits)."""
+    the identity knob, a name the next onboard of that class then refuses to adopt — the adoption rule, and for
+    `role` the made-up-role rule too (the knob refuses `backend_vendor_config` and `backend_napalm`, which the next
+    onboard would answer 409). It does NOT cover a stored backend that declares no role: on a class whose module file
+    names no role either, a backend the registry does not ship, or one with no role, is accepted here and answered 409
+    at the next onboard that names no backend (SECURITY.md C22, limits)."""
     import itertools
     reuse()
     descriptors = catalog.load_knob_descriptors()          # read once: the planner re-reads them on every call
@@ -359,6 +348,9 @@ def test_no_identity_knob_stores_a_name_the_adoption_rule_refuses(reuse, monkeyp
     words = ["".join(t) for n in (1, 2) for t in itertools.product("a0_-.A ", repeat=n)]
     words += ["a-b", "a.b", "a b", "0ab", "_ab", "ab-", "a0_", "A01"]
     words += ["null", "true", "no", "yes", "on", "off", "1e3", "all", "ungrouped", "localhost", "a" * 64, "a" * 65]
+    registry = catalog.load_backends()
+    made_up = catalog.made_up_roles(registry)
+    words += made_up
     for field in onboard._ADOPTED:
         accepted = []
         for word in words:
@@ -366,7 +358,10 @@ def test_no_identity_knob_stores_a_name_the_adoption_rule_refuses(reuse, monkeyp
             if plan["error"] is None and plan["changes"]:
                 accepted.append(word)
                 onboard._adopted({field: word}, field, "demo_sw")       # raises if the next onboard would refuse it
+                if field == "role":
+                    onboard._no_made_up_role(word, "demo_sw", registry)
         assert "a" in accepted and "a" * 64 in accepted, "the %s knob accepted nothing worth comparing" % field
+    assert made_up, 'the registry ships no role-less backend: the made-up-role words compare nothing'
 
 
 # --- one type for "the repository's own data stopped the request" ---------------------------------------------------
@@ -542,7 +537,8 @@ def test_the_cli_prints_a_repository_refusal_as_one_line(tmp_repo, monkeypatch, 
         collection=coll, plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
-        *a, backends=[{"name": "netcommon_cli", "requires": [], "match": {"any": [{"plugin": "cliconf"}]}}]))
+        *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
+                       "match": {"any": [{"plugin": "cliconf"}]}}]))
 
     def refuse(rel_path):
         raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
@@ -571,7 +567,8 @@ def test_cmd_scaffold_writes_under_the_write_root(tmp_path, monkeypatch, make_fa
         collection=coll, plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
-        *a, backends=[{"name": "netcommon_cli", "requires": [], "match": {"any": [{"plugin": "cliconf"}]}}]))
+        *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
+                       "match": {"any": [{"plugin": "cliconf"}]}}]))
     galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
                                            secrets="network", backend="netcommon_cli", dry_run=True))
     assert "a real run refuses" not in capsys.readouterr().out      # the note is only true when the class exists
@@ -600,7 +597,8 @@ def test_cmd_scaffold_does_not_shadow_a_class_the_code_root_ships(tmp_path, monk
         collection=coll, plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
-        *a, backends=[{"name": "netcommon_cli", "requires": [], "match": {"any": [{"plugin": "cliconf"}]}}]))
+        *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
+                       "match": {"any": [{"plugin": "cliconf"}]}}]))
     with pytest.raises(SystemExit) as stop:
         galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
                                                secrets="network", backend="netcommon_cli", dry_run=False))

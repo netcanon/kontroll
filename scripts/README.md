@@ -206,7 +206,7 @@ modules (`kontroll.probe`/`kontroll.catalog`/`kontroll.gitio`/`kontroll.paths`),
 python3 scripts/galaxy.py search arista              # galaxy + local, capability-labelled (+ suggested backend)
 python3 scripts/galaxy.py search mikrotik --vector backup   # only backup-capable results
 python3 scripts/galaxy.py probe cisco.ios [--json]   # deep-probe one collection (record)
-python3 scripts/galaxy.py classify cisco.ios         # which execution backend fits
+python3 scripts/galaxy.py classify cisco.ios         # which backend fits (`best`: onboard's pick for a new class)
 python3 scripts/galaxy.py scaffold arista.eos --key arista_eos --group core_switch [--dry-run]
                                                      # generate modules/<key>/module.yml (staged)
 #   --key, --group, --secrets and --backend follow the onboard's rules for a name (and --group is not `all`,
@@ -238,7 +238,8 @@ the endpoint→capability mapping is heuristic, so live-verify before relying on
 Guessed auth and unmatched capabilities are flagged (`[!]`, `✗`).
 
 Each result is a structured **record** (`--json`): metadata + a `capabilities`
-block keyed by vector + a `suggested_backend`. The pipeline is **search → classify
+block keyed by vector + a `suggested_backend` (the backend `onboard` would choose: the first match whose
+registry entry declares a `role:`; `backend_candidates` keeps every match). The pipeline is **search → classify
 → scaffold → onboard**: find a collection, see what it can do + which backend drives
 it, emit a device-class declaration, and stand the host up. Backends are drop-in
 (`ansible/backends/<name>/`); overrides correct the residual (`overrides/`).

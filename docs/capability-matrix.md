@@ -166,9 +166,15 @@ classify:
     - {plugin: cliconf}
 confers: {actuate: true, backup: true}
 requires: [network_os]           # supplied per-device in module.yml
+role: backend_netcommon_cli      # the execution role: what a class's device_role names
 ```
 
-**Adding a backend = drop the dir + role.** The classifier auto-discovers it. A new
+**Adding a backend = drop the dir + role.** The classifier auto-discovers it. The
+entry's `role:` names the role; an entry without one may still classify (a search
+record lists it among its candidates) but is never the source of a role — a new class
+is never planned with it (the onboard planner and the scaffold choose only a backend
+that declares a role, and refuse a request that names any other); only a reused class
+that brings its own role can be (S26). A new
 Arista/Juniper device then needs **zero new task code** — `modules/<key>/module.yml`
 declares `role: backend_netcommon_cli` + `network_os`. `cisco_ios` is already
 migrated to this shape (live e2e: byte-identical capture), so it's generalization,
@@ -178,14 +184,22 @@ not a rewrite.
 
 Fleet diversity is absorbed by **data** (per-device params/recipes), not new code:
 
-| backend | covers | new-device lift |
-|---|---|---|
-| `netcommon_cli` ✅ | **all** CLI network gear (Cisco/Arista/Juniper/MikroTik…) | one declaration line |
-| `raw_ssh` | bespoke SSH appliances + plain Linux | one line + a command |
-| `api` ✅ | **all** REST devices *and* services | one line + a recipe (§5.2) |
-| `module_sdk` | SDK/socket modules (community.docker/proxmox, kubernetes.core, cloud) | one line |
-| `netconf` | NETCONF devices | 0–1 (only if present) |
-| `napalm` | optional cross-vendor network | 0–1 (manual/driver) |
+| backend | covers | new-device lift | runs today? |
+|---|---|---|---|
+| `netcommon_cli` ✅ | **all** CLI network gear (Cisco/Arista/Juniper/MikroTik…) | one declaration line | yes |
+| `raw_ssh` | bespoke SSH appliances + plain Linux | one line + a command | yes |
+| `api` ✅ | **all** REST devices *and* services | one line + a recipe (§5.2) | yes |
+| `vendor_config` | gear with a vendor `*_config` module that takes `backup` | one line | classifier only — never the source of a role |
+| `module_sdk` | SDK/socket modules (community.docker/proxmox, kubernetes.core, cloud) | one line | not built |
+| `netconf` | NETCONF devices | 0–1 (only if present) | not built |
+| `napalm` | optional cross-vendor network | 0–1 (manual/driver) | classifier only — never the source of a role |
+
+"Runs today?" is the registry's answer: **yes** — the backend's `backend.yml` declares a `role:`;
+**classifier only** — it ships a `backend.yml` with no role, so a search record may list it among its
+candidates (not `napalm`, which is manual) but the onboard planner never plans a new class with it (S26);
+**not built** — no
+`ansible/backends/<name>/` yet.
+`tests/unit/test_backend_registry.py` holds this column to the registry.
 
 You will **not** need a backend per vendor — five or six cover essentially anything
 Ansible can talk to. New backends are a rare, one-time, reusable cost.

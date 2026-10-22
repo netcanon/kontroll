@@ -172,7 +172,7 @@ def cmd_classify(args):
         " > ".join(matches) or "none (bespoke — set raw_ssh + a command, or add a backend)"))
     if matches:
         print("  best: %-14s requires: %s" % (
-            result["best"], ", ".join(result["requires"]) or "nothing"))
+            result["best"] or "none it can run (no match declares a role)", ", ".join(result["requires"]) or "nothing"))
     print()
 
 
@@ -181,7 +181,7 @@ def cmd_scaffold(args):
     if res["error"] == "not_installed":
         sys.exit("install the collection first: ansible-galaxy collection install %s" % args.collection)
     if res["error"] == "no_backend":
-        sys.exit("no backend auto-matched — pass --backend (e.g. raw_ssh) or add a backend.")
+        sys.exit("no backend kontroll can run auto-matched — pass --backend (e.g. raw_ssh) or add a backend.")
     rel, text = res["path"], res["text"]
     abspath = paths.module_write_path(args.key)   # under write_root(), confined — where every other module write goes
     existing = paths.module_file(args.key)        # the READER's view: the clone's copy, else the shipped one —
@@ -215,7 +215,7 @@ def cmd_onboard(args):
     if plan["error"] == "not_installed":
         sys.exit("install the collection first: ansible-galaxy collection install %s" % args.collection)
     if plan["error"] == "no_backend":
-        sys.exit("no backend auto-matched — pass --backend (e.g. raw_ssh).")
+        sys.exit("no backend kontroll can run auto-matched — pass --backend (e.g. raw_ssh).")
     backend, host_name = plan["backend"], plan["host_name"]
     creds_to_set = plan["creds_to_set"]
     mod_path, inv_path = plan["mod_path"], plan["inv_path"]

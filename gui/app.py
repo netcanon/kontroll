@@ -562,7 +562,7 @@ def api_onboard():
     if plan["error"] == "not_installed":
         return jsonify({"error": "install the collection first: %s" % d["collection"]}), 404
     if plan["error"] == "no_backend":
-        return jsonify({"error": "no backend auto-matched — pass an explicit backend"}), 422
+        return jsonify({"error": "no backend kontroll can run auto-matched — pass an explicit backend"}), 422
     run_id = uuid.uuid4().hex[:12]   # correlates the audit line, the commit, and the staged proposal (C10)
     bootstrap = bool(d.get("bootstrap"))
     if not d.get("apply"):

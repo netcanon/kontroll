@@ -183,6 +183,25 @@ def test_onboard_partial_auth_set_is_a_422_not_a_500(client, onboard_env, monkey
     assert len(refusals) == 1 and "reason=planner-guard" in refusals[0] and "request-boundary" not in refusals[0]
 
 
+@pytest.mark.parametrize("backend", ["napalm", "vendor_config", "zzz"])
+def test_gui_onboard_a_backend_nothing_can_run_is_a_422_with_a_code(client, onboard_env, monkeypatch, backend):
+    """The GUI onboard route answers a `backend` that declares no execution role, or that the registry does not ship,
+    with 422 and the code `invalid_backend` the browser keys its copy on, a message that does not quote it, nothing
+    written, and one `onboard-refuse` audit line naming the field. Guards GUI parity with the planner's refusal
+    (S26): the form sent the search record's first match as the backend, and a `vendor_config` match was planned
+    with a role no play can include."""
+    lines = []
+    monkeypatch.setattr(gui, "_audit", lambda action, detail="": lines.append((action, detail)))
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "backend": backend, "apply": True}, headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    assert r.get_json()["code"] == "invalid_backend" and backend not in r.get_json()["error"]
+    assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "edgeos").exists()
+    refusals = [detail for action, detail in lines if action == "onboard-refuse"]
+    assert len(refusals) == 1 and "reason=request-boundary field=backend" in refusals[0], lines
+    assert backend not in refusals[0]
+
+
 def test_onboard_dryrun_returns_plan_no_git(client, onboard_env):
     """A dry-run (apply omitted) returns the PLAN (backend, default host name, repo-rel paths) and touches
     NO git — dry-run by default is the security-relevant invariant, asserted as data."""
