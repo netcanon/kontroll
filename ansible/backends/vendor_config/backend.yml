@@ -4,6 +4,10 @@
 name: vendor_config
 label: vendor *_config module with a backup option
 order: 2
+# No `role:` — no execution role ships for this backend yet, so it classifies (a search record lists it among
+# its candidates) but never gives a class its role: the onboard planner and the scaffold never plan a new class
+# with it, and refuse a request that names it for one (S26); only a reused class that brings its own role runs
+# with it. Give it a role with tasks/check.yml + tasks/backup.yml under ansible/roles/ to make it runnable.
 classify:
   any_of:
     - {module_option: {suffix: _config, option: backup}}

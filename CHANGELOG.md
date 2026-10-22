@@ -11,6 +11,35 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): a device class is planned only with a backend some play can run (S26, 2026-10-22)
+
+The onboard planner and the scaffold made a role up (`backend_<name>`) for any backend whose registry entry declares
+no `role:` — `vendor_config` and `napalm` declare none — and for any backend name a request sent that the registry
+does not ship. The made-up name was written into the module file and every host's `device_role`; `ping.yml` then
+included a role that does not exist (rescued into a bare UNREACHABLE) and `backup-configs.yml` failed the same way.
+Nobody had to name a backend: a collection with a `*_config` module that takes a `backup` option and no cliconf
+plugin classifies to `vendor_config` first, and the GUI's onboard form sent the search record's first match.
+
+The role now comes from declared data only. A `backend` a request names must be one this install ships whose entry
+declares a role; any other is refused as the `backend` field (422 `invalid_backend`, the CLI one line) before the
+collection is probed. With no `backend`, the planner and the scaffold choose the first match that declares a role
+(`catalog.runnable`), or answer `no_backend`; a search record's `suggested_backend` and `galaxy classify`'s `best`
+are that same choice. A second device of a class whose module file declares its own role keeps that role, whatever
+shipped backend the request names (one that declares none included); with none named it takes the first match that
+declares a role, or the first match when none does. Every fault of a reused class's module file is answered before
+the collection is probed. A class whose file names no role and whose backend declares none is
+repository data (409), naming the file to give a `role:`.
+`tests/unit/test_backend_registry.py` holds every declared role to a role with a check and a backup, and the
+planner, the scaffold and the suggestion to the registry; the API, GUI and CLI rows pin the refusal and its audit
+line (`reason=request-boundary field=backend`).
+
+- **Upgrading.** A class the old planner wrote holds `role: backend_vendor_config` or `role: backend_napalm`; its
+  next onboard now answers 409 naming its module file — give it a real `role:` (the identity dialog no longer
+  stores either name). One written for a backend name the registry never shipped (`role: backend_<name>`, through
+  the API or the CLI) is still adopted, and its plays still fail. Find
+  both before they bite: `grep -n '^role: backend_' modules/*/module.yml` (in the write root) — anything but
+  `backend_netcommon_cli`, `backend_api`, `backend_raw_ssh` or a role of your own under `ansible/roles/` needs one.
+
 ### ci: a package install waits out another job's apt lock (2026-10-22)
 
 The self-hosted runners on one host share apt's locks, and a pytest job of an unrelated change failed when another

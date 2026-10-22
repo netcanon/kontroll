@@ -335,6 +335,33 @@ def load_backends():
     return sorted(bes, key=lambda b: b.get("order", 99))
 
 
+def backend_role(bdef):
+    """The execution role a backend registry entry DECLARES (its `role:`), or None where it declares none (absent,
+    null or empty). A backend with none is classifier metadata only: no play can run a check or a backup through it,
+    so the onboard planner never chooses one and refuses a request that names one — it never makes a role name up
+    (S26). A declared role that is not a name is returned as it is: the planner answers that as repository data."""
+    role = (bdef or {}).get("role")
+    return None if role is None or role == "" else role
+
+
+def made_up_roles(backends=None):
+    """The role names the onboard planner and the scaffold made up, before S26, for a shipped backend whose registry
+    entry declares no role — `backend_<name>` for each (`backend_vendor_config`, `backend_napalm`). No play can
+    include one: a reused class that names one is refused (onboard._no_made_up_role), and the identity knob does not
+    store one. A list (the registry is data, its names need not hash); empty the day every backend declares a role.
+    PURE."""
+    backends = backends if backends is not None else load_backends()
+    return ["backend_%s" % b.get("name") for b in backends if backend_role(b) is None]
+
+
+def runnable(names, backends=None):
+    """The backends among `names` (a classifier's ordered matches), in their order, whose registry entry declares an
+    execution role — what the planner, the scaffold and a search record's suggestion choose from. PURE."""
+    backends = backends if backends is not None else load_backends()
+    by_name = {b.get("name"): b for b in backends}
+    return [n for n in names if backend_role(by_name.get(n)) is not None]
+
+
 def backend_confers(name, capability, backends=None):
     """What a backend `confers` for `capability` — the F2 host->capability accessor (the ONE dispatch seam, like
     `device_role`). `capability` is 'actuate'/'backup' (a scalar: true/false/'maybe') or 'telemetry'/'logs' (a list

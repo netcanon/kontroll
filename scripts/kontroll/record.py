@@ -5,10 +5,14 @@ cell per vector) + the suggested/candidate execution backends, with the override
 merged at read time (an override patches a capability cell and stamps provenance). Pure;
 the contract under test in tests/unit/test_build_record.py. Lifted verbatim from galaxy.py.
 """
-from kontroll import predicate
+from kontroll import catalog, predicate
 
 
 def build_record(facts, vectors, overrides=None, backends=None):
+    """The record for one collection. `backend_candidates` is every backend the classifier matches, in its order;
+    `suggested_backend` is the first of them that declares an execution role — the one the onboard planner would
+    choose, and the one the GUI's onboard form sends and loads its credential fields for. A match that declares none
+    (`vendor_config`) is classifier metadata: suggested, the form would send a backend the planner refuses (S26)."""
     matches = predicate.classify(facts, backends or [])
     rec = {
         "collection": facts["collection"],
@@ -18,7 +22,7 @@ def build_record(facts, vectors, overrides=None, backends=None):
         "meta": {"description": facts["description"], "tags": facts["tags"],
                  "certified": facts["certified"]},
         "capabilities": {v["name"]: predicate.eval_vector(v, facts) for v in vectors},
-        "suggested_backend": matches[0] if matches else None,
+        "suggested_backend": next(iter(catalog.runnable(matches, backends or [])), None),
         "backend_candidates": matches,
         "provenance": "derived",
     }

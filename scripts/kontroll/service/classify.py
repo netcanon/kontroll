@@ -1,6 +1,6 @@
 """classify domain — which execution backend(s) fit a collection, and (read-only) whether it looks scrapable.
 
-service_classify returns the ordered backend matches plus the best backend's name + requirements (or None
+service_classify returns the ordered backend matches plus the best runnable backend's name + requirements (or None
 when not installed locally), AND the telemetry side: declared_metrics_methods reconciles what module.yml
 ALREADY declares; suggest_telemetry derives a NON-binding scrape suggestion from the telemetry capability
 vector. Both telemetry helpers are PURE (read the repo via paths.ROOT) and write NOTHING — the DECLARED
@@ -38,14 +38,17 @@ _LOGGING_HINT = {
 
 def service_classify(collection, backends=None):
     """Deep-probe `collection` and return {"collection","matches","best","requires","telemetry_declared"}
-    (matches ordered best-first; best/requires describe the top backend; telemetry_declared is the
-    DECLARED-side reconciliation), or None if the collection isn't installed locally (CLI owns the message)."""
+    (matches ordered best-first; best/requires describe the first match that declares an execution role — the
+    backend the onboard planner would choose for a new class, None when no match declares one (S26: `best` named
+    `vendor_config`, which the next step refuses); telemetry_declared is the DECLARED-side reconciliation), or None
+    if the collection isn't installed locally (CLI owns the message)."""
     backends = backends if backends is not None else catalog.load_backends()
     f = probe.deep_probe(collection)
     if not f["modules"] and not f["plugins"]:
         return None
     matches = predicate.classify(f, backends)
-    best = next((b for b in backends if b["name"] == matches[0]), None) if matches else None
+    first = next(iter(catalog.runnable(matches, backends)), None)
+    best = next((b for b in backends if b["name"] == first), None) if first else None
     return {"collection": collection, "matches": matches,
             "best": best["name"] if best else None,
             "requires": (best.get("requires") or []) if best else [],

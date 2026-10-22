@@ -103,7 +103,7 @@ def onboard(body: OnboardIn, request: Request,
     if plan["error"] == "not_installed":
         raise HTTPException(status_code=404, detail="install the collection first: %s" % body.collection)
     if plan["error"] == "no_backend":
-        raise HTTPException(status_code=422, detail="no backend auto-matched — pass an explicit backend")
+        raise HTTPException(status_code=422, detail="no backend kontroll can run auto-matched — pass an explicit backend")
     if not body.apply:
         return {"applied": False, "plan": _plan_view(plan), "run_id": principal.run_id}
 

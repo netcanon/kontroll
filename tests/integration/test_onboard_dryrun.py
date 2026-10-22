@@ -52,6 +52,21 @@ def test_dryrun_writes_nothing(tmp_repo, mock_probe, capsys):
     assert "- edgeos" not in (tmp_repo / "config" / "fleet.yml").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("backend", ["napalm", "zzz"])
+def test_cli_onboard_a_backend_nothing_can_run_exits_with_one_line(tmp_repo, mock_probe, monkeypatch, backend):
+    """`galaxy.py onboard --backend <b> --apply`, where `b` declares no execution role or is not in the registry,
+    exits non-zero with the refusal's one sentence (not a traceback, not quoting the value) and writes nothing.
+    Guards CLI parity with the planner's refusal (S26): the command applied a class whose `device_role` no play can
+    include."""
+    monkeypatch.setattr(galaxy.sys, "argv", ["galaxy.py", "onboard", "acme.edgeos", "--key", "edgeos", "--group",
+                                             "edge_router", "--host", "192.0.2.50", "--backend", backend, "--apply"])
+    with pytest.raises(SystemExit) as stop:
+        galaxy.main()
+    assert isinstance(stop.value.code, str) and "backend" in stop.value.code and backend not in stop.value.code
+    assert not (tmp_repo / "modules" / "edgeos").exists()
+    assert "- edgeos" not in (tmp_repo / "config" / "fleet.yml").read_text(encoding="utf-8")
+
+
 def test_apply_writes_module_inventory_and_enables_fleet(tmp_repo, mock_probe, capsys):
     """--apply writes the three artifacts — the device-class module, a drop-in inventory host
     (with the backend + mgmt IP), and the fleet-enable — the full self-completing onboard."""

@@ -140,7 +140,8 @@ class TelemetryDeclared(BaseModel):
 
 
 class ClassifyResponse(BaseModel):
-    """Which execution backend(s) fit: ordered matches + the best one's name + its requirements, plus the
+    """Which execution backend(s) fit: ordered matches + the best one's name + its requirements (`best`: the first
+    match whose registry entry declares a role — the one onboard chooses for a new class; None when none does), plus the
     telemetry methods already DECLARED for this collection in module.yml (the detected/declared reconcile)."""
     collection: str
     matches: list[str]

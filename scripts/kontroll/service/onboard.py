@@ -113,35 +113,49 @@ def _adopted(module, field, key):
     return value
 
 
-def _derived_role(backend, key, from_request):
-    """The role name for a backend no file names one for: `backend_<name>`. It is written into the module file
-    and ADOPTED from it by the next onboard of the class, so it is held to the adopted role's rule where it is
-    derived. A backend the request sent, or the plan adopted, has passed component(): only the length of the
-    derived name can fail. A registry entry's own name has passed nothing, so its derived name can fail the
-    charset as well. Whose fault it is depends on where the backend came from: the request's own field is refused
-    as that field; a backend the request did not send — adopted from the class's module file, or chosen from the
-    registry — is the declaring file's, and is answered as repository data, naming the class and never the
-    backend."""
-    role = "backend_%s" % backend
-    if paths.is_component(role):
-        return role
-    if from_request:
-        raise paths.RequestBoundaryError(
-            "backend", "backend is too long for the role name built from it (backend_<name>: 64 characters)")
-    raise paths.RepositoryDataError(
-        "backend", "the backend of the %s device class names no role, and no role name can be built from its own "
-        "name (backend_<name> must be 1-64 chars of [a-z0-9_-]) — give it a `role:` where it is declared (the "
-        "backend's registry entry, or the class's module file if that names the backend)" % key)
+def _registered(backend, backends):
+    """A backend the REQUEST names is one the registry ships (a directory under ansible/backends/), checked before
+    anything is probed. The planner used to make a role name up for any other (`backend_<name>`) and write it into
+    the module file and every host's `device_role`, where no play could include it (S26). Refused as the `backend`
+    field, never naming the value."""
+    if backend not in {b.get("name") for b in backends}:
+        raise paths.RequestBoundaryError("backend", "backend is not one this install ships (a directory under "
+                                         "ansible/backends/)")
 
 
-def _role_of(bdef, backend, key, from_request):
-    """The role of a class no module file gives one: the registry entry's own, else the one derived from the
-    backend's name. Either is written into the module file and adopted by the next onboard, so either is held to
-    the adopted role's rule here; a registry entry whose role fails is repository data, naming the class only (a
-    registry NAME reached through the classifier has passed no validator)."""
-    role = bdef.get("role")
-    if role is None or role == "":
-        return _derived_role(backend, key, from_request)
+def _no_made_up_role(role, key, backends):
+    """Stop a reuse whose module file names the role the planner made up, before S26, for a shipped backend that
+    declares none (`backend_vendor_config`, `backend_napalm`): no play can include it, and the reuse would give every
+    new host that `device_role`. Answered as repository data, the role itself not quoted. Every other role passes,
+    `backend_` or not — an operator's own role may carry the prefix, and whether a role exists under ansible/roles/
+    is the linker's question (S36), not the planner's; a class written for a backend string the registry never
+    shipped (`backend_<string>`) is what the CHANGELOG's upgrade grep finds."""
+    if role in catalog.made_up_roles(backends):
+        raise paths.RepositoryDataError(
+            "module file", "the %s class's module file names the role kontroll used to make up for a backend that "
+            "declares none (written before S26) — give the class a real `role:` in modules/%s/module.yml"
+            % (key, key))
+
+
+def _role_of(bdef, key, from_request):
+    """The role of a class no module file gives one: the one its backend's registry entry DECLARES — never one made up
+    from the backend's name (S26: `vendor_config` and `napalm` declare none, and a class written with
+    `backend_vendor_config` reached a play that could not include it, its failure rescued into a bare UNREACHABLE).
+    A backend that declares none cannot run a check or a backup, so a plan for it stops: the request's own `backend`
+    is refused as that field; a backend the request did not send — adopted from a module file that names no role
+    either — is that file's fault, answered as repository data naming the class and never the backend. (The
+    classifier's choice never lands here: the planner chooses only a backend that declares a role.) A declared role
+    is written into the module file and adopted by the next onboard, so it is held to the adopted role's rule here;
+    one that fails is repository data too, naming the class only."""
+    role = catalog.backend_role(bdef)
+    if role is None:
+        if from_request:
+            raise paths.RequestBoundaryError(
+                "backend", "backend is one kontroll can classify a collection to but cannot run: its registry entry "
+                "declares no execution role (`role:`) — choose one that does")
+        raise paths.RepositoryDataError(
+            "backend", "the %s device class's module file names no role, and its backend declares none either (or "
+            "is not one this install ships) — give the class a `role:` (modules/%s/module.yml)" % (key, key))
     if not (paths.is_component(role) and plain_scalar(role)):
         raise paths.RepositoryDataError(
             "backend", "the backend registry entry chosen for the %s device class holds a `role` that is not a "
@@ -212,10 +226,9 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         paths.component(backend, "backend")
         _plain_name(backend, "backend")
     backends = backends if backends is not None else catalog.load_backends()
+    if backend_from_request:
+        _registered(backend, backends)
     vectors = vectors if vectors is not None else catalog.load_vectors()
-    f = probe.deep_probe(collection)
-    if not f["modules"] and not f["plugins"]:
-        return {"error": "not_installed"}
 
     # REUSE an existing device-class instead of regenerating a minimal module that would clobber it (#124). The
     # same class — one whose modules/<key>/module.yml already declares THIS collection — is reused as-is: we add
@@ -236,12 +249,28 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         secrets = _adopted(existing, "secrets_domain", key) or secrets
         group = _adopted(existing, "inventory_group", key) or group
 
-    backend = backend or (predicate.classify(f, backends)[:1] or [None])[0]
+    adopted_role = _adopted(existing, "role", key) if module_reuse else None
+    _no_made_up_role(adopted_role, key, backends)
+    if backend and not adopted_role:
+        # A backend already known — the request's, or the one a reused class's own file names — gives the role when
+        # the class brings none, so one that declares none stops the plan here, before the collection is probed: as
+        # the request's `backend` field when the request named it, as the module file's fault when the file did. A
+        # reused class with its own role keeps it, and plans with that backend's connection shape (brief 14 §3.2).
+        _role_of(next((b for b in backends if b.get("name") == backend), {}), key, backend_from_request)
+    f = probe.deep_probe(collection)
+    if not f["modules"] and not f["plugins"]:
+        return {"error": "not_installed"}
+    if not backend:
+        # The classifier's matches, in its order; the first that declares a role — the one a search record
+        # suggests, so the GUI's form and the auto path agree. A match that declares none (classifier metadata
+        # only) is passed over, except by a reused class with its own role when nothing else matched: that role
+        # runs whatever its collection classifies to.
+        matches = predicate.classify(f, backends)
+        backend = next(iter(catalog.runnable(matches, backends) or (matches if adopted_role else [])), None)
     if not backend:
         return {"error": "no_backend"}
-    bdef = next((b for b in backends if b["name"] == backend), {})
-    role = ((_adopted(existing, "role", key) if module_reuse else None)
-            or _role_of(bdef, backend, key, backend_from_request))
+    bdef = next((b for b in backends if b.get("name") == backend), {})
+    role = adopted_role or _role_of(bdef, key, backend_from_request)
     version = catalog.local_installed().get(collection) or f["version"] or "0.0.0"
     params = {}
     if "network_os" in (bdef.get("requires") or []):

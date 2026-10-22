@@ -238,11 +238,12 @@ class RequestBoundaryError(ValueError):
 
 class RepositoryDataError(Exception):
     """The repository's OWN data or layout stopped a request: a module file whose adopted name is not a name, a
-    credential field that a registry or a module declares with a name that is not one, a backend that names no
-    role and whose name none can be built from (or whose registry entry holds a role that is not a name), a write
-    target that does not resolve under the write root, a block of a module file the block writer cannot edit where
-    it stands. The fault is not in the request, and the remedy is the file or the layout (a request can sometimes
-    step around it — by naming a backend itself — and the file stays wrong for the next caller): an operator fixes it.
+    credential field that a registry or a module declares with a name that is not one, a class whose module file
+    names no role and whose backend declares none (or whose backend's registry entry holds a role that is not a
+    name), a write target that does not resolve under the write root, a block of a module file the block writer
+    cannot edit where it stands. The fault is not in the request, and the remedy is the file or the layout (a
+    request can sometimes step around it — by naming a backend itself — and the file stays wrong for the next
+    caller): an operator fixes it.
     Deliberately NOT a ValueError — a handler written for the planner's guards must not answer it as a refused
     field (422, "your request is malformed", a `code` naming a field nobody sent). Each app maps it once, to 409
     `repository_data`. `what` names the KIND of thing, for the audit line; the message says where to look and
