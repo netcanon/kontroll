@@ -138,7 +138,15 @@ Five workflows (`.github/workflows/`), the same files in the public repository a
 instance repository (docs/public-split.md). Every job's `runs-on` is
 `${{ fromJSON(vars.KONTROLL_RUNS_ON || '"ubuntu-latest"') }}`: GitHub-hosted by default (the
 public repo — a public repository must never run on a self-hosted runner, a fork PR would execute
-on it), the org's self-hosted runners where the private instance repo sets the variable.
+on it), the org's self-hosted runners where the private instance repo sets the variable. A step
+that runs apt goes through `.github/scripts/apt-install.sh` — a package install as
+`apt-install.sh <package>...`, a tool that runs apt itself (Playwright's `--with-deps`) as
+`apt-install.sh --run <command>...`. The self-hosted runners on one host share apt's locks:
+`apt-get update` fails at once on the lists lock and `install` on the archives lock, and `install`
+waits 60 s for dpkg's locks, then fails. The helper runs the step again on any of those lock errors
+(apt's `E:` line, in the C locale it sets), a bounded number of times, and fails at once with apt's
+own status on any other failure. `tests/unit/test_ci_workflows.py` holds every workflow step that
+runs apt to the helper, and pins its bounds.
 
 The four gating workflows run on every push to `main` **and to any `homelab*` branch**: the private
 instance repository's permissive tine is a long-lived branch that is never merged to `main`, so it is

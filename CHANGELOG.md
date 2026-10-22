@@ -11,6 +11,18 @@ NetConfig project.
 
 ## [Unreleased]
 
+### ci: a package install waits out another job's apt lock (2026-10-22)
+
+The self-hosted runners on one host share apt's locks, and a pytest job of an unrelated change failed when another
+job's `apt-get` held the lists lock. `DPkg::Lock::Timeout` is no cure: apt waits on it for dpkg's locks only, while
+`update` fails at once on the lists lock and `install` on the archives lock (measured, apt 2.6.1, 2.8.3 and 3.0.3).
+Every step in `ci.yml` that runs apt — both package installs and the e2e job's Playwright `--with-deps` — now runs
+through `.github/scripts/apt-install.sh`. It runs the step again when apt's `E:` line names another process's lock
+(the lists or archives lock at once, dpkg's after a 60 s wait), up to twenty times fifteen seconds apart, in the C
+locale its pattern is written for. Any other failure (a missing package, a lock file apt may not open) fails at
+once with apt's own status. `tests/unit/test_ci_workflows.py` holds every workflow step that runs apt to the helper,
+runs it against a fake apt, and pins those numbers.
+
 ### fix(docker): the `service` label drops what systemd and compose mint per run (2026-10-22)
 
 The Loki `service` label is meant to be a closed set, but the journald shape used the unit's name as it came and

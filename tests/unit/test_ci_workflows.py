@@ -1,5 +1,7 @@
 """Text pins on the CI workflows the public split changed (publish target, the zizmor SARIF seat, Dependabot
-strategy, third-party action pins) and on the gate wiring (the `homelab*` push trigger, the Windows shim).
+strategy, third-party action pins) and on the gate wiring (the `homelab*` push trigger, the Windows shim), plus the
+package-install helper every workflow step that runs apt goes through (.github/scripts/apt-install.sh), run against
+a fake apt.
 
 WHY — a workflow file has no unit test of its own, so a behaviour the 2026-10-09 review fixed can quietly come back
 in a later edit: the publish target hard-coded to one org again, the SARIF seat scanning `.github/` (every alert URI
@@ -167,3 +169,165 @@ def test_a_release_refuses_a_stale_status_page():
     assert "gate" in str(wf["jobs"]["publish"].get("needs"))
     step = next(s for s in wf["jobs"]["gate"]["steps"] if s.get("run") == "python tests/check-status.py --release")
     assert "continue-on-error" not in step and "if" not in step, step
+
+
+_APT_HELPER = os.path.join(ROOT, ".github", "scripts", "apt-install.sh")
+# apt's own texts, measured on apt 2.6.1, 2.8.3 and 3.0.3 (the 2026-10-22 read of this helper): each lock error
+# another process causes, then the failures that only look like one.
+_LISTS_LOCK = "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 7 (apt-get)"
+_ARCHIVES_LOCK = "E: Could not get lock /var/cache/apt/archives/lock. It is held by process 7 (apt-get)"
+_FRONTEND_TIMEOUT = ("E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process "
+                     "using it?")
+_DPKG_TIMEOUT = "E: Unable to lock the administration directory (/var/lib/dpkg/), is another process using it?"
+_NL = "\\n"   # the fake apt-get prints one plan line as several (printf %b)
+_NO_PERMISSION = ("E: Could not open lock file /var/lib/apt/lists/lock - open (13: Permission denied)" + _NL
+                  + "E: Unable to lock directory /var/lib/apt/lists/")
+_NOT_ROOT = ("E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)" + _NL
+             + "E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), are you root?")
+_RUNS_APT = re.compile(r"\bapt(-get)?\b|--with-deps|install-deps")
+
+
+def test_every_workflow_step_that_runs_apt_goes_through_the_lock_retry():
+    """Every workflow step whose command runs apt — `apt`, `apt-get`, or a tool that runs it for itself
+    (`playwright install --with-deps`, `install-deps`) — is one line through .github/scripts/apt-install.sh, and no
+    workflow names `apt-get` outside it. The self-hosted runners on one host share apt's locks, and a bare
+    `apt-get update` failed a pytest job of an unrelated change on another job's lock (2026-10-22). Guards a new
+    install step written the old way, and one that hides apt inside another tool (the e2e job's Playwright step ran
+    the same failing pair, and the first form of this row, which searched for `apt-get`, did not see it)."""
+    seen = 0
+    for name in sorted(os.listdir(WF)):
+        text = _read(os.path.join(".github", "workflows", name))
+        assert "apt-get" not in text, "%s calls apt-get directly; use .github/scripts/apt-install.sh" % name
+        for job in (yaml.safe_load(text).get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                run = str(step.get("run", "")).strip()
+                if _RUNS_APT.search(run):
+                    assert run.startswith("bash .github/scripts/apt-install.sh ") and "\n" not in run, (name, run)
+                    seen += 1
+    assert seen >= 3, "the apt steps are gone — if they moved, move this test with them"
+    ci = _read(".github/workflows/ci.yml")
+    assert "bash .github/scripts/apt-install.sh --run python -m playwright install --with-deps chromium" in ci
+
+
+def _run_helper(tmp_path, plan, args=("gawk", "mawk"), tries=4, delay="0"):
+    """Run the helper with a fake `sudo` (runs its arguments without LC_ALL, as a sudoers that keeps no locale would —
+    sudo's default keeps it, so the helper's export and the pair's own `env LC_ALL=C` each prove out only here), a
+    fake `sleep` (records its argument) and a fake
+    `apt-get` that answers each call from `plan` in turn ("<rc>|<stderr text>", `\\n` between lines; a blank plan line
+    or a spent plan = success) and records its arguments and its LC_ALL. `tries`/`delay` None leaves the helper's
+    own default. Returns (rc, output, calls, sleeps, locales)."""
+    import shutil
+    import subprocess
+    bash = shutil.which("bash")
+    if os.name == "nt" or not bash:
+        pytest.skip("needs a POSIX bash")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "sudo").write_text('#!/usr/bin/env bash\nexec env -u LC_ALL "$@"\n')
+    (fake / "sleep").write_text('#!/usr/bin/env bash\necho "$1" >> "$FAKE_DIR/sleeps"\n')
+    (fake / "apt-get").write_text(
+        '#!/usr/bin/env bash\necho "$*" >> "$FAKE_DIR/calls"\necho "${LC_ALL-unset}" >> "$FAKE_DIR/locales"\n'
+        '{ IFS= read -r line; cat > "$FAKE_DIR/plan.rest"; } < "$FAKE_DIR/plan"\n'
+        'mv "$FAKE_DIR/plan.rest" "$FAKE_DIR/plan"\n'
+        '[ -z "$line" ] && exit 0\nprintf "%b\\n" "${line#*|}" >&2\nexit "${line%%|*}"\n')
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    (tmp_path / "plan").write_text("".join(line + "\n" for line in plan))
+    env = {k: v for k, v in os.environ.items() if k not in ("APT_INSTALL_TRIES", "APT_INSTALL_DELAY", "LC_ALL")}
+    env.update({"PATH": "%s%s%s" % (fake, os.pathsep, os.environ["PATH"]), "FAKE_DIR": str(tmp_path)})
+    if tries is not None:
+        env["APT_INSTALL_TRIES"] = str(tries)
+    if delay is not None:
+        env["APT_INSTALL_DELAY"] = delay
+    r = subprocess.run([bash, _APT_HELPER, *args], env=env, capture_output=True, text=True, timeout=60)
+
+    def lines(name):
+        return (tmp_path / name).read_text().splitlines() if (tmp_path / name).exists() else []
+    return r.returncode, r.stdout + r.stderr, lines("calls"), lines("sleeps"), lines("locales")
+
+
+def _verbs(calls):
+    return [next(w for w in c.split() if w in ("update", "install")) for c in calls]
+
+
+def test_the_helper_retries_an_update_another_job_holds_the_lists_lock_for(tmp_path):
+    """`apt-get update` fails at once on the lists lock whatever DPkg::Lock::Timeout says (measured, apt 2.6.1 to
+    3.0.3), which is how the pytest job failed: two lock errors, then the pair runs and succeeds. Guards the retry,
+    and the install still receiving the packages with --no-install-recommends and dpkg's lock wait, in the C locale
+    the lock pattern is written for (apt's messages are translated) — set past sudo by the pair itself, so it holds
+    whatever the host's sudoers keeps."""
+    rc, out, calls, sleeps, locales = _run_helper(tmp_path, ["100|" + _LISTS_LOCK, "100|" + _LISTS_LOCK])
+    assert rc == 0, out
+    assert _verbs(calls) == ["update", "update", "update", "install"], calls
+    assert calls[-1] == "-o DPkg::Lock::Timeout=60 install -y --no-install-recommends gawk mawk"
+    assert out.count("another process holds apt's lock") == 2 and sleeps == ["0", "0"]
+    assert set(locales) == {"C"}, locales
+
+
+@pytest.mark.parametrize("error", [_ARCHIVES_LOCK, _FRONTEND_TIMEOUT, _DPKG_TIMEOUT],
+                         ids=["archives-lock", "dpkg-frontend-wait-ran-out", "dpkg-lock-wait-ran-out"])
+def test_the_helper_retries_an_install_that_meets_a_lock(tmp_path, error):
+    """`install` fails at once on the archives lock, and on either of dpkg's locks once its 60 s wait runs out —
+    apt's own texts, measured — so the retry covers the install as well as the update. Guards the first form of the
+    pattern, which matched no dpkg-wait error ("Unable to acquire the dpkg frontend lock … is another process using
+    it?"), so a host's long unattended upgrade failed the job after one wait."""
+    rc, out, calls, _, _ = _run_helper(tmp_path, ["", "100|" + error])
+    assert rc == 0, out
+    assert _verbs(calls) == ["update", "install", "update", "install"], calls
+
+
+@pytest.mark.parametrize("plan", [
+    ["100|E: Unable to locate package mawk"],
+    ["", "100|Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 7"],
+    ["100|" + _NO_PERMISSION],
+    ["", "100|" + _NOT_ROOT],
+], ids=["no-such-package", "a-wait-line-is-no-lock-error", "lock-file-not-opened", "not-root"])
+def test_a_failure_that_names_no_lock_fails_at_once_with_apts_status(tmp_path, plan):
+    """A failure that is not another process's lock is not retried: it fails on the first try with apt's own status,
+    as the bare command did, so a wrong package name costs no retries. apt's line while it waits for dpkg's lock
+    carries the same words as the error, so only an `E:` line counts; and apt's "Unable to lock directory" follows
+    a lock file it could not OPEN (a permission, a read-only /var) as well as one another process holds, so it does
+    not count either — the first form of the pattern retried a permission failure for every try, saying another
+    process held the lock."""
+    rc, out, calls, sleeps, _ = _run_helper(tmp_path, plan)
+    assert rc == 100, out
+    assert len(calls) == len(plan) and sleeps == [], calls
+    assert "another process holds apt's lock" not in out
+
+
+def test_a_failure_after_a_lock_is_judged_on_its_own_output(tmp_path):
+    """A try that fails for another reason after an earlier try met a lock fails at once: each try's output is judged
+    alone. Guards an appending capture, which would carry the earlier lock line forward and retry a wrong package
+    name until the tries ran out."""
+    rc, out, calls, _, _ = _run_helper(tmp_path, ["100|" + _LISTS_LOCK, "", "100|E: Unable to locate package mawk"])
+    assert rc == 100, out
+    assert _verbs(calls) == ["update", "update", "install"], calls
+
+
+def test_a_lock_that_is_never_released_fails_after_the_default_bound(tmp_path):
+    """With nothing set, a lock held through every try fails the step after twenty tries fifteen seconds apart (the
+    numbers the CHANGELOG and the doc give), with no sleep after the last try, and says so, rather than hang the job.
+    Guards the wait itself — a helper that stopped sleeping would spend every try in a second, before any real holder
+    let go — and the bound."""
+    rc, out, calls, sleeps, _ = _run_helper(tmp_path, ["100|" + _LISTS_LOCK] * 20, tries=None, delay=None)
+    assert rc == 1, out
+    assert len(calls) == 20 and sleeps == ["15"] * 19, (len(calls), sleeps)
+    assert "still held after 20 tries" in out and "try 20 of 20" not in out
+
+
+def test_the_helper_runs_a_command_that_runs_apt_itself_the_same_way(tmp_path):
+    """`--run <command>...` runs the command (here the fake apt-get, as Playwright's `--with-deps` runs the real
+    one), retries it on a lock error and fails a failure that names no lock at once, and a call with nothing to run
+    is a usage error. The command runs in the C locale the helper exports, the only setting that reaches a command
+    the helper does not write itself. Guards the e2e job's Playwright step, which runs apt's update and install
+    itself."""
+    def run(name, plan, args):
+        (tmp_path / name).mkdir()
+        return _run_helper(tmp_path / name, plan, args=args)
+    rc, out, calls, _, locales = run("retried", ["100|" + _LISTS_LOCK, ""], ("--run", "apt-get", "update"))
+    assert rc == 0 and calls == ["update", "update"] and set(locales) == {"C"}, (out, calls, locales)
+    rc, out, calls, _, _ = run("failed", ["100|E: Unable to locate package mawk"], ("--run", "apt-get", "install"))
+    assert rc == 100 and calls == ["install"], (out, calls)
+    for name, args in (("bare-run", ("--run",)), ("nothing", ())):
+        rc, out, calls, _, _ = run(name, [], args)
+        assert rc == 2 and "usage" in out and calls == [], (args, out)

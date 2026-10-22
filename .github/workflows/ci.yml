@@ -134,7 +134,8 @@ jobs:
       # busybox replaces the runner image's busybox-static, so these pytest jobs run test_socket_proxy_start_script.py's
       # busybox leg on a build that follows PATH, while validate keeps busybox-static, which prefers its applets.
       - name: Install the awk implementations a control node may have
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gawk mawk busybox original-awk
+        # Through the helper: it retries while another job on the runner's host holds apt's lock.
+        run: bash .github/scripts/apt-install.sh gawk mawk busybox original-awk
 
       - name: pytest (offline; e2e/slow excluded — the hermetic default)
         run: pytest -m "not e2e and not slow" --cov=scripts --cov=gui --cov=api --cov-report=term-missing
@@ -161,7 +162,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install NetSNMP dev headers (the generator is CGO — links libsnmp)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsnmp-dev build-essential
+        run: bash .github/scripts/apt-install.sh libsnmp-dev build-essential
 
       - name: Build the PINNED snmp_exporter generator (v0.30.1) from source
         run: |
@@ -201,7 +202,8 @@ jobs:
         run: pip install --quiet -r tests/requirements-dev.txt
 
       - name: Install the Playwright chromium browser (+ OS deps)
-        run: python -m playwright install --with-deps chromium
+        # `--with-deps` runs apt itself, so it goes through the lock retry like the other apt steps.
+        run: bash .github/scripts/apt-install.sh --run python -m playwright install --with-deps chromium
 
       - name: pytest (e2e — real Flask app booted in-process, service seams mocked, headless chromium)
         run: pytest tests/e2e -m e2e -q
