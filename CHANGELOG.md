@@ -35,13 +35,13 @@ drops the promote step when nothing was staged.
 - Response text only: no route, field or control changed. An API client that parsed `next` sees new words.
 - Tests: `tests/unit/test_promote_hint_single_source.py` (new: every `next` a committing route answers, and every `next`
   a route answers only when the write was staged, is built from the helper — a dict entry, any call's `next=`, an item
-  assignment, `.setdefault`, a local; no tracked text file outside the history and the test's own samples spells the
-  old instruction, emphasised with `*`, a backtick or `__`, in an HTML tag or entity, or wrapped across one line
-  break, a comment's included — stale and clean samples, each naming the pattern that must catch it, keep the scan
-  from going blind), e2e `test_keygen_flow.py`
-  (the header: staged, committed to main, nothing changed), `test_pending.py` (the helper's words against the
-  template and the document), `test_keygen_service.py` (the minted id; no promote step when unstaged), the staged route
-  tests in `test_gui_api.py`, `test_api_actuation.py`, `test_api_create_unit.py`.
+  assignment, `.setdefault`, a local; no tracked text file outside the history and the test's own samples spells the old
+  instruction, emphasised with `*`, a backtick or `__`, in an inline HTML tag (never a `<runid>` placeholder) or an
+  entity, or wrapped across one line break, a comment's included — stale and clean samples, each naming the pattern that
+  must catch it, keep the scan from going blind), e2e `test_keygen_flow.py` (the header: staged, committed to main,
+  nothing changed), `test_pending.py` (the helper's words against the template and the document),
+  `test_keygen_service.py` (the minted id; no promote step when unstaged), the staged route tests in `test_gui_api.py`,
+  `test_api_actuation.py`, `test_api_create_unit.py`.
 
 ### fix(scripts): an unrecognised collection is refused, not onboarded as SSH; a plain SSH host has a search card (S24, 2026-10-22)
 
