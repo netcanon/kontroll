@@ -45,7 +45,7 @@
       ansible.builtin.file:
         path: "{{ config_backup_dir }}"
         state: directory
-        mode: "0750"
+        mode: "0700"            # deploy-stack.yml's mode: the captures hold device secrets (C8)
 
 - name: Capture device configs (per-class backup entrypoint)
   hosts: all

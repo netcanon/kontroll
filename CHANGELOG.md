@@ -11,6 +11,19 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the backups make the captures dir `0700`, the deploy's mode (2026-10-22)
+
+The captures hold device configs, secrets included, and SECURITY.md (C8) closes their dir by its own mode, `0700`.
+The deploy made it `0700`, but the backup play and those class `backup` entrypoints that make the dir themselves
+made it `0750`. So every backup opened the dir to its group (gid 1001, `kontroll`, which a host install adds the
+operator's login to) and every deploy closed it again; each capture is `0640`, so between the two the group could
+read every one. A box's `--check --diff` reported the change; the dir's ctime was the nightly backup's hour.
+
+Every such task now sets `0700`. `tests/unit/test_backup_dir_mode.py` holds each `file` task under `ansible/`
+that makes `config_backup_dir` (by any of the module's names and path aliases, `state` left out included) to the
+deploy's mode, so a class added with `0750` copied from an older one fails there. On a box, the next deploy or
+backup closes the dir; nothing to do by hand.
+
 ### test(docker): the label check reads VRL by its structure, not its indentation (2026-10-21)
 
 `test_compose_logging.py` holds every input of the Loki sink to setting each label field on every event. It read
