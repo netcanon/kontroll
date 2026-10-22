@@ -78,6 +78,14 @@ Bring the stack back: `docker compose ... up -d loki vector` (or re-run `deploy-
 in `stack_services`). Vector resumes from its on-disk checkpoint (the `vector-data` volume), so a restart
 re-ships from where it stopped rather than re-reading everything.
 
+A new build's Vector transforms or Grafana alert rules not in effect after a deploy: Vector, Grafana, Loki,
+Prometheus, Caddy, the exporters and the GUI (its age key) read their bound config only at start, and the deploy
+restarts each one whose config changed since it loaded it (`restarting, for config changed since loaded: …` in
+the run). One the run did
+not name had no change on record: `docker compose restart <service>` loads the tree as it is (the next deploy may
+restart it once more, harmlessly). A config the service reloads by itself (Grafana's dashboards, Prometheus's
+file_sd targets) restarts nothing; see `scripts/stale-config.py`.
+
 ## 4. Quick checks
 
 - **No logs in Grafana at all** → confirm the Loki datasource provisioned (`uid: loki`); confirm Vector is

@@ -28,6 +28,12 @@ services:
       # 30-day homelab default; overridable per-instance from .env. ALWAYS populated (the :-720h default) so
       # loki-config.yml's ${LOKI_RETENTION_PERIOD} never expands empty (= infinite retention = unbounded disk).
       LOKI_RETENTION_PERIOD: ${LOKI_RETENTION_PERIOD:-720h}
+    labels:
+      # The binds this service reloads on its own (container targets, space-separated): the deploy's
+      # restart-on-config-change (scripts/stale-config.py) leaves them out, so a
+      # retention change is never a restart (runtime_config re-reads it, loki-config.yml; a restart would turn
+      # a bad file into an outage).
+      kontroll.config.live: "/etc/loki/overrides"
     volumes:
       # ../ : compose resolves an included file's relative paths from THIS file's dir (docker/services/), so
       # ONE level up reaches docker/loki/. (prometheus.yaml uses ../../ because its config lives at REPO-ROOT

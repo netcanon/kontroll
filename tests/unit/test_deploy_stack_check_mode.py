@@ -129,17 +129,22 @@ def test_secrets_dir_resolver_keystone():
 
 
 def test_mutating_tasks_are_not_check_mode_false():
-    """The compose `up` and the `gen-*` regenerators MUTATE (start containers / write generated files); they
-    must STAY check-skipped (never check_mode:false) so a `--check` dry-run never actuates. Pins the
-    resolver-vs-mutator boundary the fix draws, so a future careless `check_mode: false` on a writer is caught.
-    A generator's read-only modes are named one by one: a new mode is a writer here until it is listed."""
+    """The compose `up` and `restart`, the `gen-*` regenerators and the stale-config record (`--write`) MUTATE
+    (start or restart containers / write generated files / write the stamp); they must STAY check-skipped (never
+    check_mode:false) so a `--check` dry-run never actuates. Pins the resolver-vs-mutator boundary the fix draws,
+    so a future careless `check_mode: false` on a writer is caught — a stamp written in a dry-run would record a
+    config no service loaded, and the next apply would leave that service on its old one. A generator's
+    read-only modes are named one by one: a new mode is a writer here until it is listed."""
     offenders = []
     for t in _all_tasks():
         cmd = _cmd_str(t)
         # A gen-* call MUTATES only when it WRITES (the regenerators); its read-only modes (`--env`, `--check`,
         # `--fleet-check`) are resolvers, not writers — e.g. gen-image-digests.py --env reads the lock to feed the
         # .env pin (C0), and gen-requirements.py --fleet-check reads the fleet list and resolves nothing.
-        mutates = ("compose" in cmd and "up" in cmd) or _gen_writes(cmd)
+        # stale-config.py is the same: its find reads (check_mode:false, so a dry-run names the stale services);
+        # its `--write` records.
+        mutates = (("compose" in cmd and ("up" in cmd or " restart " in cmd)) or _gen_writes(cmd)
+                   or ("stale-config.py" in cmd and "--write" in cmd))
         if mutates and t.get("check_mode") is False:
             offenders.append(t.get("name"))
     assert not offenders, "mutating task(s) must NOT be check_mode:false (would actuate during --check): %r" % offenders

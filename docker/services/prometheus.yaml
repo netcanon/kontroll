@@ -23,6 +23,12 @@ services:
       # — no restart, no docker socket. The `reload-observability` Semaphore task POSTs it (item F, Tier-1 enact).
       # Exposure is bounded to the mgmt VLAN (:9090 is mgmt-bound, C3); /-/quit is an accepted mgmt-only risk.
       - "--web.enable-lifecycle"
+    labels:
+      # The binds this service reloads on its own (container targets, space-separated): the deploy's
+      # restart-on-config-change (scripts/stale-config.py) leaves them out, so an
+      # onboarding is never a restart (file_sd_configs watches it, prometheus.yml; a restart is a WAL replay
+      # and a scrape gap).
+      kontroll.config.live: "/etc/prometheus/targets"
     volumes:
       # ../../ : compose resolves an included file's relative paths from THIS file's dir
       # (docker/services/), so two levels up reaches the repo-root prometheus/ tree

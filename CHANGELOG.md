@@ -11,6 +11,33 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a deploy restarts each service whose read-only config changed (2026-10-22)
+
+A service that reads a bound config only when it starts — Vector, Grafana's provisioning, Loki, Prometheus, the
+exporters, Caddy — kept the config it started with: `docker compose up` recreates a container only when its
+service definition changed. Both boxes' redeploy wrote the new Vector transforms and Grafana alert rules to disk,
+reported success, and left both services on the old ones until they were restarted by hand.
+
+deploy-stack now runs `scripts/stale-config.py` after `up`. It reads each service's read-only binds as
+`docker compose config` resolves them, from the tree or a file the deploy puts under the storage root (the
+Caddyfile, Vector's key, CA bundle and known_hosts, the GUI's age key, so a rotated key reaches the running GUI),
+and digests their content, not their mtime, so the generators' rewrites restart nothing and a second apply stays
+at 0 changed. A service the resolved stack does not hold (one behind a compose profile) fails the run by name
+rather than pass unchecked. It compares each digest with what the running service last
+loaded (`config-loaded.json` under the storage root, root's `0600`); the deploy restarts the services whose config
+changed, except one `up` itself just started, then merges what they loaded into the record, so a subset deploy
+keeps the others'. This replaces the snmp-exporter's own restart on a changed render. A bind a service reloads by
+itself is named in its `kontroll.config.live` label (Grafana's dashboards, Loki's overrides, Prometheus's file_sd
+targets) and restarts nothing.
+
+A `--check` run names the services whose config on disk differs from their record (the apply restarts each,
+unless its `up` recreates it); what the apply would regenerate first is not previewed, and a dry-run where the
+check cannot run says so.
+The first deploy with this fix finds no record: it recreates Grafana, Loki and Prometheus once (their new label),
+and restarts each other service with such a config once.
+`tests/unit/test_stale_config.py` holds the bind selection (against the shipped stack too), the digest, the stamp,
+the output (names only: the rendered `snmp.yml` holds credentials) and the tasks' order.
+
 ### fix(ansible): the backups make the captures dir `0700`, the deploy's mode (2026-10-22)
 
 The captures hold device configs, secrets included, and SECURITY.md (C8) closes their dir by its own mode, `0700`.
@@ -313,8 +340,9 @@ started. The tests rendered the template without `trim_blocks` and passed. Found
   when credentials exist, and another that any credential reads back as the same string.
 - **`deploy-stack.yml`:** a render that changed `snmp.yml` now restarts a running snmp-exporter after `up`. The
   render writes a new file under the same name and the container's file bind keeps the one it started with, so a
-  rotated credential — or this fix — reached the exporter only at its next restart. A run started past the render
-  (`--start-at-task`) restarts nothing. A row pins the task.
+  rotated credential — or this fix — reached the exporter only at its next restart. (Superseded by the 2026-10-22
+  entry above: `scripts/stale-config.py` restarts every service whose read-only config changed, this one included,
+  and this task and its row are gone.)
 - **`prometheus/exporters/snmp/README.md`** says all three to whoever edits the template next.
 - **Operator:** deploy again with `snmp-exporter` in `stack_services`; the deploy restarts the exporter on the
   corrected file.
