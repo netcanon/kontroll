@@ -232,9 +232,9 @@ crown jewel — protect it where it lives, not at a remote.
 - The local canonical (`/srv/kontroll.git`) is operator-owned; the runner mounts it
   **read-only** unless the privileged tier is armed (C10: `api_privileged` renders the mount `:rw`, which is what
   lets the `promote-proposal` task fast-forward `main`); the secret captures (`/var/lib/kontroll/backups`) are
-  `0700`/uid-1001. The deploy makes the dir `0700`, and so does every task the backups run that makes it — the
-  backup play's and each class's `backup` entrypoint's, which until 2026-10-22 made it `0750` at every backup
-  (`tests/unit/test_backup_dir_mode.py`).
+  `0700`/uid-1001. The deploy makes the dir `0700`, and so does every `file` task under `ansible/` that makes it —
+  the backup play's, and those of the class `backup` entrypoints that make it themselves, which until 2026-10-22
+  made it `0750` at every backup (`tests/unit/test_backup_dir_mode.py`).
 - **Retention pruning stays inside this boundary (#125).** The capture-history prune (`backup-configs.yml`)
   rewrites the commit graph of the **same** `0700`/uid-1001 captures dir to enforce a finite
   `kontroll_backup_retention` window. It is **fail-closed**: it runs only when a finite window is set

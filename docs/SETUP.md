@@ -216,9 +216,9 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > `/var/lib/kontroll`). Point it at a different disk to put the whole stack's state there, or override just the
 > high-growth classes — `KONTROLL_LOGS_DIR` (Loki) and `KONTROLL_BACKUPS_DIR` (config captures) — to keep those
 > on a roomy data disk while config stays on the system disk (`docker/.env.example` documents all knobs). Defaults
-> preserve today's paths, so leaving them unset changes nothing. deploy-stack **creates each dir uid-scoped 0750
-> before the stack comes up** (the chown follows the path you set — SECURITY.md C8); named volumes (Prometheus
-> TSDB, Grafana, Postgres, Vector buffers) are Docker-managed and not relocated by these knobs.
+> preserve today's paths, so leaving them unset changes nothing. deploy-stack **creates each dir uid-scoped, at
+> the mode SECURITY.md C8 gives it, before the stack comes up** (the chown follows the path you set); named
+> volumes (Prometheus TSDB, Grafana, Postgres, Vector buffers) are Docker-managed and not relocated by these knobs.
 > A root you make yourself (a mount, a directory on another disk) must be a directory of root's that neither its
 > group nor others may write and that others may pass through, with every directory above it passable too —
 > `sudo chown root:root <root>` and `sudo chmod 0711 <root>`; a deploy that brings up `api` or `onboard-gui`
