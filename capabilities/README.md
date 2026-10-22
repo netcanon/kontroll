@@ -28,7 +28,7 @@ Adding a capability is **only**:
 
 | New / changed | What |
 |---|---|
-| `capabilities/<cap>.yml` | this descriptor |
+| `capabilities/<cap>.yml` | this descriptor (a Stage-3 `resource_stage.testid` is `cap-<cap>-…`; the server drops any other — T22) |
 | `vectors/<cap>.yml` | the detection vector |
 | `scripts/gen-<cap>.py` | the generator (block → actuation artifact) |
 | `classify.py` | a `suggest_<cap>` / `declared_<cap>` pair (resolved by import-by-convention) |

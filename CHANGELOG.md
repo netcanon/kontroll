@@ -11,6 +11,35 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(gui): a knob group's testid is its capability's own, never another element of the dialog (T22 / F9, 2026-10-22)
+
+The capability and reconfigure dialogs render a knob group into a container named by a server-supplied testid,
+create that container before their own buttons, and find every control by testid, first match first. A descriptor
+testid of `cap-promote` would therefore have left the real Promote disabled with its click handler on the
+container, and one with a space or a bracket made the page's unquoted selector throw, leaving both buttons
+unwired; one naming the method container (`cap-params`) or a knob row (`knob-<key>`) had Stage 3 wipe the
+method's knobs. Only shipped descriptors (the code root, read-only on a baked deploy) supply one today, so nothing
+reached it; the server now holds the rule whatever a descriptor says.
+
+- `kontroll.service.configurable.group_testid`: a `resource_stage.testid` outside its capability's namespace —
+  `cap-<cap>-`, then `[a-z0-9-]`, 63 at most — is dropped with a warning naming the descriptor, and the group renders no
+  container. The one collision the namespace leaves (a capability named `cred` meets the page's `cap-cred-*` controls)
+  is held by the registry tests — the shipped descriptors, a synthetic `cred` one, and `cred` pinned as the only such
+  name, so reserved — until T23 wires the dialog by reference. A name that is a hyphen-prefix of another (`cred` of
+  `cred-x`) shares its namespace; one dialog never holds two capabilities' groups.
+- The page quotes the selector (`CSS.escape`), a belt behind the server's charset.
+- `tests/unit/test_capability_registry.py`: every shipped Stage-3 testid passes the rule as written and is no testid the
+  page creates; a synthetic `cred` descriptor naming `cap-cred-prereq` is refused by that check; `cred` is the one
+  capability name whose namespace the page occupies (so reserved until T23), and the page holds no `cap-` prefix literal
+  or `cap-…${` template after a quote, a backtick or `=` (how a testid built at run time is spelled; e.g. a `.join`
+  or a split literal is not read); the page readers see
+  each spelling sampled; no literal group testid is anything the page creates but a group container;
+  `test_configurable.py` (the rule's refusals, its charset past the prefix, its length, a capability named after a
+  control, the warning naming the descriptor and never the value); e2e `test_knob_renderer.py` (a testid the bare
+  selector could not parse renders, never throws).
+- Docs: `tests/testid_reference.md` §Stage-3, the capability-dialog schema and `capabilities/README.md` state the
+  rule.
+
 ### fix(scripts): a staged write's promote hint says what is true (T19, 2026-10-22)
 
 Every staged write's `next` (GUI and API) and the keygen steps told the operator how to promote in one of two

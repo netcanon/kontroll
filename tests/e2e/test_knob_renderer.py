@@ -118,3 +118,22 @@ def test_knob_selection_harvests_by_type(page):
     }""")
     assert sel["method"] == "snmp"
     assert sel["params"] == {"module": "if_mib", "on": True, "port": 443}   # blank omitted; number is a real int
+
+
+def test_a_group_testid_the_selector_could_not_parse_does_not_throw(page):
+    """Verifies: renderKnobGroup given a testid that is not a valid bare selector token (a space, a bracket, a
+    quote) returns without throwing and finds the container that carries exactly that testid. Guards against
+    (T22 / F9): the unquoted selector — a throw there leaves the dialog's buttons unwired (the server holds the
+    charset; this is the page's own belt)."""
+    page.goto("/")
+    out = page.evaluate("""() => {
+        const res = {};
+        for (const t of ['a b', 'x]', 'q"]']) {
+            const d = document.createElement('div'); const c = document.createElement('div');
+            c.dataset.testid = t; d.appendChild(c);
+            try { renderKnobGroup(d, {testid: t, source_kind: 'params', knobs: [{key: 'k', type: 'text'}]});
+                  res[t] = c.querySelector('[data-param]') ? 'rendered' : 'empty'; }
+            catch (e) { res[t] = 'threw'; }
+        }
+        return res; }""")
+    assert out == {"a b": "rendered", "x]": "rendered", 'q"]': "rendered"}

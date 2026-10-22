@@ -35,7 +35,7 @@ files:
   scripts/kontroll/service/capability.py: "387fbb84e17927502a3042b052f67a3be49dd31167e350398dc909e5dde8be8a"
   scripts/kontroll/service/capture_exception.py: "2c0d81232e49b35a27c57e44d658becfbd8fe0add58eee9ef074b8ab6d5c7acd"
   scripts/kontroll/service/classify.py: "07cb2b63473e3a48bec4f8e51eb80b48584e3578f3527fd35233d97f57620715"
-  scripts/kontroll/service/configurable.py: "894c5c0996618d15afeb7e74cde158bf4fdbffcbd84d26312d453f6260cc5f32"
+  scripts/kontroll/service/configurable.py: "285fb80b59c7a4f96652d577fc33a3eb84360923845625a8a49fa2c1a045e8ee"
   scripts/kontroll/service/discard.py: "ce13750496dbd84b1d0c4201a508245a6f15be9b09f86a9d4fe8363de33b8b74"
   scripts/kontroll/service/discovery.py: "d6e7589954d3f4135f25af70088de196e0ecd4d5ad77f385c74eb061a7a0666a"
   scripts/kontroll/service/fleet.py: "50a7ae66d69f2627421c295224f55d6934a726d5b2b18eb5ae7dd60c8613186b"
