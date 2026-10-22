@@ -43,6 +43,15 @@ def _fake_local_shallow(keywords, limit):
     so the e2e can drive the provisioning-surface flow (proxmox is the class that declares a PVEAuditor cred
     prerequisite). Both render as cliconf devices — the offline backend classify needs no real probe. Mirrors
     _fake_deep_probe for the --deep path. Returns a list, like catalog.galaxy_search."""
+    # A 'linux' query matches no installed collection — only the Generic SSH host card the backend registry
+    # declares (S24) — and a 'nosignal' query returns a collection that carries no signal any backend classifies on,
+    # so the card and the "no backend fits" badge render in a real browser.
+    if any("linux" in k.lower() for k in keywords):
+        return []
+    if any("nosignal" in k.lower() for k in keywords):
+        f = _probe._facts("acme.nosignal", "1.0.0", "local", "shallow")
+        f["plugins"], f["modules"] = {}, ["nosignal_info"]
+        return [f]
     coll = "community.proxmox" if any("proxmox" in k.lower() for k in keywords) else "cisco.ios"
     f = _probe._facts(coll, "5.0.0", "local", "shallow")
     f["plugins"] = {"cliconf": ["ios"]}

@@ -2,14 +2,14 @@
 key: docker_host
 description: Docker hosts (NAS / reverse-proxy stacks) over SSH
 # F2 (de-bespoke, north-star Rung 4): this class's metrics FLOOR is AUTO-DERIVED. community.docker does NOT classify
-# (its `docker_config` swarm module trips the raw_ssh `none_of {module_suffix: _config}` guard → no backend), but a
-# Docker host is a plain Linux box whose TELEMETRY backend is raw SSH (the collection only actuates containers). So
-# we DECLARE `backend: raw_ssh` — _backend_for honors a declared backend over classification —
-# and derive raw_ssh's floor [blackbox, host_node]. ADDITIVE on blackbox (the class had host_node only) → it gains a
-# committed blackbox reachability target; host_node is byte-identical. The `dashboards:` block is now the DERIVED
+# (nothing in it is positive evidence of a backend — and raw_ssh is never auto-matched, S24), but a Docker host is
+# a plain Linux box whose TELEMETRY backend is raw SSH (the collection only actuates containers). So we DECLARE
+# `backend: raw_ssh` — _backend_for honors a declared backend over classification — and derive raw_ssh's floor
+# [blackbox, host_node]. ADDITIVE on blackbox (the class had host_node only) → it gains a committed blackbox
+# reachability target; host_node is byte-identical. The `dashboards:` block is now the DERIVED
 # floor too (Rung 4a: blackbox + node boards); backup stays role-gated (not derived). See facts.pinned.yml.
 derived: true
-backend: raw_ssh               # declared (community.docker won't classify)
+backend: raw_ssh               # declared (community.docker classifies to nothing)
 collections:
   - name: community.docker
     version: ">=4.0.0"

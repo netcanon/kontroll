@@ -120,6 +120,40 @@ def test_onboard_form_groups_proxmox_api_token_as_one_auth_set(page):
     expect(card.get_by_test_id("field-cred-api_token")).to_have_count(0)         # not the generic single-token box
 
 
+def test_the_generic_ssh_card_opens_an_ssh_form_under_its_own_key(page):
+    """S24 live: a `linux` search shows the Generic SSH host card — suggesting `raw_ssh`, with no Automations badge
+    (a card names a collection ansible-core ships, nothing a unit pins) — and its onboard form proposes the card's
+    class key `ssh_host` and derives the SSH credential fields. Guards the operator's only path to a plain SSH host
+    now that raw_ssh is never auto-matched: a form defaulting to `ansible_builtin` creates a junk class, and one
+    without SSH fields cannot onboard the box."""
+    page.goto("/")
+    page.get_by_test_id("search-input").fill("linux")
+    page.get_by_test_id("search-btn").click()
+    card = page.get_by_test_id("card").first
+    expect(card).to_be_visible()
+    expect(card.get_by_test_id("suggested-backend-badge")).to_contain_text("raw_ssh")
+    expect(card.get_by_test_id("no-backend-badge")).to_have_count(0)
+    expect(card.get_by_test_id("unit-badge")).to_have_count(0)
+    card.get_by_test_id("onboard-toggle").click()
+    expect(card.get_by_test_id("field-key")).to_have_value("ssh_host")
+    expect(card.get_by_test_id("field-cred-username")).to_be_visible()      # auto-waits for the async derive
+    expect(card.get_by_test_id("field-cred-ssh_private_key")).to_be_visible()
+    expect(card.get_by_test_id("field-cred-api_token")).to_have_count(0)
+
+
+def test_a_collection_no_backend_fits_says_so_on_its_card(page):
+    """S24 live: a collection that carries no signal any backend classifies on is shown with a "no backend fits"
+    badge and no suggested backend. Guards the operator filling a form for a target the onboard will refuse with no
+    hint on the card (raw_ssh used to catch such a collection and onboard it as SSH-as-root)."""
+    page.goto("/")
+    page.get_by_test_id("search-input").fill("nosignal")
+    page.get_by_test_id("search-btn").click()
+    card = page.get_by_test_id("card").first
+    expect(card).to_be_visible()
+    expect(card.get_by_test_id("no-backend-badge")).to_be_visible()
+    expect(card.get_by_test_id("suggested-backend-badge")).to_have_count(0)
+
+
 def test_onboard_dryrun_shows_the_auto_derived_monitoring_floor(page):
     """F2 (de-bespoke) live: onboarding a collection under a FRESH device-class key (no existing module → the
     derive path, not a reuse) shows the AUTO-DERIVED monitoring floor in the dry-run output — the blind class is

@@ -1,12 +1,13 @@
-# PINNED offline probe facts opnsense was classified + capability-derived from (F2, north-star Rung 4). Re-deriving
+# PINNED offline probe facts opnsense was capability-derived from (F2, north-star Rung 4). Re-deriving
 # the metrics:/logs: floor from these (the frozen-oracle unit test while staged) is hermetic — no re-probe. The
 # classify-SIGNAL surface only: ansibleguy.opnsense ships NO connection plugin (it drives the OPNsense REST API via
 # action/uri modules, verified by a real probe of ansibleguy.opnsense 1.2.16) — so `plugins` is empty and, with no
-# cliconf/httpapi/netconf/`_config`-suffix module, predicate.classify falls through to the `raw_ssh` catch-all, which
-# confers telemetry [blackbox, host_node] (a reachable box is ICMP-probable AND a node_exporter candidate). NOTE this
-# is `raw_ssh`, NOT `api` — a real probe corrected the design's assumption (ansibleguy.opnsense has no httpapi PLUGIN,
-# only API-calling modules). host_node is honest (OPNsense can run node_exporter); it scrapes DOWN until one is
-# installed. `module_options` stays {}. `probed_at` is provenance, NOT read by the derivation.
+# cliconf/httpapi/netconf/`_config`-suffix module, predicate.classify returns NO backend. module.yml DECLARES
+# `backend: raw_ssh` (S24 — never a catch-all), which confers telemetry [blackbox, host_node] (a reachable box is
+# ICMP-probable AND a node_exporter candidate). NOTE this is `raw_ssh`, NOT `api` — a real probe corrected the
+# design's assumption (ansibleguy.opnsense has no httpapi PLUGIN, only API-calling modules). host_node is honest
+# (OPNsense can run node_exporter); it scrapes DOWN until one is installed. `module_options` stays {}. `probed_at`
+# is provenance, NOT read by the derivation.
 collection: ansibleguy.opnsense
 version: ">=1.2.0"
 plugins: {}

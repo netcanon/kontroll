@@ -3,7 +3,8 @@
 **Execution backend**, not a device class. Generic `check`/`backup` for bespoke
 SSH appliances with no usable collection (OpenWrt over Dropbear, plain Linux,
 oddball gear). Captures the output of a device-supplied command over
-`ansible.builtin.raw`. The catch-all the classifier maps `bespoke` results to.
+`ansible.builtin.raw`. Never auto-matched (S24): a class declares `backend: raw_ssh`, or the
+operator onboards from the Generic SSH host search card.
 
 ## Entrypoints (`tasks_from`)
 

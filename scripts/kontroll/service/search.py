@@ -44,10 +44,23 @@ def _deepen(shallow_facts):
         return list(ex.map(_probe_one, shallow_facts))
 
 
+def _cards(keywords, vectors, overrides, backends):
+    """The records of the backend registry's search cards a query matches (catalog.search_cards) — the commonest
+    Ansible target, a plain SSH host, has no collection to find. A query keyword matches a card the way local_shallow
+    matches a collection name (a substring, case-folded) — of the card's collection or one of its keywords, not of
+    its title, whose prose ("backup", "metrics") would offer the card to unrelated queries. Built from declared data
+    after any deepening, so a card is never probed."""
+    kw = [k.lower() for k in keywords]
+    return [record.build_card_record(bdef, card, vectors, overrides, backends)
+            for bdef, card in catalog.search_cards(backends)
+            if any(k in h.lower() for k in kw for h in [card["collection"], *card["keywords"]])]
+
+
 def service_search(keywords, origin="both", limit=8, vector=None, deep=False,
                    vectors=None, overrides=None, backends=None):
     """Return the capability RECORDS matching `keywords`: installed collections (SHALLOW by default — fast,
-    files only) and/or Galaxy (shallow), filtered to those that HAVE every capability in `vector`, sorted
+    files only) with the backend registry's search cards the query matches (the local arm; `_cards`) and/or
+    Galaxy (shallow), filtered to those that HAVE every capability in `vector`, sorted
     local-first then by name. `deep=True` (or a non-empty `vector`, since a capability filter needs exact
     cells) re-probes the keyword-matched local candidates deeply, resolving the deferred 'maybe' cells.
     Loaders default to the real tree; callers may inject vectors/overrides/backends to avoid reloading."""
@@ -62,6 +75,10 @@ def service_search(keywords, origin="both", limit=8, vector=None, deep=False,
         for f in local_facts:
             records.append(record.build_record(f, vectors, overrides, backends))
             seen.add(f["collection"])
+        for rec in _cards(keywords, vectors, overrides, backends):
+            if rec["collection"] not in seen:
+                records.append(rec)
+                seen.add(rec["collection"])
     if origin in ("both", "galaxy"):
         try:
             galaxy = catalog.galaxy_search(keywords, limit)

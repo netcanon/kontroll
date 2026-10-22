@@ -276,17 +276,18 @@ _CLI = {"name": "netcommon_cli", "requires": [], "classify": {"plugin": "cliconf
 @pytest.mark.parametrize("role", [None, ""], ids=["no-role", "empty-role"])
 def test_a_matched_backend_that_declares_no_role_is_passed_over(reuse, name, role):
     """With no `backend` asked for, a registry entry the classifier matches that declares no role (none, or an empty
-    one) is passed over by the planner and by the scaffold: alone, the answer is `no_backend`; nothing is made up
-    from its name, whatever that name is.
+    one) is passed over by the planner and by the scaffold: alone, the answer is `no_backend`, naming it as the match
+    that cannot run; nothing is made up from its name, whatever that name is.
 
     Guards the auto path writing a class nobody named a backend for: a collection whose only match was
     `vendor_config` was planned with the made-up role `backend_vendor_config` (S26), and a match whose name no role
     could be made from stopped the plan as repository data instead of being passed over."""
     registry = [dict(_CLI, name=name, role=role)]
     plan = onboard.build_onboard_plan("cisco.ios", "newcls", "core_switch", "192.0.2.41", backends=registry, vectors=[])
-    assert plan == {"error": "no_backend"}
-    assert scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", backends=registry) == {
-        "error": "no_backend"}
+    made = scaffold.build_scaffold("cisco.ios", "scaf", "core_switch", "network", backends=registry)
+    assert plan["error"] == made["error"] == "no_backend"
+    assert plan["signals"]["unrunnable"] == made["signals"]["unrunnable"] == [name]
+    assert "role" not in plan and "module" not in made
 
 
 @pytest.mark.parametrize("role", [123, ["x"], "Bad Role }}", "r" * 80, "null", 0, False], ids=repr)

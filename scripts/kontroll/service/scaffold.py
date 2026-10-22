@@ -8,14 +8,15 @@ import os
 
 import yaml
 
-from kontroll import catalog, paths, predicate, probe
-from kontroll.service.onboard import _plain_name, _registered, _role_of
+from kontroll import catalog, paths, predicate
+from kontroll.service.onboard import _facts_for, _pins, _plain_name, _registered, _role_of, no_backend_signals
 
 
 def build_scaffold(collection, key, group, secrets, backend=None, backends=None):
     """Compute the scaffolded device-class module for `collection`. Returns a dict with
     "error": "not_installed" (probe found nothing) | "no_backend" (no backend that declares a role
-    auto-matched, and none given) | None; on success {"error":None,"backend","module","text","path"} where
+    auto-matched, and none given — with the planner's `signals`, for its sentence) | None; on success
+    {"error":None,"backend","module","text","path"} where
     `text` is the YAML to write and `path` is repo-relative.
 
     The names are held to the onboard planner's own rules, in its order, before anything is probed — a `backend`
@@ -38,23 +39,25 @@ def build_scaffold(collection, key, group, secrets, backend=None, backends=None)
     if backend_from_request:
         _registered(backend, backends)
         _role_of(next((b for b in backends if b.get("name") == backend), {}), key, True)   # before the probe
-    f = probe.deep_probe(collection)
-    if not f["modules"] and not f["plugins"]:
+    bundled = catalog.bundled_collections(backends)
+    f = _facts_for(collection, bundled)
+    if f is None:
         return {"error": "not_installed"}
-    backend = backend or next(iter(catalog.runnable(predicate.classify(f, backends), backends)), None)
     if not backend:
-        return {"error": "no_backend"}
+        matches = predicate.classify(f, backends)
+        backend = next(iter(catalog.runnable(matches, backends)), None)
+        if not backend:
+            return {"error": "no_backend", "signals": no_backend_signals(f, matches)}
     bdef = next((b for b in backends if b.get("name") == backend), {})
     requires = bdef.get("requires") or []
     parts = collection.split(".")
-    version = catalog.local_installed().get(collection) or f["version"] or "0.0.0"
     params = {}
     if "network_os" in requires:                 # ns.name -> ns.name.name (verify)
         params["network_os"] = "%s.%s" % (collection, parts[-1])
     module = {
         "key": key,
         "description": "%s via %s backend (auto-scaffolded)" % (collection, backend),
-        "collections": [{"name": collection, "version": ">=%s" % version}],
+        "collections": _pins(collection, f, bundled),
         "role": _role_of(bdef, key, backend_from_request),
         "backend": backend,
     }

@@ -1,8 +1,8 @@
 ---
 # Generic config backup for bespoke SSH devices — captures the output of a
 # device-supplied command (backend_backup_command, e.g. `uci export`) over raw SSH.
-# The catch-all backend for things with no collection. A device class points here
-# by declaring `role: backend_raw_ssh` + backend_backup_command.
+# The backend for things with no collection — chosen by declaration, never as a catch-all
+# (S24). A device class points here by declaring `role: backend_raw_ssh` + backend_backup_command.
 #
 # Access chain used:   control node -> device (raw SSH)
 # May break:           none (read-only — runs only the capture command)

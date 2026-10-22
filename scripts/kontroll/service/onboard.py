@@ -163,6 +163,95 @@ def _role_of(bdef, key, from_request):
     return role
 
 
+def _facts_for(collection, bundled):
+    """The facts a plan or a scaffold is built from, or None when the collection is not installed. A collection
+    that ships inside ansible-core (`bundled` — a search card's, the plain SSH host) gets its empty DECLARED facts,
+    what openwrt pins: it is always installed and there is nothing to read, so it costs no ansible-doc call and
+    `not_installed` cannot misfire for it (S24)."""
+    if collection in bundled:
+        return probe._facts(collection, None, "local", "declared")
+    f = probe.deep_probe(collection)
+    return f if (f["modules"] or f["plugins"]) else None
+
+
+def _pins(collection, f, bundled):
+    """What a NEW class's module file pins: nothing for a bundled collection — ansible-core ships it, and a pin would
+    send the next bootstrap's `ansible-galaxy` after a collection Galaxy does not have (S24) — else the collection
+    at its installed version or newer."""
+    if collection in bundled:
+        return []
+    version = catalog.local_installed().get(collection) or f["version"] or "0.0.0"
+    return [{"name": collection, "version": ">=%s" % version}]
+
+
+def no_backend_signals(facts, matches):
+    """What a `no_backend` answer carries, so its sentence can name the gap and not only the code: the plugin TYPES
+    the collection ships (never their names — those are third-party bytes), how many modules it has, and the
+    backends it does classify to, each one kontroll cannot run (registry names; none declares a role)."""
+    return {"plugin_types": sorted(t for t, names in (facts.get("plugins") or {}).items() if names),
+            "modules": len(facts.get("modules") or []),
+            "unrunnable": list(matches)}
+
+
+def _declaring_class(collection, backends):
+    """The key of the class whose module file declares `collection` (catalog.module_for_collection — shipped or
+    onboarded, the first that declares it) when an onboard of the collection under that key would plan, or None. A
+    reuse onboard of that class adopts its backend and its role, so it is where a `no_backend` answer for the
+    collection under another key points: `community.proxmox` classifies to nothing, but the proxmox class declares
+    `backend: raw_ssh`. Named by the rules the reuse path holds the class to, so the hint never sends the operator
+    to a refusal of its own: the key is one a request may send, and the file under it is the one that declares the
+    collection; each name the reuse adopts passes `_adopted`; the backend is one this install ships; and the class
+    brings a role that is not a made-up one, or its backend declares one (`_role_of`). Two classes whose reuse
+    plans are not named, so the hint fails closed: one that names a backend this install does not ship (its reuse
+    plans with its own role and no connection shape — not a fault the planner checks yet), and one that names no
+    backend but brings its own role, whose reuse takes the collection's first match (S26) — a backend that declares
+    no role, which is why the answer is `no_backend` under another key. A malformed module file declares nothing,
+    the class's own included."""
+    key = (catalog.module_for_collection(collection) or {}).get("key")
+    if not (paths.is_component(key) and plain_scalar(key)):
+        return None
+    try:
+        existing = _existing_module(key)
+        if existing is None or collection not in _module_collections(existing):
+            return None
+        backend = existing.get("backend")
+        if not (isinstance(backend, str) and backend in {b.get("name") for b in backends}):
+            return None
+        for field in _ADOPTED:
+            _adopted(existing, field, key)
+        _no_made_up_role(existing.get("role"), key, backends)
+        if existing.get("role") is None:
+            _role_of(next(b for b in backends if b.get("name") == backend), key, False)
+    except (paths.RepositoryDataError, ValueError, RecursionError):
+        return None
+    return key
+
+
+def no_backend_message(plan, collection, remedy):
+    """The one sentence a `no_backend` plan or scaffold is answered with, on every surface — what the collection
+    showed, then the surface's `remedy`. Since raw_ssh stopped catching every collection nothing else claimed
+    (S24), this is what a Kubernetes, cloud or WinRM collection meets: it names the gap instead of onboarding the
+    target as SSH-as-root. Every value in it is the tool's own (plugin types, a count, registry names, a class key)
+    or the collection, which the request boundary has held to its charset; the audit line carries none of them."""
+    sig = plan.get("signals") or {}
+    if sig.get("unrunnable"):
+        found = ("it classifies only to %s, which kontroll recognises but cannot run (no execution role)"
+                 % ", ".join(sig["unrunnable"]))
+    else:
+        found = ("nothing in it is a signal a backend classifies on (plugin types: %s; %d modules)"
+                 % (", ".join(sig.get("plugin_types") or []) or "none", sig.get("modules") or 0))
+    if plan.get("reused_class"):
+        # the class's own file is the remedy — the surface's (the Generic SSH host card under this key) would meet
+        # the class's declared collection and be refused as a conflict
+        return ("no backend kontroll can run fits %s: %s; the %s class's module file declares no backend — add one "
+                "(`backend:` in modules/%s/module.yml; `raw_ssh` if it is an SSH host)"
+                % (collection, found, plan["reused_class"], plan["reused_class"]))
+    if plan.get("declaring_class"):
+        return ("no backend kontroll can run fits %s on its own, but the %s class declares it with a backend — "
+                "onboard it as device-class key %s" % (collection, plan["declaring_class"], plan["declaring_class"]))
+    return "no backend kontroll can run fits %s: %s — %s" % (collection, found, remedy)
+
+
 def _sops_ref(sops_expr, sops_key):
     """The host var that resolves ONE key of a decrypted SOPS domain: `(…).key` when the key is an identifier — what
     every existing drop-in holds, so a second onboard of the same host still reports no change — else
@@ -229,14 +318,22 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
     if backend_from_request:
         _registered(backend, backends)
     vectors = vectors if vectors is not None else catalog.load_vectors()
+    bundled = catalog.bundled_collections(backends)
 
     # REUSE an existing device-class instead of regenerating a minimal module that would clobber it (#124). The
     # same class — one whose modules/<key>/module.yml already declares THIS collection — is reused as-is: we add
     # only the inventory host + fleet-enable, so its curated metrics:/backup:/logs: blocks survive (the live defect
     # was an Overwrite stripping cisco_ios's blocks). A DIFFERENT collection colliding on the key is NOT reuse — it
-    # stays a WriteConflict at apply, so the operator picks a fresh key or consciously Overwrites.
+    # stays a WriteConflict at apply, so the operator picks a fresh key or consciously Overwrites. A collection-less
+    # class (exactly `collections: []` — openwrt, a class onboarded from a search card; not an empty file, nor one
+    # whose `collections` is not a list or lists entries that name no collection, nor one that declares another
+    # collection, which all stay a WriteConflict) is the class a bundled collection's onboard adds a host to: it
+    # declares no collection to match, so the second plain SSH host used to
+    # regenerate the module and hit a WriteConflict as soon as the operator had curated it (S24).
     existing = _existing_module(key)
-    module_reuse = existing is not None and collection in _module_collections(existing)
+    declared = _module_collections(existing) if existing is not None else set()
+    collection_less = (existing or {}).get("collections") == []
+    module_reuse = existing is not None and (collection in declared or (collection in bundled and collection_less))
     if module_reuse:
         # Adopt the curated class's identity so the host attaches FAITHFULLY (its declared role/backend/domain/
         # group), not a freshly re-classified one that could drift from the shipped module. Each adopted name
@@ -257,8 +354,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # the request's `backend` field when the request named it, as the module file's fault when the file did. A
         # reused class with its own role keeps it, and plans with that backend's connection shape (brief 14 §3.2).
         _role_of(next((b for b in backends if b.get("name") == backend), {}), key, backend_from_request)
-    f = probe.deep_probe(collection)
-    if not f["modules"] and not f["plugins"]:
+    f = _facts_for(collection, bundled)
+    if f is None:
         return {"error": "not_installed"}
     if not backend:
         # The classifier's matches, in its order; the first that declares a role — the one a search record
@@ -267,11 +364,12 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # runs whatever its collection classifies to.
         matches = predicate.classify(f, backends)
         backend = next(iter(catalog.runnable(matches, backends) or (matches if adopted_role else [])), None)
-    if not backend:
-        return {"error": "no_backend"}
+        if not backend:
+            return {"error": "no_backend", "signals": no_backend_signals(f, matches),
+                    "reused_class": key if module_reuse else None,
+                    "declaring_class": None if module_reuse else _declaring_class(collection, backends)}
     bdef = next((b for b in backends if b.get("name") == backend), {})
     role = adopted_role or _role_of(bdef, key, backend_from_request)
-    version = catalog.local_installed().get(collection) or f["version"] or "0.0.0"
     params = {}
     if "network_os" in (bdef.get("requires") or []):
         params["network_os"] = "%s.%s" % (collection, collection.split(".")[-1])
@@ -287,7 +385,7 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
     else:
         module = {"key": key,
                   "description": "%s via %s backend (onboarded)" % (collection, backend),
-                  "collections": [{"name": collection, "version": ">=%s" % version}],
+                  "collections": _pins(collection, f, bundled),
                   "role": role, "backend": backend}
         if params:
             module["backend_params"] = params

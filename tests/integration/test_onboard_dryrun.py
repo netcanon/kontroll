@@ -142,6 +142,34 @@ def test_onboard_second_host_merges_keeps_first(tmp_repo, mock_probe, capsys):
     assert "192.0.2.50" in inv and "192.0.2.51" in inv
 
 
+def test_second_generic_host_reuses_the_class_even_after_curation(tmp_repo, monkeypatch):
+    """Hosts two and three onboarded through the Generic SSH host card (`ansible.builtin`, backend raw_ssh) REUSE
+    the class host one created, even after the operator curated its module (a `backup:` block): the module stays
+    byte-for-byte, all three hosts land in the drop-in, nothing is probed. Guards "one click" failing on host two: a
+    collection-less class declares no collection to match, so the second onboard regenerated the module and hit a
+    WriteConflict as soon as it had been curated (S24)."""
+    def _refuse(*a, **k):
+        raise AssertionError("the card's collection is never probed")
+    monkeypatch.setattr(probe, "deep_probe", _refuse)
+
+    def _plan(n):
+        return build_onboard_plan("ansible.builtin", "ssh_host", "linux_hosts", "192.0.2.%d" % (70 + n),
+                                  host_name="box-%d" % n, backend="raw_ssh")
+    first = _plan(1)
+    assert first["module_reuse"] is False and first["module"]["collections"] == []
+    apply_onboard_plan(first)
+    mp = tmp_repo / "modules" / "ssh_host" / "module.yml"
+    mp.write_text(mp.read_text(encoding="utf-8") + "backup:\n  capable: true\n", encoding="utf-8")   # curated
+    curated = mp.read_text(encoding="utf-8")
+    for n in (2, 3):
+        plan = _plan(n)
+        assert plan["module_reuse"] is True, n
+        apply_onboard_plan(plan)
+    assert mp.read_text(encoding="utf-8") == curated
+    inv = (tmp_repo / "ansible" / "inventory" / "onboarded-ssh_host.yml").read_text(encoding="utf-8")
+    assert all(h in inv for h in ("box-1", "box-2", "box-3"))
+
+
 def test_onboard_different_collection_on_same_key_still_conflicts(tmp_repo, mock_probe):
     """A DIFFERENT collection colliding on an existing key is NOT reuse (reuse keys on the collection matching):
     it still hard-stops with WriteConflict so the operator picks a fresh key, and only a deliberate overwrite

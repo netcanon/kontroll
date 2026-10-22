@@ -47,7 +47,8 @@ from kontroll.service import _reconfig  # noqa: E402  (the shared single-object 
 from kontroll.service import keygen as keygen_service  # noqa: E402  (the guided age key-generation backend)
 from kontroll.service import secrets as secrets_service  # noqa: E402  (the secret-onboarding dialog backend)
 from kontroll.service.classify import service_classify  # noqa: E402
-from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan  # noqa: E402  (in-process onboard)
+from kontroll.service.onboard import (  # noqa: E402  (in-process onboard)
+    apply_onboard_plan, build_onboard_plan, no_backend_message)
 from kontroll.service.search import service_search  # noqa: E402
 
 app = Flask(__name__)
@@ -562,7 +563,11 @@ def api_onboard():
     if plan["error"] == "not_installed":
         return jsonify({"error": "install the collection first: %s" % d["collection"]}), 404
     if plan["error"] == "no_backend":
-        return jsonify({"error": "no backend kontroll can run auto-matched — pass an explicit backend"}), 422
+        # the API's answer and audit line (api/routes/onboard.py): what the collection showed; the reason alone logged
+        _audit("onboard-refuse", "reason=no-backend")
+        return jsonify({"error": no_backend_message(plan, d["collection"], (
+            "if it is a plain SSH host, onboard it from the Generic SSH host search result (search: ssh), "
+            "or pass an explicit backend")), "code": "no_backend"}), 422
     run_id = uuid.uuid4().hex[:12]   # correlates the audit line, the commit, and the staged proposal (C10)
     bootstrap = bool(d.get("bootstrap"))
     if not d.get("apply"):

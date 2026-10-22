@@ -290,7 +290,13 @@ block (telemetry today) committed to **only the plan's scoped paths**, carrying 
 chosen exporter's creds stay SOPS; the audit logs the secret-domain NAME only). The whole
 `/capability/<cap>` prefix is privileged — a registry-parametrized tripwire (`test_api_ratelimit`) keeps
 any future capability route inside the token budget. It is guarded like the GUI (C8), extended for a
-token-auth service.
+token-auth service. An onboard of a collection that carries no signal a backend classifies on is refused — 422,
+audited `onboard-refuse reason=no-backend` with nothing from the collection — and never routed to SSH: `raw_ssh`
+(SSH as root by default) is chosen only by a class's `backend:` declaration or its Generic SSH host search card
+(S24; `tests/unit/test_classify.py`, `test_search_card.py`, `test_api_onboard.py`). A search card may name only a
+collection ansible-core ships (`paths.ANSIBLE_CORE_BUNDLED`): the planner neither probes nor pins a card's
+collection, so a card naming a Galaxy collection would onboard it unpinned (`test_search_card.py`, the
+`galaxy-collection` row).
 
 **Self-describing onboard credentials (F1) — domain confinement.** The onboard form's credential fields are
 DERIVED per-backend from each backend's declared `auth:` shape (`scripts/kontroll/authspec.py` — a `network_cli`
@@ -1831,7 +1837,8 @@ fails is repository data, and so is a reused class whose module file names no ro
 file — declares none, or names the role the planner used to make up for a backend that declares none
 (`backend_vendor_config`, `backend_napalm`; `onboard._no_made_up_role`, which the identity knob also refuses to
 store): what one request writes into a module file, the next one adopts. Each of these faults of a reused class's
-file is answered before the collection is probed. An
+file is answered before the collection is probed. A backend the file names that this install does not ship is not
+one the planner checks: a class that brings its own role plans with it, and no connection shape. An
 inventory group a class is ATTACHED to — the onboard field, the identity knob, the scaffold's argument, a group
 adopted from a module file — is additionally none of `all`, `ungrouped`, `localhost` (`paths.inventory_group()`): a
 class's group is a play's pattern — `hosts:` in the logging wiring play and a unit's play, the limit of the backup

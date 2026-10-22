@@ -119,6 +119,39 @@ def test_search_returns_records(client, mock_services):
     assert mock_services == []                      # shallow search never deep-probes (fast path)
 
 
+def test_search_returns_the_generic_ssh_card(client, mock_services):
+    """/api/search for an SSH-ish word returns the Generic SSH host card — `ansible.builtin`, suggested backend
+    raw_ssh, provenance "declared", its class key — and probes nothing; a "cisco" search does not carry it. Guards
+    GUI parity for the card (S24): the GUI paints what the service returns, so a plain SSH host is one search away."""
+    body = client.get("/api/search?q=linux", headers=_auth()).get_json()
+    assert [(r["collection"], r["suggested_backend"], r["provenance"], r["suggested_key"]) for r in body] == [
+        ("ansible.builtin", "raw_ssh", "declared", "ssh_host")]
+    assert "ansible.builtin" not in [r["collection"] for r in client.get("/api/search?q=cisco",
+                                                                          headers=_auth()).get_json()]
+    assert mock_services == []
+
+
+def test_gui_onboard_of_an_unrecognised_shape_is_a_422_naming_the_gap(client, onboard_env, monkeypatch, make_facts):
+    """The GUI onboard of a collection that carries no signal a backend classifies on (a Kubernetes shape) answers
+    422 with the sentence that names what it showed — its plugin types, never a plugin's name — and points at the
+    Generic SSH host card; nothing is written, and one `onboard-refuse reason=no-backend` audit line is left, with
+    nothing from the collection in it. Guards the S24 misroute (it was planned and applied as SSH-as-root) and a
+    refusal that leaves no trace."""
+    monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(
+        collection=coll, plugins={"connection": ["kubectl"]}, modules=["k8s"]))
+    lines = []
+    monkeypatch.setattr(gui, "_audit", lambda action, detail="": lines.append((action, detail)))
+    r = client.post("/api/onboard", json={"collection": "kubernetes.core", "key": "k8s", "group": "clusters",
+                                          "host": "192.0.2.80", "apply": True}, headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    said = r.get_json()["error"]
+    assert r.get_json()["code"] == "no_backend"
+    assert said.startswith("no backend kontroll can run fits kubernetes.core: nothing in it is a signal")
+    assert "plugin types: connection; 1 modules" in said and "Generic SSH host" in said and "kubectl" not in said
+    assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "k8s").exists()
+    assert [(a, d) for a, d in lines if a == "onboard-refuse"] == [("onboard-refuse", "reason=no-backend")]
+
+
 def test_search_deep_toggle_reprobes(client, mock_services):
     """/api/search?deep=true re-probes the local hit deeply (depth=deep) — the GUI 'deep' toggle (the
     search-deep testid) wired through to the service; the default stays shallow. Proves the toggle resolves

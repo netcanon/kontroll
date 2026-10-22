@@ -232,6 +232,26 @@ def test_onboard_a_backend_nothing_can_run_is_a_422_and_audited(onb, backend, ap
     assert backend not in audit.replace("onboard-refuse", "")
 
 
+@pytest.mark.parametrize("apply", [False, True], ids=["dry-run", "apply"])
+def test_onboard_of_an_unrecognised_shape_is_a_422_naming_the_gap_and_audited(onb, monkeypatch, make_facts, apply):
+    """An onboard of a collection that carries no signal a backend classifies on (a WinRM shape: modules only) is
+    answered 422 with the sentence that names what it showed and the remedy, nothing written and git untouched, and
+    one `onboard-refuse reason=no-backend` audit line with nothing from the collection in it. Guards the S24 misroute —
+    such a collection was planned as raw_ssh and an apply wrote it — and a refusal that leaves no trace."""
+    monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(
+        collection=coll, modules=["win_ping", "win_shell"]))
+    r = onb.client.post("/onboard", headers=AUTH, json=_body(collection="ansible.windows", key="win", apply=apply))
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "no_backend"            # key on the code, not the status (api/README)
+    assert r.json()["detail"] == (
+        "no backend kontroll can run fits ansible.windows: nothing in it is a signal a backend classifies on "
+        "(plugin types: none; 2 modules) — if it is a plain SSH host, onboard it from the Generic SSH host search "
+        "result (search: ssh), or pass an explicit backend")
+    assert onb.calls == [] and not (onb.repo / "modules" / "win").exists()
+    audit = [ln for ln in open(onb.audit_log, encoding="utf-8").read().splitlines() if "onboard-refuse" in ln]
+    assert len(audit) == 1 and audit[0].endswith("reason=no-backend") and "windows" not in audit[0]
+
+
 def _damage_a_class(repo, **identity_keys):
     """Seed an onboarded class (`edgeos`, acme.edgeos) whose module file holds the given identity keys."""
     import yaml

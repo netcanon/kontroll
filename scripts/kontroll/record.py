@@ -5,7 +5,7 @@ cell per vector) + the suggested/candidate execution backends, with the override
 merged at read time (an override patches a capability cell and stamps provenance). Pure;
 the contract under test in tests/unit/test_build_record.py. Lifted verbatim from galaxy.py.
 """
-from kontroll import catalog, predicate
+from kontroll import catalog, predicate, probe
 
 
 def build_record(facts, vectors, overrides=None, backends=None):
@@ -39,4 +39,17 @@ def build_record(facts, vectors, overrides=None, backends=None):
         if ov.get("note"):
             rec["meta"]["note"] = ov["note"]
         rec["provenance"] = "derived+override"
+    return rec
+
+
+def build_card_record(bdef, card, vectors, overrides=None, backends=None):
+    """The record for a backend's SYNTHETIC search card (catalog.search_cards): the record of the collection's
+    empty, declared facts — nothing is probed, there is nothing to probe — in which the declaring backend names
+    itself: `suggested_backend` and `backend_candidates` are that backend, `provenance` is "declared",
+    `meta.description` is the card's title and `suggested_key` the class key the onboard form proposes. The GUI's
+    form sends the suggestion as the request's `backend`, so a card onboards with the backend that declared it."""
+    rec = build_record(probe._facts(card["collection"], None, "local", "declared"), vectors, overrides, backends)
+    rec.update(suggested_backend=bdef["name"], backend_candidates=[bdef["name"]], provenance="declared",
+               suggested_key=card["key"])
+    rec["meta"]["description"] = card["title"]
     return rec

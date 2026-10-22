@@ -167,7 +167,7 @@ function card(rec) {
     bd.dataset.cap = k; bd.dataset.state = st;   // address a specific capability + its state, no class/text parsing
     if (CAP_DIALOGS.includes(k)) {               // a secondary capability: its badge opens the standalone dialog
       bd.classList.add('cap-open'); bd.title = 'configure '+k+' for this class';
-      const okey = rec.collection.replace(/[^a-z0-9]/gi,'_').toLowerCase();
+      const okey = classKey(rec);
       bd.onclick = () => openCapabilityDialog(k, okey, {collection: rec.collection});
     }
     b.appendChild(bd);
@@ -175,13 +175,20 @@ function card(rec) {
   // Locally derived (predicate.classify over the backends dir), not Galaxy-authored — but it is still a `rec.` field,
   // and the rule this arc establishes is mechanical, not case-by-case: no record value reaches innerHTML. Ever.
   if (rec.suggested_backend) b.appendChild(ET('span','badge backend','→ '+rec.suggested_backend, 'suggested-backend-badge'));
+  // No backend kontroll can run fits (S24: raw_ssh no longer catches what nothing else claims) — said on the card, so
+  // the operator does not fill a form the onboard will refuse. A plain SSH host has its own card (search: ssh).
+  else b.appendChild(ET('span','badge no','no backend fits','no-backend-badge'));
   // ⚙ Automations — the app-store unit badge (sibling of the capability/backend badges): opens openUnitDialog to
   // create a version-pinned, runnable actuation unit from this collection. `collection` is data, never a per-unit
   // testid (the capability/secret-dialog doctrine). The dialog degrades honestly if the collection ships no units.
-  const ub = E('span','badge cap-open','⚙ Automations','unit-badge'); ub.dataset.collection = rec.collection;
-  ub.title = 'create a version-pinned, runnable app-store unit from this collection';
-  ub.onclick = () => openUnitDialog(rec.collection, rec.version);
-  b.appendChild(ub);
+  // A search card (provenance "declared" — the Generic SSH host) names a collection ansible-core ships, not one a
+  // unit could be pinned from, so it has no Automations badge.
+  if (rec.provenance !== 'declared') {
+    const ub = E('span','badge cap-open','⚙ Automations','unit-badge'); ub.dataset.collection = rec.collection;
+    ub.title = 'create a version-pinned, runnable app-store unit from this collection';
+    ub.onclick = () => openUnitDialog(rec.collection, rec.version);
+    b.appendChild(ub);
+  }
   c.appendChild(b);
   const btn = E('button',null,'Onboard this'); btn.dataset.testid='onboard-toggle';
   const form = onboardForm(rec);
@@ -214,8 +221,12 @@ function onbPristine(f) {
   return !txt && !box;
 }
 
+// The device-class key a card proposes: a search card's own (`suggested_key` — ssh_host, not ansible_builtin), else
+// one made from the collection name. Only a default the operator can change; the server holds it to its rule.
+function classKey(rec) { return (rec.suggested_key || rec.collection).replace(/[^a-z0-9]/gi,'_').toLowerCase(); }
+
 function onboardForm(rec) {
-  const f = E('form','onb',null,'onboard-form'); const key = rec.collection.replace(/[^a-z0-9]/gi,'_').toLowerCase();
+  const f = E('form','onb',null,'onboard-form'); const key = classKey(rec);
   f.innerHTML = `
     <div><label>device-class key</label><input name="key" data-testid="field-key"></div>
     <div><label>inventory group</label><input name="group" data-testid="field-group" placeholder="e.g. core_switch"></div>

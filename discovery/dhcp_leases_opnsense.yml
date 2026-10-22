@@ -42,8 +42,8 @@ secret_domain: network                         # REUSE the existing network doma
 # observed pattern <ns>_<coll>_<N>_<field>) so a shipped descriptor cannot hardcode it. Before the sweep the operator
 # exports KONTROLL_OPNSENSE_DISCOVERY_KEY/SECRET from that domain — see discovery/README.md § Extending. Unset =>
 # `no-creds`, skipped. (opnsense is STAGED — its network field is created at the post-cutover onboard.)
-# NO applies_when -> DECLARED-only: opnsense ships no httpapi plugin (facts plugins:{}, classifies raw_ssh), so a
-# facts predicate would offer to NOTHING (F2). The class opts in via a `discovery:` block in its module.yml.
+# NO applies_when -> DECLARED-only: opnsense ships no httpapi plugin (facts plugins:{}; the class declares raw_ssh),
+# so a facts predicate would offer to NOTHING (F2). The class opts in via a `discovery:` block in its module.yml.
 access_chain:
   chain: "control VM (kontroll net) -> sweep http_get -> HTTPS GET <opnsense>/api/dhcpv4/leases/searchLease (read-only)"
   may_break: nothing — a read-only lease poll; a creds/reach failure records the source `no-creds`/`unreachable`
