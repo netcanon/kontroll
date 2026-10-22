@@ -59,7 +59,7 @@ method_registry: telemetry | null
 render_method_stage: true | false  # false -> SKIP the picker, inline a one-line confirmation (no empty stage)
 
 resource_stage:                    # the per-capability "second concern" (Stage 3)
-  testid:      <cap-dashboards|cap-policy|null>
+  testid:      <cap-<cap>-dashboards|cap-<cap>-policy|null>   # cap-<cap>- then [a-z0-9-], ≤63 (else dropped, T22)
   source_kind: curated_list | policy_fields | none
   fields:      []                  # iff policy_fields: ordered [{name,type,default,enum?,help}] — only ENACTABLE values
 

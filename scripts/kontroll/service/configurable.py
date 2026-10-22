@@ -18,10 +18,36 @@ the EXPOSURE half only — the diff/merge/overwrite write-back safety half is a 
 """
 import logging
 import os
+import re
 
 from kontroll.service import capability, secrets
 
 log = logging.getLogger("kontroll.service.configurable")
+
+# A knob group's testid names the container the page renders the group into, and the page finds that container
+# with a selector built from it — and finds every other element of the dialog by testid too, first match first,
+# after the container exists. A descriptor's value is held to its capability's own namespace, `cap-<cap>-`, then
+# this closed charset: always a valid selector, never one of its own (T22 / F9: a space or a bracket made the lookup
+# throw and left the dialog's buttons unwired), and never a testid the page gives anything else in the dialog — a
+# control (`cap-promote`, which would stay disabled with its handler on the container), the method container
+# (`cap-params`, which the Stage-3 lookup would wipe) or a knob row (`knob-<key>`). The one collision the namespace
+# leaves — a capability named `cred` meeting the page's `cap-cred-*` controls — is held by test_capability_registry.py
+# (the shipped descriptors, a synthetic `cred` one, and `cred` pinned as the only such name, so reserved); wiring the
+# dialog by reference (T23) removes the class.
+_TESTID = re.compile(r"[a-z][a-z0-9-]{0,62}")
+
+
+def group_testid(value, owner):
+    """`value` when it is a testid in capability `owner`'s namespace — `cap-<owner>-`, then [a-z0-9-], 63 characters
+    at most — else None (the page renders no container for the group) and a warning naming `owner`, the descriptor,
+    never the value."""
+    prefix = "cap-%s-" % (owner,)
+    if isinstance(value, str) and _TESTID.fullmatch(value) and value.startswith(prefix) and value != prefix:
+        return value
+    if value is not None:
+        log.warning("knob group of %s: its testid is not cap-%s- then [a-z0-9-] (63 at most) — dropped, the group "
+                    "renders no container", owner, owner)
+    return None
 
 # Secret-form field types that hold a CREDENTIAL VALUE (rendered write-only, never echoed). `text` is a
 # NON-secret field (e.g. a username) that keeps its default; `textarea` is a MULTI-LINE secret (a PEM key).
@@ -67,7 +93,8 @@ def _stage_group(descriptor):
                    "required": bool(f.get("required")), "pattern": f.get("pattern")})
                  for f in (rs.get("fields") or [])]
     return {"id": "%s-stage" % descriptor.get("name", "cap"), "source_kind": sk,
-            "testid": rs.get("testid"), "label": rs.get("label"), "knobs": knobs}
+            "testid": group_testid(rs.get("testid"), descriptor.get("name", "cap")), "label": rs.get("label"),
+            "knobs": knobs}
 
 
 def _method_entry(m, current, declared):

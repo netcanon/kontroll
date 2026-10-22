@@ -136,8 +136,17 @@ The dialog's Stage-3 "second concern" is **not** a fixed testid: the shared shel
 keyed by the descriptor's `resource_stage.source_kind`, and emits the testid from the descriptor's
 `resource_stage.testid` (see [docs/observability/secondary-capability-dialog.md](../docs/observability/secondary-capability-dialog.md) §3.2).
 So each capability's Stage-3 testid is **data in `capabilities/<cap>.yml`**, recorded here so the inventory stays
-grep-verifiable (CLAUDE.md hard rule) — `source_kind: curated_list` renders an asserted picker; `source_kind:
-none` renders nothing (the testid is descriptor data only, kept honest here so a later flip to a rendering
+grep-verifiable (CLAUDE.md hard rule). It must be `cap-<cap>-` then `[a-z0-9-]`, 63 characters at most — the
+server drops any other value, and the group renders no container — so it is never a testid the page gives anything
+else in the dialog (a control such as `cap-promote`, the method container `cap-params`, a knob row `knob-<key>`):
+the page makes the container first and finds each element by testid, first match first
+(`test_a_group_testid_is_never_a_control_of_its_dialog`). The one exception is a capability named `cred`, whose
+namespace holds the page's own `cap-cred-*` controls: until T23 wires the dialog by reference, the name is reserved,
+the registry check refuses the clash (`test_the_registry_check_refuses_a_descriptor_in_the_occupied_namespace`), and
+`cred` is pinned as the only such name, with no `cap-` prefix literal or `cap-…${` template in the page after a quote, a
+backtick or `=` (how a testid built at run time is spelled; e.g. a `.join` or a split literal is not read;
+`test_cred_is_the_one_capability_name_the_page_occupies`). `source_kind: curated_list` renders an asserted picker;
+`source_kind: none` renders nothing (the testid is descriptor data only, kept honest here so a later flip to a rendering
 `source_kind` already has its row).
 
 | `data-testid` | Supplied by | `source_kind` | Rendered? | Element |

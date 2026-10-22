@@ -52,7 +52,7 @@ def test_stage_group_projects_source_kind_without_speculative_knobs():
         "testid": "cap-telemetry-dashboards", "source_kind": "curated_list", "fields": []}})
     assert tel["source_kind"] == "curated_list" and tel["testid"] == "cap-telemetry-dashboards" and tel["knobs"] == []
     pol = configurable._stage_group({"name": "x", "resource_stage": {
-        "testid": "cap-x", "source_kind": "policy_fields",
+        "testid": "cap-x-policy", "source_kind": "policy_fields",
         "fields": [{"key": "level", "allowed": ["info", "debug"], "required": True}]}})
     assert pol["knobs"][0]["type"] == "enum" and pol["knobs"][0]["key"] == "level"
 
@@ -163,3 +163,39 @@ def test_configurable_view_is_read_only_by_construction():
     assert_read_only("scripts/kontroll/service/configurable.py", "_stage_group")
     assert_read_only("scripts/kontroll/service/configurable.py", "_unit_view")     # R3 — the curated-knob projection
     assert_read_only("scripts/kontroll/service/configurable.py", "_unit_knob")
+
+
+@pytest.mark.parametrize("testid", ["a b", "x]", 'x"]', "Cap-Promote", "1st", "", "-x", "cap-x-" + "y" * 58, 5,
+                                    ["x"], "cap-promote", "cap-params", "knob-level", "cap-y-policy", "cap-x-",
+                                    "cap-x-a b", "cap-x-Y", "cap-x-y_z"])
+def test_a_stage_testid_outside_its_namespace_is_dropped(testid):
+    """Verifies: a capability descriptor whose `resource_stage.testid` is not `cap-<its name>-` then [a-z0-9-], 63
+    characters at most, projects a group with no testid (the page renders no container), and one that is passes
+    through — the 63rd character included, and no printable ASCII character outside [a-z0-9-] past the prefix; and
+    that a capability named after a one-hyphen control (`promote`) cannot name it, the prefix's own trailing hyphen
+    holding. Guards against (T22 / F9): a value the page's selector cannot
+    parse — the lookup throws and both dialog buttons are left unwired — one that carries a selector of its own, and
+    one naming an element the page creates in the dialog (a control, the method container, a knob row, another
+    capability's group — unless one name is a hyphen-prefix of the other, `cred` of `cred-x`, which share
+    `cap-cred-x-…`; one dialog never holds two capabilities' groups), which the first-match lookup would find
+    instead."""
+    def stage(t):
+        return configurable._stage_group({"name": "x", "resource_stage": {"testid": t, "source_kind": "none"}})
+    assert stage(testid)["testid"] is None
+    assert stage("cap-x-policy")["testid"] == "cap-x-policy" and stage(None)["testid"] is None
+    longest = "cap-x-" + "y" * 57
+    assert len(longest) == 63 and stage(longest)["testid"] == longest
+    assert configurable.group_testid("cap-promote", "promote") is None
+    assert configurable.group_testid("cap-xy", "x") is None
+    outside = [c for c in map(chr, range(32, 127)) if not (c.islower() or c.isdigit() or c == "-")]
+    assert [c for c in outside if configurable.group_testid("cap-x-y" + c, "x") is not None] == []
+
+
+def test_a_dropped_stage_testid_is_logged_by_its_descriptor_never_its_value(caplog):
+    """Verifies: dropping a descriptor's Stage-3 testid logs a warning that names the descriptor and never the
+    refused value. Guards against (T22): the log line being the only trace of a dropped group — it must say which
+    descriptor to correct — and against it echoing descriptor bytes into the server log."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="kontroll.service.configurable"):
+        configurable._stage_group({"name": "x", "resource_stage": {"testid": "zq9 refused]", "source_kind": "none"}})
+    assert "knob group of x" in caplog.text and "zq9" not in caplog.text and "refused]" not in caplog.text

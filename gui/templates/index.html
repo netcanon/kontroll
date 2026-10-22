@@ -497,7 +497,8 @@ function renderChip(knob) {                                   // a Stage-3 curat
 // `curated_list` with no items today (suggested_dashboards is a later phase) shows an honest empty state.
 function renderKnobGroup(dlg, group) {
   if (!group || !group.testid) return;
-  const wrap = dlg.querySelector('[data-testid=' + group.testid + ']');
+  // quoted + escaped: a testid is never a selector of its own (the server holds the charset too — T22)
+  const wrap = dlg.querySelector('[data-testid="' + CSS.escape(group.testid) + '"]');
   if (!wrap) return;
   wrap.innerHTML = '';
   const knobs = group.knobs || [];
