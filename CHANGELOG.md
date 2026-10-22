@@ -11,6 +11,28 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(dashboards): a logging alert reads no matching lines as OK and a failed query as Error (2026-10-21)
+
+Each logging alert counts matching lines (`sum(count_over_time(...))`), and when nothing matches Loki returns no
+series at all, not a 0. The rules left `noDataState` at Grafana's default, NoData, so on two boxes all four sat in
+NoData and sent a DatasourceNoData alert to the notifier every minute: the Alerting page showed every logging
+alert as live whether anything had happened or not.
+
+- **Every rule in `logging-rules.yaml` sets `noDataState: OK`.**
+- **Every rule also sets `execErrState: Error`.** A query that fails (Loki down) counts nothing either. Under the
+  default (Alerting), each rule fired under its own name once its `for` ran out. With Grafana 13.0.2's Loki
+  datasource on a closed port, the crash-storm and auth-denied alerts were firing at seven minutes, so a Loki
+  outage read as a crash storm. With Error the rules show Error.
+- **`test_every_rule_reads_no_lines_as_ok_and_a_failed_query_as_an_error`** holds each rule to both.
+- **`test_every_label_a_rule_selects_is_one_the_sink_sets`** is new. With no lines read as OK, a selector that
+  matches no stream reads Normal for good, so every label a rule selects must be one the Loki sink sets, and a
+  `source` matcher must name the sink's own value. A misspelt label name, a `source` no stream carries and a label
+  the sink never sets each fail it.
+- **`test_every_level_a_rule_selects_is_one_its_services_emit`** is new too. The audit shapes set `level` only to
+  `audit` and the ansible shape only to `info`, so a `level="error"` added to the auth-denied or the backup rule
+  would read Normal for good; it now fails. A rule on a service whose level comes from the event (containers,
+  journald) is not held: any level can arrive there.
+
 ### fix(scripts): install-prereqs.sh run alone says what it needs, instead of a bare "No such file" (2026-10-20)
 
 Piped to a host on its own (`cat scripts/install-prereqs.sh | ssh host sudo bash`), the script died with

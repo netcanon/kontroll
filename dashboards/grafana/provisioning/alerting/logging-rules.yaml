@@ -6,6 +6,15 @@
 # here. Live rendering is verified post-deploy (dashboards/README §Testing); CI runs the hermetic shape test
 # tests/unit/test_alerting_logging.py. Closes logging-architecture.md §2 G6 (no alerting on the log stream).
 #
+# Every rule counts matching lines, and a count of none comes back as no series at all, so each rule sets
+# `noDataState: OK`. Grafana's default, NoData, held all four in NoData and sent a DatasourceNoData alert to the
+# notifier every minute (two boxes, 2026-10-21): the Alerting page showed every logging alert as live. A query that
+# fails (Loki down) is not a count of anything either, so each rule also sets `execErrState: Error`: under the
+# default (Alerting) each rule fired under its own name once its `for` ran out, so a Loki outage read as a crash
+# storm and an auth-denied spike (scratch box, 2026-10-21); with Error each rule shows Error instead. The trade:
+# a selector that matches no stream (a misspelt label, a value nothing carries) now reads Normal for good, so the
+# test holds every label a rule selects to one the Loki sink sets, and every `service` to one a shape emits.
+#
 # NB the body-substring matchers (|~ "...") are content-coupled (V1 M-9): if a log wording changes, the alert
 # silently stops firing. The `auth-denied` token is pinned in the test as a shared contract; the runbook
 # (docs/troubleshooting.md) documents where these strings come from.
@@ -19,6 +28,8 @@ groups:
       - uid: kontroll-log-container-restart
         title: Container restart / crash storm
         condition: C
+        noDataState: OK
+        execErrState: Error
         for: 5m
         labels: {severity: warning, kontroll: logging}
         annotations: {summary: "A stack container is restarting/panicking/exiting repeatedly (crash-loop)."}
@@ -56,6 +67,8 @@ groups:
       - uid: kontroll-log-backup-failure
         title: Backup-config failure
         condition: C
+        noDataState: OK
+        execErrState: Error
         for: 15m
         labels: {severity: warning, kontroll: logging}
         annotations: {summary: "A scheduled config backup failed or captured nothing."}
@@ -85,6 +98,8 @@ groups:
       - uid: kontroll-log-onboard-error
         title: Onboard / capability error
         condition: C
+        noDataState: OK
+        execErrState: Error
         for: 10m
         labels: {severity: warning, kontroll: logging}
         annotations: {summary: "An onboard or capability-promote surfaced an error in the audit stream."}
@@ -114,6 +129,8 @@ groups:
       - uid: kontroll-log-auth-denied-spike
         title: auth-denied spike
         condition: C
+        noDataState: OK
+        execErrState: Error
         for: 5m
         labels: {severity: critical, kontroll: logging}
         annotations: {summary: "Repeated auth-denied in the privileged-surface audit log (brute-force / misconfig)."}
