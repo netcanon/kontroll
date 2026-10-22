@@ -655,7 +655,6 @@
         src: "{{ playbook_dir }}/../../prometheus/exporters/snmp/snmp.yml.j2"
         dest: "{{ playbook_dir }}/../../prometheus/exporters/snmp/snmp.yml"
         mode: "0600"
-      register: _snmp_render                # a change restarts a running exporter after `up` (below)
       become: false
       no_log: true
       # ALWAYS rendered when the exporter is deployed — the template omits the auths: block when _snmp is absent.
@@ -1200,20 +1199,72 @@
           {{ (_clones_replaced | default([])) | intersect(_up_services) | join(' ') }}
       changed_when: true
 
-    - name: Restart snmp-exporter when its rendered config changed (its file bind holds the file it started with)
-      # The render writes a new snmp.yml under the same name. A running container's file bind keeps the file it
-      # started with, and `up` recreates a container only when its service definition changed — so a new
-      # credential, or a corrected template, reached the exporter only at its next restart (a reboot, weeks later).
-      # A container `up` just made is restarted once more: harmless. A run started past the render
-      # (--start-at-task) has no render to read, so it restarts nothing.
-      when:
-        - _snmp_render is defined and _snmp_render is changed
-        - "'snmp-exporter' in _up_services"
+    # A service that reads a bound config only when it starts (Vector, Grafana's provisioning, Loki, Prometheus, the
+    # exporters, Caddy) keeps the config it started with, and `up` recreates a container only on a changed service
+    # definition: a build that changed only Vector's transforms, or Grafana's alert rules, left both on the old ones
+    # (both boxes' redeploy, 2026-10-22), and a new snmp.yml, CA bundle or Caddyfile — a file bind keeps the file it
+    # started with — reached its service only at the next restart. scripts/stale-config.py digests each service's
+    # read-only config as `docker compose config` resolves it (the tree's binds, and the files the deploy renders
+    # under the storage root; content, not mtime: the generators rewrite their files every run) and compares it
+    # with what the running service last loaded, kept in a root-only stamp. A container `up` started in this run
+    # loaded the config as it is, so it is recorded and not restarted. Prints service names only, never a digest.
+    # The playbook's own Python runs it (the play is local): the interpreter running this play is one known to be
+    # there. A service named that the resolved stack does not hold (a compose profile) fails it, naming it.
+    - name: Find the services whose read-only config changed since they last loaded it
+      vars:
+        _up_lines: >-
+          {{ (_stack_up | default({})).get('stdout_lines', []) + (_stack_up | default({})).get('stderr_lines', []) }}
+        _started: >-
+          {{ _up_lines | select('search', '^ *Container +[^ ]+ +Started') | join(' ')
+             | regex_findall('Container +([^ ]+) +Started') }}
+      ansible.builtin.command:
+        cmd: >-
+          {{ ansible_playbook_python }} -B {{ playbook_dir }}/../../scripts/stale-config.py
+          --stamp {{ kontroll_storage_root }}/config-loaded.json --stack-dir {{ stack_dir }}
+          --storage-root {{ kontroll_storage_root }} --started {{ _started | join(',') | quote }}
+          {{ _up_services | join(' ') }}
+      register: _stale_config
+      check_mode: false                     # reads only; so the dry-run names what it can see
+      changed_when: ansible_check_mode and (_stale_config.stdout_lines | length > 0)
+      # A dry-run on a node with no .env yet has no stack for compose to resolve: it fails nothing, and says so below.
+      failed_when: _stale_config.rc != 0 and not ansible_check_mode
+
+    - name: Say a dry-run could not check the services' config
+      # The script's stderr is its own: fixed text, or service names; compose's (which may quote the .env) it drops.
+      ansible.builtin.debug:
+        msg: >-
+          the config-change check failed in this dry-run, so which services the apply would restart is not shown
+          (a node with no .env yet has no stack to resolve): {{ _stale_config.stderr | default('') }}
+      when: ansible_check_mode and (_stale_config.rc | default(0)) != 0
+
+    - name: Name them (the run's log line for the restart below)
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'would restart, unless up recreates it first (for the config on disk now; what the apply regenerates is'
+             ~ ' not previewed):' if ansible_check_mode else 'restarting, for config changed since loaded:' }}
+          {{ _stale_config.stdout_lines | join(' ') }}
+      when: (_stale_config.stdout_lines | default([])) | length > 0     # a run started past the find reads none
+
+    - name: Restart each service whose read-only config changed since it last loaded it
+      when: (_stale_config.stdout_lines | default([])) | length > 0
       ansible.builtin.command:  # noqa: command-instead-of-module
         cmd: >-
           docker compose --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
-          --env-file {{ stack_dir }}/.env restart snmp-exporter
+          --env-file {{ stack_dir }}/.env restart {{ _stale_config.stdout_lines | join(' ') }}
       changed_when: true
+
+    - name: Record the config each running service loaded
+      # After the restart, so a failed one leaves its service stale for the next run; and only when this run found
+      # the stale ones, so a run started past the find (--start-at-task) records nothing it did not restart. Never
+      # in a dry-run (the command module skips there): a record with no restart behind it is the defect itself.
+      when: _stale_config is defined
+      ansible.builtin.command:
+        cmd: >-
+          {{ ansible_playbook_python }} -B {{ playbook_dir }}/../../scripts/stale-config.py
+          --stamp {{ kontroll_storage_root }}/config-loaded.json --stack-dir {{ stack_dir }}
+          --storage-root {{ kontroll_storage_root }} --write {{ _up_services | join(' ') }}
+      register: _config_recorded
+      changed_when: _config_recorded.stdout == 'written'
 
     - name: Collect the running stack containers
       ansible.builtin.command:  # noqa: command-instead-of-module

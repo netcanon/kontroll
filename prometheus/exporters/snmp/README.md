@@ -35,7 +35,8 @@ Editing `snmp.yml.j2`: the template module renders it with `trim_blocks`, so nev
 `auths:` — one that also ate the newline before it joined `auths:` onto the comment line above, and every deploy
 from 2026-07-28 to 2026-10-20 rendered the credentials commented out. The credentials go in through `to_json`, so a
 password holding `#`, `!`, `: ` or `yes` reads back as itself. A render that changed the file restarts a running
-`snmp-exporter` after `up`: the file bind holds the file the container started with.
+`snmp-exporter` after `up` (the file bind holds the file the container started with), as for every service whose
+read-only config changed: [`scripts/stale-config.py`](../../../scripts/stale-config.py).
 [`tests/unit/test_snmp_config_render.py`](../../../tests/unit/test_snmp_config_render.py) renders with the module's
 settings.
 

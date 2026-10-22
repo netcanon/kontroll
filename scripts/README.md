@@ -134,6 +134,26 @@ log under `${XDG_STATE_HOME:-~/.local/state}/kontroll/runs` — a persistent "wh
 succeeded?" trail (operator-owned, not the uid-1001 runner). See
 [docs/logging-architecture.md](../docs/logging-architecture.md) §3.
 
+## `stale-config.py` — which services must restart for their config
+
+`deploy-stack.yml` runs it after `up`. A service that reads a bound config only when it starts (Vector, Grafana's
+provisioning, Loki, Prometheus, the exporters, Caddy) keeps that config until it restarts, and `up` recreates a
+container only when its service definition changed. The script reads the stack as `docker compose config` resolves
+it (every include and interpolation, as the deploy's `up` reads them) and takes, for each service named, its
+read-only binds whose source is in the tree, or is a **file** under the storage root (what the deploy puts there:
+the Caddyfile, Vector's key, CA bundle and known_hosts, the GUI's age key); a source under both roots is the deeper
+one's, so a storage root inside the checkout still holds stores. A bind whose target the service lists in its
+`kontroll.config.live` label is one it reloads by itself (Grafana's dashboards, Loki's overrides, Prometheus's
+file_sd targets) and is left out. The digest is of the paths, types and content, never the mtime (the generators
+rewrite their files every run); a link inside a source is recorded by its target, not followed. A service named
+that the resolved stack does not hold (one behind a compose profile) fails the run, by name.
+
+It names each service whose digest differs from what it last loaded, except one whose container `up` printed
+`Started` for in this run (`--started`): that one loaded the config as it is. The deploy restarts those named, then
+`--write` merges the new digests into a root-only (`0600`) stamp, `<storage root>/config-loaded.json` — a service
+a subset deploy left out keeps its record. It prints names only, never a digest: one of the rendered `snmp.yml`
+would test guesses at its credentials. A service with no such bind is never named; one missing from the stamp is.
+
 ## `configure-semaphore.py`
 
 Declaratively configures the deployed Semaphore so it can run the kontroll

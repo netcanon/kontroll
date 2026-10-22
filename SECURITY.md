@@ -674,8 +674,10 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   root that exists is not changed; one that is not root's alone, or that others may not pass through, is refused, with
   the fix. Under a `0711` root every local account reaches a store below it by its name, so a store's own mode is what
   closes it: the secret ones are closed (the captures `0700`, Loki `0750`, Vector's dir `0700`, the TLS dirs `0750`,
-  the age key `0600`), and those the containers read by the bit for others — the audit dirs and the Ansible run-log
-  dir, `0755` — are open to every local account, as they already were under an installer-mode root (Docker makes it
+  the age key `0600`, and `config-loaded.json`, root's `0600`: a digest of each service's bound config, which covers
+  the rendered `snmp.yml`, Vector's SSH key and the GUI's age key, so one would test guesses at the SNMP
+  credentials), and those the containers read by the bit for others — the audit dirs and the Ansible run-log dir,
+  `0755` — are open to every local account, as they already were under an installer-mode root (Docker makes it
   `0755`) and were not under a root an earlier build's first store made `0700`. A clone that is not wholly the owner
   the flag names — anything in it the service can write while unarmed (every entry is looked at, not the top alone),
   anything not the service's (root's, another uid's) or not a directory while armed — is removed (Python's rmtree,

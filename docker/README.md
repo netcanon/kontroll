@@ -32,12 +32,20 @@ Re-run it to add services as later phases enable them.
    network; pull secrets via `env_file`/`${VAR}`).
 2. Add one `- services/<name>.yaml` line to `compose.yaml`.
 3. `docker compose -f docker/compose.yaml config` (in `tests/validate`) must pass.
+4. Bind the config the service reads **read-only** (`../<dir>:/etc/<x>:ro`), from the tree or as a file the
+   deploy renders under the storage root: the deploy restarts a service whose read-only config binds changed since
+   it loaded them (`scripts/stale-config.py`), so a service that reads its config only at start still gets each
+   new build's. A read-write bind, or a directory under the storage root, is the service's own state and is not
+   watched. A bind the service reloads by itself goes in its `kontroll.config.live` label (the targets,
+   space-separated), so a change to it restarts nothing.
 
 ## Errors / behaviour
 | Condition | Behaviour |
 |---|---|
 | Missing required `${VAR}` | `compose config` fails (fail-closed) — validate catches it |
 | Missing `docker/.env` | optional `env_file` (`required: false`) — service starts without live widgets |
+| Read-only config changed, service definition not | the deploy restarts it after `up`, then records it (step 4) |
+| The same, under `--check` | named (`would restart …`); a regenerated config is not previewed |
 
 ## Publishing images (C0/C1 — ghcr, pull by digest)
 

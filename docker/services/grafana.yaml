@@ -16,6 +16,11 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
       GF_SERVER_ROOT_URL: "https://grafana.${KONTROLL_DOMAIN:-localhost}"
       GF_USERS_ALLOW_SIGN_UP: "false"
+    labels:
+      # The binds this service reloads on its own (container targets, space-separated): the deploy's
+      # restart-on-config-change (scripts/stale-config.py) leaves them out, so a
+      # changed board is never a restart (the provider polls it, provisioning/dashboards/providers.yml).
+      kontroll.config.live: "/var/lib/grafana/dashboards"
     volumes:
       # ../../ : compose resolves an included file's relative paths from THIS file's dir
       # (docker/services/), so two levels up reaches the repo-root dashboards/ tree
