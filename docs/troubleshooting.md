@@ -87,6 +87,13 @@ re-ships from where it stopped rather than re-reading everything.
   cutting idle log streams: its log-stream route is missing. `docker logs docker-socket-proxy | grep kontroll:`
   says why (Vector excludes the proxy, so its WARNING never reaches Loki). Now and then the error is real:
   `timeout client 10m` still cuts a stream Vector stopped reading, e.g. while Loki was down.
+- **No container logs, and `docker-socket-proxy` keeps restarting** → its start script could not add the
+  container read limit and refused to start (it fails closed). `docker logs docker-socket-proxy | grep kontroll:`
+  shows the ERROR. The usual cause is a full disk (the copy the script writes comes out empty or short, and it is
+  not moved in), or an image whose template has no `http-request allow` line. Once the disk has room, the next
+  restart adds the limit and starts the proxy. On a disk with a page or two to spare, the script's edits go in and
+  the image's own entrypoint fails instead: `grep kontroll:` shows the limit line (or "already present"), then the
+  route's WARNING, then `sed: write error`. Same cause, same cure.
 - **The error/warn panel is full of blackbox-exporter lines** → a probe target does not answer: each failed probe
   logs `Probe failed` (error) and `Timeout reading from socket` (warn). §2 has the query that names the targets,
   and an "Anything wrong" query that leaves blackbox out. A device that is gone comes out of the inventory (its

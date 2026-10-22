@@ -130,7 +130,9 @@ jobs:
         run: pip install --quiet -r tests/requirements-dev.txt
 
       # scripts/lib/plaintext-guard.sh runs on a control node's HOST, under whatever `awk` that host has. Its tests
-      # run once under each implementation they find installed — so install the ones a node may have.
+      # run once under each implementation they find installed — so install the ones a node may have. The plain
+      # busybox replaces the runner image's busybox-static, so these pytest jobs run test_socket_proxy_start_script.py's
+      # busybox leg on a build that follows PATH, while validate keeps busybox-static, which prefers its applets.
       - name: Install the awk implementations a control node may have
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gawk mawk busybox original-awk
 

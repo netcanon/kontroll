@@ -11,6 +11,54 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): the socket proxy passes only the container reads Vector makes (2026-10-21)
+
+The C12 socket proxy is Vector's only way to the Docker API, and its `CONTAINERS=1` grant passed every GET and HEAD
+under `/containers`, not just the reads `docker_logs` makes. Through the stock 0.3.0 proxy on a real dockerd:
+- `GET /containers/<id>/archive?path=…` returned a file from inside the container (200), and still did when the
+  path was `%2F`-encoded;
+- `/export` (the container's whole filesystem), `/stats`, `/top` and `/changes` answered 200;
+- a websocket `GET /containers/<id>/attach/ws?stdin=1` was upgraded (101): it can write to the stdin of a container
+  started with stdin open. None of the stack's containers is (checked on a live box), so today it has no target.
+
+A Vector RCE could therefore read any container's files, not only its inspect JSON. SECURITY.md's "an unprivileged
+log-reader" claimed less than was true.
+
+- **The proxy's start script adds one deny line ahead of the template's allow lines.** Under `/containers/` only
+  `json` (the list), `<id>/json` (an inspect) and `<id>/logs` pass, for an id that starts with a letter or digit
+  (so not `..`). Through the scripted proxy each of the reads above answered 403. Vector's list, inspects, log
+  streams, events, `_ping` and `version` answered 200, and the config passed `haproxy -c` in the image.
+- **It fails closed.** The limited template is written beside the stock one and moved over it only if it is the
+  template plus that one line, before the first allow line. Otherwise the proxy prints `kontroll: ERROR …` and
+  does not start, and Vector's container logs stop until it does. That covers a failed write, a template with no
+  allow line, and a full disk: busybox awk exits 0 there and leaves an empty or short copy. In the image, a full disk
+  stopped the proxy with that ERROR, and a restart once there was room started it limited. `docs/troubleshooting.md` §4
+  says where to look. A restart finds the line in place before the first allow line and adds none. The log-stream route
+  still fails open, under the same kind of copy check (its line, after the events route).
+- **`<id>/json` still returns a container's inspect JSON**: its Config (`Env` among it) and its Mounts. That
+  residual is why the proxy has a network of its own, with Vector as its only peer.
+- **Tests.** The proxy's tests are one file now, `tests/unit/test_socket_proxy_start_script.py`, run on the
+  vendored template. It evaluates the filter after the script, rule by rule, for each request above, for each read
+  Vector makes, and for `/containers/../json` and an id holding an encoded `?`. The environment it reads is the
+  pinned image's whole ENV, recorded per tag, under the compose file's. A variable the filter reads must be set by
+  one of them, to 0 or 1: HAProxy's `-m bool` reads `true` as false, so `CONTAINERS: "true"` refuses every read and
+  a limit gated on `"true"` limits nothing (both measured), while the image's `HAPROXY_VERSION=2.2.33` reads as
+  true. An `http-request` line of a form the evaluator does not read fails it too. It also covers the line's
+  position, the restart case, a copy of the line placed where it limits nothing, both fail-closed paths, and, for
+  each step, a copy that is empty, cut short, widening a grant, or with the new line written wrong, left out or
+  moved to line 1. The awk stand-ins that write those copies are a shell function, which a shell runs before any awk on
+  `PATH` or busybox applet; each marks which step's copy it damaged, and a row fails unless its step's copy was. The
+  busybox leg runs busybox's own tools. Its `PATH` holds links to busybox's applets and nothing else, so a tool busybox
+  lacks fails `not found`, as in the container. Its test asks each tool what it is, because a busybox built to prefer
+  its applets (Ubuntu's busybox-static, on GitHub's runner image) runs them whatever `PATH` says. Twenty-nine mutants
+  each fail it: sixteen of the limit (none at all, after the first allow line, before the final deny, no `$` anchor, no
+  `!`, `stats` allowed, the old id class, a term on an image variable, fail open, an "already present" that matches
+  anywhere, the copy check dropped, either half of it dropped, a count in place of its position, the rejected copy left
+  behind, the awk call respelled), the two `true` settings above, nine of the route step (none at all, twice, the copy
+  check dropped, either half of it, a count in place of its position, its line number off by one, the rejected copy left
+  behind, the awk call respelled), the 0.4.x exec path and a bumped tag. The file passes inside the 0.3.0 image and on
+  Ubuntu 24.04 with either busybox 1.36.1 build (`busybox`, `busybox-static`).
+
 ### fix(docker): a container line's own level is its level, from one closed set (2026-10-21)
 
 The stack's own services (Grafana, Prometheus, Semaphore, blackbox) log logfmt or slog text, not JSON, and the
@@ -87,38 +135,39 @@ ten minutes. Measured on a scratch box: nothing lost or doubled, but the errors 
   the streams stayed open past the ten-minute mark, with no cut and every line delivered once.
 - A restart finds the route (an exact-line match) and adds none. The edit is written beside the template and
   moved over it only if the copy is the template plus that one line, on the line after the events route, so a
-  failed write leaves the stock template. That includes a write awk does not report: busybox awk exits 0 on a full
-  disk, and in the image the empty copy replaced the template, which then stayed empty across restarts until the
-  check went in. On a failed write, a copy with the route missing, misplaced or garbled or any other line changed,
-  or an image whose template lacks the events route, the proxy starts on the stock template and prints a WARNING
-  (its streams are cut again; the proxy still runs). Vector excludes the proxy, so the WARNING is in `docker logs docker-socket-proxy` only;
-  `docs/troubleshooting.md` §4 says where to look. `timeout client 10m` still cuts a stream Vector stops reading
+  failed write leaves the template as it was. That includes a write awk does not report: busybox awk exits 0 on a
+  full disk, and in the image the empty copy replaced the template, which then stayed empty across restarts until
+  the check went in. On a failed write, a copy with the route missing, misplaced or garbled or any other line
+  changed, or an image whose template lacks the events route, the proxy starts without the route (on the limited
+  template, since the entry above) and prints a WARNING (its streams are cut again; the proxy still runs). Vector
+  excludes the proxy, so the WARNING is in `docker logs docker-socket-proxy` only; `docs/troubleshooting.md` §4
+  says where to look. `timeout client 10m` still cuts a stream Vector stops reading
   (Loki down long enough to fill the buffer): that ERROR is real.
 - **An image bump must re-check the exec line.** Overriding the entrypoint drops the image's CMD, so the script
   restates 0.3.0's (`docker-entrypoint.sh haproxy -f /usr/local/etc/haproxy/haproxy.cfg`). 0.4.x renders
   `/tmp/haproxy.cfg`, so that line would crash-loop it; a test fails on any tag it has no record of.
-- **`tests/unit/test_socket_proxy_log_streams.py`** runs the script from the compose file against the pinned
-  image's whole template, vendored unmodified as a fixture
+- **Tests** (now in `tests/unit/test_socket_proxy_start_script.py`, with the read limit's: see the entry above)
+  run the script from the compose file against the pinned image's whole template, vendored unmodified as a fixture
   (`tests/fixtures/docker-socket-proxy/0.3.0/haproxy.cfg.template`, Apache-2.0), under `sh` and, where installed,
-  busybox `sh` (the container's). It checks:
-  - it adds exactly one line, after the events route, and changes no other;
-  - the path regex matches log streams only, not the list, an inspect or events;
-  - the restart case;
-  - an allow line that names the logs path;
-  - a failed write, and a copy that is not the template plus the route in its place (empty, cut short, widening a
-    grant, the route garbled, left out or on line 1). The awk stand-ins that write those copies are a shell
-    function, which a shell runs before any awk on `PATH` or busybox applet, and a row whose stand-in never ran
-    fails;
-  - the fallback.
+  busybox `sh` (the container's). They check that the route step:
+  - adds exactly one line, after the events route, and changes no other;
+  - has a path regex that matches log streams only, not the list, an inspect or events;
+  - adds nothing on a restart;
+  - is not fooled by an allow line that names the logs path;
+  - handles a failed write, and a copy that is not the template plus the route in its place (empty, cut short,
+    widening a grant, the route garbled, left out or on line 1). The awk stand-ins that write those copies are a
+    shell function, which a shell runs before any awk on `PATH` or busybox applet, and a row whose stand-in never
+    ran fails;
+  - falls back when the events route is gone.
 
-  Eighteen mutants of the script each fail it: the route step removed; an added `http-request allow`; an
+  Eighteen mutants of the script each fail them: the route step removed; an added `http-request allow`; an
   `allow if TRUE` slipped in ahead of a grant the compose file leaves off; an `env(IMAGES)` rewritten to
   `env(CONTAINERS)`; a loose "already present" match; the route twice, or before the events route; its line number
   off by one, or left unchecked when empty; either half of the copy check dropped, or both; a count of the route
   in place of its position; the rejected copy left behind; a route failure that stops the proxy; the 0.4.x exec
   path; a bumped tag; and the awk call respelled so the stand-ins no longer match it. A fixture holding only the
-  filter lines the compose file uses let the two keyed on other lines pass. A new tag fails until
-  its template is vendored and its CMD recorded.
+  filter lines the compose file uses let the two keyed on other lines pass. A new tag fails until its template is
+  vendored and its CMD recorded.
 
 ### fix(dashboards, docker): journald lines ship at their real level, the error panel counts them, and the crash alert can fire (2026-10-20)
 
