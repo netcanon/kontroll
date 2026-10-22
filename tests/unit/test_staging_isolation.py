@@ -370,9 +370,10 @@ def _shells(tmp_path):
     dash (Debian, the installer image), bash in POSIX mode (a Fedora / Arch / openSUSE host) and busybox `sh`
     (Alpine: the image the network service pushes from, so the one that runs the uid-1001 half on a node) — each
     kept only if the `id` it runs is the one found on the PATH. These tests say who is pushing by putting an `id`
-    of their own first on the PATH; a busybox built to run its own applets before the PATH (Debian's and Ubuntu's
-    is; Alpine's is not) runs its own `id` whatever the PATH says, so under it the table's uid column would be
-    the uid of whoever runs the tests. Such a shell is left out, and `sh` itself must not be one."""
+    of their own first on the PATH; a busybox built to run its own applets before the PATH (Ubuntu 24.04's
+    `busybox-static` is; its plain `busybox` and Alpine's are not) runs its own `id` whatever the PATH says, so
+    under it the table's uid column would be the uid of whoever runs the tests. Such a shell is left out, and `sh`
+    itself must not be one."""
     fakebin = tmp_path / "fakebin" if (tmp_path / "fakebin").exists() else _fake_id_bin(tmp_path)
     env = {**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ.get("PATH", ""), "FAKE_UID": "424242",
            "FAKE_ID_RC": "0"}
