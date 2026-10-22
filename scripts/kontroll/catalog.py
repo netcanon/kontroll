@@ -273,11 +273,13 @@ def module_for_collection(collection):
     device-class (`cisco_ios`) + its `inventory_group` (`core_switch`) the new unit will target — the ONE
     dispatch seam, read from shipped data, never re-derived. First match wins (one class per collection).
 
-    Resolved by SCANNING modules/*/module.yml + matching the collection NAME (not a path-join by key — the module
-    key `proxmox` ≠ its collection `community.proxmox`). README.md and other non-YAML are ignored; a malformed
-    module.yml is skipped (a typo in one class can't blank another). The shared scan `module_provisioning` reuses.
-    Scans BOTH module roots via paths.module_keys()/module_file() (Phase-B Fork B): pristine SHIPPED classes baked
-    at ROOT + operator-onboarded ones in the write_root clone, so a newly-onboarded class resolves post-promote."""
+    Resolved by SCANNING modules/*/module.yml + matching the collection NAME (not a path-join by key — the module key
+    `proxmox` ≠ its collection `community.proxmox`). README.md and other non-YAML are ignored; a malformed module.yml is
+    skipped (a typo in one class can't blank another) — whatever its parse raises: a file that does not parse, is not
+    UTF-8, holds a date no calendar has, nests past the recursion limit, or tags a scalar YAML cannot build
+    (`!!bool maybe`). The shared scan `module_provisioning` reuses. Scans BOTH module roots via
+    paths.module_keys()/module_file() (Phase-B Fork B): pristine SHIPPED classes baked at ROOT + operator-onboarded
+    ones in the write_root clone, so a newly-onboarded class resolves post-promote."""
     for key in paths.module_keys():
         mp = paths.module_file(key)
         if not os.path.exists(mp):
@@ -285,9 +287,12 @@ def module_for_collection(collection):
         try:
             with open(mp, encoding="utf-8") as fh:
                 doc = yaml.safe_load(fh) or {}
-        except (OSError, yaml.YAMLError):
+        except Exception:                          # noqa: BLE001 — a module file is data: a bad one declares nothing
             continue
-        names = [c.get("name") for c in (doc.get("collections") or []) if isinstance(c, dict)]
+        # a file that parses to a list or a scalar, or whose `collections` is not a list, declares nothing here —
+        # skipped like a file that does not parse (a no_backend answer reads this scan for EVERY refusal, S24)
+        colls = doc.get("collections") if isinstance(doc, dict) else None
+        names = [c.get("name") for c in colls if isinstance(c, dict)] if isinstance(colls, list) else []
         if collection in names:
             return doc
     return None
@@ -360,6 +365,46 @@ def runnable(names, backends=None):
     backends = backends if backends is not None else load_backends()
     by_name = {b.get("name"): b for b in backends}
     return [n for n in names if backend_role(by_name.get(n)) is not None]
+
+
+def _card_ok(card):
+    """A search card's shape: a collection ansible-core ships (paths.ANSIBLE_CORE_BUNDLED — the planner neither probes
+    nor pins a card's collection, so one naming a Galaxy collection would onboard it unpinned), a non-empty title, a
+    device-class key, a list of keywords."""
+    return (isinstance(card, dict) and card.get("collection") in paths.ANSIBLE_CORE_BUNDLED
+            and isinstance(card.get("title"), str) and card["title"].strip() != ""
+            and paths.is_component(card.get("key"))
+            and isinstance(card.get("keywords"), list) and card["keywords"] != []
+            and all(isinstance(k, str) and k != "" for k in card["keywords"]))
+
+
+def search_cards(backends=None):
+    """The SYNTHETIC search results the backend registry declares, as `(backend entry, card)` — for a target that has
+    NO collection to search for, a plain SSH host above all (S24). A card lives on the backend it onboards with, so
+    the backend names itself and nothing overrides the classifier: `collection` names the collection-less case the
+    way Ansible does (`ansible.builtin`, which ships inside ansible-core), `title` is what the result shows, `key` the
+    device-class key the onboard form proposes, `keywords` what a query matches. Only a backend that declares a role
+    offers one (a card is something to onboard with); a card that is not well formed is skipped with a warning —
+    shipped data, held to the shape by tests/unit/test_search_card.py. PURE given `backends`."""
+    backends = backends if backends is not None else load_backends()
+    out = []
+    for b in backends:
+        card = b.get("search_card")
+        if card is None:
+            continue
+        if not _card_ok(card) or backend_role(b) is None:
+            log.warning("backend %r: its search_card is not well formed, or the backend declares no role; skipped",
+                        b.get("name"))
+            continue
+        out.append((b, card))
+    return out
+
+
+def bundled_collections(backends=None):
+    """The collections the search cards name: ones that ship INSIDE ansible-core and are never installed from
+    Galaxy. The onboard planner probes nothing for one (it is always there, and there is nothing to read) and pins
+    nothing for it — a class onboarded from a card carries `collections: []` (S24)."""
+    return {card["collection"] for _, card in search_cards(backends)}
 
 
 def backend_confers(name, capability, backends=None):

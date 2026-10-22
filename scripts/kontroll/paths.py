@@ -356,6 +356,13 @@ def collection_fqcn(value, what="collection"):
     return value
 
 
+# Collections that ship INSIDE ansible-core: Galaxy has no install for them. A search card may name only one of
+# these (catalog._card_ok) — the planner neither probes nor pins a card's collection, so a card naming a Galaxy
+# collection would onboard it unpinned and unprobed — and gen-requirements drops a pin of one (BRICK-1: a fixed
+# set, not a lookup). S24.
+ANSIBLE_CORE_BUNDLED = frozenset({"ansible.builtin", "ansible.legacy"})
+
+
 def is_collection_fqcn(value):
     """True when `value` would pass collection_fqcn(). For a VALIDATOR of data the tool reads back — a unit
     descriptor's `unit.collection` — which answers with a message of its own: a descriptor is not a request field,

@@ -180,6 +180,21 @@ declares `role: backend_netcommon_cli` + `network_os`. `cisco_ios` is already
 migrated to this shape (live e2e: byte-identical capture), so it's generalization,
 not a rewrite.
 
+**A backend is matched on positive evidence only (S24).** A predicate names a signal the
+collection carries — a cliconf or httpapi plugin, a `*_config` module that takes a
+`backup` option (no shipped backend classifies on a netconf plugin yet); the absence of
+every signal matches nothing. `raw_ssh` is
+`classify: {manual: true}`: it was the catch-all for any collection nothing else claimed,
+which onboarded a Kubernetes, cloud-SDK or WinRM target as SSH-as-root. It is chosen now by
+a class that declares `backend: raw_ssh`, or from its **search card** — `search_card:` in its
+`backend.yml`, the "Generic SSH host" result a local search for `ssh`, `linux`, `server`, …
+returns. The card's collection, `ansible.builtin`, ships inside ansible-core: it is never
+probed and never pinned (a class onboarded from it carries `collections: []`, and a second
+host reuses that class). A collection that classifies to no backend kontroll can run is
+answered `no_backend` with what it showed — its plugin types and module count, never a
+plugin's name — and, when the first class that declares the collection names a backend
+this install ships and an onboard under its key would plan, that class's key.
+
 ### 5.1 How many backends? ~a handful — bounded by execution *paradigm*, not vendor
 
 Fleet diversity is absorbed by **data** (per-device params/recipes), not new code:
@@ -187,7 +202,7 @@ Fleet diversity is absorbed by **data** (per-device params/recipes), not new cod
 | backend | covers | new-device lift | runs today? |
 |---|---|---|---|
 | `netcommon_cli` ✅ | **all** CLI network gear (Cisco/Arista/Juniper/MikroTik…) | one declaration line | yes |
-| `raw_ssh` | bespoke SSH appliances + plain Linux | one line + a command | yes |
+| `raw_ssh` | SSH appliances + plain Linux — declared by the class, or the Generic SSH host card; never auto-matched | one line + a command | yes |
 | `api` ✅ | **all** REST devices *and* services | one line + a recipe (§5.2) | yes |
 | `vendor_config` | gear with a vendor `*_config` module that takes `backup` | one line | classifier only — never the source of a role |
 | `module_sdk` | SDK/socket modules (community.docker/proxmox, kubernetes.core, cloud) | one line | not built |

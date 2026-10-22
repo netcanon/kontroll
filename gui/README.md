@@ -11,6 +11,13 @@ search  →  see capability badges (A/B/L + suggested backend)  →  "Onboard th
         →  enter key/group/host + creds  →  Run  →  a STAGED proposal  →  promote  →  managed device
 ```
 
+A plain SSH host has no collection to search for: `ssh`, `linux`, `server`, … return the **Generic SSH host**
+card (S24) — backend `raw_ssh`, class key `ssh_host`, SSH credential fields, and no ⚙ Automations badge (its
+collection ships inside ansible-core). A record no backend kontroll can run fits shows **no backend fits**
+(`no-backend-badge`) instead of a suggestion; its onboard is answered 422 (`code` `no_backend`) with what the
+collection showed, and — when a class already declares the collection with a backend (proxmox) — the class key to
+onboard it as.
+
 ## The flow is fully piped (propose-then-promote, C10)
 
 Pressing **Run** with *apply* ticked calls the onboard service **in-process** — `build_onboard_plan` +

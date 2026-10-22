@@ -1,10 +1,9 @@
 # PINNED offline probe facts docker_host was capability-derived from (F2, north-star Rung 4). Probed from
 # community.docker 5.2.1. UNLIKE the other classes, docker_host does NOT classify from these facts:
-# community.docker ships a `docker_config` module (a Docker Swarm config object), whose `_config` suffix trips the
-# raw_ssh backend's `none_of {module_suffix: _config}` guard — so predicate.classify returns NO backend (the guard
-# is meant to catch a device config module like ios_config, and can't tell a swarm-config object apart). A Docker
-# host is nonetheless a plain Linux box whose TELEMETRY backend is raw SSH (node_exporter over SSH; the
-# community.docker modules only ACTUATE containers). So module.yml DECLARES `backend: raw_ssh` explicitly, and
+# community.docker ships a `docker_config` module (a Docker Swarm config object) but no cliconf/httpapi/netconf
+# plugin, and raw_ssh is never auto-matched (S24) — so predicate.classify returns NO backend. A Docker host is
+# nonetheless a plain Linux box whose TELEMETRY backend is raw SSH (node_exporter over SSH; the community.docker
+# modules only ACTUATE containers). So module.yml DECLARES `backend: raw_ssh` explicitly, and
 # gen-class-capabilities._backend_for honors the declared backend over re-classification — the derived floor is
 # raw_ssh's [blackbox, host_node]. These facts are the honest probe record (they show WHY classification is
 # declared, not derived); `module_options` stays {}. `probed_at` is provenance, NOT read by the derivation.

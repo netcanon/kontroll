@@ -44,6 +44,7 @@ class Record(BaseModel):
     suggested_backend: Optional[str] = None
     backend_candidates: list[str] = []
     provenance: str
+    suggested_key: Optional[str] = None     # a search card's class key (S24); absent on a collection's record
 
 
 class ProbeResponse(BaseModel):

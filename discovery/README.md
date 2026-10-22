@@ -52,9 +52,9 @@ discovery:
 ```
 
 This is **declared, not facts-derived**, on purpose: `ansibleguy.opnsense` ships **no** connection plugin (its
-`facts.pinned.yml` is `plugins: {}`, classifies `raw_ssh`), so an `applies_when: {plugin: httpapi}` predicate would
-offer to **nothing**. The declared block is the offer path — exactly like `logging/proxmox_api.yml` (declared on the
-proxmox class). Pinned by `tests/unit/test_discovery.py::test_offer_reaches_opnsense`, which feeds the **real**
+`facts.pinned.yml` is `plugins: {}`; the class declares `raw_ssh`), so an `applies_when: {plugin: httpapi}` predicate
+would offer to **nothing**. The declared block is the offer path — exactly like `logging/proxmox_api.yml` (declared
+on the proxmox class). Pinned by `tests/unit/test_discovery.py::test_offer_reaches_opnsense`, which feeds the **real**
 `facts.pinned.yml`.
 
 ## The shipped methods

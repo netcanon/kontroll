@@ -15,7 +15,11 @@ from pydantic import BaseModel
 from api.auth import Principal, audit_action, require_token
 from api.deps import Catalog, get_catalog
 from kontroll import authspec, catalog, gitio, paths, probe
-from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan
+from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan, no_backend_message
+
+# What a `no_backend` answer tells an API or GUI caller to do (the CLI's names its own flag).
+NO_BACKEND_REMEDY = ("if it is a plain SSH host, onboard it from the Generic SSH host search result (search: ssh), "
+                     "or pass an explicit backend")
 
 router = APIRouter(tags=["privileged"])
 
@@ -103,7 +107,11 @@ def onboard(body: OnboardIn, request: Request,
     if plan["error"] == "not_installed":
         raise HTTPException(status_code=404, detail="install the collection first: %s" % body.collection)
     if plan["error"] == "no_backend":
-        raise HTTPException(status_code=422, detail="no backend kontroll can run auto-matched — pass an explicit backend")
+        # The collection showed nothing a backend kontroll can run classifies on (S24: raw_ssh no longer catches it):
+        # the answer names what it showed; the audit line names only the reason — nothing from the collection.
+        audit_action(request, principal, "onboard-refuse", "reason=no-backend")
+        return JSONResponse(status_code=422, content={
+            "detail": no_backend_message(plan, body.collection, NO_BACKEND_REMEDY), "code": "no_backend"})
     if not body.apply:
         return {"applied": False, "plan": _plan_view(plan), "run_id": principal.run_id}
 

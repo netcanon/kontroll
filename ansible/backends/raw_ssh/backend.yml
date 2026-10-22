@@ -1,16 +1,26 @@
-# Backend: raw_ssh — bespoke appliances with no usable collection (e.g. OpenWrt).
-# A device declares the exact command to capture its config; backup capability
-# therefore depends on that command being meaningful (hence backup: maybe until a
-# command is set). The catch-all when no structured backend fits.
+# Backend: raw_ssh — a target reached over plain SSH with no usable collection: a Linux/BSD host, or an appliance
+# such as OpenWrt. A device declares the exact command to capture its config; backup capability therefore depends
+# on that command being meaningful (hence backup: maybe until a command is set). Chosen only on positive evidence
+# (S24): a class that declares `backend: raw_ssh` (openwrt, opnsense, proxmox, docker_host), or the search card
+# below. It is no longer the catch-all for a collection nothing else claims.
 name: raw_ssh
-label: raw SSH command (bespoke appliances — no collection)
+label: raw SSH command (SSH hosts and appliances — no collection)
 order: 9
-classify:
-  none_of:
-    - {plugin: cliconf}
-    - {plugin: httpapi}
-    - {plugin: netconf}
-    - {module_suffix: _config}
+# Never auto-matched: the ABSENCE of cliconf/httpapi/netconf/_config signals is not evidence that a target speaks
+# SSH (a Kubernetes, cloud or WinRM collection has the same absence). Such a collection is answered `no_backend`,
+# with what it showed, instead of being onboarded as SSH-as-root.
+classify: {manual: true}
+# A SYNTHETIC local search result: the most common Ansible target, a plain SSH host, has no collection to search
+# for. `collection` names the collection-less case as Ansible does; it ships inside ansible-core, so it is never
+# probed and never pinned — a class written from this card carries `collections: []`, and gen-requirements skips
+# it should one ever be pinned. Matched on `collection` and `keywords`; the title is painted as text.
+search_card:
+  collection: ansible.builtin
+  title: >-
+    Generic SSH host (plain Linux/BSD, or an appliance with no collection) — reachability and metrics;
+    add a backup command to back it up
+  key: ssh_host
+  keywords: [ssh, linux, generic, host, server, vm, debian, ubuntu, rhel, bsd]
 # F2 confers: a plain SSH box is pingable (blackbox) AND a node_exporter candidate (host_node); journald log
 # methods stay operator-declared (no probe signal). backup stays `maybe` (depends on backend_backup_command).
 confers: {backup: maybe, telemetry: [blackbox, host_node], logs: []}

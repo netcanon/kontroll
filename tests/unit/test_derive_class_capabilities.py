@@ -61,10 +61,11 @@ def test_rest_device_derives_only_blackbox_no_snmp_no_syslog():
 
 
 def test_vendor_narrow_credentialed_method_is_never_faked_but_named_in_the_gap():
-    """THE NEVER-FAKE GUARD: a proxmox-shaped device (module proxmox_kvm → raw_ssh) derives the universal floor
-    (blackbox + host_node) but the `pve` proxy-exporter — vendor-narrow applies_when AND a per-class secret — is
-    NEVER auto-attached; it surfaces in the HONEST gap instead (declare it to enable VM/LXC metrics). Guards the
-    empty-Grafana anti-pattern's inverse: silently shipping a vendor exporter a blind device can't actually feed."""
+    """THE NEVER-FAKE GUARD: a proxmox-shaped device (module proxmox_kvm; the class declares raw_ssh) derives the
+    universal floor (blackbox + host_node) but the `pve` proxy-exporter — vendor-narrow applies_when AND a per-class
+    secret — is NEVER auto-attached; it surfaces in the HONEST gap instead (declare it to enable VM/LXC metrics).
+    Guards the empty-Grafana anti-pattern's inverse: silently shipping a vendor exporter a blind device can't
+    actually feed."""
     out = classify.derive_class_capabilities(_facts(modules=["proxmox_kvm"]), "raw_ssh")
     metric_methods = {m["method"] for m in out["metrics"]}
     assert metric_methods == {"blackbox", "host_node"} and "pve" not in metric_methods
@@ -166,6 +167,25 @@ def _oracle(key, want_backend):
     return out
 
 
+def _declared_oracle(key, backend):
+    """The frozen oracle for a class whose backend is DECLARED, not classified: <key>'s pinned facts classify to NO
+    backend (so the declaration is load-bearing, not cosmetic), its module declares `backend`, and the floor derived
+    under that backend reproduces the module's `derived: true`-marked metrics/logs/dashboards EXACTLY, gap empty."""
+    facts = yaml.safe_load(open(os.path.join(ROOT, "modules", key, "facts.pinned.yml"), encoding="utf-8"))
+    module = yaml.safe_load(open(os.path.join(ROOT, "modules", key, "module.yml"), encoding="utf-8"))
+    assert predicate.classify(facts, catalog.load_backends()) == [], key
+    assert module.get("backend") == backend, (key, module.get("backend"))
+    out = classify.derive_class_capabilities(facts, backend)
+
+    def _strip(block):
+        return [{k: v for k, v in e.items() if k != "derived"} for e in (block or []) if e.get("derived")]
+    assert out["metrics"] == _strip(module["metrics"]), (key, out["metrics"])
+    assert out["logs"] == _strip(module.get("logs")), (key, out["logs"])
+    assert out["dashboards"] == _strip(module.get("dashboards")), (key, out["dashboards"])
+    assert out["gap"] == [], (key, out["gap"])
+    return out
+
+
 def test_routeros_derived_floor_reproduces_the_curated_module_exactly():
     """FROZEN ORACLE (Rung 4, routeros — the STAGED full-floor proof): community.routeros ships a cliconf plugin, so
     predicate.classify → `netcommon_cli` → the full network-gear floor (snmp + blackbox metrics, syslog_push logs) —
@@ -180,38 +200,39 @@ def test_routeros_derived_floor_reproduces_the_curated_module_exactly():
 
 def test_opnsense_derived_floor_reproduces_the_curated_module_exactly():
     """FROZEN ORACLE (Rung 4, opnsense — the STAGED no-connection-plugin proof): ansibleguy.opnsense ships NO
-    connection plugin, so predicate.classify falls to the `raw_ssh` catch-all (NOT `api` — a real probe corrected the
-    design), which confers telemetry [blackbox, host_node]. opnsense is STAGED, so this unit test is its drift gate
-    until cutover. Guards the migration silently changing the floor AND the raw_ssh-classification (a regression to a
-    positive-plugin backend would change the derived floor)."""
-    out = _oracle("opnsense", "raw_ssh")
+    connection plugin (NOT `api` — a real probe corrected the design), so its pinned facts classify to NO backend and
+    the module DECLARES `backend: raw_ssh` (S24 — raw_ssh is never a catch-all), which confers telemetry [blackbox,
+    host_node]. opnsense is STAGED, so this unit test is its drift gate until cutover. Guards the floor drifting under
+    the declaration, and the declaration being cosmetic: a classifier change that made the facts classify would turn
+    it into a hidden override."""
+    out = _declared_oracle("opnsense", "raw_ssh")
     assert [m["method"] for m in out["metrics"]] == ["blackbox", "host_node"]
     assert out["logs"] == []
 
 
 def test_openwrt_derived_floor_reproduces_the_curated_module_exactly():
     """FROZEN ORACLE (Rung 4, openwrt — the EMPTY-FACTS proof): openwrt has no collection, so its facts.pinned.yml is
-    empty; with no plugins/modules, predicate.classify falls to the `raw_ssh` catch-all → telemetry [blackbox,
-    host_node]. openwrt is ACTIVE + LIVE, so gen-class-capabilities --check gates it too; this test additionally pins
-    that the empty-facts artifact still classifies to raw_ssh (a regression that made empty facts classify elsewhere,
-    or added a positive signal, would change the floor). The host_node target is honest-DOWN for an AP with no
+    empty; empty facts classify to NO backend (absence is not evidence — S24), so the module DECLARES `backend:
+    raw_ssh` → telemetry [blackbox, host_node]. openwrt is ACTIVE + LIVE, so gen-class-capabilities --check gates it
+    too; this test additionally pins that the empty-facts artifact classifies to nothing (so the declaration is what
+    chooses) and that the floor is unchanged under it. The host_node target is honest-DOWN for an AP with no
     node_exporter — asserted present (never faked away), consistent with the one-seam raw_ssh confer."""
-    out = _oracle("openwrt", "raw_ssh")
+    out = _declared_oracle("openwrt", "raw_ssh")
     assert [m["method"] for m in out["metrics"]] == ["blackbox", "host_node"]
     assert out["logs"] == []
 
 
 def test_docker_host_derived_floor_uses_the_declared_backend():
-    """FROZEN ORACLE (Rung 4, docker_host — the DECLARED-BACKEND proof): community.docker does NOT classify — its
-    `docker_config` swarm module trips the raw_ssh `none_of {module_suffix: _config}` guard — so the module DECLARES
-    `backend: raw_ssh`, and gen-class-capabilities._backend_for honors the declared backend over classification →
-    the floor is raw_ssh's [blackbox, host_node]. This test pins BOTH load-bearing facts: (1) the raw facts really do
-    NOT resolve a backend (so the declaration is required, not cosmetic), and (2) the derived floor reproduces the
-    module's `derived: true` entries. The only class whose backend is declared, not classified — guards a classifier
-    change silently making community.docker classify (which would make the declaration a hidden override)."""
+    """FROZEN ORACLE (Rung 4, docker_host — the DECLARED-BACKEND proof): community.docker does NOT classify —
+    nothing in its facts is positive evidence of a backend (no cliconf/httpapi/netconf plugin; raw_ssh is never
+    auto-matched, S24) — so the module DECLARES `backend: raw_ssh`, and gen-class-capabilities._backend_for honors the
+    declared backend → the floor is raw_ssh's [blackbox, host_node]. This test pins BOTH load-bearing facts: (1) the
+    raw facts really do NOT resolve a backend (so the declaration is required, not cosmetic), and (2) the derived
+    floor reproduces the module's `derived: true` entries. Guards a classifier change silently making
+    community.docker classify (which would make the declaration a hidden override)."""
     facts = yaml.safe_load(open(os.path.join(ROOT, "modules", "docker_host", "facts.pinned.yml"), encoding="utf-8"))
     module = yaml.safe_load(open(os.path.join(ROOT, "modules", "docker_host", "module.yml"), encoding="utf-8"))
-    # premise: the real docker facts classify to NO backend (the docker_config trip) -> the declaration is required
+    # premise: the real docker facts classify to NO backend -> the declaration is required
     assert predicate.classify(facts, catalog.load_backends()) == []
     assert module["backend"] == "raw_ssh"
     out = classify.derive_class_capabilities(facts, module["backend"])

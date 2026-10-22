@@ -51,7 +51,8 @@ from kontroll.probe import _facts  # noqa: F401
 from kontroll.service.audit import service_audit
 from kontroll.service.capture_exception import add_capture_exception
 from kontroll.service.classify import service_classify
-from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan, enable_in_fleet  # noqa: F401
+from kontroll.service.onboard import (  # noqa: F401
+    apply_onboard_plan, build_onboard_plan, enable_in_fleet, no_backend_message)
 from kontroll.service.openapi import (  # noqa: F401
     build_openapi_recipe, classify_endpoints, derive_auth, derive_server, fetch_spec)
 from kontroll.service.probe import service_probe
@@ -169,11 +170,15 @@ def cmd_classify(args):
     matches = result["matches"]
     print("\n  %s  ->  backend(s): %s" % (
         args.collection,
-        " > ".join(matches) or "none (bespoke — set raw_ssh + a command, or add a backend)"))
+        " > ".join(matches) or "none — no backend fits; pass --backend raw_ssh only if the target is an SSH host"))
     if matches:
         print("  best: %-14s requires: %s" % (
             result["best"] or "none it can run (no match declares a role)", ", ".join(result["requires"]) or "nothing"))
     print()
+
+
+# What a `no_backend` answer tells a CLI caller to do (S24: raw_ssh is never chosen for them).
+_NO_BACKEND_REMEDY = "pass --backend raw_ssh only if the target is an SSH host, or add a backend"
 
 
 def cmd_scaffold(args):
@@ -181,7 +186,7 @@ def cmd_scaffold(args):
     if res["error"] == "not_installed":
         sys.exit("install the collection first: ansible-galaxy collection install %s" % args.collection)
     if res["error"] == "no_backend":
-        sys.exit("no backend kontroll can run auto-matched — pass --backend (e.g. raw_ssh) or add a backend.")
+        sys.exit(no_backend_message(res, args.collection, _NO_BACKEND_REMEDY))
     rel, text = res["path"], res["text"]
     abspath = paths.module_write_path(args.key)   # under write_root(), confined — where every other module write goes
     existing = paths.module_file(args.key)        # the READER's view: the clone's copy, else the shipped one —
@@ -215,7 +220,7 @@ def cmd_onboard(args):
     if plan["error"] == "not_installed":
         sys.exit("install the collection first: ansible-galaxy collection install %s" % args.collection)
     if plan["error"] == "no_backend":
-        sys.exit("no backend kontroll can run auto-matched — pass --backend (e.g. raw_ssh).")
+        sys.exit(no_backend_message(plan, args.collection, _NO_BACKEND_REMEDY))
     backend, host_name = plan["backend"], plan["host_name"]
     creds_to_set = plan["creds_to_set"]
     mod_path, inv_path = plan["mod_path"], plan["inv_path"]

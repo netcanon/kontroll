@@ -137,8 +137,8 @@ def test_a_reused_class_with_its_own_role_still_refuses_a_backend_the_registry_d
 ], ids=["only-vendor-config", "vendor-config-then-api", "cliconf-first"])
 def test_the_auto_path_passes_over_a_match_without_a_role(probed, facts, chosen):
     """With no `backend` asked for, the planner and the scaffold choose the first match that declares a role, in
-    the classifier's order, and answer `no_backend` when none does. A collection that classifies only to
-    `vendor_config` gets no plan; one that classifies to `vendor_config` and then `api` is planned with `api` and its
+    the classifier's order, and answer `no_backend` when none does — naming the match that cannot run. A collection
+    that classifies only to `vendor_config` gets no plan; one that classifies to `vendor_config` and then `api` is planned with `api` and its
     role. Guards the auto path writing a broken class without anyone naming a backend: `vendor_config` (order 2) was
     the first match for such a collection, and it was chosen. `galaxy classify`'s `best` (service_classify) names
     the same backend, so the CLI does not recommend one the next step refuses."""
@@ -147,7 +147,8 @@ def test_the_auto_path_passes_over_a_match_without_a_role(probed, facts, chosen)
     made = scaffold.build_scaffold("acme.edgeos", "edgeos", "edge_router", "network")
     assert classify.service_classify("acme.edgeos", backends=REGISTRY)["best"] == chosen
     if chosen is None:
-        assert plan == {"error": "no_backend"} and made == {"error": "no_backend"}
+        assert plan["error"] == made["error"] == "no_backend"
+        assert plan["signals"]["unrunnable"] == made["signals"]["unrunnable"] == ["vendor_config"]
         return
     role = catalog.backend_role(next(b for b in REGISTRY if b["name"] == chosen))
     assert plan["error"] is None and (plan["backend"], plan["role"]) == (chosen, role)

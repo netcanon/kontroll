@@ -11,6 +11,45 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): an unrecognised collection is refused, not onboarded as SSH; a plain SSH host has a search card (S24, 2026-10-22)
+
+The `raw_ssh` backend matched the ABSENCE of every signal (no cliconf/httpapi/netconf plugin, no `*_config`
+module), so a Kubernetes, cloud-SDK or WinRM collection was onboarded "successfully" as SSH-as-root with a
+node_exporter floor. It is now `classify: {manual: true}`: chosen only by a class that declares `backend: raw_ssh`,
+or from the **Generic SSH host** search card its `backend.yml` declares (`search_card:`). A collection that classifies
+to no backend kontroll can run is answered `no_backend` with what it showed — its plugin types and module count (never a
+plugin's name), any match that cannot run, and the key of the first class that already declares the collection when it
+names a backend this install ships and an onboard under that key would plan — on the API and the GUI (422, `code`
+`no_backend`; a **no backend fits** badge on the card) and the CLI (a non-zero exit); the API and GUI audit it as
+`onboard-refuse reason=no-backend`. A card may name only a collection ansible-core ships (`paths.ANSIBLE_CORE_BUNDLED`).
+
+- **The card.** A local search for `ssh`, `linux`, `server`, … returns one declared record: `ansible.builtin`,
+  backend `raw_ssh`, class key `ssh_host` (`Record.suggested_key`, new and optional). Its collection ships inside
+  ansible-core, so it is never probed and never pinned — the class it writes carries `collections: []` — and a
+  second or third host reuses that class (one whose `collections` is exactly `[]`) even after the operator
+  curated its module (it used to regenerate it and hit a WriteConflict). `gen-requirements` drops a pin of
+  `ansible.builtin`/`ansible.legacy` with a warning, for a module the old CLI path wrote (`ansible.builtin
+  >=0.0.0` would have aborted the next bootstrap's install).
+- **Shipped classes.** `openwrt`, `opnsense` and `proxmox` resolved a backend only through the catch-all; each now
+  declares `backend: raw_ssh` (`docker_host` already did). Generated floors are byte-identical.
+- **A malformed module file declares nothing.** The collection→class scan (every `no_backend` answer reads it,
+  and the app-store create seam shares it) skips a module file whatever its parse raises — one that is not UTF-8,
+  holds a date no calendar has, nests past the recursion limit or tags a scalar YAML cannot build — as it skipped
+  one that does not parse; a create preview that answered 500 for such a file anywhere under `modules/` now
+  answers as if the file were absent (`no_module`, or the next class that declares the collection), and the onboard
+  form's credential fields, which fell back to "could not derive credential fields" for most collections, derive
+  again.
+- **Upgrading.** A class of your own whose module file declares no `backend:` and whose collection carries no
+  positive signal now answers its next onboard `no_backend` — the sentence names the file and the key to add
+  (`backend:`, `raw_ssh` if it is an SSH host) — and, if it is `derived: true`, `gen-class-capabilities` can no
+  longer classify it until the line is there.
+- Tests: `tests/unit/test_search_card.py` (new), `test_classify.py` (absence matches nothing; every manual
+  backend), `test_derive_class_capabilities.py` (declared-backend oracles), `test_module_descriptors.py` (every
+  shipped class resolves a backend), `test_onboard_derived.py` (the sentence's branches, the CLI's exit, the
+  declaring class named only when its reuse would plan, past malformed files), `test_api.py`,
+  `test_api_onboard.py`, `test_gui_api.py`, `test_onboard_dryrun.py`; e2e `test_onboard_flow.py` (the card's
+  form, the badge).
+
 ### fix(scripts): a device class is planned only with a backend some play can run (S26, 2026-10-22)
 
 The onboard planner and the scaffold made a role up (`backend_<name>`) for any backend whose registry entry declares
@@ -26,8 +65,8 @@ collection is probed. With no `backend`, the planner and the scaffold choose the
 (`catalog.runnable`), or answer `no_backend`; a search record's `suggested_backend` and `galaxy classify`'s `best`
 are that same choice. A second device of a class whose module file declares its own role keeps that role, whatever
 shipped backend the request names (one that declares none included); with none named it takes the first match that
-declares a role, or the first match when none does. Every fault of a reused class's module file is answered before
-the collection is probed. A class whose file names no role and whose backend declares none is
+declares a role, or the first match when none does. Every fault in a name the reuse adopts from a class's module
+file is answered before the collection is probed. A class whose file names no role and whose backend declares none is
 repository data (409), naming the file to give a `role:`.
 `tests/unit/test_backend_registry.py` holds every declared role to a role with a check and a backup, and the
 planner, the scaffold and the suggestion to the registry; the API, GUI and CLI rows pin the refusal and its audit

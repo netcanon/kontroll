@@ -2,13 +2,15 @@
 key: openwrt
 description: OpenWrt access point (raw SSH; no dedicated collection)
 # F2 (de-bespoke, north-star Rung 4): this class's metrics FLOOR is AUTO-DERIVED. openwrt has no collection, so its
-# facts.pinned.yml is EMPTY → predicate.classify falls to the `raw_ssh` catch-all, which confers telemetry [blackbox,
-# host_node]. ADDITIVE migration (the AP had no metrics before) → it gains a committed blackbox (ICMP reachability)
+# facts.pinned.yml is EMPTY → nothing in it classifies, so the class DECLARES `backend: raw_ssh` (S24 — raw_ssh is
+# chosen only on positive evidence, never as a catch-all), which confers telemetry [blackbox, host_node]. ADDITIVE
+# migration (the AP had no metrics before) → it gains a committed blackbox (ICMP reachability)
 # target AND a node_exporter target. The AP runs no node_exporter by default, so the node target scrapes HONEST-DOWN
 # (blanks a panel; there is no up==0 alert rule) — it is not faked, and installing node_exporter on the AP turns it
 # green. host_node stays a paradigm-level confer of raw_ssh (docker_host genuinely runs it); it is NOT special-cased
 # off openwrt (one-seam). backup stays role-gated (not derived).
 derived: true
+backend: raw_ssh               # declared — empty facts are no evidence of any paradigm (S24)
 collections: []                # intentionally empty — raw SSH via ansible.builtin
 role: openwrt
 inventory_group: wireless_ap

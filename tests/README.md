@@ -122,6 +122,7 @@ omitted so the SOPS shell-out is never invoked.
 tests/unit/          # pure functions, no I/O
   test_predicate_engine.py   # three-valued eval_pred/eval_vector truth tables
   test_classify.py           # backend dispatch from synthetic facts
+  test_search_card.py        # the Generic SSH host card: matched, never probed or pinned, malformed ones skipped
   test_build_record.py       # record schema + overrides (incl. YAML yes/no→state)
   test_telemetry_vector.py   # the telemetry capability vector (4th vector): 3-state + depth-stable
   test_telemetry_suggest.py  # suggest_telemetry + declared_metrics_methods (detected/declared bridge)

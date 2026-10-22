@@ -235,16 +235,39 @@ def render_sidecar(out, prov_by_name, default_policy, keyring):
     return s
 
 
+# Collections that ship INSIDE ansible-core: Galaxy has no install for them, so a pin of one would send the next
+# bootstrap's `ansible-galaxy collection install` after nothing and abort it. The onboard planner pins nothing for
+# them (S24 — the Generic SSH host card's `ansible.builtin`); this belt drops a pin a pre-fix CLI onboard wrote. A
+# fixed set, not a lookup (paths.ANSIBLE_CORE_BUNDLED, the one the search cards are held to): this generator stays
+# offline (BRICK-1).
+ANSIBLE_CORE_BUNDLED = paths.ANSIBLE_CORE_BUNDLED
+
+
+def _drop_bundled(colls):
+    """`colls` without a pin of a collection ansible-core ships, each one dropped said on stderr (the name is one of
+    the fixed set, never file bytes) — the module that pins it is wrong, and the operator can remove the pin."""
+    kept = []
+    for c in colls:
+        name = c.get("name") if isinstance(c, dict) else None
+        if name in ANSIBLE_CORE_BUNDLED:
+            sys.stderr.write("WARNING: %s ships inside ansible-core and has no Galaxy install — its pin is skipped; "
+                             "remove it from the module file that declares it\n" % name)
+            continue
+        kept.append(c)
+    return kept
+
+
 def compute(enabled, adir):
     """Resolve the unioned, deduped collection set + the per-collection provenance map. Pure given the on-disk
-    modules/units — no network (the BRICK-1 invariant; tests pin it)."""
+    modules/units — no network (the BRICK-1 invariant; tests pin it). A pin of a collection ansible-core ships is
+    dropped (_drop_bundled)."""
     colls = list(_load("modules/_core.yml").get("collections") or [])
     for key in enabled:
         mp = os.path.join("modules", key, "module.yml")
         if os.path.exists(os.path.join(ROOT, mp)):
             colls += _load(mp).get("collections") or []
     colls += _actuation_collections(adir, enabled)     # R2: the app-store units' pins union in
-    out = resolve_pins(colls)                          # exact-wins-over-floor; fail-closed on conflicting exacts
+    out = resolve_pins(_drop_bundled(colls))                          # exact-wins-over-floor; fail-closed on conflicting exacts
     prov = _actuation_provenance(adir, enabled)
     _assert_trust_renderable(prov)                     # here, not at the render: the promote gate stops after compute
     return out, prov

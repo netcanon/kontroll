@@ -239,7 +239,12 @@ Guessed auth and unmatched capabilities are flagged (`[!]`, `✗`).
 
 Each result is a structured **record** (`--json`): metadata + a `capabilities`
 block keyed by vector + a `suggested_backend` (the backend `onboard` would choose: the first match whose
-registry entry declares a `role:`; `backend_candidates` keeps every match). The pipeline is **search → classify
+registry entry declares a `role:`; `backend_candidates` keeps every match — none at all for a collection that
+carries no signal a backend classifies on: `raw_ssh` is never auto-matched, S24). A plain SSH host has no
+collection to find; a search for `ssh`, `linux`, `server`, … returns the **Generic SSH host** card
+(`ansible.builtin`, backend `raw_ssh`), and `onboard ansible.builtin --backend raw_ssh` pins no collection for it.
+An onboard or scaffold that no backend fits exits with what the collection showed and the remedy (`--backend
+raw_ssh` only if the target is an SSH host). The pipeline is **search → classify
 → scaffold → onboard**: find a collection, see what it can do + which backend drives
 it, emit a device-class declaration, and stand the host up. Backends are drop-in
 (`ansible/backends/<name>/`); overrides correct the residual (`overrides/`).

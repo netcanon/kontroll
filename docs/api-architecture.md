@@ -251,10 +251,21 @@ surfaced by `catalog.local_shallow` (the fast local mirror of `galaxy_search`: k
 `limit`). `service_search(deep=False)` is the default; `?deep=true` (CLI `--deep`, GUI "deep" toggle) — or
 any `vector` filter, which needs exact cells — re-probes only the matched candidates deeply (concurrent),
 resolving the deferred `maybe` cells. `GET /probe/{c}` and `GET /classify/{c}` stay the per-collection deep
-forms. The Record `depth` field labels each record `shallow`/`deep`, so **no model change** was needed.
+forms. The Record `depth` field labels each record `shallow`/`deep` (a search card's record, below: `declared`),
+so **no model change** was needed.
 `GET /classify/{c}` additionally surfaces `telemetry_declared` — the device-class module(s) already declaring
 a `metrics:` block for the collection (the detected/declared telemetry reconciliation; read-only, additive to
 `ClassifyResponse`).
+
+**A third record source — the backend registry's search cards (S24).** A target with no collection to find (a
+plain SSH host above all) is offered by a card its backend declares (`search_card:` in
+`ansible/backends/raw_ssh/backend.yml`; `catalog.search_cards`). The local arm adds a card's record when a query
+keyword is a substring of the card's collection or one of its keywords — not of its title — and an installed
+collection of the same name wins. The record is built from declared, empty facts after any deepening, so a card is
+**never probed**: `depth` and `provenance` `declared`, the declaring backend as `suggested_backend` and only
+candidate, the
+card's title as `meta.description`, and `suggested_key` (a new optional `Record` field) as the class key the GUI's
+form proposes.
 
 **The accuracy guarantee — shallow ⊑ deep.** A shallow capability cell never *contradicts* the full deep
 probe: it is identical, or a `maybe` where deep is definite — **never a flipped yes↔no**. Two axes:

@@ -81,6 +81,18 @@ def test_search_local_hit_is_a_record(client):
     assert body[0]["suggested_backend"] == "netcommon_cli"
 
 
+def test_search_returns_the_generic_ssh_card_with_its_class_key(client):
+    """GET /search?q=linux returns the Generic SSH host card's record with `suggested_key` `ssh_host`,
+    `provenance` and `depth` "declared", and `raw_ssh` as its backend. Guards the typed API stripping the card's
+    key: `response_model=list[Record]` drops any field the model does not declare, silently, and a client would
+    then propose `ansible_builtin` as the class key."""
+    r = client.get("/search", params={"q": "linux"})
+    assert r.status_code == 200
+    card = next(rec for rec in r.json() if rec["collection"] == "ansible.builtin")
+    assert card["suggested_key"] == "ssh_host" and card["provenance"] == "declared" and card["depth"] == "declared"
+    assert card["suggested_backend"] == "raw_ssh"
+
+
 def test_search_deep_param_reprobes(client):
     """GET /search?q=cisco&deep=true re-probes the local match deeply — the record carries depth=deep
     (vs the default shallow), the opt-in that resolves 'maybe' cells via GET /probe-style classification.

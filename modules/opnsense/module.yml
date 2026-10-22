@@ -2,13 +2,15 @@
 key: opnsense
 description: OPNsense firewall (API)
 # F2 (de-bespoke, north-star Rung 4): this class's metrics FLOOR is AUTO-DERIVED. ansibleguy.opnsense ships NO
-# connection plugin (it drives the OPNsense REST API via modules, not a plugin), so predicate.classify falls through
-# to the `raw_ssh` catch-all — NOT `api` (a real probe corrected the design; there is no httpapi PLUGIN). raw_ssh
+# connection plugin (it drives the OPNsense REST API via modules, not a plugin), so nothing in its facts classifies
+# — NOT `api` (a real probe corrected the design; there is no httpapi PLUGIN). The class DECLARES `backend: raw_ssh`
+# (its backup is an SSH slurp of /conf/config.xml; S24 made the old fall-through a reviewable line). raw_ssh
 # confers telemetry [blackbox, host_node]. ADDITIVE migration (no metrics before). Not enabled in the example fleet,
 # so the floor is gated by the frozen-oracle unit test (test_derive_class_capabilities.py), not
 # gen-class-capabilities --check. host_node is honest (OPNsense
 # can run node_exporter) — it scrapes DOWN until one is installed. backup stays role-gated (not derived).
 derived: true
+backend: raw_ssh               # declared — the facts classify to nothing (S24); whether it should be `api` is S23's
 collections:
   - name: ansibleguy.opnsense
     version: ">=1.2.0"         # NOTE: latest is 1.2.x, NOT 2.x (corrected from the old requirements)
@@ -30,7 +32,7 @@ dashboards:
   - {gnet: 1860, name: node, derived: true}        # host_node -> "Node Exporter Full" (honest-DOWN until set up)
 # Discovery (read-spine, Rung 1a) — this class can be ASKED for its own DHCPv4 lease table read-only, to surface
 # un-onboarded hosts on the network into the onboard inbox. DECLARED (not facts-derived): ansibleguy.opnsense ships
-# no httpapi plugin (facts plugins:{}, classifies raw_ssh), so a `{plugin: httpapi}` predicate would offer to
+# no httpapi plugin (facts plugins:{}; the class declares raw_ssh), so a `{plugin: httpapi}` predicate would offer to
 # NOTHING (F2). The class opts in explicitly, like logging's proxmox_api. Passive-only, read-only, C18. A human
 # still onboards + promotes every surfaced host (C10 unchanged; discovery only pre-fills the form). See discovery/.
 discovery:

@@ -74,8 +74,13 @@ is **409** `repository_data` with a sentence that says where to look, and the au
 nothing in the request is wrong, and the remedy is the file or the layout. A `backend` an onboard sends must be one
 this install ships whose registry entry declares a `role:` (`ansible/backends/<name>/`) — a second device of a class
 whose module file declares its own role keeps that role, so there the entry needs none; any other is **422**
-`invalid_backend`, answered before the collection is probed. `POST /onboard`'s other 409 — a drop-in that exists
-with different content, answered without a `code` and retried with `overwrite` —
+`invalid_backend`, answered before the collection is probed. An onboard with no `backend` of a collection that
+carries no signal a backend kontroll can run classifies on (S24 — `raw_ssh` is never auto-matched) is **422**
+`no_backend` with a sentence naming what it showed (plugin types and a module count, never a plugin's name) and the
+remedy — the Generic SSH host search result, the class key that already declares the collection, or (for a second
+device of a class whose file declares no `backend:`) the line to add — audited `onboard-refuse reason=no-backend`.
+`POST /onboard`'s other 409 — a drop-in that exists with different content, answered without a
+`code` and retried with `overwrite` —
 is a different answer: key on `code`, not on the status.
 
 ```bash

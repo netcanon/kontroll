@@ -40,6 +40,7 @@ Both emission forms count: static `data-testid="…"` and JS-built `el.dataset.t
 | `result-badges` | the badges container | |
 | `capability-badge` | a per-capability badge | `data-cap="actuate\|backup\|bespoke\|telemetry\|logging"` + `data-state="yes\|no\|maybe"`; `telemetry`/`backup`/`logging` are clickable (open the shared dialog) |
 | `suggested-backend-badge` | the "→ <backend>" badge | painted with `ET()` — locally derived, but no `rec.*` value reaches `innerHTML` (C19) |
+| `no-backend-badge` | the "no backend fits" badge, in place of `suggested-backend-badge` on a record with no `suggested_backend` | literal text; the onboard of that collection is refused `no_backend` unless a class key that declares a backend is used (S24) |
 | `onboard-toggle` | the "Onboard this" button — reveals the form; label flips to "Collapse" when open and is **`disabled` while the form holds input** (collapse gated on a pristine form: a peek is dismissable, but entered text / ticked boxes are never silently dropped) | |
 
 ## Onboard form (per card, revealed by `onboard-toggle`)
@@ -341,7 +342,7 @@ promotes (no promote button — C10 two-key). `collection` is data on the dialog
 
 | `data-testid` | Element | Notes |
 |---|---|---|
-| `unit-badge` | the "⚙ Automations" badge on a result card | `data-collection`; opens `openUnitDialog(collection, version)` |
+| `unit-badge` | the "⚙ Automations" badge on a result card | `data-collection`; opens `openUnitDialog(collection, version)`; absent on a search card (provenance `declared` — the Generic SSH host, whose collection ships inside ansible-core) |
 | `unit-overlay` | the modal overlay | one at a time; reopening removes the prior (modal-lifecycle convention) |
 | `unit-dialog` | the dialog root | `data-collection` discriminates which collection |
 | `unit-close` | the × close control | removes `unit-overlay` |
