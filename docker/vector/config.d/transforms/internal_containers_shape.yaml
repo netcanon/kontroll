@@ -5,7 +5,13 @@ type: remap
 inputs: [internal_containers]
 source: |
   .source = "internal"
-  .service = string(.container_name) ?? "unknown"          # low-cardinality: the container name
+  # Low-cardinality: the container name — but a compose one-off (`docker compose run`, as the installer runs at
+  # every deploy) is named <project>-<service>-run-<12 hex>, a new name and so a new Loki stream at each run. The
+  # label drops the run's hash; the full name stays in the body (container_name). A bare `docker run` with no
+  # `--name` gets a random name, and so a stream of its own: name the container.
+  name = string(.container_name) ?? ""
+  if name == "" { name = "unknown" }                       # an empty name is no label
+  .service = replace(name, r'-run-[0-9a-f]{12}$', "")
   .host = string(.host) ?? get_env_var("HOSTNAME") ?? "control-vm"
   # A line's own level: a JSON line's `level` (or `severity`), or a logfmt/slog line's `level` key (Grafana,
   # Prometheus, Semaphore and blackbox all print one). parse_logfmt reads the line's own keys, so a `level=` inside

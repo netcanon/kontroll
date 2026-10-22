@@ -189,8 +189,12 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   disk, the chown follows the path; SECURITY.md C8) — inside the C8 crown-jewel-at-rest boundary, since
   log bodies may carry a leaked secret. **Canonical label schema** (low-cardinality, no secrets, the C12 hard
   rule): `source`, `host`, `service`, `level`, `run_id` (the Layer-0 correlation key), `device` (capability
-  streams only). Query via **LogQL** in Grafana Explore — the cross-silo "one pane" that G2 needs. (Built on
-  branch; pending the dogfood deploy.)
+  streams only). `service` is the container's or the unit's name less what is minted per run — a compose
+  one-off's `-run-<hash>`, a login's `session-<n>.scope`, a transient `run-*` unit or `/run` mount, a container
+  scope's hash, a unit template's instance — each of which would start a new stream. Every instance is dropped,
+  fixed ones (`getty@tty1`, `wg-quick@wg0`) too, so the set stays closed with no list to keep; the body keeps
+  the full name (`container_name`, `_SYSTEMD_UNIT`) for a query that needs one. Query via **LogQL** in Grafana
+  Explore — the cross-silo "one pane" that G2 needs.
 
 ### Layer 3 — Surface + alert: Grafana  🟡 (dashboard + alerts BUILT; runbook pending)
 - **Grafana Explore** over Loki (ad-hoc LogQL) + a hand-authored **logs dashboard**
@@ -257,11 +261,12 @@ capability-detection FEATURE VECTOR — distinct from, but serendipitously align
     `.source`/`.device` + the canonical `.service`/`.host`/`.level` fallbacks) plus the method's own field
     DERIVATION, declared as a `transform_vrl:` list in `logging/<method>.yml` and spliced in BEFORE the
     defaults. So `syslog_push` maps RFC5424 `.severity` → `.level` and `journald_remote` maps `._SYSTEMD_UNIT`
-    → `.service` + `PRIORITY` → `to_syslog_level(...)` — the same derivation the live internal journald
-    transform uses — WITHOUT `gen-logging` ever branching on the method name. Adding a derivation is a registry
-    edit, not a generator change; the field is shape-validated at generate time; nothing compiles the rendered
-    VRL before Vector loads it — the gate's `vector validate` reads the hand-written tree only (SECURITY.md C22,
-    known gaps).
+    → `.service`, folded, + `PRIORITY` → `to_syslog_level(...)` — the same derivation the live internal journald
+    transform uses, its fold rules held equal line for line by `tests/unit/test_gen_logging.py` — WITHOUT
+    `gen-logging` ever branching on the method name. Adding a derivation is a registry edit, not a generator
+    change; the field is shape-validated at generate time; nothing compiles the rendered VRL before Vector loads
+    it — the gate's `vector validate` reads the hand-written tree only (SECURITY.md C22, known gaps), and a test
+    runs only the two journald methods, rendered for a test host, under `vector test`.
   - **Pull fan-out + dedupe (data-driven):** a PULL method that returns `{<field>:[...]}` can declare
     `pull_unnest: <field>` (fan to one event per element via `. = unnest!(.<field>)`, `is_array`-guarded) and
     `dedupe_key: <path>` (a Vector `dedupe` keyed on a unique field, since a recent-window poll re-ingests).

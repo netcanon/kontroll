@@ -11,6 +11,21 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): the `service` label drops what systemd and compose mint per run (2026-10-22)
+
+The Loki `service` label is meant to be a closed set, but the journald shape used the unit's name as it came and
+the containers shape the container's: each SSH login (`session-42.scope`) and each installer run
+(`services-init-run-<hash>`, a compose one-off) started a new stream, seen on both boxes after their redeploy.
+The shapes now drop the minted part — a login's scope is `session.scope`, a transient `run-*` unit or `/run`
+mount `run.<type>`, a container scope `docker.scope`, a one-off's run hash, and every template's instance
+(`getty@.service`, fixed instances too) — and keep the full name in the body (`_SYSTEMD_UNIT`,
+`container_name`), where a query can still pick one. An empty unit is `host` and an empty container name
+`unknown`, where each was an empty label. The journald capability methods (`journald_remote`,
+`file_tail_ssh`), which one receiver runs for many hosts, fold by the same rules.
+`docker/vector/tests/internal_labels.yaml` holds each rule, and names that only look minted kept;
+`tests/unit/test_gen_logging.py` holds the methods' rules equal to the internal transform's and runs each rendered
+method under `vector test`. Streams from before the deploy keep their old `service` until retention.
+
 ### fix(ansible): a deploy restarts each service whose read-only config changed (2026-10-22)
 
 A service that reads a bound config only when it starts — Vector, Grafana's provisioning, Loki, Prometheus, the
