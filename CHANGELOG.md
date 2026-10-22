@@ -11,6 +11,39 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test(docker): the label check reads VRL by its structure, not its indentation (2026-10-21)
+
+`test_compose_logging.py` holds every input of the Loki sink to setting each label field on every event. It read
+any line in column 0 as "outside every block", but VRL ignores indentation. Two wrong shapes passed it, and
+`vector test` too:
+- a default whose body sat unindented inside a conditional (`if !exists(.run_id) && contains(…) {` / `.run_id = ""`
+  / `}`), which ships a one-word line without `run_id`;
+- a later `del(.level)` inside an `if`.
+
+The check now counts `{`, `(` and `[` depth where each line begins, skipping `#` comments and every literal (a
+`"…"` string, a raw string `s'…'`, a regex `r'…'`, a timestamp `t'…'`, each with backslash escapes); a line that
+begins inside a multi-line string is not top level. It refuses a `del(.f)` or `del(."f")` of a label field. It
+refuses outright `return`, `compact()`, `remove()`, `del(.)`, a fallible `!` call and an assignment to the whole
+event, at the top or in a block: in Vector 0.56 each shipped an event without a field it had set (on a `!` call's
+error the remap ships the event as it came in), and no shipped shape uses one.
+
+- `test_the_label_check_reads_vrl_structure_not_indentation` feeds it both shapes above, braces inside a string
+  and a comment, a call that spans lines, three valid programs a round-3 reader and the main thread got past the
+  walk (an escaped quote in `r'…'`; two with a line inside a multi-line string), two rows that kill that reader's
+  surviving mutants (a block closed on its last line, a `#` inside a string), a comparison that sets nothing, and a
+  default that sets another field.
+- `test_the_label_check_refuses_vrl_that_drops_a_set_field` feeds it the drops.
+- Sixteen mutants of the walk each fail them: indentation again, no `del` check, a quoted `del` not seen, strings
+  not skipped, comments not skipped, `#` read as a comment inside a string, escapes skipped in `"` strings only, a
+  line's depth taken where it ends, a line inside a string read as top level, the drops not refused, the
+  whole-event assignment not refused (or refused only at the top), `del(.)` not refused, a `!` call not refused, a
+  comparison taken for an assignment, and a default with any body. Counting `(` and `[` is belt and braces, so a
+  mutant that stops counting them survives: in Vector 0.56 no line that begins inside them can set a field (a
+  newline after a bare `(` is a syntax error, and so is an assignment, or a default's `if`, as an argument or an
+  element).
+
+The shipped shapes pass unchanged.
+
 ### fix(docker): the socket proxy passes only the container reads Vector makes (2026-10-21)
 
 The C12 socket proxy is Vector's only way to the Docker API, and its `CONTAINERS=1` grant passed every GET and HEAD

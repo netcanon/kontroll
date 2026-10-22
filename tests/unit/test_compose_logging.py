@@ -127,11 +127,81 @@ def test_vector_internal_source_transform_ids_disjoint_and_sink_resolves():
         assert inp in xfm_ids, "loki sink input %r is not a transform component (it must consume shaped events)" % inp
 
 
+def _vrl_outside_strings(vrl):
+    """A VRL program's lines that begin outside every block, bracket and literal (stripped); its code with literals
+    and `#` comments blanked; and its text with only the comments taken out. VRL ignores indentation, so this counts
+    depth: `{`, `(` and `[` open, their closers close, and nothing inside a literal counts: a `"…"` string, a raw
+    string `s'…'`, a regex `r'…'` or a timestamp `t'…'`, each with backslash escapes (an escaped quote ends none)."""
+    top, code, text, depth, quote, line, line_depth, i = [], [], [], 0, None, "", 0, 0
+    while i < len(vrl):
+        c = vrl[i]
+        if quote:
+            if c == "\\":
+                line += vrl[i:i + 2]
+                code.append("  ")
+                text.append(vrl[i:i + 2])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            code.append("\n" if c == "\n" else " ")
+        elif c == "#":
+            end = vrl.find("\n", i)
+            i = len(vrl) if end < 0 else end
+            continue
+        else:
+            if c in "\"'":
+                quote = c
+            elif c in "{([":
+                depth += 1
+            elif c in "})]":
+                depth -= 1
+            code.append(c)
+        text.append(c)
+        if c == "\n":
+            if line.strip() and line_depth == 0:
+                top.append(line.strip())
+            # a line that begins inside a multi-line literal is not top level, whatever it looks like
+            line, line_depth = "", depth if quote is None else -1
+        else:
+            line += c
+        i += 1
+    if line.strip() and line_depth == 0:
+        top.append(line.strip())
+    return top, "".join(code), "".join(text)
+
+
+# VRL that drops a field after it was set. Each shipped an event without it in Vector 0.56 (2026-10-21): an early
+# `return`, `compact()` (which drops an empty `run_id`), `remove()`, `del(.)`, an assignment to the whole event
+# (`. = …`, in a block too), and a fallible call with `!` (on its error the remap ships the event as it came in:
+# `drop_on_error` is off). No shipped shape uses one, so the check refuses them outright rather than follow them.
+_DROPS_FIELDS = re.compile(r"\breturn\b|\bcompact\(|\bremove!?\(|\w!\(|\bdel\(\s*\.\s*[,)]|(?<!\w)\.\s*=(?!=)")
+
+
+def _label_fields_left_unset(vrl, fields):
+    """The fields of `fields` a transform can leave unset on some event. A field is set on every event by an
+    assignment that begins outside every block (`.f = …`), or by a one-line `if !exists(.f) { .f = … }` there, with
+    no `del(.f)` or `del(."f")` anywhere (a `del` inside a string counts too: a false alarm, the safe direction). A
+    program that uses `return`, `compact()`, `remove()`, `del(.)` or a fallible `!` call, or assigns the whole
+    event, leaves every field in doubt."""
+    top, code, text = _vrl_outside_strings(vrl)
+    if _DROPS_FIELDS.search(code):
+        return list(fields)
+    unset = []
+    for f in fields:
+        sets = re.compile(r"^\.%s\s*=(?!=)" % f)
+        default = re.compile(r"^if\s+!exists\(\.%s\)\s*\{\s*\.%s\s*=" % (f, f))
+        deleted = re.search(r'\bdel\(\s*\.(?:%s\b|"%s")' % (f, f), text)
+        if deleted or not any(sets.match(line) or default.match(line) for line in top):
+            unset.append(f)
+    return unset
+
+
 def test_every_input_of_the_loki_sink_sets_each_field_it_templates_as_a_label():
     """Every transform the internal Loki sink reads sets each field the sink templates as a label
-    (`"{{ field }}"`) on EVERY event: an unconditional top-level assignment, or an `if !exists(.field)` default.
-    Guards the warning flood measured on both boxes and reproduced on a scratch Vector 0.56 + Loki 3.4.2
-    (2026-10-20): a field absent from an event fails its label template, so Vector logs a WARN per event
+    (`"{{ field }}"`) on EVERY event: an assignment outside every block, or an `if !exists(.field)` default, and
+    never a `del(.field)`. Guards the warning flood measured on both boxes and reproduced on a scratch Vector 0.56 +
+    Loki 3.4.2 (2026-10-20): a field absent from an event fails its label template, so Vector logs a WARN per event
     (rate-suppressed) and ships the event without that label — `run_id` on container/journald/file lines, `level`
     on every plain-text container line. `vector validate` compiles the VRL but cannot see a field that is only
     set inside an `if`; this is the CI guard. (An empty `run_id` is stored by Loki as no label — measured — so the
@@ -142,14 +212,77 @@ def test_every_input_of_the_loki_sink_sets_each_field_it_templates_as_a_label():
     assert {"host", "service", "level", "run_id"} <= set(fields), "the sink templates the canonical labels"
     for inp in sink["inputs"]:
         vrl = _load("docker/vector/config.d/transforms/%s.yaml" % inp)["source"]
-        top = [line for line in vrl.splitlines() if line and not line[0].isspace()]   # outside every block
-        for f in fields:
-            sets = re.compile(r"^\.%s\s*=(?!=)" % f)
-            default = re.compile(r"^if\s+!exists\(\.%s\)\s*\{\s*\.%s\s*=" % (f, f))
-            assert any(sets.match(line) or default.match(line) for line in top), (
-                "%s can leave the sink's label field %r unset: assign it at the top level or add "
-                "`if !exists(.%s) { .%s = ... }` (a missing field fails the label template on every event)"
-                % (inp, f, f, f))
+        unset = _label_fields_left_unset(vrl, fields)
+        assert not unset, (
+            "%s can leave the sink's label field(s) %s unset: assign each outside every block or add "
+            "`if !exists(.f) { .f = ... }`, and never `del(.f)` (a missing field fails the label template on every "
+            "event)" % (inp, unset))
+
+
+def test_the_label_check_reads_vrl_structure_not_indentation():
+    """The label check reads VRL by its braces, brackets, strings and comments, not by indentation. Why: VRL ignores
+    indentation, and the check first read any line in column 0 as "outside every block". A default whose body sat
+    unindented inside a conditional (`if !exists(.run_id) && contains(…) {` / `.run_id = ""` / `}`) passed it and
+    both `vector test` cases, while a one-word container line still shipped without `run_id`; a later `del(.level)`
+    inside an `if` passed too (round-1 review, 2026-10-21). A brace inside a string or a comment, or a call that
+    spans lines, must not move the count. A line's depth is the depth where it begins, not where it ends. A round-3
+    reader and the main thread got three valid programs past the walk (each run in Vector 0.56): in one an escaped
+    quote in a regex literal (`r'it\\'s'`) ended the literal early, and in two a line that began inside a multi-line
+    string was read as top level. The `closed_on_the_same_line` and `hash_in_a_string` rows kill that reader's
+    surviving mutants of the walk. A comparison (`==`) sets nothing, and a default must set the field it tests
+    (round-4 review)."""
+    fields = ["level", "run_id"]
+    ok = '.level = "info"\nif !exists(.run_id) { .run_id = "" }\n'
+    assert _label_fields_left_unset(ok, fields) == []
+    unindented_if = '.level = "info"\nif !exists(.run_id) && contains(string(.message) ?? "", " ") {\n.run_id = ""\n}\n'
+    assert _label_fields_left_unset(unindented_if, fields) == ["run_id"]
+    later_del = ok + 'if .service == "semaphore" {\ndel(.level)\n}\n'
+    assert _label_fields_left_unset(later_del, fields) == ["level"]
+    braces_in_text = '.message = "{ ( [ \\" {"\n.level = "info"  # a comment with { in it\n.run_id = ""\n'
+    assert _label_fields_left_unset(braces_in_text, fields) == []
+    call_over_lines = ("lv = parse_regex(.message,\n  r'level=(?P<l>[a-z]+)'\n) ?? {}\n"
+                       '.level = "info"\nif !exists(.run_id) { .run_id = "" }\n')
+    assert _label_fields_left_unset(call_over_lines, fields) == []
+    inside_a_call = 'x = merge(.,\n{\n.run_id = ""\n})\n.level = "info"\n'
+    assert _label_fields_left_unset(inside_a_call, fields) == ["run_id"]
+    closed_on_the_same_line = '.level = "info"\nif .x == "y" {\n.run_id = "" }\n'
+    assert _label_fields_left_unset(closed_on_the_same_line, fields) == ["run_id"]
+    hash_in_a_string = '.level = "info"\n.m = "a # b {"\nif .x == "z" {\n.run_id = "set"\n}\n'
+    assert _label_fields_left_unset(hash_in_a_string, fields) == ["run_id"]
+    hash_then_a_long_string = '.level = "info"\n.m = "a # b"\n.t = "x\n.run_id = y"\n'
+    assert _label_fields_left_unset(hash_then_a_long_string, fields) == ["run_id"]
+    escaped_quote = 'x = r\'it\\\'s\'\nif .x == "y" {\n.run_id = ""\n}\n.level = "info"\n'
+    assert "r'it\\'s'" in escaped_quote and _label_fields_left_unset(escaped_quote, fields) == ["run_id"]
+    inside_a_string = '.message = "a\n.run_id = b"\n.level = "info"\n'
+    assert _label_fields_left_unset(inside_a_string, fields) == ["run_id"]
+    a_comparison = '.level = "info"\n.run_id == "x"\n'
+    assert _label_fields_left_unset(a_comparison, fields) == ["run_id"]
+    a_default_for_another_field = '.level = "info"\nif !exists(.run_id) { .runid = "" }\n'
+    assert _label_fields_left_unset(a_default_for_another_field, fields) == ["run_id"]
+
+
+def test_the_label_check_refuses_vrl_that_drops_a_set_field():
+    """The label check refuses a program that can drop a label field after setting it: a quoted `del(."level")`, an
+    early `return`, `compact()`, `remove()`, `del(.)`, a fallible `!` call, or an assignment to the whole event, at
+    the top or in a block. Why: each passed the walk while Vector 0.56 shipped the event without the field (the
+    round-3 and round-4 reviews and the main thread, 2026-10-21), and the sink then fails that label's template on
+    every such event. On a `!` call's error the remap ships the event as it came in, with none of the fields it set.
+    No shipped shape uses one, so refusing them costs nothing; any of them inside a string is text, not code, and
+    does not count."""
+    fields = ["level", "run_id"]
+    ok = '.level = "info"\nif !exists(.run_id) { .run_id = "" }\n'
+    assert _label_fields_left_unset(ok + 'del(."level")\n', fields) == ["level"]
+    assert _label_fields_left_unset('.level = "info"\nif .x == "y" { return . }\n.run_id = ""\n', fields) == fields
+    assert _label_fields_left_unset(ok + ". = compact(.)\n", fields) == fields
+    assert _label_fields_left_unset(ok + '. = remove!(., ["run_id"])\n', fields) == fields
+    assert _label_fields_left_unset(ok + '. = {"message": .message}\n', fields) == fields
+    assert _label_fields_left_unset(ok + 'if .x == "y" { . = {"message": .message} }\n', fields) == fields
+    assert _label_fields_left_unset(ok + 'if .x == "y" {\n. = {"message": .message}\n}\n', fields) == fields
+    assert _label_fields_left_unset(ok + 'x = del(.)\n', fields) == fields
+    assert _label_fields_left_unset(ok + 'if .x == "y" { del(.) }\n', fields) == fields
+    assert _label_fields_left_unset(ok + '.p = parse_json!(.message)\n', fields) == fields
+    assert _label_fields_left_unset(ok + '.note = "return compact(.) remove(x) del(.) parse_json!(y) . = z"\n',
+                                    fields) == []
 
 
 def test_every_logging_token_env_is_passed_through_to_vector():
