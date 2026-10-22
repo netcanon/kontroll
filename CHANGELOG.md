@@ -36,7 +36,9 @@ names a backend this install ships and an onboard under that key would plan — 
   and the app-store create seam shares it) skips a module file whatever its parse raises — one that is not UTF-8,
   holds a date no calendar has, nests past the recursion limit or tags a scalar YAML cannot build — as it skipped
   one that does not parse; a create preview that answered 500 for such a file anywhere under `modules/` now
-  answers as if the file were absent (`no_module`, or the next class that declares the collection).
+  answers as if the file were absent (`no_module`, or the next class that declares the collection), and the onboard
+  form's credential fields, which fell back to "could not derive credential fields" for most collections, derive
+  again.
 - **Upgrading.** A class of your own whose module file declares no `backend:` and whose collection carries no
   positive signal now answers its next onboard `no_backend` — the sentence names the file and the key to add
   (`backend:`, `raw_ssh` if it is an SSH host) — and, if it is `derived: true`, `gen-class-capabilities` can no

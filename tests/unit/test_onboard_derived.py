@@ -105,11 +105,11 @@ def test_the_declaring_class_hint_survives_malformed_module_files(monkeypatch, t
     a scalar YAML cannot build (`!!bool maybe`) — named to sort before every other class, so the scan opens each — and
     names no class for a collection none declares (a full scan), nor for one declared by a file whose `key` is not a
     class key or is a word YAML reads as another type (the class `null`), whose `key` names a class whose own file
-    declares another collection, or whose `key` names a class whose own file is not UTF-8 or nests past the recursion
-    limit. Guards every refusal turning into a 500 (or a 422 naming the codec) because one onboarded class's file is
-    malformed — the lookup runs on each `no_backend` plan; a list file's first `.get` was an AttributeError — and the
-    hint naming a key a request could not send, or one whose onboard would not reuse the class that declares the
-    collection (it would answer `no_backend` and point at that key again)."""
+    declares another collection, or whose `key` names a class whose own file is not UTF-8, nests past the recursion
+    limit or tags a scalar YAML cannot build. Guards every refusal turning into a 500 (or a 422 naming the codec)
+    because one onboarded class's file is malformed — the lookup runs on each `no_backend` plan; a list file's first
+    `.get` was an AttributeError — and the hint naming a key a request could not send, or one whose onboard would not
+    reuse the class that declares the collection (it would answer `no_backend` and point at that key again)."""
     mods = tmp_repo / "modules"
     for key, text in (("aa_listy", "- a\n- b\n"), ("aa_odd", "key: aa_odd\ncollections: 5\n"),
                       ("aa_cp1252", b"key: aa_cp1252\ndescription: Caf\xe9\n"),
@@ -123,13 +123,16 @@ def test_the_declaring_class_hint_survives_malformed_module_files(monkeypatch, t
                       ("aa_pointer", "key: acme_garbled\ncollections:\n  - {name: acme.ptr}\nbackend: raw_ssh\n"),
                       ("acme_garbled", b"key: acme_garbled\ndescription: Caf\xe9\n"),
                       ("aa_pointer2", "key: acme_deep\ncollections:\n  - {name: acme.ptr2}\nbackend: raw_ssh\n"),
-                      ("acme_deep", "key: acme_deep\nx: " + "[" * 5000 + "]" * 5000 + "\n")):
+                      ("acme_deep", "key: acme_deep\nx: " + "[" * 5000 + "]" * 5000 + "\n"),
+                      ("aa_pointer3", "key: acme_tagged\ncollections:\n  - {name: acme.ptr3}\nbackend: raw_ssh\n"),
+                      ("acme_tagged", "key: acme_tagged\nx: !!bool maybe\n")):
         (mods / key).mkdir()
         if isinstance(text, bytes):
             (mods / key / "module.yml").write_bytes(text)
         else:
             (mods / key / "module.yml").write_text(text, encoding="utf-8")
-    for collection in ("acme.nothing", "acme.spaced", "acme.null", "acme.other", "acme.ptr", "acme.ptr2"):
+    for collection in ("acme.nothing", "acme.spaced", "acme.null", "acme.other", "acme.ptr", "acme.ptr2",
+                       "acme.ptr3"):
         plan = _blind_plan(monkeypatch, {}, ["thing_info"], collection=collection, key="thing_auto")
         assert plan["error"] == "no_backend" and plan["declaring_class"] is None, collection
 
