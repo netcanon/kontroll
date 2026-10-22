@@ -40,7 +40,8 @@ Pressing **Run** with *apply* ticked calls the onboard service **in-process** �
 
 **The deliberate trust boundary (surfaced, not relaxed):** when the deploy armed `KONTROLL_STAGE_PUSHES`
 (the C10 privileged-mutation enablement, `api_privileged`), the GUI can only **PROPOSE** — it pushes a
-`proposed/<run_id>` staging ref, never `main`; a trusted `kontroll promote <run_id>` (FF-only) lands it. A
+`proposed/<run_id>` staging ref, never `main`; a trusted promote (FF-only — the Semaphore `promote-proposal` task, or
+`scripts/kontroll-promote.py` on the control node) lands it. A
 leaked/abused GUI login can only stage a proposal — it cannot promote one. Bootstrap is **deferred**
 to after promote — the network surface runs no Ansible, and a host that lives only in an un-promoted proposal
 can't be verified yet. See [SECURITY.md](../SECURITY.md) C10 +

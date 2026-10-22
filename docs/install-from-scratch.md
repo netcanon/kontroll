@@ -263,17 +263,20 @@ for the full recipe; the itinerary:
 **Promote = a SEPARATE Semaphore web app (the two-key safety).** Under `trust_mode: separated` a proposal is
 landed on `main` from a **different app, with a different login**, than the GUI that created it — so a leaked API
 token can only park rejectable proposals, never rewrite the canonical (SECURITY.md C10;
-[trust-mode.md](trust-mode.md) says what `solo` changes). To promote a `run_id`:
+[trust-mode.md](trust-mode.md) says what `solo` changes). To promote a proposal:
 
 1. Open Semaphore at **`http://${KONTROLL_MGMT_IP}:3001`** and log in **`admin` / `semaphore_admin_password`**
    — the §2 value, **not** the GUI's `gui_admin_password` (a deliberately separate credential).
-2. Open the **`promote-proposal`** template (registered by §6) → **Run** → in the survey, enter the **`run_id`**
-   from the GUI's propose/onboard response → **Run**.
+2. In the GUI's **Pending** panel, review the proposal's change and click its **copy to promote** — it copies
+   `<run id>@<commit id>`, the commit you looked at. Open the **`promote-proposal`** template (registered by §6) →
+   **Run** → paste it into the *Proposal run_id@commit* field → **Run**. A bare run id is refused.
 3. It **fast-forward-merges** `proposed/<run_id>` into `main` (FF-only — a proposal can never rewrite history) and
    deletes the proposal. Before that it resolves the tree the promote would make `main`: one the collection
    generator refuses — two units pinning one collection differently, a fleet line that is not a class key — is
    refused (exit 2) with a sentence that says what to correct. *CLI fallback:* `sudo python3
-   scripts/kontroll-promote.py <run_id> --repo /srv/kontroll.git`.
+   scripts/kontroll-promote.py <run_id>@<commit_id> --repo /srv/kontroll.git` — it needs the source tree and a host
+   `python3` with PyYAML, which the host floor does not install
+   ([privileged-mutation-enablement.md](privileged-mutation-enablement.md) §5, step 4).
    The promote is reachable only by a Semaphore admin on the mgmt VLAN — **never the API token**.
 
 ## 8. Use it — onboarding + capabilities (the guided flow)
@@ -288,10 +291,10 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
    *(Onboarding a device of a class that already exists **reuses** that class — it adds only the host, #124.)*
 2. **(optional) Add a secondary capability.** Click a **telemetry / backup / logging** badge → pick a method →
    **Propose** (a pure plan + an anti-drift token) → **Promote** (also staged as `proposed/<run_id>`).
-3. **Promote** each `run_id` in the **Semaphore web app** — the §7 *Promote* walkthrough (`promote-proposal`
-   template, the `run_id` survey field). (An edition that runs an auto-promoter does this step itself under
-   `solo`, for what its scope allows — [trust-mode.md](trust-mode.md).) This fast-forwards the proposal onto
-   `main`; for a plain device onboard, the device is now in the inventory + fleet.
+3. **Promote** each proposal in the **Semaphore web app** — the §7 *Promote* walkthrough (the Pending panel's **copy
+   to promote**, pasted into the `promote-proposal` template). (An edition that runs an auto-promoter does this step
+   itself under `solo`, for what its scope allows — [trust-mode.md](trust-mode.md).) This fast-forwards the proposal
+   onto `main`; for a plain device onboard, the device is now in the inventory + fleet.
 4. **Enact** ("make it live") splits by privilege (item F): **Tier-1** steps — the Prometheus reload
    (`reload-observability`), a host-agent install (`install-node-exporter`) — are **one-click Semaphore tasks**
    (no host root); **Tier-2** `deploy-stack` (bring up an exporter container / fetch dashboards / rebuild the
@@ -316,7 +319,7 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
 | All service/infra secrets | manual `sops` | **per-domain GUI onboarding forms** (the main ask) |
 | Recursive canonical write-grant | ~~manual `chgrp/chmod`~~ | ✓ idempotent `local-canonical.yml` detect-then-apply pair (`kontroll-canonical.py --normalise`) |
 | C10 token | ~~manual `sops --set`~~ | ✓ guided secret form (`dashboards.kontroll_api_token`, `generate: hex32` — no value in argv, C11) |
-| Promote | ~~manual `sudo kontroll-promote.py`~~ | ✓ `promote-proposal` Semaphore task (run_id survey var; FF-only; gated rw canonical mount, gid-1001, no host root) |
+| Promote | ~~manual `sudo kontroll-promote.py`~~ | ✓ `promote-proposal` Semaphore task (`<run id>@<commit id>` survey var; FF-only; gated rw canonical mount, gid-1001, no host root) |
 | onboard-gui staging | gated deploy provisions its clone-remote (uid:gid + mount + remote) | ✓ done |
 | `acl` | manual (or avoided) | `install-prereqs.sh` |
 

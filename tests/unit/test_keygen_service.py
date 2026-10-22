@@ -227,3 +227,19 @@ def test_recipient_re_tolerates_a_trailing_comment():
     m = keygen._RECIPIENT_RE.match('      - "age1abc00000000000000000000"   # REPLACE\n')
     assert m and m.group(2) == "age1abc00000000000000000000"
     assert keygen._RECIPIENT_RE.match('      - age1bare0000000000000000000\n')      # unquoted, no comment
+
+
+def test_the_apply_result_names_the_run_id_it_was_given(sops_repo):
+    """Verifies: the apply result's promote step is `promote_hint` for the run id the route minted, with no
+    `<run_id>` placeholder left; the plan (no id exists yet) keeps the placeholder; `next_steps(..., staged=False)`
+    has no promote step, and an unknown role has no steps. Guards against: an operator copying a placeholder into
+    the promote task although the id was known two lines earlier (F12), and a promote step for a write that staged
+    nothing (the key was already a recipient, or the deploy commits to main)."""
+    from kontroll.service.pending import promote_hint
+    res = keygen.apply_keygen_plan("semaphore", run_id="0123456789ab")
+    assert any(promote_hint("0123456789ab") in s for s in res["next_steps"])
+    assert not any("<run_id>" in s for s in res["next_steps"])
+    assert any(promote_hint("<run_id>") in s for s in keygen.build_keygen_plan("semaphore")["next_steps"])
+    unstaged = keygen.next_steps("semaphore", "0123456789ab", staged=False)
+    assert unstaged and not any("promote" in s.lower() for s in unstaged)
+    assert keygen.next_steps("not_a_role") == []

@@ -592,12 +592,12 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
 - **The service only PROPOSES.** When it runs (`KONTROLL_STAGE_PUSHES=1`), `gitio.commit_and_push` pushes a
   **staging ref** `refs/heads/proposed/<run_id>`, never `main`; the operator's CLI (no such env) takes its
   commit to `main` directly (the trusted human) — as a **landing** through the promote gate, never a push (see
-  "Every way into `main` lands" below). `kontroll promote <run_id>` fast-forwards `main` (FF-only; refuses
-  otherwise). The in-GUI follow-on is now the **`promote-proposal` Semaphore task** (item C, 2026-06-15;
-  `config/semaphore/templates/promote-proposal.yml` → `ansible/playbooks/promote.yml`) — a `run_id` survey var,
-  FF-only, **reachable only by a Semaphore admin on the mgmt VLAN, never the API token** (the promote lives
-  outside the token's reach, so a leaked token can never self-promote). A leaked token can only **stage
-  proposals**. Under `separated` each one waits for you to reject or promote it, so the token alone never
+  "Every way into `main` lands" below). `kontroll-promote.py <run_id>@<commit_id>` fast-forwards `main` (FF-only;
+  refuses otherwise). The in-GUI follow-on is now the **`promote-proposal` Semaphore task** (item C, 2026-06-15;
+  `config/semaphore/templates/promote-proposal.yml` → `ansible/playbooks/promote.yml`) — a `run_id` survey var that
+  takes `<run id>@<commit id>`, FF-only, **reachable only by a Semaphore admin on the mgmt VLAN, never the API token**
+  (the promote lives outside the token's reach, so a leaked token can never self-promote). A leaked token can only
+  **stage proposals**. Under `separated` each one waits for you to reject or promote it, so the token alone never
   rewrites the lab ([docs/trust-mode.md](docs/trust-mode.md) says what `solo` changes). **A proposal is
   all of its paths or none:** `git add` exits
   non-zero for a path a `.gitignore` rule ignores (having staged the others) and for one that is not there

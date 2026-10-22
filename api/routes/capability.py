@@ -17,6 +17,7 @@ from api.auth import Principal, audit_action, require_token
 from api.deps import Catalog, get_catalog
 from kontroll import gitio
 from kontroll.service import capability
+from kontroll.service.pending import promote_hint
 
 router = APIRouter(prefix="/capability", tags=["privileged"])
 
@@ -106,6 +107,5 @@ def capability_apply(cap: str, body: CapabilityIn, request: Request,
             "target_ref": git["target_ref"], "staged": git["staged"],
             "enact": out["plan"]["enact"], "links": out["plan"].get("links") or [],   # Grafana deep-links (#122)
             "run_id": principal.run_id,
-            "next": (("staged as proposed/%s — promote it (`kontroll promote %s`), then run the enact commands"
-                      % (principal.run_id, principal.run_id)) if git["staged"]
+            "next": ((promote_hint(principal.run_id) + "; then run the enact commands") if git["staged"]
                      else "not live yet — run the listed enact commands to make it flow")}

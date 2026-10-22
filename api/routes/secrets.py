@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from api.auth import Principal, audit_action, require_token
 from kontroll import catalog, gitio
 from kontroll.service import secrets as secrets_service
+from kontroll.service.pending import promote_hint
 
 router = APIRouter(prefix="/secrets", tags=["privileged"])
 
@@ -94,5 +95,4 @@ def secret_apply(domain: str, body: SecretIn, request: Request,
             "pushed_origin": git["pushed_origin"], "target_ref": git["target_ref"], "staged": git["staged"],
             "enact": secrets_service.actuation_enact_commands(domain, set_names),   # post-promote hand-off (NAMES + cmds)
             "run_id": principal.run_id,
-            "next": ("promote the proposal: `kontroll promote %s`" % principal.run_id) if git["staged"]
-                    else "committed to main"}
+            "next": promote_hint(principal.run_id) if git["staged"] else "committed to main"}

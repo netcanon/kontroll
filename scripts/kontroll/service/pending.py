@@ -1,9 +1,9 @@
 """pending domain — the read-only "what proposals are awaiting promotion?" view (#129, gap 3 / C10).
 
-`list_pending()` lists the canonical bare repo's `refs/heads/proposed/<run_id>` branches — every change STAGED by
-the network service (onboard / capability / secret / keygen) that has not yet been promoted to `main`. Each entry
-carries the run_id (the load-bearing field the operator copies into the Semaphore `promote-proposal` task), the
-commit it points at, the tip subject ("what it changes" at a glance), the staged-at time, the author, and what it
+`list_pending()` lists the canonical bare repo's `refs/heads/proposed/<run_id>` branches — every change STAGED by the
+network service (onboard / capability / secret / keygen) that has not yet been promoted to `main`. Each entry carries
+the run_id and the commit it points at (together the `<run id>@<commit id>` the operator copies into the Semaphore
+`promote-proposal` task), the tip subject ("what it changes" at a glance), the staged-at time, the author, and what it
 changes — one status and one name per file. It is a PURE READ of the canonical (`/srv/kontroll.git` by default, or
 `$KONTROLL_CANONICAL_GIT`) and writes NOTHING — it **never promotes** (promote stays the separate, admin-authed
 Semaphore app: C10 two-key safety; the proposer's read surface must never be the promoter — so this module imports
@@ -11,7 +11,7 @@ neither `gitio.promote_ref` nor `commit_and_push`, and never `git push`/`update-
 
 WHY this surface exists: the network service stages `proposed/<run_id>` refs the operator can otherwise see only
 in the transient propose response (gone once the dialog closes) or via a manual `git for-each-ref` on the box.
-This is the GUI answer to "where do I get the run_id to promote?" — a standing list with a one-click copy + the
+This is the GUI answer to "what do I promote, and what do I paste?" — a standing list with a one-click copy + the
 exact Semaphore recipe. A missing/empty/non-git canonical → `proposals: []` + an informational note (never raises;
 the in-process GUI worker must survive — service-never-sys.exit, mirroring `fleet.list_fleet`'s posture). Serves
 metadata + path NAMES only — never file contents (that is the C8 backup-viewer's problem, deliberately not here).
@@ -52,6 +52,21 @@ PROMOTE_TASK = "promote-proposal"           # config/semaphore/templates/ — ha
 # canonical that makes each of them wait must not hold a GUI worker for their sum. A row reached after the budget
 # is listed with what was not read said as not read.
 LIST_SECONDS = 20
+PROMOTE_DOC = "docs/privileged-mutation-enablement.md"   # holds the control-node form and its preconditions
+
+
+def promote_hint(run_id):
+    """The one sentence that tells an operator how to land the proposal a write just staged. Every staged-write
+    response's `next` (GUI and API) and the keygen steps take it from here, so the instruction exists once: the
+    hand-typed copies had drifted into a CLI verb no deploy ships, and into a bare run id to promote in Semaphore,
+    which no longer says what to enter now that the task takes <run id>@<commit id> and refuses a bare run id
+    (T19). It names the Semaphore task, where its one value comes from (the Pending panel's copy control on the
+    proposal's row, which is also where the change is reviewed) and the document that holds the rest — how to list
+    proposals with no GUI, and the control-node form, whose preconditions do not fit in a sentence. It prints no commit
+    id: that value pins the commit the operator looked at, so it is copied where the change is shown."""
+    return ("promote proposed/%s: review it in the GUI's Pending panel, then enter the <run id>@<commit id> its row "
+            "copies in the Semaphore `%s` task (with no GUI, or from the control node: %s)"
+            % (run_id, PROMOTE_TASK, PROMOTE_DOC))
 
 
 def _canonical(canonical=None):

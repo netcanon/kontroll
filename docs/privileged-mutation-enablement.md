@@ -164,6 +164,10 @@ capability-promote path is live too, not just the API. The from-scratch recipe (
    /srv/kontroll.git`. With `sudo` the command is root only until it starts git: every git it runs in the
    canonical is the service uid (1001:1001), so it writes the same files, as the same owner, as the Semaphore job
    does — and says so on stderr. Without `sudo`, an account that is neither root nor the service is refused.
+   The CLI form needs the source tree on the host and a host `python3` **with PyYAML**: its resolve gate runs
+   `scripts/gen-requirements.py`, which imports `yaml`, and a gate that cannot run is reported as a refusal
+   (exit 2). The host floor (`scripts/install-prereqs.sh`: Docker + git) installs neither, so on a stock box the
+   Semaphore task is the route; every staged write's `next` hint names that task and points here for this form.
 5. **Verify:** `curl -sk -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" https://<mgmt>:8444/audit/log`
    (`http://` under `frontend.tls_mode: byo_proxy` or `acme`, where the API serves plain HTTP to your proxy)
    → 200 (no token → 401); a capture-exception/capability promote returns `staged:true target_ref:proposed/<run_id>`

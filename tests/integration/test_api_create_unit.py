@@ -20,6 +20,7 @@ from api.main import create_app
 from api.settings import Settings
 from kontroll import catalog, gitio, paths
 from kontroll.service import actuation
+from kontroll.service.pending import promote_hint
 
 pytestmark = pytest.mark.integration
 
@@ -127,12 +128,13 @@ def test_create_with_stale_token_is_409(cre):
 def test_create_targets_proposed_ref_when_staging(cre):
     """With KONTROLL_STAGE_PUSHES set (the deployed staging posture), the push targets proposed/<run_id> — never
     main (C10). Guards the load-bearing two-key property: a leaked token can only STAGE a create
-    proposal, never land a unit on main."""
+    proposal, never land a unit on main. Its `next` is the one promote instruction for THAT run id (T19)."""
     cre.monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     proposed = cre.client.post("/actuation/create", headers=AUTH, json=BODY).json()
     r = cre.client.post("/actuation/create", headers=AUTH, json=dict(BODY, apply=True, token=proposed["token"]))
     body = r.json()
     assert body["staged"] is True and body["target_ref"] == "proposed/%s" % body["run_id"]
+    assert body["next"].startswith(promote_hint(body["run_id"]))   # the one promote instruction (T19)
     push = next(c for c in cre.calls if "push" in c)
     assert any("proposed/%s" % body["run_id"] in p for p in push)   # the ref, never refs/heads/main
 

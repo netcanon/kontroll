@@ -74,7 +74,7 @@
     <button class="go" onclick="search()" data-testid="search-btn">Search</button>
     <label class="row" title="Deep-probe local matches (slower; resolves ? cells)"><input type="checkbox" id="deep" data-testid="search-deep"> deep</label>
     <button data-testid="fleet-open" onclick="openFleetPanel()" title="Index — the control-plane services + what you've onboarded; jump to each class's dialogs">Index</button>
-    <button data-testid="pending-open" onclick="openPendingPanel()" title="Proposals staged and awaiting promotion — copy a run_id into the Semaphore promote-proposal task">Pending</button>
+    <button data-testid="pending-open" onclick="openPendingPanel()" title="Proposals staged and awaiting promotion — copy a proposal's <run id>@<commit id> into the Semaphore promote-proposal task">Pending</button>
     <button data-testid="discovery-open" onclick="openDiscoveryPanel()" title="Devices the network sees but you haven't onboarded — click Onboard this to pre-fill the host into the onboard form">Discovery</button>
     <button data-testid="backup-open" onclick="openBackupPanel()" title="View + diff device config backups (read-only; secrets masked best-effort)">Backups</button>
     <button data-testid="secrets-open" onclick="openSecretsPicker()" title="Enter service/infra secrets (encrypted to SOPS, staged)">Secrets</button>
@@ -720,7 +720,8 @@ function renderCapPromote(r){
   return (r.staged? 'STAGED proposal '+r.target_ref : 'committed to main')+' (run_id '+r.run_id+')\n'
     +'paths: '+(r.paths||[]).join(', ')+'\n'
     +(r.staged
-        ? 'promote it: enter run_id '+r.run_id+' in the Semaphore promote-proposal task, then run the enact commands above.'
+        ? 'promote it: review it in the Pending panel, then enter the <run id>@<commit id> its row copies in the '
+          + 'Semaphore promote-proposal task; then run the enact commands above.'
         : 'NOT LIVE until you run the enact commands above.');
 }
 async function capPromote(dlg) {
@@ -855,7 +856,7 @@ async function unitCreate(dlg) {
   body.appendChild(ET('pre','out', renderCapPromote(r), 'unit-result'));   // reuse the staged-ref + run_id renderer
   if (!r.error && r.changed) {                                    // the post-promote hand-off (enact)
     body.appendChild(ET('pre','out',
-      'next (after you promote run_id ' + r.run_id + ' in Semaphore):\n'
+      'next (after you promote proposed/' + r.run_id + ' in Semaphore):\n'
       + '  1. configure the unit’s curated knobs (if any) + review the would-run play\n'
       + '  2. the FIRST run is a --check --diff dry-run — review it before the apply run', 'unit-enact'));
   }
@@ -940,7 +941,7 @@ async function unitConfigStage(dlg) {
   body.appendChild(ET('pre','out', renderCapPromote(r), 'unit-config-result'));   // reuse the staged-ref + run_id renderer
   if (!r.error && r.changed) {                                   // the post-promote hand-off
     body.appendChild(ET('pre','out',
-      'next (after you promote run_id ' + r.run_id + ' in Semaphore):\n'
+      'next (after you promote proposed/' + r.run_id + ' in Semaphore):\n'
       + '  the FIRST run is a --check --diff dry-run — review it before the apply run', 'unit-config-enact'));
   }
 }
@@ -1164,9 +1165,9 @@ function serviceRow(s) {
   return row;
 }
 // --- the Pending panel (#129, gap 3 / C10): a READ-ONLY list of proposals STAGED (proposed/<run_id>) and awaiting
-// promotion. The single action is COPY the run_id; the panel then points at the Semaphore promote-proposal task. It
-// NEVER promotes — promote is the separate, admin-authed Semaphore app (C10 two-key). Answers "where do I get the
-// run_id to promote?" for when the operator comes back later and the propose dialog is long gone.
+// promotion. The single action is COPY <run id>@<commit id>; the panel then points at the Semaphore
+// promote-proposal task. It NEVER promotes — promote is the separate, admin-authed Semaphore app (C10 two-key).
+// Answers "what do I promote?" for when the operator comes back later and the propose dialog is long gone.
 async function openPendingPanel() {
   document.querySelectorAll('[data-testid=pending-overlay]').forEach(n => n.remove());
   const ov = E('div', 'capov', null, 'pending-overlay');
@@ -1945,7 +1946,10 @@ async function keygenApply(dlg) {
   out.appendChild(ET('pre','keyval', r.private_key, 'keygen-private'));
   out.appendChild(ET('div','meta', 'public recipient: '+r.public_key, 'keygen-public'));
   const steps = (r.next_steps||[]).map((s,i)=>(i+1)+'. '+s).join('\n');
-  out.appendChild(ET('pre','out', (r.changed ? ('STAGED '+(r.target_ref||'')+' (run_id '+r.run_id+')\n') : (r.note+'\n'))+steps, 'keygen-steps'));
+  // STAGED only when the route staged it: a deploy that commits to main has nothing to promote (T19)
+  const head = r.staged ? 'STAGED '+(r.target_ref||'')+' (run_id '+r.run_id+')'
+    : (r.changed ? 'committed to '+(r.target_ref||'main')+' (run_id '+r.run_id+')' : r.note);
+  out.appendChild(ET('pre','out', head+'\n'+steps, 'keygen-steps'));
 }
 document.getElementById('q').addEventListener('keydown', e => { if(e.key==='Enter') search(); });
 </script>

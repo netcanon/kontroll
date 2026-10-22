@@ -10,7 +10,8 @@
 # GATED privileged deploy (`-e api_privileged=true`; SECURITY.md C10 + docs/privileged-mutation-enablement.md)
 # renders the token, has the content clone made and updated by uid 1001 (never chowned) with a `local` remote,
 # and sets KONTROLL_STAGE_PUSHES — so
-# the API can only PROPOSE (push a proposed/<run_id> staging ref); a trusted `kontroll promote` lands it.
+# the API can only PROPOSE (push a proposed/<run_id> staging ref); a trusted promote (the Semaphore
+# promote-proposal task, or scripts/kontroll-promote.py) lands it.
 # NO age key is mounted (the no-key posture — capability writes carry no creds). Bind to mgmt only; never WAN.
 #
 # Deploy via: ansible-playbook playbooks/deploy-stack.yml -e '{"stack_services":["api"]}'

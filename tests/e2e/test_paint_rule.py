@@ -270,8 +270,9 @@ def test_the_secret_and_keygen_dialogs_paint_their_descriptors_as_text(page):
     _serve(page, "**/api/keygen", [{"role": P("role"), "label": "Break-glass", "description": "offline key"}])
 
     def keygen(route):                                          # GET = the plan, POST = the one-time result
-        body = ({"private_key": P("private"), "public_key": P("public"), "changed": True, "target_ref": P("ref"),
-                 "run_id": P("runid"), "next_steps": ["save the key offline", "then run kontroll promote <run_id>"]}
+        body = ({"private_key": P("private"), "public_key": P("public"), "changed": True, "staged": True,
+                 "target_ref": P("ref"), "run_id": P("runid"),
+                 "next_steps": ["save the key offline", "then promote proposed/<run_id>"]}
                 if route.request.method == "POST" else
                 {"description": P("kdesc"), "recipient_domains": [P("recipient")], "placement": "online",
                  "private_key_path": P("keypath"), "warning": P("warning")})
@@ -300,7 +301,7 @@ def test_the_secret_and_keygen_dialogs_paint_their_descriptors_as_text(page):
     expect(keygen_dialog.get_by_test_id("keygen-public")).to_have_text("public recipient: " + P("public"))
     steps = keygen_dialog.get_by_test_id("keygen-steps")
     expect(steps).to_contain_text("STAGED " + P("ref") + " (run_id " + P("runid") + ")")
-    expect(steps).to_contain_text("kontroll promote <run_id>")                     # shown, not swallowed as a tag
+    expect(steps).to_contain_text("promote proposed/<run_id>")                     # shown, not swallowed as a tag
     _assert_inert(page)
 
 

@@ -61,7 +61,8 @@ services:
       KONTROLL_AUDIT_MAX_MB: ${KONTROLL_AUDIT_MAX_MB:-5}
       KONTROLL_AUDIT_MAX_FILES: ${KONTROLL_AUDIT_MAX_FILES:-5}
       # C10 propose-then-promote: when set (by the gated deploy), a capability promote pushes a
-      # proposed/<run_id> STAGING ref instead of main; `kontroll promote <run_id>` lands it. Soft-default
+      # proposed/<run_id> STAGING ref instead of main; a trusted promote (the Semaphore promote-proposal
+      # task, or scripts/kontroll-promote.py) lands it. Soft-default
       # (`:-`) so an unset value can't break compose — empty ⇒ direct push (the current behaviour).
       KONTROLL_STAGE_PUSHES: ${KONTROLL_STAGE_PUSHES:-}
       # The attribution trailer on every machine-made commit (shared with the API; gitio.commit_message_args).
