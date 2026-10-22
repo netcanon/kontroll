@@ -286,7 +286,8 @@ def test_onboard_apply_writes_commits_and_audits_no_creds(client, onboard_env, t
 def test_onboard_apply_stages_when_armed(client, onboard_env, monkeypatch):
     """With KONTROLL_STAGE_PUSHES set (the privileged deploy's propose-then-promote, C10), an apply STAGES
     `proposed/<run_id>` — never main. The GUI threads run_id through commit_and_push exactly like the API
-    route, so the uniform-staging invariant holds: an abused GUI login can only stage a proposal."""
+    route, so the uniform-staging invariant holds: an abused GUI login can only stage a proposal. Its `next` is
+    the one promote instruction for THAT run id (T19: it named a CLI verb no deploy ships)."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     r = client.post("/api/onboard",
                     json={"collection": "acme.edgeos", "key": "edgeos",
@@ -295,6 +296,7 @@ def test_onboard_apply_stages_when_armed(client, onboard_env, monkeypatch):
     b = r.get_json()
     assert b["staged"] is True and b["target_ref"].startswith("proposed/")
     assert b["target_ref"].endswith(b["run_id"])
+    assert b["next"].startswith(promote_hint(b["run_id"]))
     joined = [" ".join(c) for c in onboard_env.calls]
     assert any("push local HEAD:refs/heads/proposed/" in j for j in joined)
     assert not any("HEAD:refs/heads/main" in j for j in joined)   # never main when staging
@@ -800,7 +802,8 @@ def test_configurable_unknown_kind_and_form_are_404(client, secret_env):
 def test_secret_apply_stages_and_never_leaks_value(client, secret_env, tmp_path, monkeypatch):
     """POST apply encrypts the values via the (mocked) sops seam, commits, and STAGES proposed/<run_id> when
     KONTROLL_STAGE_PUSHES is set — and the secret VALUE appears in neither the response nor the audit (only
-    field NAMES). The crown-jewel no-leak property at the GUI secret surface."""
+    field NAMES). The crown-jewel no-leak property at the GUI secret surface. Its `next` is the one promote
+    instruction for THAT run id (T19)."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     logpath = tmp_path / "audit.log"
     monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath))
@@ -811,6 +814,7 @@ def test_secret_apply_stages_and_never_leaks_value(client, secret_env, tmp_path,
     assert r.status_code == 200
     b = r.get_json()
     assert b["committed"] and b["staged"] and b["target_ref"].startswith("proposed/")
+    assert b["next"] == promote_hint(b["run_id"])
     assert secret_env.written["map"]["grafana_admin_password"] == "SUPER-SECRET-PW"   # reached sops (in memory)
     assert len(secret_env.written["map"]["kontroll_api_token"]) == 64                 # generated on the box
     assert "SUPER-SECRET-PW" not in r.get_data(as_text=True)                          # never in the response
@@ -874,6 +878,7 @@ def test_capability_promote_stale_token_is_409(client, cap_class):
 
 # --- keygen dialog (D): the GUI surface, in-process over service/keygen.py --------------------------------- #
 from kontroll.service import keygen as keygen_service  # noqa: E402  (the keygen backend under test)
+from kontroll.service.pending import promote_hint  # noqa: E402  (the one promote instruction — T19)
 
 # A canned apply result (a FAKE keypair) so the route tests are deterministic and independent of the real
 # /.sops.yaml structure (that edit is the unit test's job). The private key is shaped, never real.
@@ -884,7 +889,7 @@ _FAKE_KEYGEN = {"error": None, "changed": True, "role": "break-glass",
                 "recipient_domains": ["network", "proxmox", "dashboards"], "high_blast": True,
                 "sops_updatekeys": "sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml",
                 "next_steps": ["Store the shown private key OFFLINE on trusted media — it is not saved here.",
-                               "Promote the staged proposal: `kontroll promote <run_id>`."],
+                               "So the new recipient lands on main, promote proposed/<run_id>: …"],
                 "paths": [".sops.yaml"]}
 
 
@@ -892,11 +897,25 @@ _FAKE_KEYGEN = {"error": None, "changed": True, "role": "break-glass",
 def keygen_env(monkeypatch):
     """Mock the keygen seams so the GUI keygen routes run offline: gitio._run recorded (commit_and_push goes
     through it) and apply_keygen_plan returns the canned FAKE result (no real age-keygen / no real .sops.yaml
-    write). The route under test is the one doing the audit + commit + staging."""
+    write); `given` records the run_id each apply was handed. The route under test is the one doing the audit +
+    commit + staging."""
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
-    monkeypatch.setattr(keygen_service, "apply_keygen_plan", lambda role: dict(_FAKE_KEYGEN, role=role))
-    return SimpleNamespace(calls=calls)
+    given = []
+    monkeypatch.setattr(keygen_service, "apply_keygen_plan",
+                        lambda role, run_id=None: given.append(run_id) or dict(_FAKE_KEYGEN, role=role))
+    return SimpleNamespace(calls=calls, given=given)
+
+
+def test_keygen_apply_that_staged_nothing_has_no_promote_step(client, keygen_env, monkeypatch):
+    """Verifies: on a deploy that does not stage (no KONTROLL_STAGE_PUSHES — the commit lands on main), the keygen
+    result's steps carry no promote step. Guards against: telling the operator to promote a proposal that does
+    not exist (T19/F12: the steps were fixed before the route knew whether it staged)."""
+    monkeypatch.delenv("KONTROLL_STAGE_PUSHES", raising=False)
+    monkeypatch.setattr(gitio, "land_main", lambda run_id=None: 0)
+    b = client.post("/api/keygen/break-glass", headers=_auth(), json={"apply": True}).get_json()
+    assert b["committed"] and b["staged"] is False
+    assert b["next_steps"] and not any("promote" in s.lower() for s in b["next_steps"])
 
 
 def test_keygen_list_returns_roles(client):
@@ -923,7 +942,9 @@ def test_keygen_apply_shows_private_once_and_audit_commit_carry_only_public(clie
                                                                             monkeypatch):
     """POST apply returns the minted PRIVATE key exactly once (the show-once surface) and STAGES the recipient
     add as proposed/<run_id>; the audit log AND the commit message carry ONLY the public key — the private key
-    appears nowhere but the response. This is the crown-jewel no-leak property at the keygen GUI surface."""
+    appears nowhere but the response. This is the crown-jewel no-leak property at the keygen GUI surface. The route
+    also hands the service the run id it minted, and the steps it answers promote THAT id (T19/F12 — they printed
+    a placeholder although the id was known)."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     logpath = tmp_path / "audit.log"
     monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath))
@@ -934,6 +955,8 @@ def test_keygen_apply_shows_private_once_and_audit_commit_carry_only_public(clie
     assert b["private_key"] == _FAKE_KEYGEN["private_key"]            # shown once, in the response
     assert b["public_key"] == _FAKE_KEYGEN["public_key"]
     assert b["staged"] and b["target_ref"].startswith("proposed/")   # recipient add staged, not main
+    assert keygen_env.given == [b["run_id"]]                          # the route hands the service its run id
+    assert any(promote_hint(b["run_id"]) in s for s in b["next_steps"])   # the minted id, not a placeholder
     # The audit recorded the action + the PUBLIC key — never the private key.
     text = logpath.read_text(encoding="utf-8")
     assert "keygen-apply" in text and _FAKE_KEYGEN["public_key"] in text
@@ -1200,7 +1223,7 @@ def test_unit_create_stale_token_409(client, unit_env):
 def test_unit_create_stages_proposed_ref_when_armed(client, unit_env, monkeypatch):
     """With KONTROLL_STAGE_PUSHES set (the deployed staging posture), the create stages proposed/<run_id> — never
     main (C10). Guards the load-bearing two-key property: an abused GUI login can only stage a create proposal,
-    never land a unit on main."""
+    never land a unit on main. Its `next` is the one promote instruction for THAT run id (T19)."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     proposed = client.post("/api/actuation/create", headers=_auth(), json=_UNIT_BODY).get_json()
     r = client.post("/api/actuation/create", headers=_auth(),
@@ -1208,6 +1231,7 @@ def test_unit_create_stages_proposed_ref_when_armed(client, unit_env, monkeypatc
     body = r.get_json()
     assert body["staged"] is True and body["target_ref"].startswith("proposed/")
     assert body["target_ref"].endswith(body["run_id"])
+    assert body["next"].startswith(promote_hint(body["run_id"]))
     joined = [" ".join(c) for c in unit_env.calls]
     assert any("push local HEAD:refs/heads/proposed/" in j for j in joined)
     assert not any("HEAD:refs/heads/main" in j for j in joined)   # never main when staging
@@ -1325,7 +1349,7 @@ def test_actuation_stage_stale_token_409(client, unit_config_env):
 def test_actuation_stage_stages_proposed_ref_when_armed(client, unit_config_env, monkeypatch):
     """With KONTROLL_STAGE_PUSHES set (the deployed staging posture), the configure stage targets proposed/<run_id>
     — never main (C10). Guards the load-bearing two-key property: an abused GUI login can only stage a configure
-    proposal, never land values on main."""
+    proposal, never land values on main. Its `next` is the one promote instruction for THAT run id (T19)."""
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     proposed = client.post("/api/actuation/" + _CFG_KEY, headers=_auth(),
                            json={"values": {"listen_port": 3000}}).get_json()
@@ -1334,6 +1358,7 @@ def test_actuation_stage_stages_proposed_ref_when_armed(client, unit_config_env,
     body = r.get_json()
     assert body["staged"] is True and body["target_ref"].startswith("proposed/")
     assert body["target_ref"].endswith(body["run_id"])
+    assert body["next"].startswith(promote_hint(body["run_id"]))
     joined = [" ".join(c) for c in unit_config_env.calls]
     assert any("push local HEAD:refs/heads/proposed/" in j for j in joined)
     assert not any("HEAD:refs/heads/main" in j for j in joined)   # never main when staging

@@ -17,6 +17,7 @@ import re
 import yaml
 
 from kontroll import catalog, gitio, paths
+from kontroll.service.pending import promote_hint
 
 log = logging.getLogger("kontroll.service.keygen")
 
@@ -165,16 +166,19 @@ def _verify_additive(before, after, public_key, intended):
     return True, None
 
 
-def _next_steps(desc, run_id="<run_id>"):
+def _next_steps(desc, run_id=None, staged=True):
     """The DEFERRED operator steps after a generate — placement of the show-once key, promote, the high-blast
     re-wrap (never auto-run), and (rotation) retiring the old recipient. Shown in the plan AND the result so
-    the operator knows the follow-on before and after generating."""
+    the operator knows the follow-on before and after generating. The plan has no run id yet (a placeholder
+    stands in); the result names the one the route minted (T19 — it used to print the placeholder there too), and
+    has no promote step when nothing was staged."""
     steps = []
     if desc.get("placement") == "offline":
         steps.append("Store the shown private key OFFLINE on trusted media — it is not saved here.")
     else:
         steps.append("Save the shown private key to %s on the control VM (mode 0600)." % desc.get("private_key_path"))
-    steps.append("Promote the staged proposal so the new recipient lands on main: `kontroll promote %s`." % run_id)
+    if staged:
+        steps.append("So the new recipient lands on main, %s." % promote_hint(run_id or "<run_id>"))
     steps.append("Re-wrap existing secrets to the new recipient (operator-run on a host holding a valid key; "
                  "NOT run automatically): `%s`." % SOPS_UPDATEKEYS)
     if desc.get("role") == "control":
@@ -210,7 +214,14 @@ def build_keygen_plan(role):
     return _plan_from(desc, _read_sops())
 
 
-def apply_keygen_plan(role):
+def next_steps(role, run_id=None, staged=True):
+    """`role`'s deferred steps for a result whose staging outcome is known (the route's; `staged` False drops the
+    promote step), or [] for an unknown role."""
+    desc = catalog.key_role(role)
+    return _next_steps(desc, run_id, staged) if desc is not None else []
+
+
+def apply_keygen_plan(role, run_id=None):
     """Mint `role`'s keypair, add the PUBLIC recipient to its /.sops.yaml anchor group(s) (additive, idempotent,
     PARSE-VERIFIED no-drop), and return the result INCLUDING the show-once `private_key` (the ONLY place it ever
     appears — the route returns it once; it is never logged/committed/audited). The .sops.yaml change is the
@@ -218,7 +229,8 @@ def apply_keygen_plan(role):
     "public_key", "private_key", "placement", "private_key_path", "recipient_domains", "high_blast",
     "sops_updatekeys", "next_steps", "paths": [paths.overlay_rel(".sops.yaml")]}. error codes: no_role | no_recipient_groups |
     no_sops_config | keygen_failed | <anchor error> | verify_failed:<reason> — on any error NOTHING is written
-    and no key is returned (the misconfig guards return before a key is even minted)."""
+    and no key is returned (the misconfig guards return before a key is even minted). Its `next_steps` assume the
+    write will be staged; the GUI route answers `next_steps(role, run_id, staged=…)` instead, once it knows."""
     desc = catalog.key_role(role)
     if desc is None:
         return {"error": "no_role", "changed": False}
@@ -237,7 +249,8 @@ def apply_keygen_plan(role):
     return {"error": None, "role": role, "public_key": public, "private_key": private,
             "placement": desc.get("placement", "offline"), "private_key_path": desc.get("private_key_path"),
             "recipient_domains": w["recipient_domains"], "high_blast": bool(desc.get("high_blast")),
-            "sops_updatekeys": SOPS_UPDATEKEYS, "next_steps": _next_steps(desc), "paths": [paths.overlay_rel(".sops.yaml")],
+            "sops_updatekeys": SOPS_UPDATEKEYS, "next_steps": _next_steps(desc, run_id),
+            "paths": [paths.overlay_rel(".sops.yaml")],
             "changed": w["changed"]}
 
 

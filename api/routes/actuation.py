@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from api.auth import Principal, audit_action, require_token
 from kontroll import gitio
+from kontroll.service.pending import promote_hint
 from kontroll.service.actuation import (
     build_actuation_plan, build_create_unit_plan, stage_create_unit, stage_plan)
 
@@ -128,8 +129,8 @@ def create(body: CreateIn, request: Request, principal: Principal = Depends(requ
             "device_class": out["plan"]["device_class"], "inventory_group": out["plan"]["inventory_group"],
             "pushed_canonical": git["pushed_canonical"], "target_ref": git["target_ref"], "staged": git["staged"],
             "run_id": principal.run_id,
-            "next": (("staged as proposed/%s — promote it (`kontroll promote %s`), then configure + run the unit "
-                      "in Semaphore" % (principal.run_id, principal.run_id)) if git["staged"]
+            "next": ((promote_hint(principal.run_id) + "; then configure + run the unit in Semaphore")
+                     if git["staged"]
                      else "committed to main — configure + run the unit in Semaphore")}
 
 
@@ -166,6 +167,5 @@ def stage(key: str, body: StageIn, request: Request,
     return {"applied": True, "changed": True, "committed": True, "key": key, "paths": out["paths"],
             "pushed_canonical": git["pushed_canonical"], "target_ref": git["target_ref"], "staged": git["staged"],
             "run_id": principal.run_id,
-            "next": (("staged as proposed/%s — promote it (`kontroll promote %s`), then run the unit in Semaphore"
-                      % (principal.run_id, principal.run_id)) if git["staged"]
+            "next": ((promote_hint(principal.run_id) + "; then run the unit in Semaphore") if git["staged"]
                      else "committed to main — run the unit in Semaphore")}

@@ -562,3 +562,24 @@ def test_a_proposal_that_is_mains_own_commit_is_not_listed_as_promotable(tmp_pat
     rows = {p["run_id"]: p for p in pending.list_pending(r.bare)["proposals"]}
     assert rows["0000000000a2"]["promotable"] is False and rows["0000000000a2"]["changes"] == []
     assert rows[R.FF]["promotable"] is True
+
+
+def test_the_promote_hint_names_the_task_the_value_it_takes_and_where_the_cli_form_is():
+    """Verifies: `promote_hint(run_id)` names the proposal by its run id, the Semaphore task by the name its
+    template registers (config/semaphore/templates/promote-proposal.yml), the one value that task takes
+    (<run id>@<commit id>, copied from the Pending panel), and a document that exists and holds the control-node form
+    with its PyYAML precondition and the listing a deploy with no GUI uses — and spells no command line itself. Guards
+    against: an instruction naming a task or command the tree does not ship, a value the task refuses (it refuses a bare
+    run id), or a CLI line printed without the preconditions that decide whether it runs (T19)."""
+    import yaml
+    hint = pending.promote_hint("0123456789ab")
+    with open(os.path.join(ROOT, "config", "semaphore", "templates", "promote-proposal.yml"), encoding="utf-8") as f:
+        task = yaml.safe_load(f)["name"]
+    assert task == pending.PROMOTE_TASK and "`%s`" % task in hint
+    assert "proposed/0123456789ab" in hint and "<run id>@<commit id>" in hint and "Pending panel" in hint
+    assert pending.PROMOTE_DOC in hint
+    with open(os.path.join(ROOT, pending.PROMOTE_DOC), encoding="utf-8") as f:
+        doc = f.read()
+    assert "kontroll-promote.py <run_id>@<commit_id>" in doc and "PyYAML" in doc
+    assert "with no GUI" in hint and "kontroll-promote.py --list" in doc    # where a GUI-less deploy goes
+    assert "kontroll-promote.py" not in hint and "python3" not in hint and "sudo" not in hint

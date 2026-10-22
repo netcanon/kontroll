@@ -16,6 +16,7 @@ from api.auth import Principal, audit_action, require_token
 from api.deps import Catalog, get_catalog
 from kontroll import authspec, catalog, gitio, paths, probe
 from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan, no_backend_message
+from kontroll.service.pending import promote_hint
 
 # What a `no_backend` answer tells an API or GUI caller to do (the CLI's names its own flag).
 NO_BACKEND_REMEDY = ("if it is a plain SSH host, onboard it from the Generic SSH host search result (search: ssh), "
@@ -141,7 +142,8 @@ def onboard(body: OnboardIn, request: Request,
             "pushed_canonical": git["pushed_canonical"], "pushed_origin": git["pushed_origin"],
             "target_ref": git["target_ref"], "staged": git["staged"],
             "host_name": plan["host_name"], "run_id": principal.run_id,
-            "next": ("promote the proposal: `kontroll promote %s`" % principal.run_id) if git["staged"]
+            "next": (promote_hint(principal.run_id) + "; then bootstrap (collection install + live-verify) in "
+                     "Semaphore") if git["staged"]
                     else "bootstrap (collection install + live-verify) is a Semaphore task"}
 
 

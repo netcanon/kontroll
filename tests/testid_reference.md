@@ -86,7 +86,7 @@ whose `data-cap` is a registered secondary capability (the badge then carries th
 | `cap-propose` | the Propose button (pure plan — writes nothing) | |
 | `cap-promote` | the Promote button (token-gated write) | `disabled` until a successful propose |
 | `cap-plan` | the `<pre>` plan/enact pane | contains the scoped paths + the enact commands |
-| `cap-result` | the `<pre>` promote-result pane (appended) | surfaces the `run_id` + the staged `proposed/<ref>` so the operator can drive Semaphore's promote-proposal survey (mirrors `renderOnboard`, #126); asserted in `tests/e2e/test_capability_flow.py` |
+| `cap-result` | the `<pre>` promote-result pane (appended) | surfaces the `run_id` + the staged `proposed/<ref>` — the proposal the operator then promotes from the Pending panel's copy (mirrors `renderOnboard`, #126); asserted in `tests/e2e/test_capability_flow.py` |
 | `cap-links` | the capability LINKS block (appended): one `cap-link` anchor per entry whose URL is a web link, plain text naming the URL otherwise (C19) | rendered from the plan's generic `links: [{label, url}]`; telemetry emits Grafana deep-links (`Open Grafana` + `/d/<uid>` per curated dashboard, #122). Shown on propose (preview) + after promote; absent when the plan carries no links (e.g. no mgmt base resolvable) |
 | `cap-link` | one link inside `cap-links` | built by `LINK()`: opens in a new tab; exists only when the browser resolves the plan's URL to http(s) — a `javascript:`/`data:` URL never becomes an `href` (C19) |
 
@@ -193,7 +193,7 @@ response) and is never stored, logged, or committed; only the public recipient i
 | `keygen-result` | the `<pre>` result pane | holds the show-once private key + steps |
 | `keygen-private` | the show-once PRIVATE key block | the ONLY place the private key ever appears; not stored |
 | `keygen-public` | the public recipient line | safe to record (it's the `.sops.yaml` recipient) |
-| `keygen-steps` | the staged-ref + deferred next-steps pane | promote + `sops updatekeys` (never auto-run) |
+| `keygen-steps` | the result header (STAGED + ref, committed to main, or the note) + the next-steps pane | promote (only when staged) + `sops updatekeys` (never auto-run); asserted in `tests/e2e/test_keygen_flow.py` |
 
 ## Index panel (standalone modal — opened from the header "Index" button) — #121, widened #128
 

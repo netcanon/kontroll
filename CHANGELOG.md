@@ -11,6 +11,38 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): a staged write's promote hint says what is true (T19, 2026-10-22)
+
+Every staged write's `next` (GUI and API) and the keygen steps told the operator how to promote in one of two
+ways, both wrong: `kontroll promote <run_id>` — a command no deploy ships (the launch kit's `./kontroll promote`
+runs `ansible-playbook promote` and fails) — or "promote run_id X in Semaphore", which stopped saying what to enter
+when the `promote-proposal` task began to take `<run id>@<commit id>` and refuse a bare run id. The instruction now
+exists once, `kontroll.service.pending.promote_hint`: it names the proposal, the Semaphore task, the value it takes
+(the Pending panel's copy control on the proposal's row, where the change is also reviewed) and the document that
+holds the control-node form. The keygen result promotes the run id the route minted (it printed `<run_id>`) and
+drops the promote step when nothing was staged.
+
+- `docs/privileged-mutation-enablement.md`: the control-node form's preconditions — the source tree and a host
+  `python3` with PyYAML (its resolve gate imports `yaml`; a gate that cannot run is a refusal, exit 2), neither on
+  the Docker + git host floor.
+- No document or compose comment names `kontroll promote` any more (`SECURITY.md` C10, `gui/README.md`,
+  `docker/services/{api,onboard-gui}.yaml`); the page's own staged and unit lines name the pinned value.
+- `docs/install-from-scratch.md` §7/§8: the promote walkthrough had the operator enter the bare `run_id` from the
+  onboard response, which the task refuses; it now pastes the Pending panel's copy, and the CLI fallback takes
+  `<run_id>@<commit_id>` and states its PyYAML precondition.
+- The keygen result's header says STAGED only when the write was staged (it printed "STAGED main" on a deploy that
+  commits to main, above steps with no promote step).
+- Response text only: no route, field or control changed. An API client that parsed `next` sees new words.
+- Tests: `tests/unit/test_promote_hint_single_source.py` (new: every `next` a committing route answers, and every `next`
+  a route answers only when the write was staged, is built from the helper — a dict entry, any call's `next=`, an item
+  assignment, `.setdefault`, a local; no tracked text file outside the history and the test's own samples spells the old
+  instruction, emphasised with `*`, a backtick or `__`, in an inline HTML tag (never a `<runid>` placeholder) or an
+  entity, or wrapped across one line break, a comment's included — stale and clean samples, each naming the pattern that
+  must catch it, keep the scan from going blind), e2e `test_keygen_flow.py` (the header: staged, committed to main,
+  nothing changed), `test_pending.py` (the helper's words against the template and the document),
+  `test_keygen_service.py` (the minted id; no promote step when unstaged), the staged route tests in `test_gui_api.py`,
+  `test_api_actuation.py`, `test_api_create_unit.py`.
+
 ### fix(scripts): an unrecognised collection is refused, not onboarded as SSH; a plain SSH host has a search card (S24, 2026-10-22)
 
 The `raw_ssh` backend matched the ABSENCE of every signal (no cliconf/httpapi/netconf plugin, no `*_config`

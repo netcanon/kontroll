@@ -49,6 +49,7 @@ from kontroll.service import secrets as secrets_service  # noqa: E402  (the secr
 from kontroll.service.classify import service_classify  # noqa: E402
 from kontroll.service.onboard import (  # noqa: E402  (in-process onboard)
     apply_onboard_plan, build_onboard_plan, no_backend_message)
+from kontroll.service.pending import promote_hint  # noqa: E402  (the one promote instruction a staged write returns)
 from kontroll.service.search import service_search  # noqa: E402
 
 app = Flask(__name__)
@@ -231,11 +232,11 @@ def api_services():
 def api_pending():
     """The staged proposals awaiting promotion (C10) — read-only. Powers the Pending panel: lists the canonical's
     proposed/<run_id> refs + what each changes (one status and one name per file, a moved file at both ends, a
-    name that is not text in an escaped spelling marked as such), so the operator can copy a run_id into the
-    Semaphore promote-proposal task; and, apart, any ref beside them that is not a proposal. Reads only the
-    canonical bare repo, by full ref name and in the one environment `kontroll.canon` gives its git; NEVER
-    promotes (that is the separate, admin-authed Semaphore app — the GUI cannot advance main; C10 two-key). A
-    read-only surface never gates onboarding (D*)."""
+    name that is not text in an escaped spelling marked as such), so the operator can copy a proposal's
+    <run id>@<commit id> into the Semaphore promote-proposal task; and, apart, any ref beside them that is not a
+    proposal. Reads only the canonical bare repo, by full ref name and in the one environment `kontroll.canon` gives
+    its git; NEVER promotes (that is the separate, admin-authed Semaphore app — the GUI cannot advance main; C10
+    two-key). A read-only surface never gates onboarding (D*)."""
     from kontroll.service.pending import list_pending  # local import — read-only view, no per-request catalog
     try:
         return jsonify(list_pending())
@@ -455,7 +456,7 @@ def api_homepage_apply():
         return jsonify({"error": "commit failed; nothing staged (repo may be dirty)", "run_id": run_id}), 500
     return jsonify({"applied": True, "changed": True, "committed": True, "paths": out["paths"],
                     "target_ref": git["target_ref"], "staged": git["staged"], "run_id": run_id,
-                    "next": ("promote run_id %s in Semaphore, then deploy-stack reloads :3000" % run_id)
+                    "next": (promote_hint(run_id) + "; then deploy-stack reloads :3000")
                             if git["staged"] else "committed to main"})
 
 
@@ -606,7 +607,8 @@ def api_onboard():
                     "pushed_canonical": git["pushed_canonical"], "pushed_origin": git["pushed_origin"],
                     "target_ref": git["target_ref"], "staged": git["staged"],
                     "host_name": plan["host_name"], "run_id": run_id, "bootstrap_requested": bootstrap,
-                    "next": ("promote the proposal, then bootstrap: `kontroll promote %s`" % run_id)
+                    "next": (promote_hint(run_id) + "; then bootstrap (collection install + "
+                             "live-verify) in Semaphore")
                             if git["staged"] else "bootstrap (collection install + live-verify) is a Semaphore task"})
 
 
@@ -815,7 +817,7 @@ def api_actuation_create():
     return jsonify({"applied": True, "changed": True, "committed": True, "key": key, "paths": out["paths"],
                     "device_class": out["plan"]["device_class"], "inventory_group": out["plan"]["inventory_group"],
                     "target_ref": git["target_ref"], "staged": git["staged"], "run_id": run_id,
-                    "next": (("promote run_id %s in Semaphore, then configure + run the unit" % run_id)
+                    "next": ((promote_hint(run_id) + "; then configure + run the unit")
                              if git["staged"] else "committed to main — configure + run the unit in Semaphore")})
 
 
@@ -901,7 +903,7 @@ def api_actuation_stage(key):
         return jsonify({"error": "commit failed; nothing staged (repo may be dirty)", "run_id": run_id}), 500
     return jsonify({"applied": True, "changed": True, "committed": True, "key": key, "paths": out["paths"],
                     "target_ref": git["target_ref"], "staged": git["staged"], "run_id": run_id,
-                    "next": (("promote run_id %s in Semaphore, then run the unit" % run_id)
+                    "next": ((promote_hint(run_id) + "; then run the unit")
                              if git["staged"] else "committed to main — run the unit in Semaphore")})
 
 
@@ -1159,8 +1161,7 @@ def api_secret_apply(domain):
     return jsonify({"applied": True, "changed": True, "committed": True, "domain": domain, "view": plan["view"],
                     "target_ref": git["target_ref"], "staged": git["staged"], "run_id": run_id,
                     "enact": secrets_service.actuation_enact_commands(domain, names),   # post-promote hand-off
-                    "next": ("promote the proposal: `kontroll promote %s`" % run_id) if git["staged"]
-                            else "committed to main"})
+                    "next": promote_hint(run_id) if git["staged"] else "committed to main"})
 
 
 # --- guided age key-generation (D): mint break-glass / scoped-Semaphore / control-rotation keys ----------
@@ -1198,7 +1199,7 @@ def api_keygen_apply(role):
     if _catalog.key_role(role) is None:
         return jsonify({"error": "no such key role: %s" % role}), 404
     run_id = uuid.uuid4().hex[:12]
-    res = keygen_service.apply_keygen_plan(role)
+    res = keygen_service.apply_keygen_plan(role, run_id=run_id)
     if res["error"] == "no_role":
         return jsonify({"error": "no such key role: %s" % role}), 404
     if res["error"]:
@@ -1227,7 +1228,10 @@ def api_keygen_apply(role):
                     "private_key": res["private_key"], "public_key": res["public_key"],
                     "placement": res["placement"], "private_key_path": res["private_key_path"],
                     "recipient_domains": res["recipient_domains"], "high_blast": res["high_blast"],
-                    "sops_updatekeys": res["sops_updatekeys"], "next_steps": res["next_steps"],
+                    "sops_updatekeys": res["sops_updatekeys"],
+                    # the steps the staging outcome makes true: no promote step when nothing was staged (the key was
+                    # already a recipient, or the deploy commits to main)
+                    "next_steps": keygen_service.next_steps(role, run_id, staged=git["staged"]),
                     "target_ref": git["target_ref"], "staged": git["staged"], "run_id": run_id,
                     "note": None if res["changed"] else "public key was already a recipient; nothing staged"})
 
