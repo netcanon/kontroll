@@ -25,7 +25,7 @@
       },
       {
         "name": "level", "label": "level", "type": "custom",
-        "query": "debug,info,notice,audit,warn,warning,error,err,crit,alert,emerg",
+        "query": "trace,debug,info,notice,audit,warn,warning,error,err,crit,critical,alert,emerg,fatal,panic",
         "includeAll": true, "multi": true, "allValue": ".*",
         "current": {"text": "All", "value": "$__all"}
       },

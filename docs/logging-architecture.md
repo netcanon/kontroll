@@ -161,7 +161,9 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   `transforms/<source>.yaml` shaping to the label schema), loaded by `--config-dir` implicit namespacing —
   add a source = add a file, never edit a hub. The one Loki sink (`config.d/sinks/loki.yaml`) is the label
   choke-point. Every shape sets each field the sink templates as a label: `run_id` defaults to `""`, which
-  Loki stores as no label, and a plain-text container line is `level=info`. A missing field fails the label
+  Loki stores as no label, and a container line is `level=info` unless its own level (a JSON line's `level`, or a
+  logfmt/slog line's `level` key: Grafana's, Prometheus's) names a known level, which it then is, lowercased. A
+  missing field fails the label
   template on every event — a WARN per event and the label dropped — so `tests/unit/test_compose_logging.py`
   holds every input of the sink to it. A journald entry's `level` is its `PRIORITY`'s syslog name (`err`,
   `warning`, …) and one without a `PRIORITY` is `info` (`docker/vector/tests/internal_levels.yaml`). Promtail
@@ -196,8 +198,8 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   spike (**G6 CLOSED**). NO separate Loki ruler — Grafana-managed unified alerting. Grafana is
   already the Phase-5 metrics UI → metrics + logs in **one pane**, correlated by time +
   `run_id`. Hermetic shape tests run in CI; live rendering is verified post-deploy. Levels arrive in more
-  than one spelling (syslog `err`/`warning` from journald, a JSON line's own `ERROR`/`warn`), so the error/warn
-  panel matches all of them, case-insensitive (a plain-text container line is `info`, whatever it says). A
+  than one spelling (syslog `err`/`warning` from journald, `error`/`warn` from a container line, and older lines'
+  `ERROR`), so the error/warn panel matches all of them, case-insensitive. A
   container stream's `service` is the container's name, so the crash rule picks container lines by the body's
   `container_name`. It drops lines that name the rule itself (Grafana logs its uid at every evaluation) and
   ansible's `TASK [` / `RUNNING HANDLER [` banners; its query is pinned as measured on real traffic, and

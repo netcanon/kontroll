@@ -11,6 +11,38 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): a container line's own level is its level, from one closed set (2026-10-21)
+
+The stack's own services (Grafana, Prometheus, Semaphore, blackbox) log logfmt or slog text, not JSON, and the
+containers shape labelled every non-JSON line `info`. Their errors never reached the error/warn panel or the
+"Anything wrong" query. On one box over 7 days the lines carried Grafana's `level=error` 16 times, Prometheus's
+`level=ERROR` 15 times, Semaphore's `level=warning` 77 times; on the other, blackbox's failed probes ran about
+11,500 `level=ERROR` and as many `level=WARN` a day. All shipped as `info` or with no level.
+
+- **A logfmt/slog line's own `level` key is its level** when it names a known level (`trace`, `debug`, `info`,
+  `notice`, `warn`/`warning`, `err`/`error`, `crit`/`critical`, `alert`, `emerg`, `fatal`, `panic`, any case),
+  lowercased. `parse_logfmt` reads the line's own keys, so a `level=` inside a quoted value, a URL's `?level=`, a
+  `loglevel=` or a `--log.level=` flag is not taken for it. Any other line is still `info`; a line whose level
+  word has punctuation glued to it (`level=Warning,`) is `info` too.
+- **A JSON line's `level` (or `severity`) goes through the same list**, lowercased: `ERROR` ships as `error`, and a
+  name not on the list (`verbose`, a blank) as `info`. It shipped verbatim before, any case; lines already in
+  Loki keep the spelling they have, which the panel's case-insensitive match still counts.
+- Text that is not logfmt (uvicorn's `INFO:     …`, gunicorn's `[ERROR]`) is still `info`, whatever it says.
+- **The panel will count what was hidden**, failed blackbox probes first: on a box whose probe targets do not
+  answer (one run from the example inventory probes TEST-NET addresses), expect it to light up.
+  `docs/troubleshooting.md` §2 has a query that names the targets and an "Anything wrong" query that leaves
+  blackbox out; §4 says what to do.
+- **Plain-text `debug` lines now take Loki's 7-day `{level="debug"}` retention tier** instead of the 30-day
+  default (`docker/loki/loki-config.yml`).
+- **The `level` picker offers the new names** (`trace`, `critical`, `fatal`, `panic`).
+- **Tests.** `docker/vector/tests/internal_levels.yaml` holds the parse: Prometheus's slog and Grafana's logfmt
+  lines, a level word that names no level, a level word that only starts another word, and eight cases the
+  round-2 readers found misread (a later `level=` inside a quoted value, a `?level=`, a `loglevel=`, a JSON
+  `ERROR`, a blank or unknown JSON level). Four mutants of the shape each fail `vector test`: an open set, no
+  lowercasing, the JSON branch left verbatim, and the old first-`level=`-anywhere regex. The picker and panel tests
+  read the names from the shape's `known_levels` list; a new test fails if that list cannot be read, holds an
+  uppercase name, or is not the one the shape looks a level up in.
+
 ### fix(dashboards): a logging alert reads no matching lines as OK and a failed query as Error (2026-10-21)
 
 Each logging alert counts matching lines (`sum(count_over_time(...))`), and when nothing matches Loki returns no
@@ -102,8 +134,8 @@ valid config that returns plausible output, so no check failed.
   levels are syslog names (`err`, `warning`, `crit`, …), so a failed systemd unit never counted, and neither did a
   JSON line's `"level":"ERROR"`. Both now match the syslog names from `warning` up and the common
   `warn`/`error`/`critical`/`fatal`/`panic` spellings, any case (not `severe`, numeric or one-letter levels). The
-  dashboard's `level` picker offers every syslog name. A plain-text container line is still `info` whatever it
-  says, Grafana's and Prometheus's own `level=error` lines among them.
+  dashboard's `level` picker offers every syslog name. (A plain-text container line was still `info` whatever it
+  said; the entry above fixes that.)
 - **Lines already in Loki keep the level they shipped with** until retention ages them out (30 days): past boots'
   kernel-audit lines stay `emerg`, and the widened panel now counts them.
 - **The container restart / crash storm alert could never fire.** It selected `service="containers"`, but a

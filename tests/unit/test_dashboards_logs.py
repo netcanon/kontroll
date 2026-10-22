@@ -27,8 +27,9 @@ _ALLOWED_VARS = {"source", "service", "level", "run_id", "search"}
 
 # the names VRL's to_syslog_level gives (journald PRIORITY 0..7; the capability shapes' syslog severities).
 _SYSLOG_LEVELS = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
-# what the error/warn panel must count, and what it must not: syslog names plus the spellings JSON container
-# logs use (a JSON line's own `level` is kept verbatim, any case).
+# what the error/warn panel must count, and what it must not: syslog names, the names the containers shape takes
+# from a line, and the spellings lines already in Loki carry (until 2026-10-21 a JSON line's own `level` shipped
+# verbatim, any case).
 _SEVERE = ["emerg", "alert", "crit", "critical", "err", "error", "warning", "warn", "fatal", "panic",
            "ERROR", "Warning", "FATAL"]
 _BENIGN = ["notice", "info", "debug", "audit", "INFO", "trace"]
@@ -44,13 +45,36 @@ def _level_regexes(text):
     return [r for r in re.findall(r'level=~"((?:[^"\\]|\\.)*)"', text) if "$" not in r]
 
 
+def _known_levels(text):
+    """The names in a shape's `known_levels = [...]` list (VRL; the list may span lines)."""
+    m = re.search(r"^\s*known_levels\s*=\s*\[([^\]]*)\]", text, re.M)
+    return re.findall(r'"([^"]*)"', m.group(1)) if m else []
+
+
 def _shape_levels():
-    """Every `level` a Vector shape sets to a fixed string (e.g. the audit shapes' "audit")."""
+    """Every `level` a Vector shape sets to a fixed string (e.g. the audit shapes' "audit"), plus every name in a
+    shape's `known_levels` list: the containers shape takes a line's own level when it is one of them."""
     out = set()
     for name in sorted(os.listdir(_TRANSFORMS)):
         with open(os.path.join(_TRANSFORMS, name), encoding="utf-8") as fh:
-            out.update(re.findall(r'^\s*\.level\s*=\s*"([^"]+)"', fh.read(), re.M))
+            text = fh.read()
+        out.update(re.findall(r'^\s*\.level\s*=\s*"([^"]+)"', text, re.M))
+        out.update(_known_levels(text))
     return out
+
+
+def test_the_containers_shape_level_list_is_read_and_lowercase():
+    """The containers shape's `known_levels` list is found and not empty, every name in it is lowercase, and it is
+    the list the shape looks a line's level up in. Why: the picker and panel tests take the names a line can carry
+    from that list, so a rewrite this reader cannot see (a renamed variable, a list built another way) would leave
+    them checking the fixed levels only, every test green: a round-2 reader blinded them that way (2026-10-21). And
+    the shape lowercases a line's level before the lookup, so an uppercase name in the list could never match."""
+    with open(os.path.join(_TRANSFORMS, "internal_containers_shape.yaml"), encoding="utf-8") as fh:
+        text = fh.read()
+    names = _known_levels(text)
+    assert names and {"error", "warn", "info"} <= set(names), "no known_levels list read from the shape: %s" % names
+    assert all(n and n == n.lower() for n in names), "known_levels must be lowercase names: %s" % names
+    assert "includes(known_levels, lv)" in text, "the shape must look the line's level up in known_levels"
 
 
 def test_logs_dashboard_parses_and_has_uid():
@@ -105,6 +129,8 @@ def test_the_error_panel_counts_every_error_and_warning_spelling_and_nothing_mil
     exprs = [t.get("expr", "") for p in _dash()["panels"] for t in p.get("targets", [])]
     regexes = [r for e in exprs for r in _level_regexes(e)]
     assert regexes, "no panel filters on a literal level regex"
+    unsorted = sorted(_shape_levels() - set(_SEVERE) - set(_BENIGN))
+    assert not unsorted, "a shape ships level %s: add it to _SEVERE or _BENIGN so the panel is held to it" % unsorted
     for rx in regexes:
         missed = [lv for lv in _SEVERE if not re.fullmatch(rx, lv)]
         caught = [lv for lv in _BENIGN if re.fullmatch(rx, lv)]
@@ -123,9 +149,10 @@ def test_the_troubleshooting_error_query_uses_the_panels_level_regex():
 
 
 def test_the_level_picker_offers_every_level_a_shape_can_ship():
-    """The `level` template variable lists every syslog level name and every fixed level a shape sets. Why: it
-    offered `info,warn,error,debug,audit,notice`, so journald's `err`, `warning`, `crit` (and the rest) could
-    not be picked: picking "error" hid a failed systemd unit's `err` lines."""
+    """The `level` template variable lists every syslog level name and every level a shape can set (a fixed one,
+    or a name the containers shape takes from a line's own level). Why: it offered
+    `info,warn,error,debug,audit,notice`, so journald's `err`, `warning`, `crit` (and the rest) could not be
+    picked: picking "error" hid a failed systemd unit's `err` lines."""
     var = next(x for x in _dash()["templating"]["list"] if x["name"] == "level")
     offered = set(var.get("query", "").split(","))
     missing = sorted((set(_SYSLOG_LEVELS) | _shape_levels()) - offered)
