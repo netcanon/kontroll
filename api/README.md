@@ -71,9 +71,10 @@ credential field is declared with a name that is not one; a class's module file 
 declares none (or the backend's registry entry holds a role that is not a name); the backend registry's own data (a
 default domain, a `derive_params` entry or a `maps_to` template that does not render, a `requires:` that is not a
 list of param names, or a `connection:` param it requires and does not derive, or names anywhere in a templated
-value but as a bare `{{ param }}`); a class's module file holds a `maps_to` template that neither its backend's registry
-entry nor the generic union declares for that field; a write target does not resolve inside the repository; a block of a
-module file is written with its value on the key's line, or twice — the answer
+value but as a bare `{{ param }}`, where a name built at render time is not seen); a class's module file holds a
+`maps_to` template that neither its backend's registry entry nor the generic union declares for that field; a write
+target does not resolve inside the repository; a block of a module file is written with its value on the key's line,
+or twice — the answer
 is **409** `repository_data` with a sentence that says where to look, and the audit action is `repository-refuse`:
 nothing in the request is wrong, and the remedy is the file or the layout. A `backend` an onboard sends must be one
 this install ships whose registry entry declares a `role:` (`ansible/backends/<name>/`) — a reuse (an onboard of a

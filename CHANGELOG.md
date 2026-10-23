@@ -32,9 +32,10 @@ backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s o
   `{{`, a `#jinja2:` header, or a list, a set or a map at any depth; a name built at render time is not seen), is
   refused as `repository_data`: the drop-in would hold it unrendered. So is a `requires:` that is not a list of param
   names (a YAML string made every check a substring test), by the planner, the scaffold and `GET /classify` / `galaxy
-  classify` alike (classify answered 500, and the CLI raised, for one). The former code filled `network_os` by name for
-  any backend that required it; the registry now says how, so an operator's copy of `netcommon_cli` written before this
-  change must add `derive_params: {network_os: "{collection}.{name}"}`. An operator's backend whose `connection:` block
+  classify` alike (`GET /classify` answered 500 or 200, the GUI's `/api/classify` 200, and `galaxy classify` raised or
+  printed the value letter by letter). The former code filled `network_os` by name for any backend that required it;
+  the registry now says how, so an operator's copy of `netcommon_cli` written before this change must add
+  `derive_params: {network_os: "{collection}.{name}"}`. An operator's backend whose `connection:` block
   reads a required value set at run time (a group var) is refused too, where the former code planned it: drop the param
   from the backend's `requires:` (the planner then leaves it for the class's group vars), or move that connection var
   into the class's group vars. The planner reads no class's own `backend_params`, a reused class's included.

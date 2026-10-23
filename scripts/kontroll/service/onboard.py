@@ -41,9 +41,10 @@ _INV_BANNER = "# Drop-in host, onboarded by scripts/galaxy.py onboard. Additive 
 def _existing_module(key):
     """Parse modules/<key>/module.yml via the modules overlay (paths.module_file — the write_root clone shadows the
     baked ROOT, Phase-B Fork B) if it exists, else None. This is the SHIPPED/already-onboarded device-class we must
-    REUSE rather than clobber when onboarding a collection that class already declares (#124): regenerating a minimal
-    module here would strip the curated metrics:/backup:/logs: blocks. Resolved so a baked deploy sees an operator class
-    in the propose clone AND a pristine shipped class in the image; a file that cannot be read or parsed degrades to
+    REUSE rather than clobber when onboarding a collection that class already declares (under a class with
+    `collections: []`, a collection ansible-core ships) (#124): regenerating a minimal module here would strip the
+    curated metrics:/backup:/logs: blocks. Resolved so a baked deploy sees an operator class in the propose clone
+    AND a pristine shipped class in the image; a file that cannot be read or parsed degrades to
     None (treated as absent → the normal generate path, which then no-clobbers). A file that parses to something
     other than a mapping — a list, a bare word — is neither absent nor a class: it is answered as the file it is
     (RepositoryDataError), not as the AttributeError its first `.get` would be."""
@@ -77,7 +78,7 @@ _STEM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 # params — and what makes ansible-core 2.19 template a string that can read a var (_jinja_bits.is_possibly_template,
 # less the comment marker): a `{{` or `{%` anywhere, or a `#jinja2:` override header. Every word of such a value
 # counts (T18's fold-3 read, S1: an unclosed `{{`, a `}}` inside a string literal and a header that changes the
-# delimiters each read a param a match of whole blocks did not see).
+# delimiters each named a param a match of whole blocks did not see).
 _BARE_HOLE_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\Z")
 _TEMPLATED_RE = re.compile(r"\{[{%]|\A#jinja2:")
 _NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -200,18 +201,21 @@ def _secrets_domain(secrets, bdef, backend):
     return secrets
 
 
-def _jinja_reads(value):
+def _jinja_reads(value, _within=()):
     """Every word of a value ansible-core would template — a string holding a `{{` or a `{%`, or opening with a
     `#jinja2:` header — or of each such string a list, a set or a map holds, a key too, at any depth. A quoted word,
     a comment and an attribute count: fail closed. A name built at render time (`vars[...]`, or `lookup('vars', ...)`
-    of a joined key) is no word of the value and is not seen."""
+    of a joined key) is no word of the value and is not seen. A container that holds itself (a recursive YAML alias,
+    `&a [*a]`) raises ValueError: no render of it ends, and the walk would not either (T18's fold-4 read, N7)."""
     if isinstance(value, str):
         return set(_NAME_RE.findall(value)) if _TEMPLATED_RE.search(value) else set()
-    if isinstance(value, dict):
-        return set().union(*map(_jinja_reads, list(value) + list(value.values())))
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return set().union(*map(_jinja_reads, value))
-    return set()
+    if not isinstance(value, (dict, list, tuple, set, frozenset)):
+        return set()
+    if id(value) in _within:
+        raise ValueError("a value that holds itself")
+    within = _within + (id(value),)
+    items = list(value) + list(value.values()) if isinstance(value, dict) else value
+    return set().union(*(_jinja_reads(v, within) for v in items))
 
 
 def backend_params(bdef, collection, backend):
@@ -496,7 +500,13 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
     for k, v in (bdef.get("connection") or {}).items():
         bare = _BARE_HOLE_RE.match(v.strip()) if isinstance(v, str) else None
         hole = bare.group(1) if bare else None
-        through = sorted(p for p in _jinja_reads(v) if p in required and p != hole)
+        try:
+            reads = _jinja_reads(v)
+        except ValueError:
+            raise paths.RepositoryDataError(
+                "backend registry", "the %s backend's connection var %s holds a value that refers to itself — "
+                "correct its backend.yml under ansible/backends/" % (backend, k)) from None
+        through = sorted(p for p in reads if p in required and p != hole)
         if through:
             # Only a bare `{{ param }}` is filled from `params`: a required param named anywhere else in a templated
             # value — a filter, an expression, text beside it, a `{% %}` block, an unclosed `{{`, a `#jinja2:` header,
@@ -504,11 +514,11 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
             # fold-2 read, S1: a check of a value's first name let ten shapes by; its fold-3 read, S1: a match of
             # whole blocks let six more by).
             raise paths.RepositoryDataError(
-                "backend registry", "the %s backend's connection var %s names %s, which it requires, in an "
-                "expression the planner does not render — read it bare, as `{{ %s }}`, in its backend.yml under "
-                "ansible/backends/%s" % (backend, k, through[0], through[0], "" if through[0] in params else
-                                         ", and add it to `derive_params` (or, for a value set at run time, drop it "
-                                         "from `requires:`)"))
+                "backend registry", "the %s backend's connection var %s names %s, which it requires, in a "
+                "templated value the planner does not fill — make the var's whole value `{{ %s }}`, in its "
+                "backend.yml under ansible/backends/%s" % (
+                    backend, k, through[0], through[0], "" if through[0] in params else
+                    ", and add it to `derive_params` (or, for a value set at run time, drop it from `requires:`)"))
         if hole in required and hole not in params:
             # A required param the backend does not derive would reach the drop-in unrendered, and the first play
             # fails far from the cause unless a group var happens to define it. An operator's backend written
@@ -754,9 +764,10 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
 
 
 def apply_onboard_plan(plan, overwrite=False):
-    """Perform the onboard repo mutations for a computed plan: write the device-class module (UNLESS the class
-    already exists for this collection — then REUSE it, adding only the host, so its curated metrics:/backup:/
-    logs: blocks survive, #124), MERGE the drop-in inventory host alongside any siblings (a 2nd device of a class
+    """Perform the onboard repo mutations for a computed plan: write the device-class module (UNLESS this is a
+    reuse — the class under the key already declares the collection, or is `collections: []` and the collection is
+    one ansible-core ships — then REUSE it, adding only the host, so its curated metrics:/backup:/logs: blocks
+    survive, #124), MERGE the drop-in inventory host alongside any siblings (a 2nd device of a class
     never drops the 1st), enable the class in instance/fleet.yml, and encrypt any creds into the SOPS domain.
     Prints progress and returns {"changed": bool, "paths": [repo-rel paths to git-add]}. A divergent existing
     module / a foreign inventory file raises gitio.WriteConflict unless `overwrite=True` (the GUI 'Overwrite'

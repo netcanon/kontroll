@@ -46,7 +46,8 @@ def requires_of(bdef, backend):
     Anything else is the registry's fault, refused as repository data, by the onboard planner, the scaffold and
     classify alike: a YAML string would turn every `in` test on it into a substring test (T18's fold-2 read, N4), and
     a name that is not one could never be derived or filled (its fold-3 read, S1). Here, not in the planner, so
-    classify can read it: `GET /classify` answered 500, and `galaxy classify` raised, for one (that read, N3)."""
+    classify can read it: `GET /classify` answered 500 or 200, the GUI's `/api/classify` 200, and `galaxy classify`
+    raised or printed the value letter by letter (that read, N3; its fold-4 read, N6)."""
     requires = bdef.get("requires")
     if requires is None:
         return []

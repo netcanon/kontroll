@@ -418,8 +418,7 @@ def test_apply_confines_the_targets_it_will_write_before_its_first_write(reuse, 
     """`apply_onboard_plan` asks `confined()` about every drop-in target it is going to write before any writer
     runs — the module target and the inventory target for a new class, the inventory target alone for a reuse (an
     onboard of a collection the class under that key already declares, or, under a class with `collections: []`, a
-    collection ansible-core ships) — so a layout the confinement refuses leaves
-    nothing behind.
+    collection ansible-core ships) — so a layout the confinement refuses leaves nothing behind.
 
     Guards the partial write: the module file used to be written first, and the inventory write then refused —
     "before any write" was not true of a symlinked inventory directory. And guards the opposite fault: a reuse
