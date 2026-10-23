@@ -11,6 +11,36 @@ NetConfig project.
 
 ## [Unreleased]
 
+### build(docker): every image input is pinned; Dependabot and pip-audit read the pins (T29 / S15a + S50, 2026-10-23)
+
+A rebuild — the project's recovery move — landed on whatever upstream published that day: the runner built `FROM
+semaphoreui/semaphore:latest` and ran a bare `pip install paramiko flask fastapi uvicorn` into Semaphore's ansible
+venv, the installer built on `debian:12-slim` with an `ansible-core>=2.16,<2.19` range and an unchecked sops
+download, and Semaphore's database ran `postgres:16-alpine`. The published images were pinned by digest; what they
+were built from was not.
+
+- **Bases by tag and digest:** `semaphoreui/semaphore:v2.19.17`, `debian:12-slim` and `timberio/vector:0.56.0-debian`
+  (the Dockerfile and the compose default, in lock-step). The Semaphore pin is the release `:latest` named on
+  2026-10-23, so it is not older than the base any box built from (Semaphore migrates its database forward).
+- **Python by exact version:** `docker/semaphore-runner/requirements.txt` (what the control image adds to the base's
+  venv) and `docker/installer/requirements.txt` (ansible-core 2.18.19, the version the published v0.1.2 installer
+  carries, with ansible-lint, the docker SDK and their dependencies), each installed `--no-deps` and followed by
+  `pip check`; the runner also import-checks the paramiko and PyYAML its base ships. certifi moves to 2026.10.19
+  (PYSEC-2026-4320; the published v0.1.2 installer carries 2026.7.22 until the next release).
+- **apk by minor** (`~=`), with the baked versions printed in the build log; **sops and Docker's apt key by
+  SHA-256** in the installer; **postgres** at `16.15-alpine`.
+- `api/requirements.txt` names plain `uvicorn`, as the image installs it; it and `gui/requirements.txt` stay the
+  development floors, and a test holds that every package they name ships in the image.
+- **Dependabot** covers every Dockerfile, the compose fragments (less the generated exporters) and both pin files
+  (default strategy: exact pins); **pip-audit** reads the pin files too. Promtool and vector in CI are held to the
+  compose tags.
+- `tests/unit/test_image_pins.py` fails when a pin is missing, never because one is old. The refresh procedure is
+  `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+
+On a box that builds locally, the next deploy rebuilds the control image on the pinned base and pulls
+`postgres:16.15-alpine` (a minor move inside 16: no dump and restore). A box on the published images is unchanged
+until the next release re-pins them.
+
 ### test: bind sources and check-mode resolvers are found by rule, not listed (T24 / S34 (a), (b), 2026-10-23)
 
 Two guards held hand lists. The bind-source check named the Loki and Vector configs; a third service was then

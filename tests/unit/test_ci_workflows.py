@@ -7,9 +7,11 @@ WHY — a workflow file has no unit test of its own, so a behaviour the 2026-10-
 in a later edit: the publish target hard-coded to one org again, the SARIF seat scanning `.github/` (every alert URI
 wrong), an `|| true` hiding a real zizmor failure, a `security-events: write` grant minted on every run, a pip
 ecosystem that chases `>=` floors, or a third-party action tag-pinned in the one job that can push to the package
-namespace. Each test names the failure it guards and reads the committed YAML as text (plus a YAML parse where the
-shape matters). CLAUDE.md: the test lands with the behaviour change.
+namespace. The Dependabot and pip-audit coverage of the images, and the gate's tool versions against the compose
+pins, are held the same way. Each test names the failure it guards and reads the committed YAML as text (plus a
+YAML parse where the shape matters). CLAUDE.md: the test lands with the behaviour change.
 """
+import glob
 import os
 import re
 
@@ -64,16 +66,100 @@ def test_zizmor_sarif_seat_is_gated_rooted_unmasked_and_least_privilege():
     assert uploads and uploads[0].get("continue-on-error") is True, "the upload is advisory (continue-on-error)"
 
 
-def test_every_pip_ecosystem_uses_increase_if_necessary():
-    """Every pip ecosystem in dependabot.yml uses `versioning-strategy: increase-if-necessary`, because the
-    requirements files are `>=` floors: the default strategy opens a floor-bump PR for every release (five the
-    first week). Also pins that the api/ requirements file is covered at all (it ships in the images)."""
-    doc = yaml.safe_load(_read(".github/dependabot.yml"))
-    pip = [u for u in doc["updates"] if u["package-ecosystem"] == "pip"]
-    assert pip, "dependabot.yml must cover the pip ecosystems"
-    for u in pip:
-        assert u.get("versioning-strategy") == "increase-if-necessary", u["directory"]
-    assert {u["directory"] for u in pip} >= {"/gui", "/api", "/tests"}, "gui, api and tests requirements are covered"
+_FLOORS = {"/gui", "/api", "/tests"}
+
+
+def _updates(ecosystem):
+    """The dependabot.yml update entries of one ecosystem."""
+    return [u for u in yaml.safe_load(_read(".github/dependabot.yml"))["updates"]
+            if u["package-ecosystem"] == ecosystem]
+
+
+def _directories(update):
+    """The directories one dependabot.yml entry covers (`directory:` or `directories:`)."""
+    return set(update.get("directories") or [update["directory"]])
+
+
+def _image_requirement_dirs():
+    """{"/docker/<dir>"} of every requirements file under docker/ — the exact pins an image installs
+    (tests/unit/test_image_pins.py holds that these are exactly the files the Dockerfiles install)."""
+    found = glob.glob(os.path.join(ROOT, "docker", "**", "requirements*.txt"), recursive=True)
+    return {"/" + os.path.relpath(os.path.dirname(p), ROOT).replace(os.sep, "/") for p in found}
+
+
+def test_pip_floors_use_increase_if_necessary_and_image_pins_do_not():
+    """The pip ecosystems for the `>=` floors (gui, api, tests) use `versioning-strategy: increase-if-necessary`:
+    the default strategy opens a floor-bump PR for every release (five the first week). The image pin files
+    (docker/…/requirements.txt) keep the default strategy: they are exact pins, so each release must be a PR, and
+    `increase-if-necessary` would leave a pin that still "admits" nothing newer untouched forever. Guards either
+    kind drifting to the other's strategy, and a floor or an image pin file losing its entry."""
+    pip = _updates("pip")
+    floors = [u for u in pip if _directories(u) <= _FLOORS]
+    pins = [u for u in pip if not _directories(u) & _FLOORS]
+    assert len(floors) + len(pins) == len(pip), "an entry mixes a floor directory with another"
+    assert set().union(*map(_directories, floors)) == _FLOORS, "gui, api and tests requirements are covered"
+    for u in floors:
+        assert u.get("versioning-strategy") == "increase-if-necessary", u
+    image_dirs = _image_requirement_dirs()
+    assert image_dirs and set().union(*map(_directories, pins)) == image_dirs, "each image pin file has an entry"
+    for u in pins:
+        assert "versioning-strategy" not in u, u
+
+
+def test_dependabot_covers_every_dockerfile_directory():
+    """Every directory under docker/ that holds a Dockerfile is in a `docker` ecosystem entry, so each pinned base
+    (tag and digest) has an update process. Guards a new image added with no way for its base to move but by hand
+    (the installer and Vector images had none)."""
+    found = glob.glob(os.path.join(ROOT, "docker", "**", "Dockerfile"), recursive=True)
+    dirs = {"/" + os.path.relpath(os.path.dirname(p), ROOT).replace(os.sep, "/") for p in found}
+    covered = set().union(*map(_directories, _updates("docker")))
+    assert dirs and dirs <= covered, sorted(dirs - covered)
+
+
+def test_dependabot_compose_entry_ignores_generated_fragments():
+    """The `docker-compose` entry covers docker/services, and ignores every image a `*.generated.yaml` fragment
+    names: those fragments are generated from telemetry/*.yml, so a bot edit to one fails `gen-exporters.py --check`
+    and can never merge. Guards a compose entry going missing, and bot PRs that cannot land."""
+    compose = _updates("docker-compose")
+    assert [_directories(u) for u in compose] == [{"/docker/services"}], compose
+    ignored = {i["dependency-name"] for i in compose[0].get("ignore") or [] if not i.get("update-types")}
+    generated = set()
+    for path in glob.glob(os.path.join(ROOT, "docker", "services", "*.generated.yaml")):
+        with open(path, encoding="utf-8") as fh:
+            for svc in (yaml.safe_load(fh).get("services") or {}).values():
+                generated.add(svc["image"].split("@", 1)[0].rsplit(":", 1)[0])
+    assert generated and generated <= ignored, sorted(generated - ignored)
+
+
+def _compose_tag(fragment, image):
+    """The version of `image` in a docker/services fragment's `image:` (the `${VAR:-…}` default included), with a
+    leading `v`, a `-<variant>` suffix and a digest removed."""
+    m = re.search(re.escape(image) + r":v?([0-9][0-9.]*)", _read("docker/services/" + fragment))
+    assert m, (fragment, image)
+    return m.group(1)
+
+
+def test_ci_tool_versions_match_the_compose_pins():
+    """The promtool and vector binaries ci.yml installs for the gate are the versions the stack runs: promtool's
+    release equals the prom/prometheus tag, and vector's equals the timberio/vector tag. Guards a one-sided bump (a
+    bot's compose or Dockerfile PR) leaving the gate validating with a different version than the one that runs —
+    the "versions track the compose pins" comment in ci.yml is otherwise a promise no check keeps."""
+    ci = _read(".github/workflows/ci.yml")
+    promtool = re.findall(r"prometheus/releases/download/v([0-9.]+)/", ci)
+    vector = re.findall(r"vectordotdev/vector/releases/download/v([0-9.]+)/", ci)
+    assert promtool == [_compose_tag("prometheus.yaml", "prom/prometheus")], promtool
+    assert vector == [_compose_tag("vector.yaml", "timberio/vector")], vector
+
+
+def test_pip_audit_covers_the_image_requirement_files():
+    """The pip-audit job names every requirements file an image installs, as well as the floors. Guards the audit
+    going back to reading only the floors — which name no version an image runs — so a known vulnerability in a
+    pinned image package (one was found when this landed: certifi) would pass unseen."""
+    security = _read(".github/workflows/security.yml")
+    audited = set(re.findall(r"-r\s+(\S+)", " ".join(ln for ln in security.splitlines() if "pip-audit" in ln)))
+    images = {d.lstrip("/") + "/requirements.txt" for d in _image_requirement_dirs()}
+    assert images and images <= audited, sorted(images - audited)
+    assert {"gui/requirements.txt", "api/requirements.txt", "tests/requirements-dev.txt"} <= audited, audited
 
 
 def test_third_party_actions_are_sha_pinned():

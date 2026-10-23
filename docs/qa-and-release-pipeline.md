@@ -105,11 +105,11 @@ recommends but hasn't wired it — we should, given galaxy.py + gui are real cod
 | ✅ Secret scanning | **gitleaks** (in `tests/validate` + `.pre-commit-config.yaml`) | working tree | `.gitleaks.toml` allowlists SOPS ciphertext + `local/`; custom age-key rule; verified catches a planted age key. *Next:* a CI job + full-history scan |
 | ✅ SOPS-encrypted gate | `validate` `sops-encrypted` = `scripts/lib/plaintext-guard.sh --tree` (every value ciphertext, nothing else in the directory, no private key); the same guard gates the commits that take a whole worktree into the canonical | `instance/secrets/*`, and at deploy everything the commit would take | `tests/unit/test_plaintext_guard.py` runs in CI on every pull request; `sops-guard-conformance` holds the predicate against the installed sops, and fails if any of its tests was skipped |
 | ⬜ `no_log` enforcement | a pytest/grep gate | every task touching a cred/SOPS value | already a convention + partial grep; make it a hard CI assertion |
-| ⬜ Python deps | **pip-audit** | `gui/requirements.txt` + any galaxy deps | netcanon uses Dependabot; add pip-audit too |
+| ✅ Python deps | **pip-audit** (`security.yml`) | the gui/api/tests floors, and the exact pins the images install (`docker/{semaphore-runner,installer}/requirements.txt`) | `tests/unit/test_ci_workflows.py` holds the audited set to the image files; the Semaphore base's own venv packages are not audited (SECURITY.md R-IMG-2) |
 | ⬜ Container/image scan | **trivy** | runner image, onboard-gui, homepage/grafana/prom images | scan on build, fail on HIGH/CRITICAL fixable |
 | ⬜ Ansible content | **ansible-lint** security profile + **kics/checkov** (optional) | playbooks/roles | infra-as-code misconfig scanning |
 | ⬜ SAST (Python) | **bandit** | `scripts/`, `gui/` | the GUI is privileged — worth it |
-| ✅ Dependency updates | **Dependabot** (`.github/dependabot.yml`) | pip, github-actions, docker | copy netcanon's config near-verbatim |
+| ✅ Dependency updates | **Dependabot** (`.github/dependabot.yml`) | pip (floors and image pins), github-actions, docker (every Dockerfile), docker-compose | netcanon's config, widened to every image input; a PR that moves an image is merged after the build proof in `docker/README.md` § Refreshing a pin |
 | ⬜ **GUI-specific** | auth + TLS + audit log before beta | `gui/` | tracked in [gui/README.md](../gui/README.md) security posture; the GUI can write the repo, encrypt secrets, push, and run Ansible — treat as a crown-jewel surface |
 
 ---
@@ -156,8 +156,9 @@ protection is one mis-click from a merge). A public repository has no such branc
 
 ### `ci.yml` — on `[pull_request, push:{branches:[main, homelab*]}]`, concurrency cancel-in-progress
 - **validate**: `tests/validate.sh --strict` — the SAME gate as local + the VM, with every tool it
-  can run installed in the job (sha256-pinned sops, gitleaks, promtool, vector; pinned yamllint /
-  ansible-core / ansible-lint), so a missing tool is a failure, never a silent skip. Covers yamllint,
+  can run installed in the job (sha256-pinned sops, gitleaks, promtool, vector — promtool and vector at the
+  compose pins' versions, held by `tests/unit/test_ci_workflows.py`; yamllint / ansible-core / ansible-lint
+  from `tests/requirements-dev.txt`), so a missing tool is a failure, never a silent skip. Covers yamllint,
   ansible-lint, `--syntax-check`, `docker compose config`, promtool, vector validate, the sops /
   secret-grep / gitleaks gates, every `gen-*.py --check`, the test-docstring, document-link and
   port-binding guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`), and
@@ -177,7 +178,8 @@ protection is one mis-click from a merge). A public repository has no such branc
   assertion. Always GitHub-hosted. The required check *No leaked personal identifiers* (SECURITY.md C21).
 
 ### `security.yml` — on `[pull_request, push:{branches:[main, homelab*]}, schedule: weekly]`
-- gitleaks (full history, 8.30.x) · pip-audit (gui · api · tests deps). ⬜ bandit · trivy (images).
+- gitleaks (full history, 8.30.x) · pip-audit (the gui · api · tests floors, and the image pins with `--no-deps`).
+  ⬜ bandit · trivy (images).
 
 ### `zizmor.yml` — on `[pull_request, push:{branches:[main, homelab*]}]` for `.github/` paths + weekly; workflow-security lint, advisory (log-only; plus a SARIF upload to code scanning where the repository variable `KONTROLL_CODE_SCANNING=true`).
 
@@ -186,7 +188,7 @@ Its `gate` job refuses the publish when `STATUS.md` is more than a month old or 
 lock (`tests/check-status.py --release`; a warning never refuses it), beside the read-only pin and the
 baked-code manifest.
 
-### `.github/dependabot.yml` — pip (gui + api + tests; the `>=` floors use `increase-if-necessary`, so pure floors get no version PRs), github-actions, docker; weekly, 7-day cooldown,
+### `.github/dependabot.yml` — pip (gui + api + tests; the `>=` floors use `increase-if-necessary`, so pure floors get no version PRs; the image pin files keep the default strategy), github-actions, docker (every Dockerfile's base), docker-compose (`docker/services`, less the generated exporter fragments); weekly, 7-day cooldown,
 minor+patch grouped, PR limits (netcanon parity).
 
 > **Enforcement.** On the public repository `main` is governed by a ruleset: pull request required,

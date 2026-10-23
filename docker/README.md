@@ -79,6 +79,51 @@ Cosign signing is the deferred rung.
   `--check`, so a stale/forgotten regen fails loudly and a tag can't publish drifted baked code); `--verify <tree>`
   re-checks a materialized baked tree (`/opt/kontroll`) fail-closed for an audit. OFFLINE (pure file hashing).
 
+### Refreshing a pin
+
+Every input an image build or the stack pulls is pinned, and
+[`tests/unit/test_image_pins.py`](../tests/unit/test_image_pins.py) fails when a pin is **missing** (never because
+one is old):
+
+| Input | Pinned as | Where |
+|---|---|---|
+| a Dockerfile's base | `FROM <image>:<tag>@sha256:<digest>` — the digest is pulled, the tag is its label | each `Dockerfile` (Vector's also in `services/vector.yaml`, in lock-step) |
+| the Python packages an image adds | one `name==version` per package, installed `--no-deps`, then `pip check` | `semaphore-runner/requirements.txt`, `installer/requirements.txt` |
+| the runner's apk packages | `~=<major.minor>` (the patch revision still moves: an Alpine branch keeps only its newest) | `semaphore-runner/Dockerfile` |
+| a downloaded binary or apt key | its SHA-256, checked in the same `RUN` | `installer/Dockerfile` (sops, Docker's apt key) |
+| a compose image | an exact tag (at least major.minor) | `services/*.yaml`, `../telemetry/*.yml` |
+
+The installer's and Vector's **apt** packages still float inside their pinned base; the published image's digest
+in [`images.lock.yml`](images.lock.yml) is the full pin ([SECURITY.md](../SECURITY.md) § Accepted risks, R-IMG-2).
+
+One procedure, the same for a Dependabot PR and a hand bump. It is an authoring-time act with network; nothing in
+it runs on a deploy path.
+
+1. **Change the tag** in the `FROM` line or the compose `image:` (or let Dependabot's PR do it). The exporter
+   images are generated: bump them in `telemetry/*.yml` and run `scripts/gen-exporters.py`.
+2. **Resolve the digest** for that exact tag, and write it after the tag: `docker buildx imagetools inspect
+   <image>:<tag>`, taking the top-level `Digest:` (the manifest list, so one pin serves every platform the publish
+   matrix builds). Bumping only a pip, apk or checksum pin skips this step.
+3. **The control image: re-derive what the base decides.** Build it on the new base, then:
+   - regenerate `semaphore-runner/requirements.txt` as the difference between `pip freeze` in the bare base's
+     ansible venv and `pip freeze` after `pip install paramiko flask fastapi uvicorn PyYAML` there (sorted, one
+     `name==version` per line; the header stays). A package the base already ships stays out of the file — the
+     Dockerfile's import line holds it — unless the base stops shipping it;
+   - re-read the apk constraints with `apk policy <package>` if the Alpine branch moved.
+
+   **The installer:** its `requirements.txt` is `pip freeze` in a build with `ansible-core`, `ansible-lint` and
+   `docker` installed (less Debian's own pip, setuptools and wheel). A new sops version changes `SOPS_VERSION` and
+   both `SOPS_SHA256_*` from the release's `checksums.txt` together.
+4. **Prove it.** Build all three images from the change (the control image after `python3
+   scripts/gen-requirements.py --all-modules`, as the publish workflow does) — `pip check`, the import line, the
+   checksums and the apk constraints run in the build. In the built control image, `ansible --version`, `sops
+   --version`, `age --version`, `snmpbulkwalk -V` and `ssh -V`; copy `/opt/kontroll` out and run
+   `scripts/gen-code-manifest.py --verify` on it. In the installer, `ansible --version`, `ansible-galaxy collection
+   list` and `docker compose version`. A Semaphore base must be at least the version every live box runs: Semaphore
+   migrates its database forward on start, so an older pin is a downgrade over a migrated schema. No pull-request
+   job builds an image, so a PR that moves an image is merged only after this step.
+5. **Publish and re-pin** (above): tag, publish, `gen-image-digests.py --refresh <tag>`.
+
 ### C1 — the installer image + bundle-as-compose
 
 C1 publishes the **installer** image too, so a fresh node installs from published images with **no git clone and no
@@ -110,6 +155,8 @@ full tree until those run *baked* code (Phase B).
 ## Testing
 Covered by `tests/validate`'s `compose-config` check (structure validated against
 `.env.example`) + `gen-image-digests --check` (the lock is well-formed). Runs only where Docker is installed.
+The pins are held by `tests/unit/test_image_pins.py`, and their Dependabot and pip-audit coverage by
+`tests/unit/test_ci_workflows.py` — both pure text, no Docker.
 
 ## See also
 - [installer/README.md](installer/README.md) — the compose-native installer (Phase 1)

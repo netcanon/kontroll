@@ -14,8 +14,9 @@ MIT licence above does not re-license it.
 | The `haproxy.cfg.template` of `tecnativa/docker-socket-proxy:0.3.0` (a test fixture: the socket proxy's start script is run against it) | `tests/fixtures/docker-socket-proxy/0.3.0/haproxy.cfg.template` | <https://github.com/Tecnativa/docker-socket-proxy>, copied unmodified from the image (`docker run --rm --entrypoint cat tecnativa/docker-socket-proxy:0.3.0 /usr/local/etc/haproxy/haproxy.cfg.template`) | Apache-2.0 (the image's `org.opencontainers.image.licenses` label). |
 
 Container images the stack pulls (Semaphore, Homepage, Prometheus, Grafana, Loki, Vector,
-the exporters) are not vendored here; each is pulled by digest from its publisher under its
-own licence — see the compose fragments.
+the exporters) are not vendored here; each is pulled by pinned tag from its publisher under its
+own licence — see the compose fragments. The bases kontroll's own images build on are pinned by digest in their
+Dockerfiles.
 
 The images kontroll publishes itself (`kontroll-{control,vector,installer}`, pinned in
 `docker/images.lock.yml`) redistribute their base images and the tools baked into them — the

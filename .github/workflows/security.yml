@@ -28,7 +28,7 @@ jobs:
         run: gitleaks detect -c .gitleaks.toml --redact --no-banner
 
   pip-audit:
-    name: pip-audit (gui · api · tests deps)
+    name: pip-audit (gui · api · tests floors, image pins)
     runs-on: ${{ fromJSON(vars.KONTROLL_RUNS_ON || '"ubuntu-latest"') }}   # see ci.yml "RUNNERS"
     steps:
       - uses: actions/checkout@v7
@@ -39,3 +39,5 @@ jobs:
           python-version: '3.12'
       - run: pip install --quiet pip-audit
       - run: pip-audit -r gui/requirements.txt -r api/requirements.txt -r tests/requirements-dev.txt
+      # The versions the images actually install: exact pins, each file already its whole closure, so no resolve.
+      - run: pip-audit --no-deps -r docker/semaphore-runner/requirements.txt -r docker/installer/requirements.txt
