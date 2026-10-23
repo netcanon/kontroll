@@ -9,27 +9,39 @@ fixed by `check_mode: false`. The guard before this one was a hand list of regis
 "a new SOPS-feeding resolver added without it" and did not: `_img_env` was added without it, and without a row.
 
 The rule reads the plays instead. Its scope is these tasks the control node runs:
-- every task of a play under ansible/playbooks/ whose `hosts:` is the control node (`localhost` or `127.0.0.1`,
-  alone, as a list or a comma-separated string, or a templated value that names either) or that runs
-  `connection: local` (the keyword, or the `ansible_connection` play var), less a task delegated elsewhere; and each
-  task of any other play delegated to `localhost` or run with `connection: local` (on itself or on a block around
-  it);
+- every task of a play under ansible/playbooks/ whose `hosts:` is the control node, or that sets the
+  `ansible_connection: local` play var (a play var outranks a host's own), less a task delegated to anything but
+  `localhost` or `127.0.0.1`. The control node is `localhost` or `127.0.0.1`: alone, as a list, or a string of them
+  joined by `,` or `:`; a templated `hosts:` is read by its `default('…')` literals, and one with none is not the
+  control node. And each task of any other play delegated to `localhost` or `127.0.0.1` (on itself or on a block
+  around it);
 - every task file such a play imports or includes by a literal path, and the files those import in turn;
 - the tasks and handlers of every role such a play applies by a literal name (`include_role`, `import_role`,
   `roles:`).
 There, a `command` / `shell` / `raw` task that declares itself read-only (`changed_when: false`) and whose
-`register:` is named anywhere else — a play, a task file or a role under ansible/, or a Jinja template in the tree —
-must carry `check_mode: false` (on itself or on a block around it), or have a row in `_EXEMPT` that says why an
-empty value in a dry-run is right. A comment line, a `register:` line and a task's `name:` are not reads, unless
-they hold a `{{` or a `{%` (a `#` line of a template or a block scalar is output Jinja still renders); every other
-mention counts. For the flag, that errs on the safe side. For the stale check it does not: an `_EXEMPT` row stays
-alive while its register is named anywhere the corpus reads (a var of the same name, a template's text), so a
-stale row fails only once that name is gone from everywhere under ansible/ and every template.
+`register:` is named anywhere else must carry `check_mode: false` (on itself or on a block around it), or have a
+row in `_EXEMPT` that says why an empty value in a dry-run is right. "Anywhere else" is:
+- a YAML file under ansible/ (a play, a task file, a role), read through its parsed keys and values, so a comment is
+  gone and a block scalar is whole (a `#` line in one is output Jinja still renders). A `register:` value is not a
+  read, nor is a `name:` value (a task's, or a module parameter's) that holds no `{{` or `{%`. A file the parser
+  refuses is read by lines, as a template is;
+- a Jinja template in the tree (`.j2`, `.jinja2`), read by lines: every line counts but a `#` line, a `register:`
+  line or a `name:` line that holds no `{{` or `{%`.
+Every other mention counts. For the flag, that errs on the safe side. For the stale check it does not: an `_EXEMPT`
+row stays alive while its register is named anywhere the corpus reads (a var of the same name, a template's text),
+so a stale row fails only once that name is gone from everywhere under ansible/ and every template.
 
-What the scope does not reach: `local_action:`; a role pulled in by another role's `meta/main.yml` `dependencies:`
-or named by its FQCN; a role applied both by a control-node play and by a device play (in scope, so the ban below
-spares it); an api-backend role, which its backend runs with `ansible_connection: local` (out of scope, so the ban
-holds it as a device role; none has a command task today).
+What the scope does not reach:
+- `local_action:`; a role pulled in by another role's `meta/main.yml` `dependencies:` or named by its FQCN;
+- a role applied both by a control-node play and by a device play (in scope, so the ban below spares it); an
+  api-backend role, which its backend runs with `ansible_connection: local` (out of scope, so the ban holds it as a
+  device role; none has a command task today);
+- the `connection: local` keyword, on a play, block or task: a host's own `ansible_connection` (its backend's and
+  group_vars') overrides it, as `_render-ssh-keys.yml` records, so such a task runs where its hosts are. Nor a task's
+  or block's own `vars: {ansible_connection: local}`;
+- a templated `delegate_to`, which is taken as a device: flagged, its advice (`check_mode: false`) would run a
+  device read for real in the dry-run. So a resolver delegated to `"{{ inventory_hostname }}"` from a local play, or
+  to `"{{ 'localhost' }}"` from a device play, is missed.
 
 Every other role is out of scope by rule: it runs against a device, where forcing a read to run under `--check`
 would execute the device command for real, so none of its tasks may carry `check_mode: false`.
@@ -48,7 +60,7 @@ _IMPORTS = ("ansible.builtin.import_tasks", "import_tasks", "ansible.builtin.inc
 _ROLES = ("ansible.builtin.include_role", "include_role", "ansible.builtin.import_role", "import_role")
 _LOCAL = ("localhost", "127.0.0.1")
 # A block's keyword that its tasks inherit, as far as the rule reads them.
-_INHERITED = ("check_mode", "delegate_to", "connection")
+_INHERITED = ("check_mode", "delegate_to")
 
 # (file, register) → why the read stays skipped in a dry-run. Every row is checked to still name such a read.
 _EXEMPT = {
@@ -90,23 +102,28 @@ def _tasks_of(path):
 
 
 def _is_control_node(play):
-    """Whether every task of `play` runs on the control node (a templated `hosts:` that names it counts)."""
+    """Whether every task of `play` runs on the control node: it sets the `ansible_connection: local` play var, or
+    its `hosts:` names only `localhost` / `127.0.0.1`. A templated `hosts:` is read by its `default('…')` literals:
+    one that only mentions `localhost` (`hostvars['localhost']`, a `difference(['localhost'])`) is a device play."""
     hosts = play.get("hosts")
     play_vars = play.get("vars") if isinstance(play.get("vars"), dict) else {}
-    if play.get("connection") == "local" or play_vars.get("ansible_connection") == "local":
+    if play_vars.get("ansible_connection") == "local":
         return True
     if isinstance(hosts, str) and ("{{" in hosts or "{%" in hosts):
-        return any(re.search(r"(?<![\w.])%s(?![\w.])" % re.escape(h), hosts) for h in _LOCAL)
+        hosts = ",".join(re.findall(r"default\(\s*['\"]([^'\"]*)['\"]", hosts))
+        if not hosts:
+            return False
     if isinstance(hosts, str):
-        hosts = [h.strip() for h in hosts.split(",")]
+        hosts = [h.strip() for h in re.split(r"[,:]", hosts)]
     return all(h in _LOCAL for h in (hosts if isinstance(hosts, list) else [hosts]))
 
 
 def _on_control_node(task, whole):
-    """Whether `task` (with its blocks' keywords) runs on the control node, in a play that does (`whole`) or not."""
+    """Whether `task` (with its blocks' keywords) runs on the control node, in a play that does (`whole`) or not. A
+    `delegate_to` decides it: `localhost` or `127.0.0.1` in, anything else (a templated one too) out."""
     if task.get("delegate_to") is not None:
         return task["delegate_to"] in _LOCAL
-    return whole or task.get("connection") == "local"
+    return whole
 
 
 def _role_files(roles_dir, name):
@@ -165,30 +182,60 @@ def control_node_task_files(root):
     return scoped
 
 
-# Lines that name a register without reading it: a `register:` line, and a task's `name:` that templates nothing.
-_NOT_A_READ = re.compile(r"^\s*(?:-\s+)?(?:register|name):\s*[^{]*$")
+# Template lines that name a register without reading it, unless they hold Jinja: a `register:` or `name:` line.
+_NOT_A_READ = re.compile(r"^\s*(?:-\s+)?(?:register|name):")
+
+
+def _templates(value):
+    return isinstance(value, str) and ("{{" in value or "{%" in value)
 
 
 def _is_read_line(line):
-    """Whether `line` can read a register: not a comment line or a line of `_NOT_A_READ`. A `#` line that holds a
-    `{{` or a `{%` counts — in a template, and in a YAML block scalar, it is output Jinja still renders."""
-    if "{{" in line or "{%" in line:
+    """Whether a template's `line` can read a register: one that holds a `{{` or a `{%` (a `#` line too: in a
+    template it is output Jinja still renders), or one that is neither a `#` line nor a line of `_NOT_A_READ`."""
+    if _templates(line):
         return True
     return not (line.lstrip().startswith("#") or _NOT_A_READ.match(line))
 
 
+def _scalars(node):
+    """Every key and value a parsed YAML document holds, a block scalar whole, less the values that name a register
+    without reading it: a `register:` value, and a `name:` value that holds no Jinja."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield str(key)
+            if key == "register" or key == "name" and not _templates(value):
+                continue
+            yield from _scalars(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _scalars(item)
+    elif node is not None:
+        yield str(node)
+
+
 def _corpus(root):
-    """The text of every file a register can be read from, the lines `_is_read_line` refuses dropped: each YAML
-    file under ansible/ and each Jinja template in the tree. Installed collections (`ansible_collections/`, which a
-    bootstrapped box holds under ansible/) are not the repository's own reads."""
+    """The text of every file a register can be read from: each YAML file under ansible/, as `_scalars` reads it
+    (by lines, as a template, where the parser refuses it), and each Jinja template in the tree, the lines
+    `_is_read_line` refuses dropped. Installed collections (`ansible_collections/`, which a bootstrapped box holds
+    under ansible/) are not the repository's own reads."""
     texts = []
     for top, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules", "ansible_collections")]
         rel = os.path.relpath(top, root).replace(os.sep, "/")
         for f in files:
-            if f.endswith(".j2") or (f.endswith((".yml", ".yaml")) and (rel + "/").startswith("ansible/")):
-                lines = _load(os.path.join(top, f)).splitlines()
-                texts.append("\n".join(line for line in lines if _is_read_line(line)))
+            text = None
+            if f.endswith((".yml", ".yaml")) and (rel + "/").startswith("ansible/"):
+                text = _load(os.path.join(top, f))
+                try:
+                    texts.append("\n".join(s for doc in yaml.safe_load_all(text) for s in _scalars(doc)))
+                    continue
+                except yaml.YAMLError:
+                    pass
+            elif f.endswith((".j2", ".jinja2")):
+                text = _load(os.path.join(top, f))
+            if text is not None:
+                texts.append("\n".join(line for line in text.splitlines() if _is_read_line(line)))
     return texts
 
 
@@ -314,9 +361,14 @@ _PLANTED = ("""- hosts: localhost
   roles: [ctlr]
   tasks:
 """ + _read("a resolver in a listed-host play", "_listed") + _use("_listed") + """- hosts: all
-  connection: local
+  vars:
+    ansible_connection: local
   tasks:
 """ + _read("a resolver in a local-connection play", "_conn_local") + _use("_conn_local") + """- hosts: all
+  connection: local
+  roles: [dev]
+  tasks:
+""" + _read("a read in a play with only the keyword", "_kw_local") + _use("_kw_local") + """- hosts: all
   tasks:
     - name: a device read
       ansible.builtin.command: show version
@@ -381,72 +433,113 @@ def test_the_detector_flags_a_planted_unlisted_resolver(tmp_path, forced, expect
     by a play var; one nested in a block; one read only by a task file the play imports; one read only by a
     template; one marked read-only by the string "false"; one in an imported file, and one two imports down; one
     in a role the play applies, by `include_role` or `roles:`; one in a play whose `hosts:` is a list of
-    `localhost` and `127.0.0.1`; one in a `connection: local` play; one delegated to localhost from a play for
-    `all`. These are not flagged: a read nothing uses, one named only in a comment, a writer, a device read, and a
-    read whose block forces it.
+    `localhost` and `127.0.0.1`; one in a play that sets the `ansible_connection: local` play var; one delegated to
+    localhost from a play for `all`. These are not flagged: a read nothing uses, one named only in a comment, a
+    writer, a device read, a read whose block forces it, and a read in a play for `all` that sets only the
+    `connection: local` keyword, which a host's own `ansible_connection` overrides.
 
     Guards a detector that cannot fail, and the scope gaps its first read found (T24's read, F3, F11, F12): a read
     counted only in its own file, a nested import, a control-node role, a play written as a list of local names,
-    run over a local connection or delegated, a mark on the block, and the string form of `changed_when`."""
+    run over a local connection or delegated, a mark on the block, and the string form of `changed_when`; and a
+    keyword-only play taken as the control node (its fold-3 read, N5)."""
     assert unforced_reads(_plant(tmp_path, forced)) == expect
 
 
 _LOCAL_PLAY = "- hosts: localhost\n  tasks:\n"
+_READ_R = _LOCAL_PLAY + _read("r", "_r")
+_IN_ALL = "- hosts: all\n  tasks:\n"
 _EDGES = {
-    # (playbook, a template's text or None, flagged)
-    "hash-line-in-template": (_LOCAL_PLAY + _read("r", "_r"), "# digest {{ _r.stdout }}\n", True),
-    "hash-line-in-block-scalar": (_LOCAL_PLAY + _read("r", "_r") + "    - ansible.builtin.copy:\n"
+    # (playbook, {other file: its text}, flagged)
+    "hash-line-in-template": (_READ_R, {"prom/x.conf.j2": "# digest {{ _r.stdout }}\n"}, True),
+    "hash-line-statement-in-template": (_READ_R, {"prom/x.conf.j2": "# {% if _r.rc == 0 %}up{% endif %}\n"}, True),
+    "read-only-in-a-jinja2-template": (_READ_R, {"prom/x.conf.jinja2": "value: {{ _r.stdout }}\n"}, True),
+    "named-only-in-a-template-comment": (_READ_R, {"prom/x.conf.j2": "# _r feeds this file\n"}, False),
+    "named-only-on-a-template-name-line": (_READ_R, {"prom/x.conf.j2": "name: _r\n"}, False),
+    "hash-line-in-block-scalar": (_READ_R + "    - ansible.builtin.copy:\n"
                                   "        dest: /tmp/x\n        content: |\n          # {{ _r.stdout }}\n",
-                                  None, True),
+                                  {}, True),
+    "read-only-in-a-commented-out-task": (_READ_R + "    # - ansible.builtin.debug:\n"
+                                          "    #     msg: \"{{ _r.stdout }}\"\n", {}, False),
+    "read-in-a-file-with-a-vault-tag": (_READ_R, {"ansible/group_vars/all.yml": "secret: !vault |\n"
+                                                  "  $ANSIBLE_VAULT;1.1;AES256\n  3132\nseen: \"{{ _r.stdout }}\"\n"},
+                                        True),
+    "read-only-in-a-collection": (_READ_R, {"ansible/ansible_collections/ns/c/roles/r/tasks/main.yml":
+                                            "- ansible.builtin.debug:\n    msg: \"{{ _r.stdout }}\"\n"}, False),
     "named-only-in-task-names": (_LOCAL_PLAY + _read("collect (_r)", "_r")
-                                 + "    - name: show _r\n      ansible.builtin.debug:\n        msg: hi\n", None, False),
-    "same-register-elsewhere": (_LOCAL_PLAY + _read("r", "_r") + "- hosts: all\n  tasks:\n"
-                                + "    - ansible.builtin.command: show version\n      register: _r\n", None, False),
+                                 + "    - name: show _r\n      ansible.builtin.debug:\n        msg: hi\n", {}, False),
+    "read-in-a-templated-name": (_READ_R + "    - name: \"show {{ _r.stdout }}\"\n      ansible.builtin.debug:\n"
+                                 "        msg: hi\n", {}, True),
+    "register-value-on-its-own-line": (_LOCAL_PLAY + "    - name: r\n      ansible.builtin.command: echo r\n"
+                                       "      register:\n        _r\n      changed_when: false\n", {}, False),
+    "same-register-elsewhere": (_READ_R + _IN_ALL
+                                + "    - ansible.builtin.command: show version\n      register: _r\n", {}, False),
     "templated-hosts-local": ("- hosts: \"{{ target | default('localhost') }}\"\n  tasks:\n" + _read("r", "_r")
-                              + _use("_r"), None, True),
+                              + _use("_r"), {}, True),
     "templated-hosts-device": ("- hosts: \"{{ target | default('switches') }}\"\n  tasks:\n" + _read("r", "_r")
-                               + _use("_r"), None, False),
-    "hosts-comma-string": ("- hosts: localhost,127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), None, True),
+                               + _use("_r"), {}, False),
+    "templated-hosts-mentions-localhost": ("- hosts: \"{{ hostvars['localhost']._wire_group | "
+                                           "default('__no_target__') }}\"\n  tasks:\n" + _read("r", "_r")
+                                           + _use("_r"), {}, False),
+    "templated-hosts-no-default": ("- hosts: \"{{ groups['all'] | difference(['localhost']) }}\"\n  tasks:\n"
+                                   + _read("r", "_r") + _use("_r"), {}, False),
+    "hosts-comma-string": ("- hosts: localhost,127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), {}, True),
+    "hosts-comma-space": ("- hosts: localhost, 127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), {}, True),
+    "hosts-colon-string": ("- hosts: localhost:127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), {}, True),
     "play-var-connection-local": ("- hosts: all\n  vars:\n    ansible_connection: local\n  tasks:\n"
-                                  + _read("r", "_r") + _use("_r"), None, True),
-    "task-connection-local": ("- hosts: all\n  tasks:\n" + _read("r", "_r", "\n      connection: local")
-                              + _use("_r"), None, True),
-    "block-connection-local": ("- hosts: all\n  tasks:\n    - connection: local\n      block:\n        - name: r\n"
-                               "          ansible.builtin.command: echo r\n          register: _r\n"
-                               "          changed_when: false\n        - ansible.builtin.debug:\n"
-                               "            msg: \"{{ _r.stdout }}\"\n", None, True),
+                                  + _read("r", "_r") + _use("_r"), {}, True),
+    "play-connection-keyword": ("- hosts: all\n  connection: local\n  tasks:\n" + _read("r", "_r") + _use("_r"),
+                                {}, False),
+    "task-connection-keyword": (_IN_ALL + _read("r", "_r", "\n      connection: local") + _use("_r"), {}, False),
+    "block-connection-keyword": (_IN_ALL + "    - connection: local\n      block:\n        - name: r\n"
+                                 "          ansible.builtin.command: echo r\n          register: _r\n"
+                                 "          changed_when: false\n        - ansible.builtin.debug:\n"
+                                 "            msg: \"{{ _r.stdout }}\"\n", {}, False),
     "delegated-to-a-device": (_LOCAL_PLAY + _read("r", "_r", "\n      delegate_to: \"{{ item }}\"") + _use("_r"),
-                              None, False),
+                              {}, False),
 }
 
 
 @pytest.mark.parametrize("case", sorted(_EDGES))
 def test_the_corpus_and_the_scope_at_their_edges(tmp_path, case):
-    """One read-only resolver `_r`, flagged exactly where a later task can read it on the control node: read only
-    on a `#` line of a template or of a block scalar (output Jinja renders), in a play whose `hosts:` is templated
-    to default to `localhost` or is the string `localhost,127.0.0.1`, in a play run with the `ansible_connection`
-    play var, or a task run with `connection: local` (on itself or on its block). Not flagged: named only in task
-    names, or by another play's `register:` of its own; in a play templated to default to a device group; or
-    delegated to a device.
+    """One read-only resolver `_r`, flagged exactly where a later task can read it on the control node.
+
+    Flagged: read only on a `#` line of a template (by `{{` or by `{%`) or of a block scalar (output Jinja renders),
+    in a `.jinja2` template, in a task name that templates it, or in a YAML file the parser refuses (a `!vault`
+    tag), which is read by lines; in a play whose `hosts:` is templated to default
+    to `localhost`, or is `localhost` and `127.0.0.1` joined by `,` (with or without a space) or `:`; in a play run
+    with the `ansible_connection` play var.
+
+    Not flagged: read only in a commented-out task or under `ansible_collections/`; named only in task names, on a
+    template's `#` or `name:` line that holds no Jinja, by its own `register:` value on a line of its own, or by
+    another play's `register:` of its own; in a play templated
+    to default to a device group, to name a device group by `hostvars['localhost']`, or with no default; in a play
+    or task or block for `all` that sets only the `connection: local` keyword (a host's `ansible_connection`
+    overrides it); or delegated to a device.
 
     Guards T24's fold-2 read: a `#` line dropped whole hid a real read (N3, a regression from fold 1, which read the
     raw text); a task name or a same-named register elsewhere kept a stale `_EXEMPT` row alive and flagged an unread
     resolver (N4); and the scope missed control-node plays written these ways, or swept in a task that runs its
-    command on a device (N8)."""
-    playbook, template, flagged = _EDGES[case]
+    command on a device (N8). And its fold-3 read: a templated `hosts:` that only mentions `localhost` (the
+    wire-logging device play) taken as the control node, so a forced device read in its roles escaped the ban (N1);
+    a commented-out read keeping a stale row alive (N3); the keyword taken as the control node (N5); `:` hosts
+    (N6); and rules no row held (N7: `{%`, a templated name, the collections skip, the comma's space; and, once
+    YAML no longer reached them, a template's `#` and `name:` lines)."""
+    playbook, others, flagged = _EDGES[case]
     books = tmp_path / "ansible" / "playbooks"
     books.mkdir(parents=True)
     (books / "p.yml").write_text(playbook, encoding="utf-8")
-    if template is not None:
-        (tmp_path / "prom").mkdir()
-        (tmp_path / "prom" / "x.conf.j2").write_text(template, encoding="utf-8")
+    for rel, text in others.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
     assert unforced_reads(str(tmp_path)) == ({("p.yml", "_r")} if flagged else set())
 
 
 def test_a_forced_read_in_a_device_role_is_refused(tmp_path):
-    """In the planted tree with every role read forced, the role nothing on the control node applies (`dev`) and the
-    hidden template role are offenders; the role the control-node play applies (`ctl`) is not. Guards a ban that
-    skips `.role-template` or forbids the fix in a role the control node runs (T24's read, F10)."""
+    """In the planted tree with every role read forced, the role only a play for `all` with the `connection: local`
+    keyword applies (`dev`) and the hidden template role are offenders; the role the control-node play applies
+    (`ctl`) is not. Guards a ban that skips `.role-template` or forbids the fix in a role the control node runs
+    (T24's read, F10), and one that spares a role whose play only sets the keyword, which a host's own
+    `ansible_connection` overrides (its fold-3 read, N5)."""
     assert forced_device_reads(_plant(tmp_path, True)) == [
         "ansible/roles/.role-template/tasks/main.yml: a role's resolver",
         "ansible/roles/dev/tasks/main.yml: a role's resolver"]

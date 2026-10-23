@@ -17,11 +17,15 @@ The rule reads the tree; there is no allow-list. A source written relative to it
   (`copy`/`template` `dest:`, or `file` `path:` with `state: touch` or `directory`), and that task — with every
   block around it — runs whenever the service does: not under `rescue:`, not tagged `never`, and no `when:`, or one
   that only tests `stack_services` membership and names the service and every service that starts it through
-  `depends_on`. Any other condition (a secrets-present test, a length test) is the fault's own shape. The bring-up
-  is the first `docker compose … up` (or `run` or `create`, which create the sources too) in the playbook, in any
-  play, run by `command` (`cmd`, free form, `argv` or `args: {cmd: …}`), `shell` or `raw`, or a compose module task
-  (`docker_compose_v2`, or v1's `docker_compose`) that does not stop the stack; a writer after it, in any play, is
-  too late. The tree has exactly one, and the test says so.
+  `depends_on`. Any other condition (a secrets-present test, a length test) is the fault's own shape, and so is a
+  writer that never writes on the box: one that runs with `check_mode: true`, or is delegated to anything but
+  `localhost` / `127.0.0.1` (on itself or on a block around it). The bring-up is the first `docker compose` (or
+  `docker-compose`) call in the playbook whose subcommand is `up`, `run` or `create` (which create the sources
+  too), in any play, run by `command` (`cmd`, free form, `argv` or `args: {cmd: …}`), `shell` or `raw`, or a compose
+  module task (`docker_compose_v2`, or v1's `docker_compose`) that does not stop the stack; a writer after it, in
+  any play, is too late. The subcommand is the first word after `compose` that is not a global option or the value
+  of one (`-f`, `-p`, `--project-directory`, `--profile`, …); a `{{ … }}` is one word, and a call ends at `;`, `&`,
+  `|` or `)`. The tree has exactly one bring-up, and the test says so.
 
 An env_file is held to the same rule even where it is `required: false`: compose then starts the service without
 its settings, and nothing says so.
@@ -32,8 +36,9 @@ What the rule cannot see:
 - `caddy`, which the play adds to the bring-up without its membership: its sources are absolute
   (`${KONTROLL_STORAGE_ROOT}`), outside this rule. A service caddy started through `depends_on` would run with no
   membership the rule reads, so the tree test asserts caddy starts none;
-- a bring-up in a shape other than those above (a script that runs compose, a command built from a var): the
-  window then ends at a later bring-up, or never;
+- a bring-up in a shape other than those above (a script that runs compose, a command built from a var, a
+  `docker` global option before `compose`): the window then ends at a later bring-up, or never. A value-taking
+  global option the sweep does not list has its value read as the subcommand;
 - a play that guarantees a dependency some other way (an assert, a `--no-deps` bring-up): the rule still asks the
   writer to name the starters, and refuses a safe one;
 - a writer in a task file deploy-stack imports, or one whose path names a var the sweep cannot resolve: refused,
@@ -152,7 +157,8 @@ def _members(when):
 
 def _walk(tasks, conditions=()):
     """Yield (task, the `when:` of the task and of every block around it) in document order. A task under `rescue:`
-    runs only when its block fails, and one tagged `never` only when asked for: each carries a condition no
+    runs only when its block fails, one tagged `never` only when asked for, one with `check_mode: true` never
+    changes the box, and one delegated off the control node writes elsewhere: each carries a condition no
     membership test reads, so it never counts as a writer that runs whenever the service does."""
     for task in tasks or []:
         if not isinstance(task, dict):
@@ -161,6 +167,10 @@ def _walk(tasks, conditions=()):
         tags = task.get("tags")
         if "never" in ([tags] if isinstance(tags, str) else tags if isinstance(tags, list) else []):
             here += ("<tagged never>",)
+        if _is_true(task.get("check_mode")):
+            here += ("<check_mode: true>",)
+        if task.get("delegate_to") is not None and task["delegate_to"] not in ("localhost", "127.0.0.1"):
+            here += ("<delegated>",)
         if any(isinstance(task.get(k), list) for k in ("block", "rescue", "always")):
             for key in ("block", "rescue", "always"):
                 yield from _walk(task.get(key), here + (("<rescue>",) if key == "rescue" else ()))
@@ -168,17 +178,39 @@ def _walk(tasks, conditions=()):
             yield task, here
 
 
-# `up`, `run` and `create` each create a service's bind sources; each is matched as a word of its own, not inside a
-# path (`/srv/up-stack`).
-_UP = re.compile(r"\bdocker[\s-]+compose\b.*\s(?:up|run|create)(?=\s|$)", re.S)
+_COMPOSE = re.compile(r"\bdocker(?:\s+|-)compose\b")
+# docker compose's global options that take a value: the word after one is that value, not the subcommand.
+_COMPOSE_VALUE_OPTIONS = ("-f", "--file", "-p", "--project-name", "--project-directory", "--profile", "--env-file",
+                          "--ansi", "--progress", "--parallel")
+# The subcommands that create a service's bind sources.
+_CREATES = ("up", "run", "create")
 _COMPOSE_MODULES = ("community.docker.docker_compose_v2", "docker_compose_v2", "community.docker.docker_compose",
                     "docker_compose")
 
 
+def _subcommands(text):
+    """The subcommand of each `docker compose` / `docker-compose` call in `text`: the first word after `compose`
+    that is neither a global option nor the value of one. A `{{ … }}` is one word; a quote or a backslash ends a
+    word, and `;`, `&`, `|` or `)` the call."""
+    out = []
+    text = re.sub(r"\{\{.*?\}\}", "X", text, flags=re.S)
+    for m in _COMPOSE.finditer(text):
+        skip = False
+        for word in re.split(r"[\s'\"\\]+", re.split(r"[;&|)]", text[m.end():], maxsplit=1)[0]):
+            if not word or skip:
+                skip = skip and not word
+            elif word.startswith("-"):
+                skip = word in _COMPOSE_VALUE_OPTIONS
+            else:
+                out.append(word)
+                break
+    return out
+
+
 def _brings_up(task):
-    """Whether `task` brings the stack up: a `docker compose … up` (or `run`, or `create`) run by `command` (`cmd`,
-    free form, `argv`, or `args: {cmd: …}`), `shell` or `raw`, or a compose module task (v2 or v1) that does not stop
-    it."""
+    """Whether `task` brings the stack up: a `docker compose` call whose subcommand is `up`, `run` or `create`, run
+    by `command` (`cmd`, free form, `argv`, or `args: {cmd: …}`), `shell` or `raw`, or a compose module task (v2 or
+    v1) that does not stop it."""
     for module in ("ansible.builtin.command", "command", "ansible.builtin.shell", "shell", "ansible.builtin.raw",
                    "raw"):
         if module not in task:
@@ -188,7 +220,7 @@ def _brings_up(task):
             args = task["args"]
         if isinstance(args, dict):
             args = args.get("cmd") or " ".join(str(a) for a in args.get("argv") or [])
-        if isinstance(args, str) and _UP.search(args):
+        if isinstance(args, str) and any(word in _CREATES for word in _subcommands(args)):
             return True
     return any(isinstance(task.get(m), dict) and task[m].get("state", "present") not in ("absent", "stopped")
                and not _is_true(task[m].get("stopped")) for m in _COMPOSE_MODULES)
@@ -368,20 +400,34 @@ _RENDER = """    - name: render
      "      rescue:\n        - name: render\n          ansible.builtin.template:\n            src: x.j2\n"
      "            dest: \"{{ playbook_dir }}/../../conf/x.yml\"\n", True),
     (_RENDER + "      tags: [never, render]\n", True),
+    (_RENDER + "      tags: never\n", True),
+    ("    - name: try\n      block:\n        - name: hi\n          ansible.builtin.debug:\n            msg: hi\n"
+     "      always:\n        - name: render\n          ansible.builtin.template:\n            src: x.j2\n"
+     "            dest: \"{{ playbook_dir }}/../../conf/x.yml\"\n", False),
+    (_RENDER + "      check_mode: true\n", True),
+    ("    - check_mode: true\n      block:\n"
+     + _RENDER.replace("\n    ", "\n        ").replace("    - ", "        - ", 1), True),
+    (_RENDER + "      delegate_to: sw1\n", True),
+    (_RENDER + "      delegate_to: localhost\n", False),
 ], ids=["unconditional", "member", "member-of-two", "secrets-present", "another-service", "and-paren-group",
         "paren-group-and", "and-list",
         "block-condition", "another-path", "no-writer", "touch-via-stack-dir", "file-absent", "member-parens",
-        "rescue-only", "tagged-never"])
+        "rescue-only", "tagged-never", "tagged-never-string", "always", "check-mode-true", "block-check-mode-true",
+        "delegated-away", "delegated-local"])
 def test_the_sweep_catches_a_conditionally_rendered_source(tmp_path, writer, flagged):
     """A planted fragment binding `../../conf/x.yml`, against a deploy-stack whose writer is unconditional, gated
     on the service's own membership (in paren terms too, the house style), or gated on something else: a
     secrets-present clause (the snmp_exporter fault's shape), another service, a credentials test ANDed with a
     parenthesised membership group (either way round — the house style's shape), a conjunction, a condition on the
     enclosing block, a writer of another path, none, a `file` task that removes rather than creates, a writer only
-    under `rescue:` or tagged `never`. Guards a sweep that cannot fail, one that reads only the task's own `when:`
-    and not its block's, and a membership split that skips the terms it cannot read (T24's read, F1); and a
-    membership test refused for its parens, or a writer that runs only on a failure or on request counted as one
-    that always runs (its fold-2 read, N1 and N6)."""
+    under `rescue:` or tagged `never` (as a list or a string). A writer under `always:` runs whatever its block
+    does, and passes. A writer that runs with `check_mode: true` (on itself or its block) never writes, and one
+    delegated to another host writes there: both are flagged; one delegated to localhost passes. Guards a sweep
+    that cannot fail, one that reads only the task's own `when:` and not its block's, and a membership split that
+    skips the terms it cannot read (T24's read, F1); a membership test refused for its parens, or a writer that runs
+    only on a failure or on request counted as one that always runs (its fold-2 read, N1 and N6); and the
+    `never` string and `always:` rules no row held, and a writer that never writes on the box counted as one (its
+    fold-3 read, N7 and N9)."""
     root = _plant(tmp_path, _FRAG, _PLAY % writer.rstrip("\n"))
     assert bool(unprovided(root)) is flagged, unprovided(root)
 
@@ -399,6 +445,11 @@ _UPS = {
     "compose-v1": "      community.docker.docker_compose:\n        project_src: /srv/stack\n",
     "run": "      ansible.builtin.command: docker compose run --rm x true\n",
     "create": "      ansible.builtin.command: docker compose create x\n",
+    "sh-c-quoted": "      ansible.builtin.command: sh -c 'docker compose up'\n",
+    "then-semicolon": "      ansible.builtin.shell: docker compose up; echo done\n",
+    "then-and": "      ansible.builtin.shell: docker compose up&&echo done\n",
+    "options-first": "      ansible.builtin.command: docker compose -f /srv/x.yml --profile web --dry-run up -d x\n",
+    "legacy-binary": "      ansible.builtin.command: docker-compose up -d x\n",
 }
 
 
@@ -407,10 +458,12 @@ _UPS = {
 def test_a_writer_after_the_up_is_too_late(tmp_path, up, later_play):
     """The render placed after the stack's bring-up does not provision the source, whichever way the bring-up is
     written — a folded or literal `cmd`, `argv`, free form, `args: {cmd: …}`, `shell`, `raw`, the compose module (v2
-    or v1), or a `run` or `create`, which create the sources too — and whether the render is in the same play or a
-    later one. Guards a writer moved below the bring-up, where Docker has already created the directory, and a
-    detector that stops looking for the bring-up at a reformat or a play boundary (T24's read, F2), or at a shape it
-    does not read, when an earlier bring-up in that shape ends the window (its fold-2 read, N7)."""
+    or v1), a `run` or `create`, which create the sources too, an `up` inside a quoted `sh -c` or followed by `;` or
+    `&&`, one after global options and their values, or the `docker-compose` binary — and whether the render is in
+    the same play or a later one. Guards a writer moved below the bring-up, where Docker has already created the
+    directory, and a detector that stops looking for the bring-up at a reformat or a play boundary (T24's read, F2),
+    or at a shape it does not read, when an earlier bring-up in that shape ends the window (its fold-2 read, N7;
+    its fold-3 read, N2: an `up` before punctuation)."""
     play = "- hosts: localhost\n  tasks:\n    - name: up\n%s%s%s" % (
         _UPS[up], "- hosts: localhost\n  tasks:\n" if later_play else "", _RENDER)
     root = _plant(tmp_path, _FRAG, play)
@@ -420,13 +473,19 @@ def test_a_writer_after_the_up_is_too_late(tmp_path, up, later_play):
 
 def test_a_stopping_compose_task_is_not_the_bring_up(tmp_path):
     """A `docker_compose_v2` task that stops the stack, a v1 `docker_compose` with `stopped: true`, a `docker
-    compose ps`, and a `pull` from a directory whose path holds the word `up`, come before the render without ending
-    the window it may write in. Guards a detector that reads every compose call as the bring-up, or `up` inside a
-    path (T24's fold-2 read, N7), which would refuse a render that does run first."""
+    compose ps`, a `pull` from a directory whose path holds the word `up`, an `exec` whose command says `create`, a
+    `config` under a profile named `create`, and a script that runs `config` and later says "run" come before the
+    render without ending the window it may write in. Guards a detector that reads every compose call as the
+    bring-up, or `up` inside a path (T24's fold-2 read, N7), or `up` / `run` / `create` anywhere after `compose`
+    (its fold-3 read, N2), which would refuse a render that does run first."""
     play = _PLAY % ("    - community.docker.docker_compose_v2:\n        project_src: /srv/stack\n"
                     "        state: stopped\n    - community.docker.docker_compose:\n        project_src: /srv/stack\n"
                     "        stopped: true\n    - ansible.builtin.command: docker compose ps\n"
                     "    - ansible.builtin.command: docker compose --project-directory /srv/up-stack pull\n"
+                    "    - ansible.builtin.command: docker compose exec -T api kontroll create token\n"
+                    "    - ansible.builtin.command: docker compose --profile create config\n"
+                    "    - ansible.builtin.shell: |\n        docker compose config -q\n"
+                    "        echo \"checked; run it next\"\n"
                     + _RENDER.rstrip("\n"))
     root = _plant(tmp_path, _FRAG, play)
     assert bring_ups(root) == ["up"]
@@ -518,11 +577,13 @@ def test_the_scaffold_mirror_matches_scaffold_overlay(tmp_path, monkeypatch):
         assert _scaffolded(name) == want, (name, _scaffolded(name), want)
 
 
+@pytest.mark.usefixtures("isolated_git")
 def test_the_tree_is_read_from_git_where_it_is_a_checkout(tmp_path):
-    """In a git checkout, a source on disk that git does not track (a rendered file, gitignored or not) is not in
-    the tree: a writer gated on credentials is still flagged. Guards the git branch of the tree read, which the
+    """In a git checkout, a source on disk that git does not track (a rendered file, here one not ignored) is not
+    in the tree: a writer gated on credentials is still flagged. Guards the git branch of the tree read, which the
     other planted tests (no checkout) never take: read from the disk there, the dev box's rendered file would hide
-    the fault (T24's fold-2 read, N5: its mutant G1)."""
+    the fault (T24's fold-2 read, N5: its mutant G1). It takes `isolated_git`: run from a git hook, its `git init`
+    and `add` would otherwise act on the caller's repository (its fold-3 read, N4)."""
     import shutil
     if not shutil.which("git"):
         pytest.skip("no git")
