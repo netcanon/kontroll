@@ -47,7 +47,8 @@ def requires_of(bdef, backend):
     classify alike: a YAML string would turn every `in` test on it into a substring test (T18's fold-2 read, N4), and
     a name that is not one could never be derived or filled (its fold-3 read, S1). Here, not in the planner, so
     classify can read it: `GET /classify` answered 500 or 200, the GUI's `/api/classify` 200, and `galaxy classify`
-    raised or printed the value letter by letter (that read, N3; its fold-4 read, N6)."""
+    raised, printed a string letter by letter, or printed the rest as if well-formed: `nothing` for `""` or
+    `false` (that read, N3; its fold-4 read, N6; its fold-5 read, N2)."""
     requires = bdef.get("requires")
     if requires is None:
         return []

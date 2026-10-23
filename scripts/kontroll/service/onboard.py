@@ -206,7 +206,7 @@ def _jinja_reads(value, _within=()):
     `#jinja2:` header — or of each such string a list, a set or a map holds, a key too, at any depth. A quoted word,
     a comment and an attribute count: fail closed. A name built at render time (`vars[...]`, or `lookup('vars', ...)`
     of a joined key) is no word of the value and is not seen. A container that holds itself (a recursive YAML alias,
-    `&a [*a]`) raises ValueError: no render of it ends, and the walk would not either (T18's fold-4 read, N7)."""
+    `&a [*a]`) raises ValueError: no render of it succeeds, and the walk would not end (T18's fold-4 read, N7)."""
     if isinstance(value, str):
         return set(_NAME_RE.findall(value)) if _TEMPLATED_RE.search(value) else set()
     if not isinstance(value, (dict, list, tuple, set, frozenset)):

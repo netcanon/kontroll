@@ -181,7 +181,8 @@ def test_second_generic_host_reuses_the_class_even_after_curation(tmp_repo, monk
 
 
 def test_onboard_different_collection_on_same_key_still_conflicts(tmp_repo, mock_probe):
-    """A DIFFERENT collection colliding on an existing key is NOT reuse (reuse keys on the collection matching):
+    """A DIFFERENT collection colliding on an existing key is NOT reuse (reuse keys on the class taking the
+    collection — declaring it, or being `collections: []` with ansible-core shipping it):
     it still hard-stops with WriteConflict so the operator picks a fresh key, and only a deliberate overwrite
     replaces it — the loudly-warned escape hatch. Guards reuse from being mistaken for blanket no-clobber."""
     _seed_class(tmp_repo, key="edgeos", collection="other.os")   # existing module is a DIFFERENT collection

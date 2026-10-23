@@ -531,16 +531,21 @@ def test_a_connection_value_that_reads_no_var_plans_as_written(probed, derive, v
     assert dict(_host_vars(_lab_plan(bdef), "h1"))["ansible_network_os"] == value
 
 
+@pytest.mark.parametrize("looped", ["v: &a [*a]", "v: &a [[*a]]", "v: &a {k: *a}", "v: [x, &a [*a]]"],
+                         ids=["self-list", "two-level", "self-map", "below-root"])
 @pytest.mark.parametrize("requires", [["network_os"], []], ids=["required", "not-required"])
-def test_a_connection_value_that_holds_itself_is_repository_data(probed, requires):
-    """A backend whose `connection:` value holds itself (a recursive YAML alias, `&a [*a]`) is refused as repository
-    data naming the connection var, whether the backend requires a param or not; a value that holds one list twice
-    (an alias used twice, no cycle) plans.
+def test_a_connection_value_that_holds_itself_is_repository_data(probed, requires, looped):
+    """A backend whose `connection:` value holds itself (a recursive YAML alias: a container met again anywhere on
+    its own path — one or two levels down, through a map, or below the root) is refused as repository data naming
+    the connection var, whether the backend requires a param or not; a value that holds one list twice (an alias
+    used twice, no cycle) plans.
 
-    Guards the planner's template walk recursing until Python stops it: the API answered 500 where every other
-    malformed registry answers 409, for a backend whose params the rule never refuses too (T18's fold-4 read, N7)."""
+    Guards the planner's template walk recursing until Python stops it: the API answered 500 where a malformed
+    registry answers 409, for a backend whose params the rule never refuses too (T18's fold-4 read, N7). The
+    two-level, map and below-root rows are rows because a walk that remembered only the parent, checked lists
+    only, or checked the root only still caught `&a [*a]` (its fold-5 read, N3: mutants W1, W2 and W3)."""
     probed(**CLICONF)
-    looped = yaml.safe_load("v: &a [*a]")["v"]
+    looped = yaml.safe_load(looped)["v"]
     bdef = _lab(default_secrets_domain="lab", requires=requires,
                 connection={"ansible_connection": "network_cli", "ansible_network_os": looped})
     with pytest.raises(paths.RepositoryDataError) as refused:
@@ -549,6 +554,21 @@ def test_a_connection_value_that_holds_itself_is_repository_data(probed, require
     twice = yaml.safe_load("v: [&a [x], *a]")["v"]
     plan = _lab_plan(dict(bdef, connection={"ansible_connection": "network_cli", "ansible_network_os": twice}))
     assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == [["x"], ["x"]]
+
+
+def test_a_param_name_of_64_characters_is_a_param_name(probed):
+    """A backend that requires and derives a param whose name is 64 characters long, the most a `derive_params`
+    key may hold, plans with the derived value in the connection var that reads it bare.
+
+    Guards the `requires:` name rule drifting one shorter than the `derive_params` key rule: only a 65-character
+    entry was pinned (refused), so a cap of 63 made such a param un-requirable, unseen (T18's fold-5 read, N3:
+    its mutant R1 survived every suite)."""
+    probed(**CLICONF)
+    name = "a" * 64
+    plan = _lab_plan(_lab(default_secrets_domain="lab", requires=[name],
+                          derive_params={name: "{collection}.{name}"},
+                          connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ " + name + " }}"}))
+    assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "acme.edgeos.edgeos"
 
 
 def test_a_legacy_api_token_on_a_backend_without_the_template_gets_the_unions_var(probed):
