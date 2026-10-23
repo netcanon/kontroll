@@ -31,6 +31,11 @@ role: backend_api
 # had silently reported a healthy FortiGate as UNREACHABLE for the whole life of the class.
 connection:
   ansible_connection: local
+# The TCP port ping.yml's reachability probe uses for a host of this backend (S28): the planner writes it into the
+# host's drop-in as `kontroll_probe_port`. It is the API's port — the SSH port the probe otherwise defaults to says
+# nothing about a REST device. The recipe's own `port:` still governs the check and backup requests; a recipe on
+# another port needs its hosts to set `ansible_port` or `mgmt_port`. A YAML integer, or the onboard is refused.
+probe_port: 443
 # Self-describing credential SHAPE (F1 TIER-A): a REST/httpapi device authenticates with an API TOKEN (or basic
 # auth) — NOT an SSH key. Deriving exactly these fields stops the form showing dead SSH boxes for a REST device (the
 # operator's headline gap). The token's hostvar is the recipe's token_var (resolved by the planner). The exact

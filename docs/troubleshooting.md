@@ -118,6 +118,13 @@ file_sd targets) restarts nothing; see `scripts/stale-config.py`.
 - **A device's syslog never arrives** (`{source="capability"}` empty) → confirm `docker/services/vector.yaml`
   publishes the mgmt-bound `:5514`, the device is configured to ship there (the `logging_syslog_push` wiring
   role), and the device can reach the collector on the mgmt VLAN.
+- **`ping.yml` reports a host `UNREACHABLE` that answers otherwise** → the probe is a TCP connect from the control
+  node, and its port is the first set of `mgmt_port`, `ansible_port`, `kontroll_probe_port`, then 22
+  (`ansible/playbooks/ping.yml`'s header). An SSH host on another port needs its port typed at onboard (it is
+  written as `ansible_port`); an `api` host onboarded before S28 is probed on 22 until it is re-onboarded (that
+  writes `kontroll_probe_port: 443`). See which port each host gets, on the control node, with no device contacted:
+  `ansible -i instance/inventory all -m ansible.builtin.debug -a "msg={{ mgmt_port | default(ansible_port |
+  default(kontroll_probe_port | default(22))) }}"`.
 - **Disk filling** → metrics are bounded by `PROM_RETENTION_SIZE`/`_TIME`; logs by `LOKI_RETENTION_PERIOD`
   (+ per-stream tiers); see the storage paradigm
   ([docs/reviews/2026-06-16-storage-logging/99-synthesis.md](reviews/2026-06-16-storage-logging/99-synthesis.md)).

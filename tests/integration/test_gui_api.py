@@ -235,6 +235,25 @@ def test_gui_onboard_a_backend_nothing_can_run_is_a_422_with_a_code(client, onbo
     assert backend not in refusals[0]
 
 
+@pytest.mark.parametrize("port", ["{{ lookup('pipe', 'id') }}", "0", "22 "])
+def test_gui_onboard_bad_port_is_a_422_with_a_field_code(client, onboard_env, monkeypatch, port):
+    """The GUI onboard route answers a typed SSH port that is not a TCP port with 422 and the code `invalid_port`,
+    a message that does not quote it, nothing written, and one `onboard-refuse` audit line naming the field, never
+    the value. Guards GUI parity with the planner's S28 refusal: the port is the first request value written into an
+    inventory host var, and the form sends whatever is typed in its box."""
+    lines = []
+    monkeypatch.setattr(gui, "_audit", lambda action, detail="": lines.append((action, detail)))
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "creds": {"username": "admin", "port": port},
+                                          "apply": True}, headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    assert r.get_json()["code"] == "invalid_port" and port.strip() not in r.get_json()["error"]
+    assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "edgeos").exists()
+    refusals = [detail for action, detail in lines if action == "onboard-refuse"]
+    assert len(refusals) == 1 and "reason=request-boundary field=port" in refusals[0], lines
+    assert port.strip() not in refusals[0]
+
+
 def test_onboard_dryrun_returns_plan_no_git(client, onboard_env):
     """A dry-run (apply omitted) returns the PLAN (backend, default host name, repo-rel paths) and touches
     NO git — dry-run by default is the security-relevant invariant, asserted as data."""

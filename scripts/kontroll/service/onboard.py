@@ -71,7 +71,6 @@ def _module_collections(mod):
             if isinstance(c, dict) and isinstance(c.get("name"), str)}
 
 
-_INLINE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,252}\Z")
 _STEM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 _NOT_A_NAME = "%s is a word YAML reads as another type (null, a boolean, a number, a date)"
 
@@ -266,18 +265,6 @@ def _sops_ref(sops_expr, sops_key):
     return ("{{ (%s).%s }}" if sops_key.isidentifier() else "{{ (%s)['%s'] }}") % (sops_expr, sops_key)
 
 
-def _inline_literal(value, field):
-    """A non-secret credential field a backend marks `inline: true` is written INTO the inventory as a literal host
-    var (a host, a port, a flag). Ansible templates inventory variables, so a string there is an expression unless
-    its charset is closed: a bool, an int, or one word of letters, digits, `.`, `_`, `:` and `-`. No shipped backend
-    declares an inline field today; this is the boundary for the first one that does (SECURITY.md C22)."""
-    if isinstance(value, (bool, int)):
-        return value
-    if isinstance(value, str) and _INLINE_RE.fullmatch(value):
-        return value
-    raise paths.RequestBoundaryError(field, "%s is not a plain host, port or flag value" % field)
-
-
 def build_onboard_plan(collection, key, group, host, host_name=None, secrets="network",
                        backend=None, username=None, password=None, api_token=None,
                        ssh_private_key=None, backends=None, vectors=None, creds=None, deep=False):
@@ -427,6 +414,17 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         if isinstance(v, str) and v.strip().startswith("{{"):
             v = params.get(v.strip().strip("{} "), v)
         hostvars[k] = v
+    # S28: the TCP port the reachability probe (ping.yml) uses for a host of this backend when the host sets no
+    # port of its own — the API port for `api`, where the SSH port the probe defaults to says nothing. A top-level
+    # key, not a `connection:` one: it is kontroll's own var, read only by a control-node TCP probe. It is a YAML
+    # integer in range or the plan is refused; a quoted or templated value in the descriptor never reaches the drop-in.
+    if bdef.get("probe_port") is not None:
+        probe_port = authspec.port_number(bdef["probe_port"]) if isinstance(bdef["probe_port"], int) else None
+        if probe_port is None:
+            raise paths.RepositoryDataError(
+                "backend registry", "the %s backend's probe_port is not a TCP port (a whole number from 1 to 65535)"
+                % backend)
+        hostvars["kontroll_probe_port"] = probe_port
     # Self-contained creds: the host carries its OWN inline SOPS lookups (no shared group_vars needed), keyed per
     # host so onboarded hosts never collide. Values are encrypted into the domain at apply time.
     #
@@ -440,6 +438,9 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         creds = {fld: val for fld, val in (("username", username), ("password", password),
                                            ("api_token", api_token), ("ssh_private_key", ssh_private_key))
                  if val is not None}
+    # A blank value is no value (S28, MF-02): the GUI never sends one, and an API caller's "" means the same thing —
+    # so "blank = 22" holds for both, and a blank never overwrites a stored secret.
+    creds = {fld: val for fld, val in creds.items() if val != ""}
     # F1 seam S1: on the REUSE path a curated class's OWN `auth:` block wins over the backend's generic shape — so a
     # proxmox reuse derives its coherent api-token auth_set (field names lined up with the pve-exporter's
     # secret_env_map), not the generic single api_token box. A freshly-classified (non-reuse) class has no module
@@ -548,13 +549,16 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             hostvars[tok_var] = _sops_ref(_sops, sops_key)
             creds_to_set[sops_key] = val
         elif cf.get("inline"):
-            # a non-secret literal hostvar (host/port/bool) — not SOPS, so the VALUE itself lands in the inventory.
-            # It has nowhere else to go: an inline field with no host var would be written under the key `null`.
-            if not maps_to:
+            # A non-secret literal host var (a port, a flag) — not SOPS, so the VALUE itself lands in the inventory,
+            # where Ansible templates it (S28, SECURITY.md C22). authspec types it first, so what is written is an int
+            # or a bool and never the request's text. The descriptor's half — which kinds may be inline, and that a
+            # port lands in a `*_port` var — is repository data, refused as such before any write.
+            target = authspec.inline_target(cf)
+            if target is None:
                 raise paths.RepositoryDataError(
-                    "credential field", "an inline credential field %s names no host var to be written under"
-                    % _where)
-            hostvars[maps_to] = _inline_literal(val, cf["field"])
+                    "credential field", "an inline credential field %s is not a port or a flag written to a var "
+                    "of its kind" % _where)
+            hostvars[target] = authspec.inline_value(cf, val)
         else:
             # SOPS-store the value, and wire a hostvar inline-lookup ONLY if the field maps to one. A shared
             # domain cred (proxmox exporter token) has NO maps_to — it is read from the SOPS domain by its consumer
