@@ -363,11 +363,13 @@ def test_an_api_token_with_no_var_on_a_backend_without_the_template_is_stored_on
     assert "h1_api_token" not in dict(_host_vars(plan, "h1"))
 
 
-@pytest.mark.parametrize("maps_to", ["{cred_key}", "ansible_{cred_key}", "{cred_key}_password"])
+@pytest.mark.parametrize("maps_to", ["{cred_key}", "ansible_{cred_key}", "{cred_key}_password",
+                                     "{cred_key}_api_token"])
 def test_a_module_files_auth_entry_may_not_hold_a_template(probed, tmp_repo, maps_to):
     """A curated class whose own `auth:` entry gives `maps_to` a template its backend does not declare for that field
-    is refused as repository data, before any var is written; the same entry repeating the backend's own template
-    for `api_token` plans as the backend's would.
+    is refused as repository data saying so, before any var is written — `api_token`'s own template too, on the
+    `password` field; the same entry repeating the backend's own template for `api_token` plans as the backend's
+    would. (`{cred_key}_api_token` on `password` and the refusal's wording are T18's fold-2 read, N3: X1, X3.)
 
     Guards the request's host name choosing WHICH host var a lookup lands in (T18's read, F1): rendered, such a
     template put a SOPS lookup of a value the request supplied under `ansible_python_interpreter` or
@@ -377,7 +379,7 @@ def test_a_module_files_auth_entry_may_not_hold_a_template(probed, tmp_repo, map
              auth=[{"field": "password", "kind": "password", "maps_to": maps_to}])
     with pytest.raises(paths.RepositoryDataError) as refused:
         _plan("h1", creds={"password": "p"})
-    assert "template" in str(refused.value)
+    assert "template" in str(refused.value) and "does not declare" in str(refused.value)
     (tmp_repo / "modules" / "edgeos" / "module.yml").unlink()
     (tmp_repo / "modules" / "edgeos").rmdir()
     _curated(tmp_repo, backend="api", secrets_domain="network",
@@ -389,35 +391,88 @@ def test_a_module_files_auth_entry_may_not_hold_a_template(probed, tmp_repo, map
 def test_a_required_connection_param_the_backend_does_not_derive_is_repository_data(probed):
     """A backend whose `connection:` block reads a param it requires and does not derive (an operator's copy of
     netcommon_cli written before S27, with no `derive_params`) is refused as repository data naming the param; the
-    same backend deriving it plans with the param rendered into the host var.
+    same backend deriving it plans with the param rendered into the host var. The refusal names the connection
+    var, and the edits that clear it for a value set at run time: dropping the param from `requires:`, or moving the
+    var out of the block.
 
     Guards an unrendered `{{ network_os }}` reaching the drop-in (T18's read, F12): unless a group var happened to
-    define it, the plan succeeded and the first play failed far from the cause."""
+    define it, the plan succeeded and the first play failed far from the cause. The remedy is pinned because, as
+    first worded, it named only the param and left the plan refused when followed (fold-2 read, S2)."""
     probed(**CLICONF)
     copy = _lab(default_secrets_domain="lab", requires=["network_os"],
                 connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ network_os }}"})
     with pytest.raises(paths.RepositoryDataError) as refused:
         _lab_plan(copy)
     assert "network_os" in str(refused.value) and "derive_params" in str(refused.value)
+    assert "requires:" in str(refused.value) and "ansible_network_os" in str(refused.value)
     plan = _lab_plan(dict(copy, derive_params={"network_os": "{collection}.{name}"}))
     assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "acme.edgeos.edgeos"
 
 
-@pytest.mark.parametrize("derive", [None, {"network_os": "{collection}.{name}"}], ids=["underived", "derived"])
-def test_a_required_connection_param_read_through_an_expression_is_repository_data(probed, derive):
-    """A backend whose `connection:` block reads a required param through a filter (`{{ network_os | lower }}`) is
-    refused as repository data naming the param and the bare form, whether the backend derives it or not.
+_THROUGH = ["{{ network_os | lower }}", "{{network_os|lower}}", "{{ network_os }}_x", "{{ 'acme.' ~ network_os }}",
+            "x{{ network_os }}", "{{- network_os -}}", "{{ y }}{{ network_os }}", "{{ (network_os) }}",
+            "{{ x | default(network_os) }}", "{% if true %}{{ network_os }}{% endif %}",
+            "{% if network_os %}cisco.ios.ios{% endif %}", "{{ hostvars[inventory_hostname]['network_os'] }}",
+            ["{{ network_os }}"], {"a": "{{ network_os }}"}]
+_THROUGH_IDS = ["filter", "filter-unspaced", "text-after", "concat", "text-before", "trim-markers", "second-expression",
+                "parenthesised", "default-arg", "statement", "statement-only", "hostvars", "list", "map"]
 
-    Guards the filtered form escaping F12's check (T18's fold read, N5): only a bare `{{ param }}` is filled from the
-    derived params, so the drop-in would hold the expression unrendered and the first play would fail."""
+
+@pytest.mark.parametrize("value", _THROUGH, ids=_THROUGH_IDS)
+@pytest.mark.parametrize("derive", [None, {"network_os": "{collection}.{name}"}], ids=["underived", "derived"])
+def test_a_required_connection_param_read_through_an_expression_is_repository_data(probed, derive, value):
+    """A backend whose `connection:` block reads a required param any way but a bare `{{ network_os }}` — a filter
+    (spaced or not), text beside it, an expression it is not first in, whitespace control, a `{% %}` block (alone
+    too), a `hostvars` lookup, a list or a map — is refused as repository data naming the param and the bare form,
+    whether the backend derives it or not; for an underived param the refusal also names `derive_params`.
+
+    Guards the forms escaping F12's check: only a bare `{{ param }}` is filled from the derived params, so the
+    drop-in would hold the expression unrendered and the first play would fail (T18's fold read, N5). The check
+    first read only a value's first name, from a value that began with `{{`, and ten of these shapes passed it
+    (fold-2 read, S1; its mutants X4 and X5 survived every suite)."""
     probed(**CLICONF)
     bdef = _lab(default_secrets_domain="lab", requires=["network_os"],
-                connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ network_os | lower }}"})
+                connection={"ansible_connection": "network_cli", "ansible_network_os": value})
     if derive:
         bdef["derive_params"] = derive
     with pytest.raises(paths.RepositoryDataError) as refused:
         _lab_plan(bdef)
     assert "network_os" in str(refused.value) and "expression" in str(refused.value)
+    assert ("derive_params" in str(refused.value)) == (derive is None)
+
+
+@pytest.mark.parametrize("value", ["{{ network_os }}", "{{network_os}}", "  {{ network_os }}  ", "{{  network_os  }}"],
+                         ids=["spaced", "unspaced", "padded", "wide"])
+def test_a_bare_required_connection_param_is_filled_in_any_spacing(probed, value):
+    """A derived required param read bare, whatever the spacing inside or around its braces, plans with the derived
+    value as the host var.
+
+    Guards the bare form's match narrowing: the expression rule refuses any read of a required param but the bare
+    one, so a bare form it failed to recognise would refuse netcommon_cli's every onboard as repository data."""
+    probed(**CLICONF)
+    plan = _lab_plan(_lab(default_secrets_domain="lab", requires=["network_os"],
+                          derive_params={"network_os": "{collection}.{name}"},
+                          connection={"ansible_connection": "network_cli", "ansible_network_os": value}))
+    assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "acme.edgeos.edgeos"
+
+
+@pytest.mark.parametrize("requires", ["network_os", ["network_os", 5], {"network_os": 1}],
+                         ids=["string", "non-string-entry", "map"])
+def test_a_requires_that_is_not_a_list_of_names_is_repository_data(probed, requires):
+    """A backend whose `requires:` is not a list of param names is refused as repository data naming `requires`, by
+    the planner and by the scaffold's `backend_params` alike.
+
+    Guards a YAML string turning every `param in requires` test into a substring test (T18's fold-2 read, N4):
+    `requires: network_os` refused a backend reading `{{ os }}` as if it required `os`, and would derive any param
+    whose name is a piece of the string."""
+    probed(**CLICONF)
+    bdef = _lab(default_secrets_domain="lab", requires=requires, derive_params={"network_os": "{collection}.{name}"},
+                connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ os }}"})
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        _lab_plan(bdef)
+    assert "requires" in str(refused.value)
+    with pytest.raises(paths.RepositoryDataError):
+        onboard.backend_params(bdef, "acme.edgeos", "lab_cli")
 
 
 def test_a_connection_param_the_backend_does_not_require_is_left_for_run_time(probed):

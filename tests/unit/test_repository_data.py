@@ -416,8 +416,9 @@ def test_drop_refused_still_skips_a_path_it_cannot_confine(tmp_path, monkeypatch
 @pytest.mark.parametrize("second_device", [False, True], ids=["new-class", "reuse"])
 def test_apply_confines_the_targets_it_will_write_before_its_first_write(reuse, monkeypatch, second_device):
     """`apply_onboard_plan` asks `confined()` about every drop-in target it is going to write before any writer
-    runs — the module target and the inventory target for a new class, the inventory target alone for a second
-    device of an existing one — so a layout the confinement refuses leaves nothing behind.
+    runs — the module target and the inventory target for a new class, the inventory target alone for a reuse (an
+    onboard of a collection the class under that key already declares) — so a layout the confinement refuses leaves
+    nothing behind.
 
     Guards the partial write: the module file used to be written first, and the inventory write then refused —
     "before any write" was not true of a symlinked inventory directory. And guards the opposite fault: a reuse
@@ -726,7 +727,7 @@ def test_apply_takes_a_second_device_of_a_class_only_the_code_root_holds(tmp_pat
     under the write root, no module file is, and nothing is a conflict.
 
     Guards the reader's-view conflict being asked of a reuse as well: a reuse writes no module file, so there is
-    nothing to shadow, and asking would refuse every second device of a shipped class on a clone older than its
+    nothing to shadow, and asking would refuse every reuse of a shipped class on a clone older than its
     image — with a message that tells the operator to pick another key."""
     code_root, write_root = tmp_path / "code", tmp_path / "write"
     (code_root / "modules" / "cisco_ios").mkdir(parents=True)

@@ -72,8 +72,11 @@ def _module_collections(mod):
 
 
 _STEM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
-# The first name a backend's `connection:` value reads (`{{ network_os | lower }}` -> network_os).
-_HOLE_NAME_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)")
+# A backend `connection:` value that is one bare `{{ param }}` — the only form the planner fills from the derived
+# params — and the names a Jinja expression or statement in a value reads (a quoted word counts too: fail closed).
+_BARE_HOLE_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\Z")
+_JINJA_BLOCK_RE = re.compile(r"\{[{%](.*?)[}%]\}", re.S)
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NOT_A_NAME = "%s is a word YAML reads as another type (null, a boolean, a number, a date)"
 
 
@@ -193,14 +196,41 @@ def _secrets_domain(secrets, bdef, backend):
     return secrets
 
 
+def _requires(bdef, backend):
+    """The params `backend` requires: its registry entry's `requires:`, a list of param names (none when absent).
+    Anything else is the registry's fault, refused as repository data: a YAML string would turn every `in` test on it
+    into a substring test (T18's fold-2 read, N4)."""
+    requires = bdef.get("requires")
+    if requires is None:
+        return []
+    if not (isinstance(requires, list) and all(isinstance(r, str) for r in requires)):
+        raise paths.RepositoryDataError(
+            "backend registry", "the %s backend's requires is not a list of param names — correct its backend.yml "
+            "under ansible/backends/" % backend)
+    return requires
+
+
+def _jinja_reads(value):
+    """Every name a Jinja expression or statement in `value` reads — a string, or each string a list or a map holds,
+    a key too — a quoted word included: fail closed."""
+    if isinstance(value, str):
+        return {n for block in _JINJA_BLOCK_RE.findall(value) for n in _NAME_RE.findall(block)}
+    if isinstance(value, dict):
+        return set().union(*map(_jinja_reads, list(value) + list(value.values())))
+    if isinstance(value, list):
+        return set().union(*map(_jinja_reads, value))
+    return set()
+
+
 def backend_params(bdef, collection, backend):
     """The params a NEW class of `backend` is written with (its module file's `backend_params`): each param the
     registry entry DERIVES (`derive_params`, S27 — netcommon_cli's `network_os: "{collection}.{name}"` turns
     cisco.ios into cisco.ios.ios) that it also requires, rendered from the collection's names by
     catalog.render_template. A required param it does not derive is the operator's to set at run time (raw_ssh's
     backup command, a group var its role reads); the planner refuses one the backend's `connection:` block reads.
-    A block or a template that does not render is the registry's fault, refused as repository data before any
-    write. Shared by the planner and the scaffold."""
+    A block or a template that does not render, or a `requires:` that is not a list of names, is the registry's
+    fault, refused as repository data before any write. Shared by the planner and the scaffold."""
+    requires = _requires(bdef, backend)
     derive = bdef.get("derive_params")
     if derive is None:
         return {}
@@ -210,7 +240,6 @@ def backend_params(bdef, collection, backend):
         raise paths.RepositoryDataError(*where)
     namespace, name = collection.split(".", 1)
     ctx = {"collection": collection, "namespace": namespace, "name": name}
-    requires = bdef.get("requires") or []
     params = {}
     for param, tmpl in derive.items():
         if not (isinstance(param, str) and _STEM_RE.fullmatch(param)):
@@ -471,30 +500,35 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         module_text = yaml.safe_dump(module, sort_keys=False, allow_unicode=True, width=4096)
 
     hostvars = {"device_role": role}
-    required = bdef.get("requires") or []
+    required = _requires(bdef, backend)
     for k, v in (bdef.get("connection") or {}).items():
-        if isinstance(v, str) and v.strip().startswith("{{"):
-            hole = v.strip().strip("{} ")
-            first = _HOLE_NAME_RE.match(v.strip())
-            name = first.group(1) if first else hole
-            if name in required and name != hole:
-                # Only a bare `{{ param }}` is filled from `params`: a required param read through a filter or an
-                # expression would reach the drop-in unrendered, derived or not (T18's fold read, N5).
-                raise paths.RepositoryDataError(
-                    "backend registry", "the %s backend's connection block reads %s, which it requires, through an "
-                    "expression the planner does not render — write it as `{{ %s }}` in its backend.yml under "
-                    "ansible/backends/" % (backend, name, name))
-            if name in required and hole not in params:
-                # A required param the backend does not derive would reach the drop-in unrendered, and the first play
-                # fails far from the cause unless a group var happens to define it. An operator's backend written
-                # before S27 (a copy of netcommon_cli without `derive_params`) meets this, and so does one whose
-                # `connection:` block reads a required value set at run time: that var belongs in the class's group
-                # vars. The planner reads no class's own `backend_params`, a reused class's included (T18's read,
-                # F12; its fold read, N5).
-                raise paths.RepositoryDataError(
-                    "backend registry", "the %s backend requires %s in its connection block and does not derive "
-                    "it — add it to `derive_params` in its backend.yml under ansible/backends/, or, for a value set "
-                    "at run time, set that connection var in the class's group vars instead" % (backend, hole))
+        bare = _BARE_HOLE_RE.match(v.strip()) if isinstance(v, str) else None
+        hole = bare.group(1) if bare else None
+        through = sorted(p for p in _jinja_reads(v) if p in required and p != hole)
+        if through:
+            # Only a bare `{{ param }}` is filled from `params`: a required param read any other way — a filter, an
+            # expression, text beside it, a `{% %}` block, a list or a map — would reach the drop-in unrendered,
+            # derived or not (T18's fold read, N5; its fold-2 read, S1: a check of a value's first name let ten
+            # shapes by).
+            raise paths.RepositoryDataError(
+                "backend registry", "the %s backend's connection var %s reads %s, which it requires, through an "
+                "expression the planner does not render — read it bare, as `{{ %s }}`, in its backend.yml under "
+                "ansible/backends/%s" % (backend, k, through[0], through[0], "" if through[0] in params else
+                                         ", and add it to `derive_params` (or, for a value set at run time, drop it "
+                                         "from `requires:`)"))
+        if hole in required and hole not in params:
+            # A required param the backend does not derive would reach the drop-in unrendered, and the first play
+            # fails far from the cause unless a group var happens to define it. An operator's backend written
+            # before S27 (a copy of netcommon_cli without `derive_params`) meets this, and so does one whose
+            # `connection:` block reads a required value set at run time: dropping the param from `requires:` leaves
+            # it for the class's group vars, and so does moving the connection var there. The planner reads no
+            # class's own `backend_params`, a reused class's included (T18's read, F12; its fold reads, N5 and S2).
+            raise paths.RepositoryDataError(
+                "backend registry", "the %s backend's connection var %s reads %s, which it requires and does not "
+                "derive — add it to `derive_params` in its backend.yml under ansible/backends/; for a value set at "
+                "run time, drop it from that backend's `requires:` (the planner then leaves it for the class's group "
+                "vars), or move %s out of its connection block into the class's group vars" % (backend, k, hole, k))
+        if hole is not None:
             v = params.get(hole, v)
         hostvars[k] = v
     # S28: the TCP port the reachability probe (ping.yml) uses for a host of this backend when the host sets no

@@ -1847,9 +1847,9 @@ a mapping at all — is not a request refusal (below). The role a class gets whe
 backend registry entry's own, never one made from a name (S26: the planner and the scaffold made `backend_<name>` up
 for a backend that declared none, and wrote it into the module file and every host's `device_role`, where
 `ping.yml` and `backup-configs.yml` then included a role that does not exist). A `backend` a request names must be
-one this install ships (`onboard._registered`) whose entry declares a `role:` (`onboard._role_of`) — a second
-device of a class whose module file declares its own role keeps that role, so there the entry needs none; any other
-is a refusal of the `backend` field, before the collection is probed. A backend the classifier matches is chosen
+one this install ships (`onboard._registered`) whose entry declares a `role:` (`onboard._role_of`) — a reuse
+(an onboard of a collection the class under that key already declares) whose module file declares its own role keeps
+that role, so there the entry needs none; any other is a refusal of the `backend` field, before the collection is probed. A backend the classifier matches is chosen
 only when its entry declares one (`catalog.runnable`) — for a new class; a reused class with its own role falls back
 to the first match when none declares one — and a search record's `suggested_backend`, which the GUI's onboard form
 sends, is that same choice. The registry role is held to the name rule where it is taken, by the planner and by the
@@ -1951,8 +1951,8 @@ one to correct, or the layout — and never the value, and audited under an acti
 what=<kind> route=<route>` — never as a refused request (on the API an open route has no principal and writes no
 line, as for a field refusal; every GUI route is authenticated and writes one). `apply_onboard_plan` confines the
 drop-in targets it is going to write — the module file and the inventory drop-in of a new class, the inventory
-drop-in alone for a second device of an existing one — before its first write, so a drop-in the confinement refuses
-stops the apply with nothing written; the fixed-path writes that follow (the fleet file, a secret domain) are not
+drop-in alone for a reuse (an onboard of a collection the class under that key already declares) — before its first
+write, so a drop-in the confinement refuses stops the apply with nothing written; the fixed-path writes that follow (the fleet file, a secret domain) are not
 confined; and nothing an apply has written — drop-in or fixed path — is rolled back when a later step fails. `POST
 /onboard` therefore has more than one 409, told apart by `code`: this one, and a drop-in that exists with different
 content (no `code`; the caller may retry with `overwrite`) — which, on an install whose write root is not its code
@@ -2002,8 +2002,8 @@ where the create route derives it; a directory made by hand with a longer name i
 board's `services.yaml` — at a shell, by the operator, into their own files. (`scripts/kontroll-promote.py`
 holds its `run_id` to the two minted shapes itself, whoever runs it; the promote play checks the same rule before
 it calls the script.) A credential
-field's `maps_to` is held to being a variable name (or, for a template the backend registry declares, to
-`catalog.MAPS_TO_RE`), not to a set of variables: a module file's own `auth:` entry stored in SOPS may write its
+field's `maps_to` is held to being a variable name (or, for a template the backend registry or the generic union
+declares, to `catalog.MAPS_TO_RE`), not to a set of variables: a module file's own `auth:` entry stored in SOPS may write its
 lookup under `ansible_connection`, `ansible_host` or any other host var of that class's hosts, and an `inline` flag
 may write `true` or `false` under any lower-case one (only an inline port is held to a `*_port` var) — a file an
 operator promotes, never a request. The request's text reaches a var's NAME only through a template the backend

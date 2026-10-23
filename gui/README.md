@@ -26,7 +26,7 @@ Pressing **Run** with *apply* ticked calls the onboard service **in-process** �
 | Step | Who does it | Manual? |
 |---|---|---|
 | Pick a collection | operator (search + click) | ✅ the one selection |
-| Connection details (host, group, creds) | operator (form) | ✅ the one detail entry — the secrets-domain box ships empty, its placeholder naming the backend's `default_secrets_domain` (S27; an onboard under the key of a class that already exists (one the tool ships, or one onboarded before) stores in that class's own domain), or saying one is required when the backend declares none |
+| Connection details (host, group, creds) | operator (form) | ✅ the one detail entry — the secrets-domain box ships empty, its placeholder naming the backend's `default_secrets_domain` (S27; a reuse — an onboard of a collection the class under that key already declares (shipped, or onboarded before; under a class with `collections: []`, a collection ansible-core ships) — stores in that class's own domain), or saying one is required when the backend declares none |
 | **Which credential fields to show** (SSH login for a switch, a token for a REST device — no dead boxes) | derived per-backend (F1 TIER-A), fetched from `GET /api/onboard/cred-fields` on the form's first open | automated |
 | Module declaration `modules/<key>/module.yml` | onboard | automated |
 | Drop-in inventory host (self-contained, inline SOPS cred lookups) | onboard | automated |

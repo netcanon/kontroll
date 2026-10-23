@@ -27,13 +27,15 @@ backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s o
   whose module file names a backend this install does not ship is told so in the same refusal.
 - `derive_params` (`netcommon_cli`: `network_os: "{collection}.{name}"`): what a new class's `backend_params` are
   written with. Only a param the backend `requires:` is written, and every param's name is held to an identifier.
-  A backend whose `connection:` block reads a param it requires and does not derive, or reads one through a filter
-  or an expression, is refused as `repository_data`: the drop-in would hold it unrendered. The former code filled
-  `network_os` by name for any backend that required it; the registry now says how, so an operator's copy of
-  `netcommon_cli` written before this change must add `derive_params: {network_os: "{collection}.{name}"}`. An
-  operator's backend whose `connection:` block reads a required value set at run time (a group var) is refused too,
-  where the former code planned it: set that connection var in the class's group vars instead. The planner reads no
-  class's own `backend_params`, a reused class's included.
+  A backend whose `connection:` block reads a param it requires and does not derive, or reads one any way but a
+  bare `{{ param }}` (a filter, an expression, text beside it, a `{% %}` block, a list or a map), is refused as
+  `repository_data`: the drop-in would hold it unrendered. So is a `requires:` that is not a list of param names (a
+  YAML string made every check a substring test). The former code filled `network_os` by name for any backend that
+  required it; the registry now says how, so an operator's copy of `netcommon_cli` written before this change must
+  add `derive_params: {network_os: "{collection}.{name}"}`. An operator's backend whose `connection:` block reads a
+  required value set at run time (a group var) is refused too, where the former code planned it: drop the param from
+  the backend's `requires:` (the planner then leaves it for the class's group vars), or move that connection var
+  into the class's group vars. The planner reads no class's own `backend_params`, a reused class's included.
 - A templated `maps_to` (`api` and the generic union's `api_token`: `{cred_key}_api_token`) names the host var a
   token is written under. A template is a closed `{name}` grammar rendered to a fixed charset; a default or template
   that fails is answered `repository_data` and never written. Only the registry and the generic union declare one:
@@ -49,9 +51,8 @@ backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s o
 - API and GUI: `secrets` is optional on `POST /onboard` and `GET /onboard/cred-fields` — a blank value now means
   omitted (it was a 422) — and `cred-fields` answers the backend's default as its `secrets`, and shows the api
   token's descriptor with its template `maps_to` (`{cred_key}_api_token`), where it showed none. The onboard form's
-  domain box ships empty, its placeholder naming the backend's default (an onboard under the key of a class that
-  already exists — one the tool ships, or one onboarded before — stores in that class's own domain, whatever the box
-  shows) or saying a domain is required; a typed domain now counts as input to
+  domain box ships empty, its placeholder naming the backend's default (a reuse — an onboard of a collection the class under that key already declares (shipped, or onboarded before; under a class with `collections: []`, a collection ansible-core ships) — stores in that
+  class's own domain, whatever the box shows) or saying a domain is required; a typed domain now counts as input to
   the form's collapse check. The CLI's `--secrets` has no default of its own, and a blank one means omitted, as in
   the API.
 
@@ -204,7 +205,7 @@ The role now comes from declared data only. A `backend` a request names must be 
 declares a role; any other is refused as the `backend` field (422 `invalid_backend`, the CLI one line) before the
 collection is probed. With no `backend`, the planner and the scaffold choose the first match that declares a role
 (`catalog.runnable`), or answer `no_backend`; a search record's `suggested_backend` and `galaxy classify`'s `best`
-are that same choice. A second device of a class whose module file declares its own role keeps that role, whatever
+are that same choice. A reuse of a class whose module file declares its own role keeps that role, whatever
 shipped backend the request names (one that declares none included); with none named it takes the first match that
 declares a role, or the first match when none does. Every fault in a name the reuse adopts from a class's module
 file is answered before the collection is probed. A class whose file names no role and whose backend declares none is
