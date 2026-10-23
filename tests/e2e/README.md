@@ -40,8 +40,9 @@ the browser layer on top.
 What the mocked seams answer (bar the probe fakes, which the conftest builds with the real `probe._facts`, and
 the search's empty list), and the `page.route` bodies of the Discard, Re-propose, keygen and unit-pick tests, come
 from [tests/_canned.py](../_canned.py): each canned dict is there once, with a row in
-[test_mock_conformance.py](../unit/test_mock_conformance.py) that holds it to the real function's shape, and a seam
-`_mock_service_seams` replaces with no row fails that file (S33; [tests/README.md](../README.md)). The
+[test_mock_conformance.py](../unit/test_mock_conformance.py) that holds it to the real function's shape (the
+actuation unit is held by the registry's own validator instead), and a seam `_mock_service_seams` replaces with no
+row fails that file (S33; [tests/README.md](../README.md)). The
 Pending-changes tests still build their payloads by hand; tests/README.md lists the bodies that remain.
 
 `test_paint_rule.py` is the browser proof of SECURITY.md C19 for the Pending, Index, Settings,

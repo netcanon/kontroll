@@ -131,16 +131,25 @@ when T21's read measured them), the onboard flow's error stub, and route-test fa
 `integration/test_gui_api.py`'s `promote_board`, `discard_proposal`, `module_for_collection` (`_MODULE_LOW` /
 `_MODULE_HIGH`) and `local_installed`; `integration/test_api.py`'s `actuation_unit` (it lacks `schema` and
 `install`, so the registry's validator would refuse it), `units_in_collection` and `local_installed`;
-`integration/test_api_create_unit.py`'s `module_for_collection`; and the `local_installed` returns in the other
-`integration/test_api_*.py` files and `test_onboard_dryrun.py`. The answers some e2e tests hand a renderer through
-`page.evaluate` are written by hand too. Move one into `_canned.py`, with a row, when you next touch it.
+`integration/test_api_create_unit.py`'s `module_for_collection`; `integration/test_api_capability.py`'s
+`_fake_probe` (a deep_probe answer written as a literal, not with `probe._facts`); and the `local_installed` returns
+in the other `integration/test_api_*.py` files and `test_onboard_dryrun.py`. The answers some e2e tests hand a
+renderer through `page.evaluate` are written by hand too. Move one into `_canned.py`, with a row, when you next touch
+it. A fake whose answer has no shape to drift (an empty dict or list, `None`, a bool, a list or set of names:
+`_enabled_modules`, `_existing_keys`, `sops_decrypt_domain`, `sops_write_domain`, `service_units`) and a stand-in
+for an external tool's output (`catalog._installed_json`) are not listed.
 A key whose value is by design one type or another is produced in both types by the row's fixture (the inbox's
-`vendor`), or, where the fixture cannot, named in the row's `optional` set (the Pending rows' `repropose_hint`). A
+`vendor`), or, where the row's fixture does not, named in the row's `optional` set (the Pending rows'
+`repropose_hint`, whose canned value has a row of its own). A
 mock written from belief keeps a UI test green while the server emits something else, and a second hand copy drifts
 from the first (S33). A seam the e2e conftest replaces with no row fails
 `test_every_replaced_seam_has_a_conformance_row`, and so does one it replaces without handing it back to be
-restored, or one replaced in a form the parse cannot name (a nested target, a `setattr` by a variable name, a
-monkeypatch object, a replacement outside `_mock_service_seams`); a seam whose fake needs none (a record built by
+restored, or one replaced in a form the parse refuses (a nested target, a `setattr` by a variable name, a
+monkeypatch object's `.setattr`, an assignment through an imported name outside `_mock_service_seams`, a
+`unittest.mock` import, a write through `__dict__`, `__setattr__`, `vars`, `exec` or `eval`), and so does a conftest
+without its one restore loop or whose `_mock_service_seams` does not return its `originals`. A replacement outside
+`_mock_service_seams` through a name that is not an import, or through a renamed `setattr`, is not read at all, so
+review holds it. A seam whose fake needs none (a record built by
 the real constructor, an empty list) is listed in `NO_ROW` with the reason. A seam hands out a copy of its canned
 dict, never the module object. Where a generator writes a file another part reads, a round-trip test feeds the real
 output to the real reader:
