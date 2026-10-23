@@ -11,6 +11,21 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test: a canned shape lives once and is held to the real function's (T21 / S33, 2026-10-22)
+
+No runtime change. The dicts the browser suite and the route tests are served in place of a service call were
+written by hand, some of them twice, and nothing compared one with what the function returns. Compared, several had
+drifted: the Pending panel's payload lacked `changes_read`, `note_kind`, `main_note` and `skipped_note`, the discard
+answer lacked `run_id_audit`, both homepage mocks lacked keys the board and the plan carry, and a route test's copy
+of the discovery inbox lacked `vendor`.
+
+- `tests/_canned.py` holds each canned dict once; the e2e conftest, the Pending e2e tests and the route tests read it.
+- `tests/unit/test_mock_conformance.py` builds the smallest real fixture for each, calls the real function and
+  compares key sets and value types. A seam the e2e server replaces with no row fails it.
+- Round-trip tests feed a generator's real output to its real reader: gen-backup's schedules file to
+  configure-semaphore (driven against a fake Semaphore), gen-requirements' trust sidecar to the provenance view, and
+  a ref the real stager pushed to the Pending list.
+
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 
 `ping.yml` decides a host is reachable with a TCP connect from the control node, on `mgmt_port` or 22 — and nothing

@@ -118,6 +118,23 @@ off `galaxy` for call-style tests) is **pure dict→dict** and tested directly a
 repoints `kontroll.paths.ROOT`), so they never touch the real tree, and credentials are
 omitted so the SOPS shell-out is never invoked.
 
+### A canned shape lives once, in `tests/_canned.py`
+
+A dict a test is served in place of a real service call — a seam the e2e server replaces, a route test's
+`monkeypatch` return, a `page.route` body — is written once in [_canned.py](_canned.py), and
+[unit/test_mock_conformance.py](unit/test_mock_conformance.py) holds a row for it that builds the smallest real
+fixture, calls the real function and compares the two SHAPES: the key set and each value's type, never the values.
+A key whose value is by design one type or another (a hint that is a dict or None) is named in the row's `optional`
+set. A mock written from belief keeps a UI test green while the server emits something else, and a second hand copy
+drifts from the first (S33). A seam the e2e conftest replaces with no row fails
+`test_every_replaced_seam_has_a_conformance_row`; a seam whose fake needs none (a record built by the real
+constructor, an empty list) is listed in `NO_ROW` with the reason. Where a generator writes a file another part
+reads, a round-trip test feeds the real output to the real reader:
+`test_configure_semaphore.py::test_reads_what_gen_backup_renders`,
+`test_provenance.py::test_reads_the_sidecar_gen_requirements_writes` and
+`test_pending.py::test_lists_a_proposal_the_real_stager_produced`. The C19 paint suite (`e2e/test_paint_rule.py`)
+is outside the rule: it serves payloads made to carry markup in every field, not a producer's answer.
+
 ```
 tests/unit/          # pure functions, no I/O
   test_predicate_engine.py   # three-valued eval_pred/eval_vector truth tables
@@ -129,6 +146,7 @@ tests/unit/          # pure functions, no I/O
   test_fleet_edit.py         # enable_in_fleet idempotent, comment-preserving
   test_openapi.py            # derive_auth/derive_server/classify_endpoints heuristics
   test_service_layer.py      # service_* return structured data directly (no stdout-parsing)
+  test_mock_conformance.py   # S33: every canned shape in tests/_canned.py has the key set + value types of the real function's answer; every e2e-replaced seam has a row
   test_units.py              # runnable-unit prober + service_units resolver + SEC-3 traversal guard + validate_unit_config (R3 configure gate)
   test_actuation_registry.py # actuation/ registry: resolve_pins (exact-wins/fail-closed) + gen-actuation validation (incl. R3 curated knobs) + overlay loader
   test_actuation_service.py  # R4 preview + R5 write verb: build_actuation_plan render/staging-metadata (read-only) + apply_actuation_plan (idempotent write) + stage_plan drift gate

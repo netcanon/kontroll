@@ -37,6 +37,11 @@ the rendered UX: **search → result card → open the form → dry-run → the 
 hermetic auth/contract is covered by [test_gui_api.py](../integration/test_gui_api.py); this is
 the browser layer on top.
 
+What the mocked seams answer, and the Pending panel's `page.route` bodies, come from
+[tests/_canned.py](../_canned.py): each canned dict is there once, with a row in
+[test_mock_conformance.py](../unit/test_mock_conformance.py) that holds it to the real function's shape, and a seam
+`_mock_service_seams` replaces with no row fails that file (S33; [tests/README.md](../README.md)).
+
 `test_paint_rule.py` is the browser proof of SECURITY.md C19 for the Pending, Index, Settings,
 Homepage and Discovery panels and the capability, reconfigure, secret and keygen dialogs: it serves
 their JSON with `page.route`, puts a payload (`<img src=x onerror=…>`) in the fields they paint, and

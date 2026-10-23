@@ -22,7 +22,7 @@ import pytest
 
 import _canon_repo as R
 from _readonly_pins import assert_read_only
-from kontroll import canon
+from kontroll import canon, gitio, paths
 from kontroll.service import pending
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("isolated_git")]
@@ -94,6 +94,46 @@ def test_proposal_reports_its_changed_paths(bare_with_proposals):
     # pins the field's PRESENCE so the GUI can always read p.repropose_hint without a per-row existence check (Move 1).
     assert all("repropose_hint" in p for p in out["proposals"])
     assert all(p["repropose_hint"] is None for p in out["proposals"])
+
+
+def test_lists_a_proposal_the_real_stager_produced(tmp_path, monkeypatch):
+    """A proposal `gitio.commit_and_push` stages — in staging mode, onto the canonical named `local`, as the onboard
+    route does — is listed under its run id, with its full ref and commit id, the commit's subject, the paths it
+    wrote, the onboard re-propose hint, and as promotable.
+
+    Guards a change to how the stager names its ref or writes its commit hiding staged proposals from the Pending
+    panel, or listing them without the hint, while this file stays green: every other test here builds its refs by
+    hand, and the Pending e2e is served a canned list (S33)."""
+    canonical, clone = tmp_path / "canonical.git", tmp_path / "clone"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(canonical)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(clone)], check=True, capture_output=True)
+    for key, value in (("user.email", "t@example.test"), ("user.name", "t"), ("commit.gpgsign", "false"),
+                       ("core.autocrlf", "false")):
+        _git(clone, "config", key, value)
+    (clone / "seed.txt").write_bytes(b"base\n")
+    _git(clone, "add", "-A")
+    _git(clone, "commit", "-q", "-m", "seed")
+    _git(clone, "remote", "add", "local", str(canonical))
+    _git(clone, "push", "-q", "local", "main")
+    monkeypatch.setattr(paths, "ROOT", str(clone))
+    monkeypatch.delenv("KONTROLL_WRITE_ROOT", raising=False)
+    monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
+    wrote = ["instance/inventory/onboarded-demo_sw.yml", "modules/demo_sw/module.yml"]
+    for rel in wrote:
+        (clone / rel).parent.mkdir(parents=True, exist_ok=True)
+        (clone / rel).write_bytes(b"key: demo_sw\n")
+    done = gitio.commit_and_push(wrote, ["feat(onboard): stage demo_sw", "a second line"], run_id="0123456789ab")
+    assert done["committed"] is True and done["staged"] is True
+
+    listed = _by_id(str(canonical))
+    assert list(listed) == ["0123456789ab"]
+    proposal = listed["0123456789ab"]
+    sha = subprocess.run(["git", "-C", str(canonical), "rev-parse", "refs/heads/proposed/0123456789ab"],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    assert proposal["ref"] == "refs/heads/proposed/0123456789ab" and proposal["sha"] == sha
+    assert proposal["subject"] == "feat(onboard): stage demo_sw" and proposal["changes_read"] is True
+    assert sorted(proposal["paths"]) == sorted(wrote)
+    assert proposal["repropose_hint"] == {"kind": "onboard", "key": "demo_sw"} and proposal["promotable"] is True
 
 
 def test_repropose_hint_derives_the_class_from_an_onboard_dropin():

@@ -23,6 +23,7 @@ os.environ.setdefault("GUI_USER", "admin")
 os.environ.setdefault("GUI_PASSWORD", "test-password-e2e")
 os.environ.setdefault("GUI_AUDIT_LOG", os.path.join(tempfile.gettempdir(), "kontroll-e2e-audit.log"))
 
+import _canned  # noqa: E402  (tests/_canned.py — every canned shape, each with a conformance row)
 import app as gui  # noqa: E402  (after sys.path is set up)
 from kontroll import catalog as _catalog  # noqa: E402  (search/classify run the service layer in-process)
 from kontroll import probe as _probe  # noqa: E402
@@ -65,22 +66,6 @@ def _fake_local_shallow(keywords, limit):
     return [f]
 
 
-# A canned REGISTERED actuation unit so the Index Automations section + the configure dialog render in a real
-# browser (the configure-dialog e2e). Mocking the ONE underlying read `catalog.load_actuation_units` flows through
-# registered_units_view (the Automations row), configurable_view→_unit_view (the knob group), AND
-# build_actuation_plan (the Preview play) — without overriding any of those higher seams (so the capability/secret
-# e2e flows that ALSO use configurable_view stay untouched). The Stage write is NOT driven in e2e (it commits).
-_E2E_UNIT = {
-    "schema": 1, "key": "community-docker-swarm",
-    "unit": {"kind": "role", "collection": "community.docker", "name": "swarm"},
-    "install": {"collections": [{"name": "community.docker", "version": "==3.10.4"}],
-                "provenance": {"source": "galaxy", "signature": "adaptive"}},
-    "target": {"device_class": "docker_host", "inventory_group": "docker_hosts", "blast_radius": "LAN"},
-    "knobs": [{"key": "listen_port", "label": "Listen port", "type": "int",
-               "range": {"min": 1, "max": 65535}, "default": 2377}],
-}
-
-
 def _mock_service_seams():
     """Point search/classify's service I/O at offline facts (cisco.ios as a cliconf device, no Galaxy) + register
     one canned actuation unit (the Automations/configure-dialog e2e). Covers the default shallow seam
@@ -100,39 +85,22 @@ def _mock_service_seams():
         (_prov, "image_provenance"): _prov.image_provenance,
         (_disc, "read_inbox"): _disc.read_inbox,
     }
-    _catalog.local_installed = lambda: {"cisco.ios": "5.0.0"}
+    _catalog.local_installed = lambda: dict(_canned.LOCAL_INSTALLED)
     _catalog.local_shallow = _fake_local_shallow
     _probe.deep_probe = _fake_deep_probe
     _catalog.galaxy_search = lambda kw, limit: []
-    _catalog.load_actuation_units = lambda: [dict(_E2E_UNIT)]
+    # One REGISTERED actuation unit, so the Index Automations section and the configure dialog render in a
+    # real browser. Mocking the ONE underlying read flows through registered_units_view, configurable_view
+    # and build_actuation_plan without overriding those higher seams. The Stage write is not driven (it commits).
+    _catalog.load_actuation_units = lambda: [dict(_canned.E2E_UNIT)]
     # MF-5 Supply-chain section: one canned unsigned-pinned collection so the amber badge renders in a real browser.
-    _prov.fleet_provenance = lambda: {
-        "available": True, "default_policy": "adaptive", "keyring_present": False,
-        "collections": [{"name": "community.docker", "pin": "==4.0.0", "pin_kind": "exact", "policy": "adaptive",
-                         "class": "unsigned-pinned", "digest_recorded": False,
-                         "note": "verified by pin + checksum — no signature served by this source"}],
-        "summary": {"total": 1, "unsigned_pinned": 1, "signed": 0, "digests_recorded": 0}}
+    _prov.fleet_provenance = lambda: _canned.FLEET_PROVENANCE
     # Rung-1b discovery inbox: two un-onboarded candidates so the panel + the onboard pre-fill render in a real
     # browser — one normal host + one whose hostname is a `<script>` payload (the F6 XSS-safe-render e2e; the ET/
     # textContent rendering must show it as literal text, never execute it). P-1: RFC-5737 IPs + RFC-7042 MACs.
-    _disc.read_inbox = lambda: {
-        "generated_at": "2026-07-03T00:00:00+00:00",
-        "sources": [{"key": "opnsense", "method": "dhcp_leases_opnsense", "host": "192.0.2.1",
-                     "status": "ok", "count": 2}],
-        "candidates": [
-            {"ip": "192.0.2.42", "mac": "00:00:5e:00:53:01", "hostname": "sw-lab-3",
-             "vendor": "IEEE Example Vendor Inc",         # the Rung-3 OUI display hint (advisory text; renders via ET)
-             "source_key": "opnsense", "source_host": "192.0.2.1"},
-            {"ip": "192.0.2.43", "mac": "00:00:5e:00:53:02", "hostname": "<script>window.__xss=1</script>",
-             "vendor": None,                              # no OUI match -> the discovery-vendor line is absent
-             "source_key": "opnsense", "source_host": "192.0.2.1"}]}
+    _disc.read_inbox = lambda: _canned.DISCOVERY_INBOX
     # C1 images sub-panel (§7.3): one canned digest-pinned image so the amber image badge renders in a real browser.
-    _prov.image_provenance = lambda: {
-        "available": True, "signing_configured": False,
-        "images": [{"name": "kontroll-control", "ref": "ghcr.io/example/kontroll-control", "tag": "v1",
-                    "digest": "sha256:" + "a" * 64, "digest_short": "a" * 12, "class": "digest-pinned",
-                    "note": "Docker verifies this @sha256: on every pull — not a signature (a digest-pin is not signed)"}],
-        "summary": {"total": 1, "digest_pinned": 1, "local_build": 0, "signed": 0}}
+    _prov.image_provenance = lambda: _canned.IMAGE_PROVENANCE
     return originals
 
 
