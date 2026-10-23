@@ -282,6 +282,20 @@ def test_gui_onboard_creds_that_are_not_an_object_are_a_422(client, onboard_env,
     assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "edgeos").exists()
 
 
+@pytest.mark.parametrize("creds", [{"ssh_private_key": ["x"]}, {"password": 7}, {"username": {"a": 1}}],
+                         ids=["a-list-key", "a-number-password", "an-object-username"])
+def test_gui_onboard_a_credential_value_that_is_not_text_is_a_422(client, onboard_env, creds):
+    """A GUI onboard whose credential VALUE is a list, a number or an object (for a field that is not inline) answers
+    422 `invalid_creds` and writes nothing. Guards the 500 an SSH key's list raised in the planner, and a number or an
+    object going into the SOPS domain as itself (T17 fold review, N1): the GUI's JSON body is untyped, and only an
+    inline field (a port, a flag) takes anything but text."""
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "creds": creds, "apply": True}, headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    assert r.get_json()["code"] == "invalid_creds"
+    assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "edgeos").exists()
+
+
 def test_onboard_dryrun_returns_plan_no_git(client, onboard_env):
     """A dry-run (apply omitted) returns the PLAN (backend, default host name, repo-rel paths) and touches
     NO git — dry-run by default is the security-relevant invariant, asserted as data."""

@@ -81,9 +81,10 @@ def _keys(node):
 
 
 def test_probe_port_is_unchanged_for_a_host_that_sets_neither_new_var():
-    """For any host that sets neither new variable, the new expression gives the old one's port, with or without
-    `mgmt_port`; and no shipped inventory (the example overlay, the mock inventory) sets either, so no host that
-    exists before S28 is probed on another port after it. Guards the change moving the probe of an already-onboarded
+    """For any host that sets neither new variable, the new expression gives the old one's port, with `mgmt_port`
+    unset or a port (a null or empty one now gives 22, where the old one gave the probe no port); and no shipped
+    inventory (the example overlay, the mock inventory) sets either, so no host that exists before S28 is probed on
+    another port after it. Guards the change moving the probe of an already-onboarded
     host — the whole safety argument of S28, checkable by reading (the private overlay was checked the same way)."""
     for hostvars in ({}, {"mgmt_port": 8443}, {"mgmt_port": 22}, {"ansible_host": "192.0.2.1", "device_role": "x"}):
         assert _render(_probe_port_expression(), hostvars) == _render(_OLD, hostvars), hostvars
@@ -94,6 +95,20 @@ def test_probe_port_is_unchanged_for_a_host_that_sets_neither_new_var():
         with open(path, encoding="utf-8") as fh:
             for doc in yaml.safe_load_all(fh):
                 assert not set(_keys(doc)) & set(_NEW_VARS), path
+
+
+def test_the_troubleshooting_pre_flight_prints_the_old_port_then_the_plays():
+    """The pre-flight in docs/troubleshooting.md §4 prints `<old> -> <new>` with, on each side, the old expression
+    and ping.yml's own, as one quoted `msg` value. Guards the copy in the doc drifting from the play (Q-10 asks the
+    operator to read `N -> N` from it before the first ping), and the quotes being dropped: without them `-a` splits
+    the message at its spaces and the debug task fails on every host (T17 fold review, S1)."""
+    with open(os.path.join(ROOT, "docs", "troubleshooting.md"), encoding="utf-8") as fh:
+        doc = " ".join(fh.read().split())
+    opener = "-m ansible.builtin.debug -a \"msg='"
+    start = doc.index(opener) + len(opener)
+    before, after = doc[start:doc.index("'\"", start)].split(" -> ")
+    assert before == _OLD
+    assert after == " ".join(_probe_port_expression().split())
 
 
 def test_backend_probe_ports_are_integers_in_range():

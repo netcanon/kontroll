@@ -18,11 +18,11 @@ ever wrote `mgmt_port`. Every host was probed on 22: a REST-only device read `UN
 ran (L12 F-5), and an SSH host on another port could not be onboarded as one.
 
 - `ping.yml` probes the first of `mgmt_port` (a hand override), `ansible_port` (what Ansible connects on),
-  `kontroll_probe_port` (the backend's), then 22. A host that sets neither new var is probed exactly as before, and
-  no host onboarded before this change sets either; a unit test renders the play's own expression over its truth
-  table and that invariant. A deployment that already sets `ansible_port` itself (a group_vars `all.yml` for SSH on
+  `kontroll_probe_port` (the backend's), then 22. A host that sets neither new var, with `mgmt_port` unset or a
+  port, is probed exactly as before, and no host onboarded before this change sets either; a unit test renders the
+  play's own expression over its truth table and that invariant. A deployment that already sets `ansible_port` itself (a group_vars `all.yml` for SSH on
   another port) now has those hosts probed on it, api hosts included; `mgmt_port` overrides. A port var set to null
-  or empty counts as unset: `wait_for` with no port only slept and reported ok.
+  or empty counts as unset for the probe: `wait_for` with no port only slept and reported ok.
 - The `api` backend declares `probe_port: 443`, and the onboard writes it into the host's drop-in as
   `kontroll_probe_port` (an int). An api host onboarded earlier keeps the 22 probe until it has that line: add it
   to the host's drop-in, or re-onboard the host WITH its token (a re-onboard replaces the host's vars, and a blank
@@ -39,7 +39,8 @@ ran (L12 F-5), and an SSH host on another port could not be onboarded as one.
   (`onboard._inline_literal`), which let one plain word of any kind through.
 - A blank credential value is no value, for an API caller as for the form (MF-02): `"port": ""` means 22, and an
   API caller's `"password": ""` is no longer stored over the secret in SOPS. A GUI request whose `creds` is not an
-  object is a 422 (`invalid_creds`), not a 500.
+  object, or holds a list, number or object for a field that is not inline, is a 422 (`invalid_creds`), not a 500
+  or a value stored in SOPS as itself.
 
 Before the first ping after a box has this change, the read-only pre-flight in `docs/troubleshooting.md` §4 prints
 each host's port before and after; every host should read `N -> N`. Tests: `tests/unit/test_probe_port.py`,

@@ -45,7 +45,7 @@ files:
   scripts/kontroll/service/keygen.py: "22dcc25d6ef7ad56f7fa5b8dc1ffc04b1a6f3a89da971552d6e7a66282a125b6"
   scripts/kontroll/service/logsvc.py: "4e42ad67ee8602e90edb7a6724055efe00013f31efe1a1cb1d1ed5aeeb72ef9e"
   scripts/kontroll/service/observe.py: "36f20e48df9ac009cff16835d5e5d0de441432b912c8979bf0982b75377389b4"
-  scripts/kontroll/service/onboard.py: "fdb4642df810ae0f6b4d66dcadac18db81bb1a5d86a45b021b40cf725fbe1a2c"
+  scripts/kontroll/service/onboard.py: "78bc9437db69f09622be924385d2141cdb7f9bea86f50bc38a11696a7c0f4e4d"
   scripts/kontroll/service/openapi.py: "345795ca23869170811f2b51297096d7fde943f1dc53635d859bd1b959746300"
   scripts/kontroll/service/pending.py: "2102ce2ce696e0ce0ccfc196e7196d3976b29f3416604efd42edc7559d2234d7"
   scripts/kontroll/service/probe.py: "edf9d21c356285d99823b802e27fa8f761e7b481d154479e2e52fa2ee19a6c54"

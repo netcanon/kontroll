@@ -125,11 +125,12 @@ file_sd targets) restarts nothing; see `scripts/stale-config.py`.
   `kontroll_probe_port: 443`: add that line to the host in its drop-in, or re-onboard it WITH its token — a
   re-onboard replaces the host's vars, and a blank token box drops its token var, so the check then fails with
   "no API token is in scope". A host that already sets `ansible_port` (say, a group_vars `all.yml` for SSH on
-  another port) is probed on it, api hosts included: give those `mgmt_port`. A var set to null or empty counts as
-  unset. The pre-flight, on the control node with no device contacted, prints each host's port before and after
-  S28 — every host onboarded before it should read `N -> N`:
-  `ansible -i instance/inventory all -m ansible.builtin.debug -a "msg={{ mgmt_port | default(22) }} -> {{ mgmt_port
-  | default(ansible_port | default(kontroll_probe_port | default(22, true), true), true) }}"`.
+  another port) is probed on it, api hosts included: give those `mgmt_port`. For the probe, a port var set to null
+  or empty counts as unset (Ansible's own connection still refuses an empty `ansible_port`). The pre-flight, on the
+  control node with no device contacted, prints each host's port before and after S28 — every host onboarded before
+  it should read `N -> N` (the single quotes keep the message one value):
+  `ansible -i instance/inventory all -m ansible.builtin.debug -a "msg='{{ mgmt_port | default(22) }} -> {{ mgmt_port
+  | default(ansible_port | default(kontroll_probe_port | default(22, true), true), true) }}'"`.
 - **Disk filling** → metrics are bounded by `PROM_RETENTION_SIZE`/`_TIME`; logs by `LOKI_RETENTION_PERIOD`
   (+ per-stream tiers); see the storage paradigm
   ([docs/reviews/2026-06-16-storage-logging/99-synthesis.md](reviews/2026-06-16-storage-logging/99-synthesis.md)).

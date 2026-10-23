@@ -1992,9 +1992,10 @@ it calls the script.) A credential
 field's `maps_to` is held to being a variable name, not to a set of variables: a module file's own `auth:` entry
 stored in SOPS may write its lookup under `ansible_connection`, `ansible_host` or any other host var of that class's
 hosts, and an `inline` flag may write `true` or `false` under any lower-case one (only an inline port is held to a
-`*_port` var) — a file an operator promotes, never a request, and never the request's text. The class seams refuse the names a NAME can tell; a PARENT group the
-inventory defines (the example's `network_devices`, `compute`) is a group like any other to them, and a class
-attached to one addresses its children wherever the class's group is a pattern. The identity dialog's charset for a
+`*_port` var) — a file an operator promotes, never a request, and never the request's text. The class seams refuse
+the names a NAME can tell; a PARENT group the inventory defines (the example's `network_devices`, `compute`) is a
+group like any other to them, and a class attached to one addresses its children wherever the class's group is a
+pattern. The identity dialog's charset for a
 NEW value is narrower than the onboard field's — no hyphen, no leading digit: a class onboarded with such a group or
 domain keeps it and stays editable (a value read back unchanged is not judged), and the dialog cannot set one. The
 `backend` knob is bounded like a name, not checked against the registry: on a class whose module file names no

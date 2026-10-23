@@ -497,6 +497,11 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         val = creds.get(cf["field"])
         if val is None:
             continue
+        if not cf.get("inline") and not isinstance(val, str):
+            # Only an inline field takes a typed value (authspec.inline_value refuses the rest of it). Anywhere else a
+            # list, a number or an object from the GUI's untyped JSON went into SOPS as itself, or a 500 (an SSH key's
+            # `.replace`). Refused as `creds`, never as the request's own key, which would reach the audit line.
+            raise paths.RequestBoundaryError("creds", "a credential value is not text")
         # A `shared` cred is a DOMAIN-level secret (one per SOPS domain, e.g. the read-only proxmox token the
         # pve-exporter uses for every node) → stored FLAT under its sops_stem so its consumer reads the exact name
         # (telemetry/pve.yml's secret_env_map {proxmox_api_user}…). A normal cred stays HOST-keyed so two onboarded
@@ -510,9 +515,10 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # variable a SOPS-stored field names is the declaring file's to choose — a module's own `auth:` entry may
         # name `ansible_connection` as the registry names `ansible_user`; what lands there is a lookup, never the
         # request's text — and is not restricted here (SECURITY.md C22, limits). An inline field's variable is
-        # narrower: authspec.inline_target, below. Neither name is anything the caller sent: the backend registry or the class's module
-        # file declared it (an option name out of an installed module that is not an identifier is not offered
-        # at all — authspec), so the refusal is the repository-data one and says where to look.
+        # narrower: authspec.inline_target, below. Neither name is anything the caller sent: the backend registry
+        # or the class's module file declared it (an option name out of an installed module that is not an
+        # identifier is not offered at all — authspec), so the refusal is the repository-data one and says where
+        # to look.
         _where = ("declared for the %s device class (its module file's `auth:` block, or the %s backend's "
                   "registry entry)" % (key, backend))
         stem = cf["sops_stem"]

@@ -185,15 +185,15 @@ def test_a_credential_fields_host_var_name_is_an_identifier(reuse, monkeypatch, 
     (asserted below, so the limit is pinned and not implied closed). An INLINE field's var is narrower since S28 —
     a port only into a `*_port` var (authspec.inline_target) — and that is asserted last."""
     reuse()
-    field = {"field": "mode", "kind": "port", "label": "mode", "sops_stem": "mode", "inline": True}
+    stored = {"field": "mode", "kind": "password", "label": "mode", "sops_stem": "mode", "secret": True}
     monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"source": "shallow", "fields": [
-        dict(field, maps_to=maps_to)]})
-    with pytest.raises(paths.RepositoryDataError) as stop:
-        _plan(creds={"mode": "22"})
+        dict(stored, maps_to=maps_to)]})
+    with pytest.raises(paths.RepositoryDataError) as stop:              # the planner's own check: a SOPS field's
+        _plan(creds={"mode": "local"})                                   # var is not narrowed by inline_target
     message = str(stop.value)
     assert stop.value.what == "credential field" and "ansible_connection" not in message
     assert "demo_sw" in message and "netcommon_cli" in message          # where to look
-    stored = {"field": "mode", "kind": "password", "label": "mode", "sops_stem": "mode", "secret": True}
+    field = {"field": "mode", "kind": "port", "label": "mode", "sops_stem": "mode", "inline": True}
     for name in ("ansible_user", "ansible_connection"):
         monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"source": "shallow", "fields": [
             dict(stored, maps_to=name)]})
