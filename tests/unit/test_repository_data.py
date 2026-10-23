@@ -150,11 +150,20 @@ def test_a_module_file_that_is_not_a_mapping_is_repository_data(reuse, tmp_repo,
     assert "not a mapping" in str(stop.value)
 
 
+def _maps_to_passes(maps_to):
+    """The planner's rule for a credential field's `maps_to`: none, an identifier, or a template that renders, for a
+    representative credential key, inside catalog.MAPS_TO_RE."""
+    if isinstance(maps_to, str) and "{" in maps_to:
+        return bool(catalog.render_template(maps_to, {"cred_key": "sw2"}, catalog.MAPS_TO_RE))
+    return maps_to is None or bool(onboard._STEM_RE.fullmatch(maps_to))
+
+
 def test_every_shipped_class_and_backend_passes_the_adoption_rule():
     """Every shipped module file passes the adoption rule for the names it holds, every credential field a shipped
-    module or backend declares maps to nothing or to an identifier, and every role a shipped backend declares passes
-    the adopted role's rule. Guards the re-check refusing a healthy shipped class: this is the corpus the rule was
-    measured against, kept in the suite."""
+    module or backend declares maps to nothing, to an identifier or to a template (S27) that renders to a host var
+    name, every role a shipped backend declares passes the adopted role's rule, and its default domain passes the
+    request field's. Guards the re-check refusing a healthy shipped class: this is the corpus the rule was measured
+    against, kept in the suite."""
     seen = 0
     for path in sorted(glob.glob(os.path.join(ROOT, "modules", "*", "module.yml"))):
         with open(path, encoding="utf-8") as fh:
@@ -162,11 +171,12 @@ def test_every_shipped_class_and_backend_passes_the_adoption_rule():
         for field in onboard._ADOPTED:
             onboard._adopted(module, field, module.get("key") or "x")
         for entry in module.get("auth") or []:
-            assert entry.get("maps_to") is None or onboard._STEM_RE.fullmatch(entry["maps_to"]), path
+            assert _maps_to_passes(entry.get("maps_to")), path
         seen += 1
     for backend in catalog.load_backends():
         for entry in backend.get("auth") or []:
-            assert entry.get("maps_to") is None or onboard._STEM_RE.fullmatch(entry["maps_to"]), backend.get("name")
+            assert _maps_to_passes(entry.get("maps_to")), backend.get("name")
+        onboard.default_secrets_domain(backend, backend["name"])         # raises RepositoryDataError if it fails
         if catalog.backend_role(backend) is not None:                    # one with none is never chosen (S26)
             assert onboard._role_of(backend, "x", False)
         assert paths.is_component(backend["name"]) and onboard.plain_scalar(backend["name"]), backend.get("name")
@@ -273,7 +283,7 @@ def test_a_backend_the_request_sent_is_the_requests_fault_on_a_reuse_too(reuse, 
 
 
 _CLI = {"name": "netcommon_cli", "requires": [], "classify": {"plugin": "cliconf"},    # a registry entry that
-        "role": "backend_netcommon_cli"}                                                # runs (it declares a role)
+        "role": "backend_netcommon_cli", "default_secrets_domain": "network"}          # runs (it declares a role)
 
 
 @pytest.mark.parametrize("name", ["r" * 60, "Weird.Name", "x y", "netcommon_cli"])
@@ -543,7 +553,7 @@ def test_the_cli_prints_a_repository_refusal_as_one_line(tmp_repo, monkeypatch, 
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
         *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
-                       "match": {"any": [{"plugin": "cliconf"}]}}]))
+                       "default_secrets_domain": "network", "match": {"any": [{"plugin": "cliconf"}]}}]))
 
     def refuse(rel_path):
         raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
@@ -573,7 +583,7 @@ def test_cmd_scaffold_writes_under_the_write_root(tmp_path, monkeypatch, make_fa
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
         *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
-                       "match": {"any": [{"plugin": "cliconf"}]}}]))
+                       "default_secrets_domain": "network", "match": {"any": [{"plugin": "cliconf"}]}}]))
     galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
                                            secrets="network", backend="netcommon_cli", dry_run=True))
     assert "a real run refuses" not in capsys.readouterr().out      # the note is only true when the class exists
@@ -603,7 +613,7 @@ def test_cmd_scaffold_does_not_shadow_a_class_the_code_root_ships(tmp_path, monk
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
         *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
-                       "match": {"any": [{"plugin": "cliconf"}]}}]))
+                       "default_secrets_domain": "network", "match": {"any": [{"plugin": "cliconf"}]}}]))
     with pytest.raises(SystemExit) as stop:
         galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
                                                secrets="network", backend="netcommon_cli", dry_run=False))

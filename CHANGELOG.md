@@ -21,7 +21,8 @@ former code wrote for every backend the tool ships (`tests/unit/test_backend_def
 
 - `default_secrets_domain` (every shipped backend: `network`). An onboard or scaffold that names no domain stores
   credentials there; a request's domain wins over it, and a reused class's own `secrets_domain` over both, as before.
-  A backend that declares none makes a domain required (422 `invalid_secrets_domain`).
+  A backend that declares none makes a domain required (422 `invalid_secrets_domain`) — so an onboard through an
+  operator's own `backend.yml` written before this change must name one until the file declares a default.
 - `derive_params` (`netcommon_cli`: `network_os: "{collection}.{name}"`): what a new class's `backend_params` are
   written with. Only a param the backend `requires:` is written.
 - A templated `maps_to` (`api` and the generic union's `api_token`: `{cred_key}_api_token`) names the host var a
