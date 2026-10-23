@@ -29,7 +29,8 @@
         - name: TCP reachability probe from the control node
           ansible.builtin.wait_for:
             host: "{{ ansible_host }}"
-            port: "{{ mgmt_port | default(ansible_port | default(kontroll_probe_port | default(22, true), true), true) }}"
+            port: >-
+              {{ mgmt_port | default(ansible_port | default(kontroll_probe_port | default(22, true), true), true) }}
             timeout: 5
           delegate_to: localhost
 
