@@ -364,9 +364,9 @@ async function submit(f, collection, backend, overwrite=false) {
       ob.onclick = () => {
         // Loud warning (#124): Overwrite REPLACES a curated class — it can strip its metrics:/backup:/logs:
         // blocks. Onboarding a collection the class under this key takes (it declares it, or it is
-        // `collections: []` and ansible-core ships it) REUSES it (no conflict); a conflict here means another
-        // collection collides on this key, or the host's inventory drop-in was written by hand, so confirm the
-        // destructive replace.
+        // `collections: []` and ansible-core ships it) REUSES it (its module is no conflict); a conflict here means
+        // another collection collides on this key, or the key's inventory drop-in is not one onboard wrote (it
+        // lacks the onboard banner), so confirm the destructive replace.
         if (window.confirm('Overwrite REPLACES the existing module/host file. If this key matches a curated '
           + 'device-class, its metrics/backup/logs capabilities will be lost. Prefer a new key unless you mean '
           + 'to replace it. Continue?')) submit(f, collection, backend, true);
