@@ -37,7 +37,7 @@ the real function's answer on a fixture: a mock shaped by belief keeps a UI test
 something else (S33). The e2e server's seams are enforced in the replacement forms the conformance file's parse
 reads or refuses; the forms it does not read, and whether a body or a route test's fake comes from `_canned.py`, are
 held only by review. [../tests/README.md](../tests/README.md) lists the fakes still written by hand and points to
-the parse's own list of the forms it does not read. The live lab and the Playwright flows are never in the blind
+the parse's docstring, which names some of the forms it does not read. The live lab and the Playwright flows are never in the blind
 hermetic gate (`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
 
 ---

@@ -5,7 +5,8 @@ actuation registry's own validator holds) that builds the smallest real fixture,
 compares the two SHAPES — the key set and each value's type, never the values.
 A canned dict written from belief keeps a UI test green while the server emits something else (L16's second most
 recurrent fault), and a second hand copy drifts from the first. Add a dict here and its row there; a seam the e2e
-server replaces with no row fails `test_every_replaced_seam_has_a_conformance_row`. Nothing scans a `page.route` body
+server replaces with no row, in a form the conformance file's parse reads or refuses, fails
+`test_every_replaced_seam_has_a_conformance_row`. Nothing scans a `page.route` body
 or a route test's fake, so one written by hand in its test is caught only in review: tests/README.md lists the ones
 that still are.
 

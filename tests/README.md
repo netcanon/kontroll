@@ -149,7 +149,7 @@ variable name or handed on, a monkeypatch object's `.setattr`, an assignment thr
 `eval`), and so does a conftest without its one restore loop or without a `return originals` in
 `_mock_service_seams`. Anything else is not read, so review holds it: for example a replacement outside
 `_mock_service_seams` through a name that is not an import, a fixture that patches (`mocker`), one made in another
-file, and whether the restore loop puts back what it was handed. The `_seams` docstring lists the rest. A seam
+file, and whether the restore loop puts back what it was handed. The `_seams` docstring names more. A seam
 whose fake needs none (a record built by the real constructor, an empty list) is listed in `NO_ROW` with the
 reason. A seam hands out a copy of its canned dict, never the module object. Where a generator writes a file
 another part reads, a round-trip test feeds the real output to the real reader:

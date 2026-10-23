@@ -12,7 +12,6 @@ import ast
 import base64
 import copy
 import functools
-import inspect
 import os
 
 import pytest
@@ -297,7 +296,8 @@ def _seams(source=None):
         assert not (isinstance(node, ast.Call)
                     and getattr(node.func, "id", getattr(node.func, "attr", None)) in ("vars", "exec", "eval")), \
             _CANNOT_NAME + ast.unparse(node)
-        assert not (isinstance(node, ast.Name) and node.id == "setattr" and id(node) not in called), \
+        assert not (getattr(node, "id", getattr(node, "attr", None)) == "setattr"
+                    and isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in called), \
             _CANNOT_NAME + "setattr handed on, not called"
         if isinstance(node, ast.Assign):
             targets = node.targets
@@ -385,11 +385,17 @@ _PLANT_HEAD = "from kontroll import catalog as _catalog\nfrom kontroll.service i
     "def _mock_service_seams():\n    getattr(_catalog, '__dict__')['load'] = 1\n",
     "def _mock_service_seams():\n    sa = setattr\n    sa(_catalog, 'load', 1)\n",
     "def _mock_service_seams():\n    pass\n\n\n_catalog.__dict__['load'] = 1\n",
+    "def _mock_service_seams():\n    pass\n\n\ndef live_server():\n    getattr(_catalog, '__setattr__')('load', 1)\n",
+    "import functools\ndef _mock_service_seams():\n    pass\n\n\ndef live_server():\n"
+    "    functools.partial(setattr, _catalog)('load', 1)\n",
+    "def _mock_service_seams():\n    list(map(setattr, [_catalog], ['load'], [1]))\n",
+    "import builtins\ndef _mock_service_seams():\n    sa = builtins.setattr\n    sa(_catalog, 'load', 1)\n",
 ], ids=["nested", "local-alias", "setattr-variable", "setattr-nested", "monkeypatch-object", "outside", "module-level",
         "setattr-module-level", "import-as-outside", "nested-outside", "dotted-import-outside", "list-target-outside",
         "for-target-outside", "with-target-outside", "mock-patch-object", "mock-patch-dotted", "dunder-dict",
         "dunder-setattr", "vars", "exec", "eval", "vars-outside", "comprehension-outside", "builtins-vars",
-        "getattr-dunder", "setattr-handed-on", "dunder-outside"])
+        "getattr-dunder", "setattr-handed-on", "dunder-outside", "string-setattr-outside",
+        "partial-setattr-outside", "map-setattr", "builtins-setattr-handed-on"])
 def test_the_seam_parse_refuses_a_replacement_it_cannot_name(body):
     """The planted violations: a seam replaced in a form the parse cannot name as `module.attr`, or outside
     `_mock_service_seams`, or patched in a form the parse refuses outright (`unittest.mock`, `__dict__`,
@@ -397,8 +403,11 @@ def test_the_seam_parse_refuses_a_replacement_it_cannot_name(body):
     the parse. Guards the seam test passing over a replacement it never read, so that the seam got no shape row and,
     unrestored, leaked: of the first eight, each but the local alias (which raised a KeyError) passed unseen before
     T21's fold read (N3); the import-as and nested-outside rows hold branches no plant reached (its fold-2 read, N3);
-    the next twelve passed unseen through the fold's own parse (that read, S1); and the last six through fold 3's
-    (its read, S1 and N2: `vars` and `__dict__` outside the seam function hold "anywhere")."""
+    the next eleven passed unseen through the fold's own parse (that read, S1); of the next six, four passed unseen
+    through fold 3's (its read, S1), and `vars-outside` and `dunder-outside`, which that parse already refused, hold
+    its "anywhere" for `vars` and `__dict__` (its N2); and the last four hold fold 4's own closures where its read
+    found them unheld (N2, N3): `__setattr__` as a string outside, a `setattr` handed on through `partial` outside and
+    through `map`, and `builtins.setattr` handed on."""
     with pytest.raises(AssertionError, match="cannot name"):
         _seams(_PLANT_HEAD + body)
 
@@ -434,11 +443,12 @@ def test_the_seam_parse_reads_the_forms_it_names():
                            {"kontroll.catalog.a", "kontroll.service.discovery.b"}, 1, True)
 
 
-def test_the_seam_parse_counts_the_restore_loops_and_reads_the_hand_back():
+def test_the_seam_parse_counts_the_restore_loops_and_reads_the_hand_back(monkeypatch):
     """The parse counts the bare `setattr` calls it lets through outside `_mock_service_seams` — two loops count two,
     none counts none — and reads whether that function returns its `originals` (`return {}` does not); the seam
     test's own check (`_restored_seams`) passes one loop with a hand-back and fails no loop, two loops, `return {}`
-    and a seam replaced and not handed back; and the seam test runs that check on the real conftest.
+    and a seam replaced and not handed back; and the seam test runs that check, once, on the real conftest (a spy
+    records the call, so a revert that leaves the name in a comment is caught and an equivalent call is not).
 
     Guards the seam test's restore check passing a conftest whose seams stay replaced: deleting live_server's restore
     loop, or handing back `{}`, passed it (T21's fold-2 read, N6), and so did a second, table-driven `setattr` loop
@@ -457,7 +467,10 @@ def test_the_seam_parse_counts_the_restore_loops_and_reads_the_hand_back():
                     base.replace("    return originals", "    _catalog.z = 2\n    return originals") + loop):
         with pytest.raises(AssertionError):
             _restored_seams(planted)
-    assert "_restored_seams()" in inspect.getsource(test_every_replaced_seam_has_a_conformance_row)
+    calls, real = [], _restored_seams
+    monkeypatch.setitem(globals(), "_restored_seams", lambda source=None: calls.append(source) or real(source))
+    test_every_replaced_seam_has_a_conformance_row()
+    assert calls == [None], "the seam test runs the restore check on the real conftest"
 
 
 def test_the_shape_helper_catches_a_planted_missing_key():
