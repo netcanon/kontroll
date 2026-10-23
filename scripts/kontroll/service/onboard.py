@@ -8,7 +8,8 @@ Split into the API-ready shape the workstream calls for:
   * apply_onboard_plan — performs the repo mutations for a plan (idempotent no-clobber
     writes + fleet-enable + SOPS encrypt), prints progress (the exemplar's pattern), and
     returns {"changed","paths"}.
-Onboarding a device whose CLASS already exists REUSES the curated module (adds only the host
+Onboarding a collection the class under its key already declares (under a class with
+`collections: []`, a collection ansible-core ships) REUSES the curated module (adds only the host
 + fleet-enable) rather than regenerating a minimal one that would strip its metrics:/backup:/
 logs: blocks (#124); the inventory drop-in MERGES so a 2nd device of a class never drops the
 1st. A genuinely DIFFERENT class colliding on a key still hard-stops (WriteConflict) unless the
@@ -26,7 +27,7 @@ import yaml
 
 from kontroll import authspec, catalog, gitio, paths, predicate, probe
 from kontroll.service._validate import plain_scalar
-from kontroll.service.classify import derive_class_capabilities, suggest_telemetry
+from kontroll.service.classify import derive_class_capabilities, requires_of, suggest_telemetry
 
 log = logging.getLogger("kontroll.service.onboard")
 
@@ -40,9 +41,9 @@ _INV_BANNER = "# Drop-in host, onboarded by scripts/galaxy.py onboard. Additive 
 def _existing_module(key):
     """Parse modules/<key>/module.yml via the modules overlay (paths.module_file — the write_root clone shadows the
     baked ROOT, Phase-B Fork B) if it exists, else None. This is the SHIPPED/already-onboarded device-class we must
-    REUSE rather than clobber when onboarding another device of the same class (#124): regenerating a minimal module
-    here would strip the curated metrics:/backup:/logs: blocks. Resolved so a baked deploy sees an operator class in
-    the propose clone AND a pristine shipped class in the image; a file that cannot be read or parsed degrades to
+    REUSE rather than clobber when onboarding a collection that class already declares (#124): regenerating a minimal
+    module here would strip the curated metrics:/backup:/logs: blocks. Resolved so a baked deploy sees an operator class
+    in the propose clone AND a pristine shipped class in the image; a file that cannot be read or parsed degrades to
     None (treated as absent → the normal generate path, which then no-clobbers). A file that parses to something
     other than a mapping — a list, a bare word — is neither absent nor a class: it is answered as the file it is
     (RepositoryDataError), not as the AttributeError its first `.get` would be."""
@@ -73,9 +74,12 @@ def _module_collections(mod):
 
 _STEM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 # A backend `connection:` value that is one bare `{{ param }}` — the only form the planner fills from the derived
-# params — and the names a Jinja expression or statement in a value reads (a quoted word counts too: fail closed).
+# params — and what makes ansible-core 2.19 template a string that can read a var (_jinja_bits.is_possibly_template,
+# less the comment marker): a `{{` or `{%` anywhere, or a `#jinja2:` override header. Every word of such a value
+# counts (T18's fold-3 read, S1: an unclosed `{{`, a `}}` inside a string literal and a header that changes the
+# delimiters each read a param a match of whole blocks did not see).
 _BARE_HOLE_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\Z")
-_JINJA_BLOCK_RE = re.compile(r"\{[{%](.*?)[}%]\}", re.S)
+_TEMPLATED_RE = re.compile(r"\{[{%]|\A#jinja2:")
 _NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NOT_A_NAME = "%s is a word YAML reads as another type (null, a boolean, a number, a date)"
 
@@ -196,28 +200,16 @@ def _secrets_domain(secrets, bdef, backend):
     return secrets
 
 
-def _requires(bdef, backend):
-    """The params `backend` requires: its registry entry's `requires:`, a list of param names (none when absent).
-    Anything else is the registry's fault, refused as repository data: a YAML string would turn every `in` test on it
-    into a substring test (T18's fold-2 read, N4)."""
-    requires = bdef.get("requires")
-    if requires is None:
-        return []
-    if not (isinstance(requires, list) and all(isinstance(r, str) for r in requires)):
-        raise paths.RepositoryDataError(
-            "backend registry", "the %s backend's requires is not a list of param names — correct its backend.yml "
-            "under ansible/backends/" % backend)
-    return requires
-
-
 def _jinja_reads(value):
-    """Every name a Jinja expression or statement in `value` reads — a string, or each string a list or a map holds,
-    a key too — a quoted word included: fail closed."""
+    """Every word of a value ansible-core would template — a string holding a `{{` or a `{%`, or opening with a
+    `#jinja2:` header — or of each such string a list, a set or a map holds, a key too, at any depth. A quoted word,
+    a comment and an attribute count: fail closed. A name built at render time (`vars[...]`, or `lookup('vars', ...)`
+    of a joined key) is no word of the value and is not seen."""
     if isinstance(value, str):
-        return {n for block in _JINJA_BLOCK_RE.findall(value) for n in _NAME_RE.findall(block)}
+        return set(_NAME_RE.findall(value)) if _TEMPLATED_RE.search(value) else set()
     if isinstance(value, dict):
         return set().union(*map(_jinja_reads, list(value) + list(value.values())))
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple, set, frozenset)):
         return set().union(*map(_jinja_reads, value))
     return set()
 
@@ -230,7 +222,7 @@ def backend_params(bdef, collection, backend):
     backup command, a group var its role reads); the planner refuses one the backend's `connection:` block reads.
     A block or a template that does not render, or a `requires:` that is not a list of names, is the registry's
     fault, refused as repository data before any write. Shared by the planner and the scaffold."""
-    requires = _requires(bdef, backend)
+    requires = requires_of(bdef, backend)
     derive = bdef.get("derive_params")
     if derive is None:
         return {}
@@ -500,18 +492,19 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         module_text = yaml.safe_dump(module, sort_keys=False, allow_unicode=True, width=4096)
 
     hostvars = {"device_role": role}
-    required = _requires(bdef, backend)
+    required = requires_of(bdef, backend)
     for k, v in (bdef.get("connection") or {}).items():
         bare = _BARE_HOLE_RE.match(v.strip()) if isinstance(v, str) else None
         hole = bare.group(1) if bare else None
         through = sorted(p for p in _jinja_reads(v) if p in required and p != hole)
         if through:
-            # Only a bare `{{ param }}` is filled from `params`: a required param read any other way — a filter, an
-            # expression, text beside it, a `{% %}` block, a list or a map — would reach the drop-in unrendered,
-            # derived or not (T18's fold read, N5; its fold-2 read, S1: a check of a value's first name let ten
-            # shapes by).
+            # Only a bare `{{ param }}` is filled from `params`: a required param named anywhere else in a templated
+            # value — a filter, an expression, text beside it, a `{% %}` block, an unclosed `{{`, a `#jinja2:` header,
+            # a list, a set or a map — would reach the drop-in unrendered, derived or not (T18's fold read, N5; its
+            # fold-2 read, S1: a check of a value's first name let ten shapes by; its fold-3 read, S1: a match of
+            # whole blocks let six more by).
             raise paths.RepositoryDataError(
-                "backend registry", "the %s backend's connection var %s reads %s, which it requires, through an "
+                "backend registry", "the %s backend's connection var %s names %s, which it requires, in an "
                 "expression the planner does not render — read it bare, as `{{ %s }}`, in its backend.yml under "
                 "ansible/backends/%s" % (backend, k, through[0], through[0], "" if through[0] in params else
                                          ", and add it to `derive_params` (or, for a value set at run time, drop it "

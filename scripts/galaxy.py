@@ -421,7 +421,8 @@ def main():
     ob.add_argument("--host-name", help="inventory hostname (default: <key>-1)")
     ob.add_argument("--secrets", help="secrets domain for a new class (default: the backend's "
                     "default_secrets_domain); a reuse (an onboard of a collection the class under that key "
-                    "already declares) stores in the class's own")
+                    "already declares, or, under a class with `collections: []`, a collection ansible-core ships) "
+                    "stores in the class's own")
     ob.add_argument("--backend", help="override the auto-chosen backend")
     ob.add_argument("--username", help="login user (SSH) — encrypted into the secrets domain, inline on the host")
     ob.add_argument("--password", help="login password (SSH) — encrypted into the secrets domain")

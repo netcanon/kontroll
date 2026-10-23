@@ -27,14 +27,16 @@ backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s o
   whose module file names a backend this install does not ship is told so in the same refusal.
 - `derive_params` (`netcommon_cli`: `network_os: "{collection}.{name}"`): what a new class's `backend_params` are
   written with. Only a param the backend `requires:` is written, and every param's name is held to an identifier.
-  A backend whose `connection:` block reads a param it requires and does not derive, or reads one any way but a
-  bare `{{ param }}` (a filter, an expression, text beside it, a `{% %}` block, a list or a map), is refused as
-  `repository_data`: the drop-in would hold it unrendered. So is a `requires:` that is not a list of param names (a
-  YAML string made every check a substring test). The former code filled `network_os` by name for any backend that
-  required it; the registry now says how, so an operator's copy of `netcommon_cli` written before this change must
-  add `derive_params: {network_os: "{collection}.{name}"}`. An operator's backend whose `connection:` block reads a
-  required value set at run time (a group var) is refused too, where the former code planned it: drop the param from
-  the backend's `requires:` (the planner then leaves it for the class's group vars), or move that connection var
+  A backend whose `connection:` block reads a param it requires and does not derive, or names one anywhere in a
+  templated value but as a bare `{{ param }}` (a filter, an expression, text beside it, a `{% %}` block, an unclosed
+  `{{`, a `#jinja2:` header, or a list, a set or a map at any depth; a name built at render time is not seen), is
+  refused as `repository_data`: the drop-in would hold it unrendered. So is a `requires:` that is not a list of param
+  names (a YAML string made every check a substring test), by the planner, the scaffold and `GET /classify` / `galaxy
+  classify` alike (classify answered 500, and the CLI raised, for one). The former code filled `network_os` by name for
+  any backend that required it; the registry now says how, so an operator's copy of `netcommon_cli` written before this
+  change must add `derive_params: {network_os: "{collection}.{name}"}`. An operator's backend whose `connection:` block
+  reads a required value set at run time (a group var) is refused too, where the former code planned it: drop the param
+  from the backend's `requires:` (the planner then leaves it for the class's group vars), or move that connection var
   into the class's group vars. The planner reads no class's own `backend_params`, a reused class's included.
 - A templated `maps_to` (`api` and the generic union's `api_token`: `{cred_key}_api_token`) names the host var a
   token is written under. A template is a closed `{name}` grammar rendered to a fixed charset; a default or template
@@ -51,10 +53,11 @@ backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s o
 - API and GUI: `secrets` is optional on `POST /onboard` and `GET /onboard/cred-fields` — a blank value now means
   omitted (it was a 422) — and `cred-fields` answers the backend's default as its `secrets`, and shows the api
   token's descriptor with its template `maps_to` (`{cred_key}_api_token`), where it showed none. The onboard form's
-  domain box ships empty, its placeholder naming the backend's default (a reuse — an onboard of a collection the class under that key already declares (shipped, or onboarded before; under a class with `collections: []`, a collection ansible-core ships) — stores in that
-  class's own domain, whatever the box shows) or saying a domain is required; a typed domain now counts as input to
-  the form's collapse check. The CLI's `--secrets` has no default of its own, and a blank one means omitted, as in
-  the API.
+  domain box ships empty, its placeholder naming the backend's default (a reuse — an onboard of a collection the class
+  under that key already declares (shipped, or onboarded before; under a class with `collections: []`, a collection
+  ansible-core ships) — stores in that class's own domain, whatever the box shows) or saying a domain is required; a
+  typed domain now counts as input to the form's collapse check. The CLI's `--secrets` has no default of its own, and a
+  blank one means omitted, as in the API.
 
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 

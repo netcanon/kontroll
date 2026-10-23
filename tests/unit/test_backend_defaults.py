@@ -405,6 +405,7 @@ def test_a_required_connection_param_the_backend_does_not_derive_is_repository_d
         _lab_plan(copy)
     assert "network_os" in str(refused.value) and "derive_params" in str(refused.value)
     assert "requires:" in str(refused.value) and "ansible_network_os" in str(refused.value)
+    assert "out of its connection block" in str(refused.value)
     plan = _lab_plan(dict(copy, derive_params={"network_os": "{collection}.{name}"}))
     assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "acme.edgeos.edgeos"
 
@@ -413,23 +414,33 @@ _THROUGH = ["{{ network_os | lower }}", "{{network_os|lower}}", "{{ network_os }
             "x{{ network_os }}", "{{- network_os -}}", "{{ y }}{{ network_os }}", "{{ (network_os) }}",
             "{{ x | default(network_os) }}", "{% if true %}{{ network_os }}{% endif %}",
             "{% if network_os %}cisco.ios.ios{% endif %}", "{{ hostvars[inventory_hostname]['network_os'] }}",
-            ["{{ network_os }}"], {"a": "{{ network_os }}"}]
+            ["{{ network_os }}"], {"a": "{{ network_os }}"}, {"{{ network_os }}": 1}, [["{{ network_os }}"]],
+            {"a": {"b": "{{ network_os }}"}}, {"{{ network_os }}"}, "{{ x |\n network_os }}", "{{ network_os",
+            "{{ network_os }", "{{ '}}' ~ network_os }}",
+            "#jinja2:variable_start_string:'[[',variable_end_string:']]'\n[[ network_os ]]"]
 _THROUGH_IDS = ["filter", "filter-unspaced", "text-after", "concat", "text-before", "trim-markers", "second-expression",
-                "parenthesised", "default-arg", "statement", "statement-only", "hostvars", "list", "map"]
+                "parenthesised", "default-arg", "statement", "statement-only", "hostvars", "list", "map", "map-key",
+                "nested-list", "nested-map", "set", "multi-line", "unclosed", "single-close", "literal-close",
+                "override-header"]
 
 
 @pytest.mark.parametrize("value", _THROUGH, ids=_THROUGH_IDS)
 @pytest.mark.parametrize("derive", [None, {"network_os": "{collection}.{name}"}], ids=["underived", "derived"])
 def test_a_required_connection_param_read_through_an_expression_is_repository_data(probed, derive, value):
-    """A backend whose `connection:` block reads a required param any way but a bare `{{ network_os }}` — a filter
-    (spaced or not), text beside it, an expression it is not first in, whitespace control, a `{% %}` block (alone
-    too), a `hostvars` lookup, a list or a map — is refused as repository data naming the param and the bare form,
-    whether the backend derives it or not; for an underived param the refusal also names `derive_params`.
+    """A backend whose `connection:` block names a required param anywhere in a templated value but as a bare
+    `{{ network_os }}` — a filter (spaced or not), text beside it, an expression it is not first in, whitespace
+    control, a `{% %}` block (alone too), a `hostvars` lookup, a line break inside the braces, an unclosed or
+    single-closed `{{`, a `}}` inside a string literal, a `#jinja2:` header that changes the delimiters, or a list, a
+    set or a map (a key too) at any depth — is refused as repository data naming the param and the bare form, whether
+    the backend derives it or not; for an underived param the refusal also names `derive_params` and the run-time
+    edit (drop it from `requires:`).
 
     Guards the forms escaping F12's check: only a bare `{{ param }}` is filled from the derived params, so the
     drop-in would hold the expression unrendered and the first play would fail (T18's fold read, N5). The check
     first read only a value's first name, from a value that began with `{{`, and ten of these shapes passed it
-    (fold-2 read, S1; its mutants X4 and X5 survived every suite)."""
+    (fold-2 read, S1; its mutants X4 and X5 survived every suite); then it read whole `{{ }}`/`{% %}` blocks and
+    walked one level, and the unclosed, literal-close, header, set, map-key and nested shapes passed (fold-3 read,
+    S1 and N2: its mutants Y1-Y4)."""
     probed(**CLICONF)
     bdef = _lab(default_secrets_domain="lab", requires=["network_os"],
                 connection={"ansible_connection": "network_cli", "ansible_network_os": value})
@@ -439,6 +450,7 @@ def test_a_required_connection_param_read_through_an_expression_is_repository_da
         _lab_plan(bdef)
     assert "network_os" in str(refused.value) and "expression" in str(refused.value)
     assert ("derive_params" in str(refused.value)) == (derive is None)
+    assert ("value set at run time" in str(refused.value)) == (derive is None)
 
 
 @pytest.mark.parametrize("value", ["{{ network_os }}", "{{network_os}}", "  {{ network_os }}  ", "{{  network_os  }}"],
@@ -456,15 +468,17 @@ def test_a_bare_required_connection_param_is_filled_in_any_spacing(probed, value
     assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "acme.edgeos.edgeos"
 
 
-@pytest.mark.parametrize("requires", ["network_os", ["network_os", 5], {"network_os": 1}],
-                         ids=["string", "non-string-entry", "map"])
+@pytest.mark.parametrize("requires", ["network_os", ["network_os", 5], {"network_os": 1}, ["r\u00e9seau"], False, ""],
+                         ids=["string", "non-string-entry", "map", "non-identifier-entry", "false", "empty-string"])
 def test_a_requires_that_is_not_a_list_of_names_is_repository_data(probed, requires):
-    """A backend whose `requires:` is not a list of param names is refused as repository data naming `requires`, by
-    the planner and by the scaffold's `backend_params` alike.
+    """A backend whose `requires:` is not a list of param names — a string (empty too), `false`, a map, an entry that
+    is not a string or not an identifier — is refused as repository data naming `requires`, by the planner and by the
+    scaffold's `backend_params` alike; only an absent or `null` one means none.
 
     Guards a YAML string turning every `param in requires` test into a substring test (T18's fold-2 read, N4):
     `requires: network_os` refused a backend reading `{{ os }}` as if it required `os`, and would derive any param
-    whose name is a piece of the string."""
+    whose name is a piece of the string. An entry that is not an identifier was accepted and could never be derived
+    or read bare (fold-3 read, S1), and a falsy `requires:` read as none would hide the same fault (its mutant Y7)."""
     probed(**CLICONF)
     bdef = _lab(default_secrets_domain="lab", requires=requires, derive_params={"network_os": "{collection}.{name}"},
                 connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ os }}"})
@@ -475,16 +489,18 @@ def test_a_requires_that_is_not_a_list_of_names_is_repository_data(probed, requi
         onboard.backend_params(bdef, "acme.edgeos", "lab_cli")
 
 
-def test_a_connection_param_the_backend_does_not_require_is_left_for_run_time(probed):
-    """A backend whose `connection:` block reads a param it does not require plans, the param left as written for a
-    group var to define at run time; only a required param must be derived.
+@pytest.mark.parametrize("value", ["{{ site_os }}", "{{ site_os | lower }}"], ids=["bare", "filter"])
+def test_a_connection_param_the_backend_does_not_require_is_left_for_run_time(probed, value):
+    """A backend whose `connection:` block reads a param it does not require, bare or through a filter, plans, the
+    value left as written for a group var to define at run time; only a required param must be derived and read bare.
 
-    Guards F12's refusal widening to every `{{ … }}` in a `connection:` block (mutant M3 of T18's fold read): a
-    backend that reads a site's own group var through its connection block would then be refused."""
+    Guards F12's refusal widening to every `{{ … }}` in a `connection:` block (mutant M3 of T18's fold read), or the
+    expression rule to every templated value (mutant Y13 of its fold-3 read): a backend that reads a site's own group
+    var through its connection block would then be refused."""
     probed(**CLICONF)
     plan = _lab_plan(_lab(default_secrets_domain="lab", requires=[],
-                          connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ site_os }}"}))
-    assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "{{ site_os }}"
+                          connection={"ansible_connection": "network_cli", "ansible_network_os": value}))
+    assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == value
 
 
 def test_a_legacy_api_token_on_a_backend_without_the_template_gets_the_unions_var(probed):

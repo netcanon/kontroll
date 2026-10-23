@@ -8,12 +8,17 @@ method in module.yml is the source of truth, the vector is only a hint. No actua
 """
 import logging
 import os
+import re
 
 import yaml
 
 from kontroll import catalog, paths, predicate, probe
 
 log = logging.getLogger("kontroll.service.classify")
+
+# A param name a backend's `requires:` lists: the rule the onboard planner holds a `derive_params` key to (its
+# `_STEM_RE`, written again here because the planner imports this module).
+_PARAM_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
 
 # Suggestion map: a DETECTED collection plugin -> the telemetry method(s) an operator would pick. DATA, not
 # logic — extend by editing this dict. It is the suggestion layer, distinct from the telemetry/<method>.yml
@@ -36,6 +41,22 @@ _LOGGING_HINT = {
 }
 
 
+def requires_of(bdef, backend):
+    """The params `backend` requires: its registry entry's `requires:`, a list of param names (none when absent).
+    Anything else is the registry's fault, refused as repository data, by the onboard planner, the scaffold and
+    classify alike: a YAML string would turn every `in` test on it into a substring test (T18's fold-2 read, N4), and
+    a name that is not one could never be derived or filled (its fold-3 read, S1). Here, not in the planner, so
+    classify can read it: `GET /classify` answered 500, and `galaxy classify` raised, for one (that read, N3)."""
+    requires = bdef.get("requires")
+    if requires is None:
+        return []
+    if not (isinstance(requires, list) and all(isinstance(r, str) and _PARAM_NAME_RE.fullmatch(r) for r in requires)):
+        raise paths.RepositoryDataError(
+            "backend registry", "the %s backend's requires is not a list of param names — correct its backend.yml "
+            "under ansible/backends/" % backend)
+    return requires
+
+
 def service_classify(collection, backends=None):
     """Deep-probe `collection` and return {"collection","matches","best","requires","telemetry_declared"}
     (matches ordered best-first; best/requires describe the first match that declares an execution role — the
@@ -51,7 +72,7 @@ def service_classify(collection, backends=None):
     best = next((b for b in backends if b["name"] == first), None) if first else None
     return {"collection": collection, "matches": matches,
             "best": best["name"] if best else None,
-            "requires": (best.get("requires") or []) if best else [],
+            "requires": requires_of(best, best["name"]) if best else [],
             "telemetry_declared": declared_metrics_methods(collection)}
 
 

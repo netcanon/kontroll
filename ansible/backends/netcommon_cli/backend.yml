@@ -27,8 +27,8 @@ derive_params:
 default_secrets_domain: network
 role: backend_netcommon_cli       # the execution role (device class's device_role)
 # Connection vars the onboard planner renders into the host/group (network_os is
-# the param derive_params fills; a required param read here must be derived and read bare, as
-# `{{ network_os }}`, or the plan is refused).
+# the param derive_params fills; a required param named anywhere in a templated value here must be derived and
+# read bare, as `{{ network_os }}`, or the plan is refused; a name built at render time is not seen).
 connection:
   ansible_connection: network_cli
   ansible_network_os: "{{ network_os }}"

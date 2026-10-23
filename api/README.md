@@ -20,7 +20,7 @@ for a row whose route is gone.
 | `GET /units/{collection}` | — | the collection's runnable units (collection-shipped playbooks + roles; empty if it ships only modules; 404 if not installed) |
 | `POST /units/{key}/configure` | — | **write-free** (validates, stages nothing): re-check an actuation unit's submitted configure `values` against its curated knobs → `{key, ok, errors}` (404 if no such unit) |
 | `POST /units/preview` | — | **write-free** (renders, stages nothing): the Review-stage preview of what unit `key` would run with `values` → the would-run `play` + resolved `vars` + `check_first` + `enact` (404 no unit; 422 invalid values) |
-| `GET /classify/{collection}` | — | the fitting execution backend(s) (404 if not installed; 422 if the segment is not `namespace.name`) |
+| `GET /classify/{collection}` | — | the fitting execution backend(s) (404 if not installed; 422 if the segment is not `namespace.name`; 409 `repository_data` if the best backend's `requires:` is not a list of param names) |
 | `GET /health` | — | liveness `{status, service}` |
 | `POST /refresh` | token | rebuild the (gitignored) capability-matrix cache, written under the write root (the propose clone on a baked install) → `{count, run_id}` |
 | `POST /capture-exceptions` | token | add a capture-exception + commit + push the canonical → what changed |
@@ -70,22 +70,22 @@ repository's own data or layout — a class's module file holds a group, domain,
 credential field is declared with a name that is not one; a class's module file names no role and its backend
 declares none (or the backend's registry entry holds a role that is not a name); the backend registry's own data (a
 default domain, a `derive_params` entry or a `maps_to` template that does not render, a `requires:` that is not a
-list of param names, or a `connection:` param it requires and does not derive, or reads any way but a bare
-`{{ param }}`); a class's module file holds a `maps_to` template that neither its backend's registry entry nor the
-generic union declares for that field; a write target does not resolve inside the repository; a block of a module
-file is written with its value on the key's line, or twice — the answer
+list of param names, or a `connection:` param it requires and does not derive, or names anywhere in a templated
+value but as a bare `{{ param }}`); a class's module file holds a `maps_to` template that neither its backend's registry
+entry nor the generic union declares for that field; a write target does not resolve inside the repository; a block of a
+module file is written with its value on the key's line, or twice — the answer
 is **409** `repository_data` with a sentence that says where to look, and the audit action is `repository-refuse`:
 nothing in the request is wrong, and the remedy is the file or the layout. A `backend` an onboard sends must be one
 this install ships whose registry entry declares a `role:` (`ansible/backends/<name>/`) — a reuse (an onboard of a
-collection the class under that key already declares) whose module file declares its own role keeps that role, so
-there the entry needs none; any other is **422** `invalid_backend`, answered before the collection is probed. An onboard with no `backend` of a collection that
+collection the class under that key already declares, or, under a class with `collections: []`, a collection
+ansible-core ships) whose module file declares its own role keeps that role, so there the entry needs none; any other is
+**422** `invalid_backend`, answered before the collection is probed. An onboard with no `backend` of a collection that
 carries no signal a backend kontroll can run classifies on (S24 — `raw_ssh` is never auto-matched) is **422**
 `no_backend` with a sentence naming what it showed (plugin types and a module count, never a plugin's name) and the
 remedy — the Generic SSH host search result, the class key that already declares the collection, or (for a reuse of a
-class whose file declares no `backend:`) the line to add — audited `onboard-refuse reason=no-backend`.
-`POST /onboard`'s other 409 — a drop-in that exists with different content, answered without a
-`code` and retried with `overwrite` —
-is a different answer: key on `code`, not on the status.
+class whose file declares no `backend:`) the line to add — audited `onboard-refuse reason=no-backend`. `POST /onboard`'s
+other 409 — a drop-in that exists with different content, answered without a `code` and retried with `overwrite` — is a
+different answer: key on `code`, not on the status.
 
 ```bash
 export KONTROLL_API_TOKEN=…          # at deploy, sourced from SOPS like GUI_PASSWORD

@@ -288,7 +288,8 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
 1. **Onboard a device.** **Search** a collection → **Onboard this** → enter the device IP + creds → **Run** (tick
    *apply*). Behind the form: the creds are SOPS-encrypted, the module + inventory drop-in + fleet-enable are
    written, and the change is **staged** as `proposed/<run_id>` (never `main`). The `run_id` is in the result.
-   *(Onboarding a device of a class that already exists **reuses** that class — it adds only the host, #124.)*
+   *(Onboarding a collection that a class under the same key already declares **reuses** that class — it adds
+   only the host, #124; another collection under that key is a conflict.)*
 2. **(optional) Add a secondary capability.** Click a **telemetry / backup / logging** badge → pick a method →
    **Propose** (a pure plan + an anti-drift token) → **Promote** (also staged as `proposed/<run_id>`).
 3. **Promote** each proposal in the **Semaphore web app** — the §7 *Promote* walkthrough (the Pending panel's **copy
