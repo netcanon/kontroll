@@ -12,9 +12,9 @@ The rule reads the plays instead. Its scope is these tasks the control node runs
 - every task of a play under ansible/playbooks/ whose `hosts:` is the control node, or that sets the
   `ansible_connection: local` play var (a play var outranks a host's own), less a task delegated to anything but
   `localhost` or `127.0.0.1`. The control node is `localhost` or `127.0.0.1`: alone, as a list, or a string of them
-  joined by `,` or `:`; a templated `hosts:` is read by its `default('…')` literals, and one with none is not the
-  control node. And each task of any other play delegated to `localhost` or `127.0.0.1` (on itself or on a block
-  around it);
+  joined by `,` or `:`; a templated `hosts:` is read by its `default('…')` (or `d('…')`) string literals, and one
+  with none is not the control node. And each task of any other play delegated to `localhost` or `127.0.0.1` (on
+  itself or on a block around it);
 - every task file such a play imports or includes by a literal path, and the files those import in turn;
 - the tasks and handlers of every role such a play applies by a literal name (`include_role`, `import_role`,
   `roles:`).
@@ -23,8 +23,8 @@ There, a `command` / `shell` / `raw` task that declares itself read-only (`chang
 row in `_EXEMPT` that says why an empty value in a dry-run is right. "Anywhere else" is:
 - a YAML file under ansible/ (a play, a task file, a role), read through its parsed keys and values, so a comment is
   gone and a block scalar is whole (a `#` line in one is output Jinja still renders). A `register:` value is not a
-  read, nor is a `name:` value (a task's, or a module parameter's) that holds no `{{` or `{%`. A file the parser
-  refuses is read by lines, as a template is;
+  read, nor is a `name:` value (a task's, or a module parameter's) that is a string holding no `{{` or `{%` (a
+  list or a mapping under `name:` is read). A file the parser refuses is read by lines, as a template is;
 - a Jinja template in the tree (`.j2`, `.jinja2`), read by lines: every line counts but a `#` line, a `register:`
   line or a `name:` line that holds no `{{` or `{%`.
 Every other mention counts. For the flag, that errs on the safe side. For the stale check it does not: an `_EXEMPT`
@@ -39,9 +39,14 @@ What the scope does not reach:
 - the `connection: local` keyword, on a play, block or task: a host's own `ansible_connection` (its backend's and
   group_vars') overrides it, as `_render-ssh-keys.yml` records, so such a task runs where its hosts are. Nor a task's
   or block's own `vars: {ansible_connection: local}`;
-- a templated `delegate_to`, which is taken as a device: flagged, its advice (`check_mode: false`) would run a
-  device read for real in the dry-run. So a resolver delegated to `"{{ inventory_hostname }}"` from a local play, or
-  to `"{{ 'localhost' }}"` from a device play, is missed.
+- a templated `delegate_to`, which is taken as a device: were it flagged, its advice (`check_mode: false`) would
+  run a device read for real in the dry-run. So a resolver delegated to `"{{ inventory_hostname }}"` from a local
+  play, or to `"{{ 'localhost' }}"` from a device play, is missed;
+- a templated `hosts:` read by its default alone. One that defaults to `localhost` is taken as the control node,
+  though an `-e` may point it at devices, and a forced read in its roles then escapes the ban below. A list default
+  (`default(['localhost'])`) is read as a device play, and a literal joined to the template
+  (`"{{ a | default('localhost') }},switches"`) is not read. None of these is on the tree;
+- the `ansible_connection` play var set by `vars_files`, by a role's own `vars/`, or as `ansible.builtin.local`.
 
 Every other role is out of scope by rule: it runs against a device, where forcing a read to run under `--check`
 would execute the device command for real, so none of its tasks may carry `check_mode: false`.
@@ -102,15 +107,16 @@ def _tasks_of(path):
 
 
 def _is_control_node(play):
-    """Whether every task of `play` runs on the control node: it sets the `ansible_connection: local` play var, or
-    its `hosts:` names only `localhost` / `127.0.0.1`. A templated `hosts:` is read by its `default('…')` literals:
-    one that only mentions `localhost` (`hostvars['localhost']`, a `difference(['localhost'])`) is a device play."""
+    """Whether every task of `play` runs on the control node: it sets the `ansible_connection: local` play var, or its
+    `hosts:` names only `localhost` / `127.0.0.1`. A templated `hosts:` is read by its `default('…')` (or `d('…')`)
+    literals: one that only mentions `localhost` (`hostvars['localhost']`, a `difference(['localhost'])`) is a device
+    play."""
     hosts = play.get("hosts")
     play_vars = play.get("vars") if isinstance(play.get("vars"), dict) else {}
     if play_vars.get("ansible_connection") == "local":
         return True
     if isinstance(hosts, str) and ("{{" in hosts or "{%" in hosts):
-        hosts = ",".join(re.findall(r"default\(\s*['\"]([^'\"]*)['\"]", hosts))
+        hosts = ",".join(re.findall(r"\b(?:default|d)\(\s*['\"]([^'\"]*)['\"]", hosts))
         if not hosts:
             return False
     if isinstance(hosts, str):
@@ -200,11 +206,12 @@ def _is_read_line(line):
 
 def _scalars(node):
     """Every key and value a parsed YAML document holds, a block scalar whole, less the values that name a register
-    without reading it: a `register:` value, and a `name:` value that holds no Jinja."""
+    without reading it: a `register:` value, and a `name:` value that is a string holding no Jinja (a list or a
+    mapping under `name:`, a package list, is walked)."""
     if isinstance(node, dict):
         for key, value in node.items():
             yield str(key)
-            if key == "register" or key == "name" and not _templates(value):
+            if key == "register" or key == "name" and isinstance(value, str) and not _templates(value):
                 continue
             yield from _scalars(value)
     elif isinstance(node, list):
@@ -467,6 +474,8 @@ _EDGES = {
                                             "- ansible.builtin.debug:\n    msg: \"{{ _r.stdout }}\"\n"}, False),
     "named-only-in-task-names": (_LOCAL_PLAY + _read("collect (_r)", "_r")
                                  + "    - name: show _r\n      ansible.builtin.debug:\n        msg: hi\n", {}, False),
+    "read-in-a-name-list": (_READ_R + "    - ansible.builtin.package:\n        name: [\"{{ _r.stdout }}\", curl]\n",
+                            {}, True),
     "read-in-a-templated-name": (_READ_R + "    - name: \"show {{ _r.stdout }}\"\n      ansible.builtin.debug:\n"
                                  "        msg: hi\n", {}, True),
     "register-value-on-its-own-line": (_LOCAL_PLAY + "    - name: r\n      ansible.builtin.command: echo r\n"
@@ -485,6 +494,9 @@ _EDGES = {
     "hosts-comma-string": ("- hosts: localhost,127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), {}, True),
     "hosts-comma-space": ("- hosts: localhost, 127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), {}, True),
     "hosts-colon-string": ("- hosts: localhost:127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), {}, True),
+    "hosts-mixed": ("- hosts: localhost:switches\n  tasks:\n" + _read("r", "_r") + _use("_r"), {}, False),
+    "templated-hosts-d-alias": ("- hosts: \"{{ target | d('localhost') }}\"\n  tasks:\n" + _read("r", "_r")
+                                + _use("_r"), {}, True),
     "play-var-connection-local": ("- hosts: all\n  vars:\n    ansible_connection: local\n  tasks:\n"
                                   + _read("r", "_r") + _use("_r"), {}, True),
     "play-connection-keyword": ("- hosts: all\n  connection: local\n  tasks:\n" + _read("r", "_r") + _use("_r"),
@@ -504,15 +516,16 @@ def test_the_corpus_and_the_scope_at_their_edges(tmp_path, case):
     """One read-only resolver `_r`, flagged exactly where a later task can read it on the control node.
 
     Flagged: read only on a `#` line of a template (by `{{` or by `{%`) or of a block scalar (output Jinja renders),
-    in a `.jinja2` template, in a task name that templates it, or in a YAML file the parser refuses (a `!vault`
-    tag), which is read by lines; in a play whose `hosts:` is templated to default
-    to `localhost`, or is `localhost` and `127.0.0.1` joined by `,` (with or without a space) or `:`; in a play run
-    with the `ansible_connection` play var.
+    in a `.jinja2` template, in a task name that templates it, in a `name:` list (a package's), or in a YAML file
+    the parser refuses (a `!vault` tag), which is read by lines; in a play whose `hosts:` is templated to default
+    (by `default` or `d`) to `localhost`, or is `localhost` and `127.0.0.1` joined by `,` (with or without a space)
+    or `:`; in a play run with the `ansible_connection` play var.
 
     Not flagged: read only in a commented-out task or under `ansible_collections/`; named only in task names, on a
     template's `#` or `name:` line that holds no Jinja, by its own `register:` value on a line of its own, or by
     another play's `register:` of its own; in a play templated
     to default to a device group, to name a device group by `hostvars['localhost']`, or with no default; in a play
+    for `localhost:switches`, which names a device group too; in a play
     or task or block for `all` that sets only the `connection: local` keyword (a host's `ansible_connection`
     overrides it); or delegated to a device.
 
@@ -523,7 +536,8 @@ def test_the_corpus_and_the_scope_at_their_edges(tmp_path, case):
     wire-logging device play) taken as the control node, so a forced device read in its roles escaped the ban (N1);
     a commented-out read keeping a stale row alive (N3); the keyword taken as the control node (N5); `:` hosts
     (N6); and rules no row held (N7: `{%`, a templated name, the collections skip, the comma's space; and, once
-    YAML no longer reached them, a template's `#` and `name:` lines)."""
+    YAML no longer reached them, a template's `#` and `name:` lines). And its fold-4 read: a `name:` list dropped
+    whole, Jinja and all (N2); a mixed `hosts:` taken as local, which no row refused (N3); `d(…)` (N4)."""
     playbook, others, flagged = _EDGES[case]
     books = tmp_path / "ansible" / "playbooks"
     books.mkdir(parents=True)

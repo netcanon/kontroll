@@ -190,15 +190,18 @@ _COMPOSE_MODULES = ("community.docker.docker_compose_v2", "docker_compose_v2", "
 
 def _subcommands(text):
     """The subcommand of each `docker compose` / `docker-compose` call in `text`: the first word after `compose`
-    that is neither a global option nor the value of one. A `{{ … }}` is one word; a quote or a backslash ends a
-    word, and `;`, `&`, `|` or `)` the call."""
+    that is neither a global option, the value of one, nor a whole `{{ … }}`. A `{{ … }}` is one word, which may print
+    options and so is never taken as the subcommand (as an option's value it is that value); a `{% … %}` prints
+    nothing; a quote or a backslash ends a word, and `;`, `&`, `|` or `)` the call."""
     out = []
-    text = re.sub(r"\{\{.*?\}\}", "X", text, flags=re.S)
+    text = re.sub(r"\{%.*?%\}", " ", re.sub(r"\{\{.*?\}\}", "\0", text, flags=re.S), flags=re.S)
     for m in _COMPOSE.finditer(text):
         skip = False
         for word in re.split(r"[\s'\"\\]+", re.split(r"[;&|)]", text[m.end():], maxsplit=1)[0]):
             if not word or skip:
                 skip = skip and not word
+            elif word == "\0":
+                continue
             elif word.startswith("-"):
                 skip = word in _COMPOSE_VALUE_OPTIONS
             else:
@@ -409,11 +412,13 @@ _RENDER = """    - name: render
      + _RENDER.replace("\n    ", "\n        ").replace("    - ", "        - ", 1), True),
     (_RENDER + "      delegate_to: sw1\n", True),
     (_RENDER + "      delegate_to: localhost\n", False),
+    (_RENDER + "      delegate_to: 127.0.0.1\n", False),
+    (_RENDER + "      check_mode: \"yes\"\n", True),
 ], ids=["unconditional", "member", "member-of-two", "secrets-present", "another-service", "and-paren-group",
         "paren-group-and", "and-list",
         "block-condition", "another-path", "no-writer", "touch-via-stack-dir", "file-absent", "member-parens",
         "rescue-only", "tagged-never", "tagged-never-string", "always", "check-mode-true", "block-check-mode-true",
-        "delegated-away", "delegated-local"])
+        "delegated-away", "delegated-local", "delegated-loopback", "check-mode-yes-string"])
 def test_the_sweep_catches_a_conditionally_rendered_source(tmp_path, writer, flagged):
     """A planted fragment binding `../../conf/x.yml`, against a deploy-stack whose writer is unconditional, gated
     on the service's own membership (in paren terms too, the house style), or gated on something else: a
@@ -421,8 +426,9 @@ def test_the_sweep_catches_a_conditionally_rendered_source(tmp_path, writer, fla
     parenthesised membership group (either way round — the house style's shape), a conjunction, a condition on the
     enclosing block, a writer of another path, none, a `file` task that removes rather than creates, a writer only
     under `rescue:` or tagged `never` (as a list or a string). A writer under `always:` runs whatever its block
-    does, and passes. A writer that runs with `check_mode: true` (on itself or its block) never writes, and one
-    delegated to another host writes there: both are flagged; one delegated to localhost passes. Guards a sweep
+    does, and passes. A writer that runs with `check_mode: true` (on itself or its block, or as the string `"yes"`)
+    never writes, and one delegated to another host writes there: both are flagged; one delegated to localhost or
+    127.0.0.1 passes. Guards a sweep
     that cannot fail, one that reads only the task's own `when:` and not its block's, and a membership split that
     skips the terms it cannot read (T24's read, F1); a membership test refused for its parens, or a writer that runs
     only on a failure or on request counted as one that always runs (its fold-2 read, N1 and N6); and the
@@ -448,7 +454,18 @@ _UPS = {
     "sh-c-quoted": "      ansible.builtin.command: sh -c 'docker compose up'\n",
     "then-semicolon": "      ansible.builtin.shell: docker compose up; echo done\n",
     "then-and": "      ansible.builtin.shell: docker compose up&&echo done\n",
-    "options-first": "      ansible.builtin.command: docker compose -f /srv/x.yml --profile web --dry-run up -d x\n",
+    "options-first": ("      ansible.builtin.command: docker compose -f /srv/x.yml -p x --profile web --compatibility"
+                      " up -d x\n"),
+    "templated-option": "      ansible.builtin.command: docker compose {{ compose_opts }} up -d x\n",
+    "templated-option-over-lines": ("      ansible.builtin.shell: |\n        docker compose {{ compose_opts\n"
+                                    "          | default('') }} up -d x\n"),
+    "statement-option": "      ansible.builtin.shell: docker compose {% if web %}--profile web{% endif %} up -d x\n",
+    "statement-over-lines": ("      ansible.builtin.shell: |\n        docker compose {% if web\n"
+                             "          %}--profile web{% endif %} up -d x\n"),
+    "spaced": "      ansible.builtin.command: docker  compose up -d x\n",
+    "shell-continued": ("      ansible.builtin.shell: |\n        docker compose \\\n"
+                        "          --project-directory /srv/stack \\\n          up -d x\n"),
+    "in-a-subshell": "      ansible.builtin.shell: (cd /srv/stack && docker compose up)\n",
     "legacy-binary": "      ansible.builtin.command: docker-compose up -d x\n",
 }
 
@@ -456,14 +473,16 @@ _UPS = {
 @pytest.mark.parametrize("up", sorted(_UPS))
 @pytest.mark.parametrize("later_play", [False, True], ids=["same-play", "later-play"])
 def test_a_writer_after_the_up_is_too_late(tmp_path, up, later_play):
-    """The render placed after the stack's bring-up does not provision the source, whichever way the bring-up is
-    written — a folded or literal `cmd`, `argv`, free form, `args: {cmd: …}`, `shell`, `raw`, the compose module (v2
-    or v1), a `run` or `create`, which create the sources too, an `up` inside a quoted `sh -c` or followed by `;` or
-    `&&`, one after global options and their values, or the `docker-compose` binary — and whether the render is in
-    the same play or a later one. Guards a writer moved below the bring-up, where Docker has already created the
-    directory, and a detector that stops looking for the bring-up at a reformat or a play boundary (T24's read, F2),
-    or at a shape it does not read, when an earlier bring-up in that shape ends the window (its fold-2 read, N7;
-    its fold-3 read, N2: an `up` before punctuation)."""
+    """The render placed after the stack's bring-up does not provision the source, whichever way the bring-up is written
+    — a folded or literal `cmd`, `argv`, free form, `args: {cmd: …}`, `shell`, `raw`, the compose module (v2 or v1), a
+    `run` or `create`, which create the sources too, an `up` inside a quoted `sh -c` or followed by `;` or `&&`, one
+    after global options and their values, a templated option (on one line or over several) or a `{% … %}` one, written
+    over shell line continuations or in a subshell, or the `docker-compose` binary — and whether the render is in the
+    same play or a later one. Guards a writer moved below the bring-up, where Docker has already created the directory,
+    and a detector that stops looking for the bring-up at a reformat or a play boundary (T24's read, F2), or at a shape
+    it does not read, when an earlier bring-up in that shape ends the window (its fold-2 read, N7; its fold-3 read, N2:
+    an `up` before punctuation; its fold-4 read, N1: a `{{ … }}` or `{%` taken as the subcommand, and N5: `-p`, a
+    backslash and `)` held by no row)."""
     play = "- hosts: localhost\n  tasks:\n    - name: up\n%s%s%s" % (
         _UPS[up], "- hosts: localhost\n  tasks:\n" if later_play else "", _RENDER)
     root = _plant(tmp_path, _FRAG, play)
