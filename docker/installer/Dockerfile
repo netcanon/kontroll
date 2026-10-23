@@ -41,10 +41,10 @@ RUN apt-get update -qq \
 # scripts/install-prereqs.sh exactly (same Signed-By, no "Conflicting values" if the two ever co-exist). The key
 # file's SHA-256 is checked before apt trusts it: a swapped key would let any package through. Docker has served
 # the same key since 2017; if it rotates, this build fails until the new key's checksum is read and pinned here.
-ARG DOCKER_APT_KEY_SHA256=1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+ARG DOCKER_APT_GPG_SHA256=1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
 RUN install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
- && echo "$DOCKER_APT_KEY_SHA256  /etc/apt/keyrings/docker.asc" | sha256sum -c - \
+ && echo "$DOCKER_APT_GPG_SHA256  /etc/apt/keyrings/docker.asc" | sha256sum -c - \
  && chmod a+r /etc/apt/keyrings/docker.asc \
  && printf 'Types: deb\nURIs: https://download.docker.com/linux/debian\nSuites: bookworm\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n' \
       "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.sources \
