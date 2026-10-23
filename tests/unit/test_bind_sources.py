@@ -23,9 +23,11 @@ The rule reads the tree; there is no allow-list. A source written relative to it
   `docker-compose`) call in the playbook whose subcommand is `up`, `run` or `create` (which create the sources
   too), in any play, run by `command` (`cmd`, free form, `argv` or `args: {cmd: …}`), `shell` or `raw`, or a compose
   module task (`docker_compose_v2`, or v1's `docker_compose`) that does not stop the stack; a writer after it, in
-  any play, is too late. The subcommand is the first word after `compose` that is not a global option or the value
-  of one (`-f`, `-p`, `--project-directory`, `--profile`, …); a `{{ … }}` is one word, and a call ends at `;`, `&`,
-  `|` or `)`. The tree has exactly one bring-up, and the test says so.
+  any play, is too late. The subcommand is the first word after `compose` that is not a global option, the value
+  of one (`-f`, `-p`, `--project-directory`, `--profile`, …) or a whole `{{ … }}`; after a `{% … %}`, or a
+  `{{ … }}` where the subcommand would be, any later `up`, `run` or `create` word of the call counts too (the
+  template may choose it). A call ends at `;`, `&`, `|` or `)`. The tree has exactly one bring-up, and the test says
+  so.
 
 An env_file is held to the same rule even where it is `required: false`: compose then starts the service without
 its settings, and nothing says so.
@@ -38,7 +40,9 @@ What the rule cannot see:
   membership the rule reads, so the tree test asserts caddy starts none;
 - a bring-up in a shape other than those above (a script that runs compose, a command built from a var, a
   `docker` global option before `compose`): the window then ends at a later bring-up, or never. A value-taking
-  global option the sweep does not list has its value read as the subcommand;
+  global option the sweep does not list has its value read as the subcommand, and a subcommand a `{{ … }}` prints
+  (`docker compose {{ verb }} -d api`) is not read. The other way, a templated call whose later argument is the
+  word `up`, `run` or `create` (`docker compose {{ opts }} exec x create`) is read as a bring-up: loud;
 - a play that guarantees a dependency some other way (an assert, a `--no-deps` bring-up): the rule still asks the
   writer to name the starters, and refuses a safe one;
 - a writer in a task file deploy-stack imports, or one whose path names a var the sweep cannot resolve: refused,
@@ -189,23 +193,32 @@ _COMPOSE_MODULES = ("community.docker.docker_compose_v2", "docker_compose_v2", "
 
 
 def _subcommands(text):
-    """The subcommand of each `docker compose` / `docker-compose` call in `text`: the first word after `compose`
+    """The subcommands of each `docker compose` / `docker-compose` call in `text`: the first word after `compose`
     that is neither a global option, the value of one, nor a whole `{{ … }}`. A `{{ … }}` is one word, which may print
-    options and so is never taken as the subcommand (as an option's value it is that value); a `{% … %}` prints
-    nothing; a quote or a backslash ends a word, and `;`, `&`, `|` or `)` the call."""
+    options and so is never taken as the subcommand (as an option's value it is that value). A `{% … %}` may choose
+    any word after it (`--profile {% if a %}web{% else %}core{% endif %} up`, `{% if b %}restart{% else %}up{% endif
+    %}`), and a `{{ … }}` met where the subcommand would be may print an option's name: after either, every later
+    `up`, `run` or `create` word of the call is taken as a subcommand too. A `{# … #}` prints nothing; a quote or a
+    backslash ends a word, and `;`, `&`, `|` or `)` the call."""
     out = []
-    text = re.sub(r"\{%.*?%\}", " ", re.sub(r"\{\{.*?\}\}", "\0", text, flags=re.S), flags=re.S)
+    text = re.sub(r"\{#.*?#\}", " ", text, flags=re.S)
+    text = re.sub(r"\{%.*?%\}", " \1 ", re.sub(r"\{\{.*?\}\}", "\0", text, flags=re.S), flags=re.S)
     for m in _COMPOSE.finditer(text):
-        skip = False
-        for word in re.split(r"[\s'\"\\]+", re.split(r"[;&|)]", text[m.end():], maxsplit=1)[0]):
-            if not word or skip:
+        skip, templated = False, False
+        words = re.split(r"[\s'\"\\]+", re.split(r"[;&|)]", text[m.end():], maxsplit=1)[0])
+        for i, word in enumerate(words):
+            if word == "\1":
+                templated = True
+            elif not word or skip:
                 skip = skip and not word
             elif word == "\0":
-                continue
+                templated = True
             elif word.startswith("-"):
                 skip = word in _COMPOSE_VALUE_OPTIONS
             else:
                 out.append(word)
+                if templated:
+                    out += [w for w in words[i + 1:] if w in _CREATES]
                 break
     return out
 
@@ -433,7 +446,7 @@ def test_the_sweep_catches_a_conditionally_rendered_source(tmp_path, writer, fla
     skips the terms it cannot read (T24's read, F1); a membership test refused for its parens, or a writer that runs
     only on a failure or on request counted as one that always runs (its fold-2 read, N1 and N6); and the
     `never` string and `always:` rules no row held, and a writer that never writes on the box counted as one (its
-    fold-3 read, N7 and N9)."""
+    fold-3 read, N7 and N9); and the loopback and `"yes"` rules no row held (its fold-4 read, N5: M8, M10)."""
     root = _plant(tmp_path, _FRAG, _PLAY % writer.rstrip("\n"))
     assert bool(unprovided(root)) is flagged, unprovided(root)
 
@@ -462,6 +475,12 @@ _UPS = {
     "statement-option": "      ansible.builtin.shell: docker compose {% if web %}--profile web{% endif %} up -d x\n",
     "statement-over-lines": ("      ansible.builtin.shell: |\n        docker compose {% if web\n"
                              "          %}--profile web{% endif %} up -d x\n"),
+    "statement-else-option": ("      ansible.builtin.shell: docker compose --profile {% if web %}web{% else %}core"
+                              "{% endif %} up -d x\n"),
+    "subcommand-in-an-else": ("      ansible.builtin.shell: docker compose {% if warm %}restart{% else %}up -d"
+                              "{% endif %} x\n"),
+    "templated-option-name": "      ansible.builtin.shell: docker compose {{ profile_flag }} web up -d x\n",
+    "jinja-comment": "      ansible.builtin.shell: \"docker compose {# the stack #} up -d x\"\n",
     "spaced": "      ansible.builtin.command: docker  compose up -d x\n",
     "shell-continued": ("      ansible.builtin.shell: |\n        docker compose \\\n"
                         "          --project-directory /srv/stack \\\n          up -d x\n"),
@@ -476,13 +495,16 @@ def test_a_writer_after_the_up_is_too_late(tmp_path, up, later_play):
     """The render placed after the stack's bring-up does not provision the source, whichever way the bring-up is written
     — a folded or literal `cmd`, `argv`, free form, `args: {cmd: …}`, `shell`, `raw`, the compose module (v2 or v1), a
     `run` or `create`, which create the sources too, an `up` inside a quoted `sh -c` or followed by `;` or `&&`, one
-    after global options and their values, a templated option (on one line or over several) or a `{% … %}` one, written
-    over shell line continuations or in a subshell, or the `docker-compose` binary — and whether the render is in the
-    same play or a later one. Guards a writer moved below the bring-up, where Docker has already created the directory,
-    and a detector that stops looking for the bring-up at a reformat or a play boundary (T24's read, F2), or at a shape
-    it does not read, when an earlier bring-up in that shape ends the window (its fold-2 read, N7; its fold-3 read, N2:
-    an `up` before punctuation; its fold-4 read, N1: a `{{ … }}` or `{%` taken as the subcommand, and N5: `-p`, a
-    backslash and `)` held by no row)."""
+    after global options and their values, a templated option (a `{{ … }}` or a `{% … %}`, each on one line or over
+    several), an `{% if %}…{% else %}` that chooses an option's value or the subcommand, an option's name a
+    `{{ … }}` prints, a `{# … #}` before the subcommand, `docker` and `compose` two spaces apart, written over shell
+    line continuations or in a subshell, or the `docker-compose` binary — and whether the render is in the same play
+    or a later one. Guards a writer moved below the bring-up, where Docker has
+    already created the directory, and a detector that stops looking for the bring-up at a reformat or a play
+    boundary (T24's read, F2), or at a shape it does not read, when an earlier bring-up in that shape ends the window
+    (its fold-2 read, N7; its fold-3 read, N2: an `up` before punctuation; its fold-4 read, N1: a `{{ … }}` or `{%`
+    taken as the subcommand, and N5 and M14: `-p`, a backslash, `)` and the double space held by no row; its fold-5
+    read, N1: an `{% else %}` branch taken as the subcommand)."""
     play = "- hosts: localhost\n  tasks:\n    - name: up\n%s%s%s" % (
         _UPS[up], "- hosts: localhost\n  tasks:\n" if later_play else "", _RENDER)
     root = _plant(tmp_path, _FRAG, play)

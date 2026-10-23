@@ -32,14 +32,14 @@ digest" assert. Both faults are fixed; the guards now read the tree.
   shapes: `command` (`cmd`, free form, `argv`, `args: {cmd: …}`), `shell`, `raw`, the compose module (v2 or v1),
   or a `run` or `create`. A compose call's subcommand is the first word after `compose` that is not a global
   option, an option's value or a `{{ … }}` (which may print options), so an `exec … create` is not a bring-up and an
-  `up;` is. Where the tree is a git
-  checkout, a rendered file git does not track is not in it. It replaces
-  `test_loki_and_vector_config_bind_sources_exist`.
+  `up;` is; after a `{% … %}` (which may choose any word after it), or a `{{ … }}` where the subcommand would be, a
+  later `up`, `run` or `create` counts too. Where the tree is a git checkout, a rendered file git does not track is
+  not in it. It replaces `test_loki_and_vector_config_bind_sources_exist`.
 - `tests/unit/test_check_mode_resolvers.py`: in every control-node play (`hosts:` of `localhost` or
-  `127.0.0.1` — a list, a string joined by `,` or `:`, or a templated value whose `default('…')` literals name
-  only those — or the `ansible_connection: local` play var), less a task delegated anywhere else, and every task
-  delegated to `localhost`, in the task files those import at any depth, and in the roles they apply, a
-  read-only `command` / `shell` / `raw` task whose register is read anywhere under `ansible/` or in a Jinja
+  `127.0.0.1` — a list, a string joined by `,` or `:`, or a templated value whose `default('…')` or `d('…')`
+  literals name only those — or the `ansible_connection: local` play var), less a task delegated anywhere else,
+  and every task delegated to `localhost`, in the task files those import at any depth, and in the roles they
+  apply, a read-only `command` / `shell` / `raw` task whose register is read anywhere under `ansible/` or in a Jinja
   template carries `check_mode: false` (on itself or its block), or has an exemption row that says why an empty
   value is right in a dry-run. The `connection: local` keyword does not count: a host's own `ansible_connection`
   overrides it. YAML is read through its parsed values, so a comment is not a read; nor is a `register:` value,

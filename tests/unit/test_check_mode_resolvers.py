@@ -476,6 +476,10 @@ _EDGES = {
                                  + "    - name: show _r\n      ansible.builtin.debug:\n        msg: hi\n", {}, False),
     "read-in-a-name-list": (_READ_R + "    - ansible.builtin.package:\n        name: [\"{{ _r.stdout }}\", curl]\n",
                             {}, True),
+    "read-in-a-name-mapping": (_READ_R + "    - some.mod:\n        name:\n          first: \"{{ _r.stdout }}\"\n",
+                               {}, True),
+    "templated-hosts-other-call": ("- hosts: \"{{ t | odd('localhost') }}\"\n  tasks:\n" + _read("r", "_r")
+                                   + _use("_r"), {}, False),
     "read-in-a-templated-name": (_READ_R + "    - name: \"show {{ _r.stdout }}\"\n      ansible.builtin.debug:\n"
                                  "        msg: hi\n", {}, True),
     "register-value-on-its-own-line": (_LOCAL_PLAY + "    - name: r\n      ansible.builtin.command: echo r\n"
@@ -516,15 +520,17 @@ def test_the_corpus_and_the_scope_at_their_edges(tmp_path, case):
     """One read-only resolver `_r`, flagged exactly where a later task can read it on the control node.
 
     Flagged: read only on a `#` line of a template (by `{{` or by `{%`) or of a block scalar (output Jinja renders),
-    in a `.jinja2` template, in a task name that templates it, in a `name:` list (a package's), or in a YAML file
-    the parser refuses (a `!vault` tag), which is read by lines; in a play whose `hosts:` is templated to default
+    in a `.jinja2` template, in a task name that templates it, in a `name:` list (a package's) or mapping, or in a
+    YAML file the parser refuses (a `!vault` tag), which is read by lines; in a play whose `hosts:` is templated to
+    default
     (by `default` or `d`) to `localhost`, or is `localhost` and `127.0.0.1` joined by `,` (with or without a space)
     or `:`; in a play run with the `ansible_connection` play var.
 
     Not flagged: read only in a commented-out task or under `ansible_collections/`; named only in task names, on a
     template's `#` or `name:` line that holds no Jinja, by its own `register:` value on a line of its own, or by
     another play's `register:` of its own; in a play templated
-    to default to a device group, to name a device group by `hostvars['localhost']`, or with no default; in a play
+    to default to a device group, to name a device group by `hostvars['localhost']`, with no default, or through
+    another call whose name ends in `d` (`odd('localhost')` is no `d('…')`); in a play
     for `localhost:switches`, which names a device group too; in a play
     or task or block for `all` that sets only the `connection: local` keyword (a host's `ansible_connection`
     overrides it); or delegated to a device.
@@ -537,7 +543,8 @@ def test_the_corpus_and_the_scope_at_their_edges(tmp_path, case):
     a commented-out read keeping a stale row alive (N3); the keyword taken as the control node (N5); `:` hosts
     (N6); and rules no row held (N7: `{%`, a templated name, the collections skip, the comma's space; and, once
     YAML no longer reached them, a template's `#` and `name:` lines). And its fold-4 read: a `name:` list dropped
-    whole, Jinja and all (N2); a mixed `hosts:` taken as local, which no row refused (N3); `d(…)` (N4)."""
+    whole, Jinja and all (N2); a mixed `hosts:` taken as local, which no row refused (N3); `d(…)` (N4). And its
+    fold-5 read, N4: the `name:` mapping walk and the word boundary before `d(`, which no row held."""
     playbook, others, flagged = _EDGES[case]
     books = tmp_path / "ansible" / "playbooks"
     books.mkdir(parents=True)
