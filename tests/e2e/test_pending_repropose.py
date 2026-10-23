@@ -14,20 +14,9 @@ import json
 import pytest
 from playwright.sync_api import expect
 
-pytestmark = pytest.mark.e2e
+import _canned
 
-_STALE_ONBOARD = {
-    "proposals": [{
-        "run_id": "abc123def456", "ref": "refs/heads/proposed/abc123def456", "sha": "de" * 20,
-        "staged_at": "2026-07-05T00:00:00+00:00", "author": "kontroll",
-        "subject": "feat(onboard): stage cisco_ios",
-        "paths": ["instance/inventory/onboarded-cisco_ios.yml", "modules/cisco_ios/module.yml"],
-        "changes": [{"status": "A", "path": "instance/inventory/onboarded-cisco_ios.yml", "exact": True},
-                    {"status": "M", "path": "modules/cisco_ios/module.yml", "exact": True}],
-        "promotable": False,                                   # the FF-race: main advanced past it
-        "repropose_hint": {"kind": "onboard", "key": "cisco_ios"}}],
-    "unrecognised": [],
-    "canonical": "/srv/kontroll.git", "promote_task": "promote-proposal", "note": None}
+pytestmark = pytest.mark.e2e
 
 
 def _mock_pending(page, payload):
@@ -42,7 +31,7 @@ def test_stale_proposal_offers_re_propose_to_the_class(page):
     stale hint's prose ("re-run the same onboard dialog") wired to a working button. The onboard form is pre-ROUTED,
     NOT pre-filled with host/creds (a path name yields only the class; the human re-enters the rest — apply stays
     unchecked)."""
-    _mock_pending(page, _STALE_ONBOARD)
+    _mock_pending(page, _canned.PENDING_STALE_ONBOARD)
     page.goto("/")
     page.get_by_test_id("pending-open").click()
     row = page.get_by_test_id("pending-row").first
@@ -62,7 +51,7 @@ def test_promotable_proposal_has_no_re_propose_button(page):
     """A PROMOTABLE (fast-forwardable) proposal shows neither the stale badge NOR a re-propose button — it gets the
     normal Semaphore promote-hint. Guards the gate: re-propose is a STALE-only affordance (a healthy proposal must
     not be nudged to re-propose)."""
-    ok = json.loads(json.dumps(_STALE_ONBOARD))
+    ok = json.loads(json.dumps(_canned.PENDING_STALE_ONBOARD))
     ok["proposals"][0]["promotable"] = True
     _mock_pending(page, ok)
     page.goto("/")

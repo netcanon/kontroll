@@ -11,6 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test: a canned shape lives once and is held to the real function's (T21 / S33, 2026-10-22)
+
+No runtime change. The dicts the browser suite and the route tests are served in place of a service call were
+written by hand, some of them twice, and nothing compared one with what the function returns. Compared, several had
+drifted: the Pending panel's payload lacked `changes_read`, `note_kind`, `main_note` and `skipped_note`, the discard
+answer lacked `run_id_audit` and its refusal `run_id`, both homepage mocks lacked keys the board and the plan carry,
+a route test's copy of the discovery inbox lacked `vendor`, the keygen e2e's answer lacked `placement`,
+`private_key_path`, `recipient_domains`, `high_blast` and `sops_updatekeys` (and named `main` where nothing changed,
+where the route names no ref), and the unit-pick e2e's list lacked `collection` and each unit's `id`.
+
+- `tests/_canned.py` holds each canned dict once; the e2e conftest, the Discard, Re-propose, keygen and unit-pick e2e
+  tests and the route tests read it, and each seam hands out a copy. A few bodies are still written by hand in
+  their tests; `tests/README.md` lists them.
+- `tests/unit/test_mock_conformance.py` builds the smallest real fixture for each, calls the real function (the
+  keygen answer through the real route) and compares key sets and value types. A seam the e2e server replaces with
+  no row fails it, and so does one it does not hand back to be restored, or one replaced in a form the file's parse
+  refuses (a nested target, a `setattr` by a variable name or handed on, a monkeypatch object's `.setattr`, an
+  assignment through an imported name outside the seam function, `unittest.mock`, or a write through `__dict__`,
+  `vars` or `exec`), or a conftest without its one restore loop. The forms the parse does not read (among them a
+  replacement outside the seam function through a name that is not an import, a patching fixture, one made in
+  another file; `_seams`' docstring names more) are held by review.
+- Round-trip tests feed a generator's real output to its real reader: gen-backup's schedules file to
+  configure-semaphore (driven against a fake Semaphore; the retention and destination it describes the template
+  with), gen-requirements' trust sidecar to the provenance view (its pins, policies, default policy and keyring),
+  and a ref the real stager pushed to the Pending list.
+
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 
 `ping.yml` decides a host is reachable with a TCP connect from the control node, on `mgmt_port` or 22 — and nothing

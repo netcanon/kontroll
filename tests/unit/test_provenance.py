@@ -8,7 +8,11 @@ WHY (the failures these guard):
     sidecar isn't generated yet (a fresh tree pre-bootstrap) — never raise (the in-process GUI must survive).
   * the read must NEVER gain a write/actuation path (read-only-by-construction; INVARIANT D*).
 """
+import importlib.util
+import os
+
 import pytest
+import yaml
 
 from _readonly_pins import assert_read_only
 from kontroll import paths
@@ -30,6 +34,46 @@ def _write_sidecar(tmp, policy="adaptive"):
     for name, ver in cols:
         body += '  - name: %s\n    version: "%s"\n    signature_policy: %s\n    sha256: null\n' % (name, ver, policy)
     p.write_text(body, encoding="utf-8")
+
+
+def test_reads_the_sidecar_gen_requirements_writes(tmp_path, monkeypatch):
+    """fleet_provenance, reading the trust sidecar gen-requirements renders for the example fleet, is available,
+    lists one row per collection the sidecar names, in its order, each with the sidecar's pin and policy, and reads
+    the sidecar's default policy and its keyring (present once the file it names exists).
+
+    Guards the Supply-chain panel going silently empty, or losing a column, after a key is renamed on one side: the
+    other tests here read a sidecar written by hand, so they pass whatever the generator writes (S33)."""
+    root = paths.ROOT
+    spec = importlib.util.spec_from_file_location("gen_requirements", os.path.join(root, "scripts",
+                                                                                   "gen-requirements.py"))
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    with open(os.path.join(root, "instance.example", "fleet.yml"), encoding="utf-8") as fh:
+        fleet = yaml.safe_load(fh)
+    out, prov = gen.compute(paths.enabled_keys(fleet), os.path.join(root, "actuation"))
+    # One collection declares a policy of its own, as an actuation unit's provenance does, so a per-collection key
+    # the reader looked for under another name would show — not fall back to the default, which every other carries.
+    prov = dict(prov, **{out[0]["name"]: {"signature_policy": "none"}})
+    text = gen.render_sidecar(out, prov, fleet.get("signature_policy") or "adaptive",
+                              fleet.get("keyring") or gen.DEFAULT_KEYRING)
+    written = yaml.safe_load(text)["collections"]
+    assert written and written[0]["signature_policy"] == "none", "the sidecar did not carry the declared policy"
+
+    monkeypatch.setattr(paths, "ROOT", str(tmp_path))
+    (tmp_path / _SIDECAR).parent.mkdir(parents=True)
+    (tmp_path / _SIDECAR).write_bytes(text.encode("utf-8"))
+    view = fleet_provenance()
+    assert view["available"] is True and view["summary"]["total"] == len(written)
+    assert [row["name"] for row in view["collections"]] == [c["name"] for c in written]
+    for row, c in zip(view["collections"], written):
+        assert row["pin"] == c["version"] and row["policy"] == c["signature_policy"], c["name"]
+    side = yaml.safe_load(text)
+    assert view["default_policy"] == side["default_signature_policy"]
+    assert view["keyring_present"] is False                           # the file the sidecar names is not there yet
+    assert not os.path.isabs(side["keyring"]), "the example keyring must be repo-relative for this test"
+    (tmp_path / side["keyring"]).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / side["keyring"]).write_bytes(b"keyring")
+    assert fleet_provenance()["keyring_present"] is True
 
 
 @pytest.fixture
