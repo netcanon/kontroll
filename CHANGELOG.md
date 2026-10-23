@@ -25,19 +25,26 @@ digest" assert. Both faults are fixed; the guards now read the tree.
   included, is in the tree; or it is an `instance/` path `kontroll-init --fresh` scaffolds (its exceptions
   mirrored, and checked against the scaffold); or a `deploy-stack.yml` task before the stack's one bring-up
   writes it whenever the service runs. The writer's `when:`, and its blocks', may only test `stack_services`
-  membership, and must name the service and every service that starts it through `depends_on`. Planted cases
-  show a secrets-present condition, another service's, a credentials test ANDed with a membership group, a
-  block's condition, and a writer after the bring-up are flagged, the bring-up written in any of the shapes a
-  reformat could give it. It replaces `test_loki_and_vector_config_bind_sources_exist`.
-- `tests/unit/test_check_mode_resolvers.py`: in every control-node play (`localhost` or `127.0.0.1`, a list of
-  them, `connection: local`) and every task delegated to `localhost`, in the task files those import at any
-  depth, and in the roles they apply, a read-only `command` / `shell` / `raw` task whose register is read
-  anywhere under `ansible/` or in a Jinja template carries `check_mode: false` (on itself or its block), or has
-  an exemption row that says why an empty value is right in a dry-run. Three rows today: the two bootstrap key
-  reads (the key is not minted in a dry-run on a fresh node) and the post-deploy `ps`. A row whose read is gone
-  or forced fails as stale. No `command` / `shell` / `raw` task of any other role, `.role-template` included,
-  may carry `check_mode: false`, since that role runs against a device. It replaces the `_RESOLVERS` list;
-  `test_deploy_stack_check_mode.py` keeps the keystone resolver and the boundary that keeps writers skipped.
+  membership, and must name the service and every service that starts it through `depends_on`; a writer under
+  `rescue:` or tagged `never` does not count. Planted cases show a secrets-present condition, another
+  service's, a credentials test ANDed with a membership group, a block's condition, and a writer after the
+  bring-up are flagged, the bring-up written in any of these shapes: `command` (`cmd`, free form, `argv`,
+  `args: {cmd: …}`), `shell`, `raw`, the compose module (v2 or v1), or a `run` or `create`. Where the tree is a
+  git checkout, a rendered file git does not track is not in it. It replaces
+  `test_loki_and_vector_config_bind_sources_exist`.
+- `tests/unit/test_check_mode_resolvers.py`: in every control-node play (`hosts:` of `localhost` or
+  `127.0.0.1` — a list, a comma-separated string, or a templated value naming either — or `connection: local`,
+  the keyword or the play var), less a task delegated elsewhere, and every task delegated to `localhost` or run
+  with `connection: local`, in the task files those import at any depth, and in the roles they apply, a
+  read-only `command` / `shell` / `raw` task whose register is read anywhere under `ansible/` or in a Jinja
+  template carries `check_mode: false` (on itself or its block), or has an exemption row that says why an empty
+  value is right in a dry-run. A comment, a `register:` line and a task's name are not reads unless they hold
+  Jinja. Three rows today: the two bootstrap key reads (the key is not minted in a dry-run on a fresh node) and
+  the post-deploy `ps`. A row whose read is forced, or whose register is gone from everywhere under `ansible/`
+  and every template, fails as stale; any other mention of that name keeps it. No `command` / `shell` / `raw`
+  task of any other role, `.role-template` included, may carry `check_mode: false`, since that role runs against
+  a device. It replaces the `_RESOLVERS` list; `test_deploy_stack_check_mode.py` keeps the keystone resolver and
+  the boundary that keeps writers skipped.
 - No play changed. The canonical's reads that the plan expected the sweep to flag were rewritten into
   `_land_check`, which runs in a dry-run. Promote's were folded into the promote script, a writer, so
   `promote.yml`'s dry-run still previews nothing — out of this sweep's class.

@@ -8,18 +8,28 @@ fail where it is skipped — the mandated `--check --diff` dry-run goes wrong fu
 fixed by `check_mode: false`. The guard before this one was a hand list of register names, which claimed to catch
 "a new SOPS-feeding resolver added without it" and did not: `_img_env` was added without it, and without a row.
 
-The rule reads the plays instead. Its scope is every task the control node runs:
-- every play under ansible/playbooks/ whose `hosts:` is the control node (`localhost` or `127.0.0.1`, alone or as a
-  list) or that runs `connection: local`, and each task of any other play that carries `delegate_to: localhost`
-  (on itself or on a block around it);
+The rule reads the plays instead. Its scope is these tasks the control node runs:
+- every task of a play under ansible/playbooks/ whose `hosts:` is the control node (`localhost` or `127.0.0.1`,
+  alone, as a list or a comma-separated string, or a templated value that names either) or that runs
+  `connection: local` (the keyword, or the `ansible_connection` play var), less a task delegated elsewhere; and each
+  task of any other play delegated to `localhost` or run with `connection: local` (on itself or on a block around
+  it);
 - every task file such a play imports or includes by a literal path, and the files those import in turn;
 - the tasks and handlers of every role such a play applies by a literal name (`include_role`, `import_role`,
   `roles:`).
 There, a `command` / `shell` / `raw` task that declares itself read-only (`changed_when: false`) and whose
 `register:` is named anywhere else — a play, a task file or a role under ansible/, or a Jinja template in the tree —
 must carry `check_mode: false` (on itself or on a block around it), or have a row in `_EXEMPT` that says why an
-empty value in a dry-run is right. Counting any mention but a comment line errs on the safe side: a task name, a
-same-named register elsewhere and a template all count as reads.
+empty value in a dry-run is right. A comment line, a `register:` line and a task's `name:` are not reads, unless
+they hold a `{{` or a `{%` (a `#` line of a template or a block scalar is output Jinja still renders); every other
+mention counts. For the flag, that errs on the safe side. For the stale check it does not: an `_EXEMPT` row stays
+alive while its register is named anywhere the corpus reads (a var of the same name, a template's text), so a
+stale row fails only once that name is gone from everywhere under ansible/ and every template.
+
+What the scope does not reach: `local_action:`; a role pulled in by another role's `meta/main.yml` `dependencies:`
+or named by its FQCN; a role applied both by a control-node play and by a device play (in scope, so the ban below
+spares it); an api-backend role, which its backend runs with `ansible_connection: local` (out of scope, so the ban
+holds it as a device role; none has a command task today).
 
 Every other role is out of scope by rule: it runs against a device, where forcing a read to run under `--check`
 would execute the device command for real, so none of its tasks may carry `check_mode: false`.
@@ -38,7 +48,7 @@ _IMPORTS = ("ansible.builtin.import_tasks", "import_tasks", "ansible.builtin.inc
 _ROLES = ("ansible.builtin.include_role", "include_role", "ansible.builtin.import_role", "import_role")
 _LOCAL = ("localhost", "127.0.0.1")
 # A block's keyword that its tasks inherit, as far as the rule reads them.
-_INHERITED = ("check_mode", "delegate_to")
+_INHERITED = ("check_mode", "delegate_to", "connection")
 
 # (file, register) → why the read stays skipped in a dry-run. Every row is checked to still name such a read.
 _EXEMPT = {
@@ -80,10 +90,23 @@ def _tasks_of(path):
 
 
 def _is_control_node(play):
-    """Whether every task of `play` runs on the control node."""
+    """Whether every task of `play` runs on the control node (a templated `hosts:` that names it counts)."""
     hosts = play.get("hosts")
-    hosts = hosts if isinstance(hosts, list) else [hosts]
-    return all(h in _LOCAL for h in hosts) or play.get("connection") == "local"
+    play_vars = play.get("vars") if isinstance(play.get("vars"), dict) else {}
+    if play.get("connection") == "local" or play_vars.get("ansible_connection") == "local":
+        return True
+    if isinstance(hosts, str) and ("{{" in hosts or "{%" in hosts):
+        return any(re.search(r"(?<![\w.])%s(?![\w.])" % re.escape(h), hosts) for h in _LOCAL)
+    if isinstance(hosts, str):
+        hosts = [h.strip() for h in hosts.split(",")]
+    return all(h in _LOCAL for h in (hosts if isinstance(hosts, list) else [hosts]))
+
+
+def _on_control_node(task, whole):
+    """Whether `task` (with its blocks' keywords) runs on the control node, in a play that does (`whole`) or not."""
+    if task.get("delegate_to") is not None:
+        return task["delegate_to"] in _LOCAL
+    return whole or task.get("connection") == "local"
 
 
 def _role_files(roles_dir, name):
@@ -131,7 +154,7 @@ def control_node_task_files(root):
                 continue
             whole = _is_control_node(play)
             for section in ("pre_tasks", "tasks", "post_tasks", "handlers"):
-                tasks += [t for t in _walk(play.get(section)) if whole or t.get("delegate_to") in _LOCAL]
+                tasks += [t for t in _walk(play.get(section)) if _on_control_node(t, whole)]
             for role in (play.get("roles") or []) if whole else []:
                 role_name = role if isinstance(role, str) else (role.get("role") or role.get("name"))
                 for role_file in _role_files(roles_dir, role_name):
@@ -142,17 +165,30 @@ def control_node_task_files(root):
     return scoped
 
 
+# Lines that name a register without reading it: a `register:` line, and a task's `name:` that templates nothing.
+_NOT_A_READ = re.compile(r"^\s*(?:-\s+)?(?:register|name):\s*[^{]*$")
+
+
+def _is_read_line(line):
+    """Whether `line` can read a register: not a comment line or a line of `_NOT_A_READ`. A `#` line that holds a
+    `{{` or a `{%` counts — in a template, and in a YAML block scalar, it is output Jinja still renders."""
+    if "{{" in line or "{%" in line:
+        return True
+    return not (line.lstrip().startswith("#") or _NOT_A_READ.match(line))
+
+
 def _corpus(root):
-    """The text of every file a register can be read from, comment lines dropped: each YAML file under ansible/ and
-    each Jinja template in the tree."""
+    """The text of every file a register can be read from, the lines `_is_read_line` refuses dropped: each YAML
+    file under ansible/ and each Jinja template in the tree. Installed collections (`ansible_collections/`, which a
+    bootstrapped box holds under ansible/) are not the repository's own reads."""
     texts = []
     for top, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules")]
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules", "ansible_collections")]
         rel = os.path.relpath(top, root).replace(os.sep, "/")
         for f in files:
             if f.endswith(".j2") or (f.endswith((".yml", ".yaml")) and (rel + "/").startswith("ansible/")):
                 lines = _load(os.path.join(top, f)).splitlines()
-                texts.append("\n".join(line for line in lines if not line.lstrip().startswith("#")))
+                texts.append("\n".join(line for line in lines if _is_read_line(line)))
     return texts
 
 
@@ -167,7 +203,7 @@ def unforced_reads(root):
             if not register or not any(k in task for k in _COMMANDS) or not _is_false(task.get("changed_when")):
                 continue
             word = re.compile(r"\b%s\b" % re.escape(register))
-            reads = sum(len(word.findall(text)) for text in corpus) - 1     # less the `register:` line itself
+            reads = sum(len(word.findall(text)) for text in corpus)        # the `register:` lines are not in it
             if reads > 0 and not _is_false(task.get("check_mode")):
                 found.add((os.path.basename(path), register))
     return found
@@ -353,6 +389,58 @@ def test_the_detector_flags_a_planted_unlisted_resolver(tmp_path, forced, expect
     counted only in its own file, a nested import, a control-node role, a play written as a list of local names,
     run over a local connection or delegated, a mark on the block, and the string form of `changed_when`."""
     assert unforced_reads(_plant(tmp_path, forced)) == expect
+
+
+_LOCAL_PLAY = "- hosts: localhost\n  tasks:\n"
+_EDGES = {
+    # (playbook, a template's text or None, flagged)
+    "hash-line-in-template": (_LOCAL_PLAY + _read("r", "_r"), "# digest {{ _r.stdout }}\n", True),
+    "hash-line-in-block-scalar": (_LOCAL_PLAY + _read("r", "_r") + "    - ansible.builtin.copy:\n"
+                                  "        dest: /tmp/x\n        content: |\n          # {{ _r.stdout }}\n",
+                                  None, True),
+    "named-only-in-task-names": (_LOCAL_PLAY + _read("collect (_r)", "_r")
+                                 + "    - name: show _r\n      ansible.builtin.debug:\n        msg: hi\n", None, False),
+    "same-register-elsewhere": (_LOCAL_PLAY + _read("r", "_r") + "- hosts: all\n  tasks:\n"
+                                + "    - ansible.builtin.command: show version\n      register: _r\n", None, False),
+    "templated-hosts-local": ("- hosts: \"{{ target | default('localhost') }}\"\n  tasks:\n" + _read("r", "_r")
+                              + _use("_r"), None, True),
+    "templated-hosts-device": ("- hosts: \"{{ target | default('switches') }}\"\n  tasks:\n" + _read("r", "_r")
+                               + _use("_r"), None, False),
+    "hosts-comma-string": ("- hosts: localhost,127.0.0.1\n  tasks:\n" + _read("r", "_r") + _use("_r"), None, True),
+    "play-var-connection-local": ("- hosts: all\n  vars:\n    ansible_connection: local\n  tasks:\n"
+                                  + _read("r", "_r") + _use("_r"), None, True),
+    "task-connection-local": ("- hosts: all\n  tasks:\n" + _read("r", "_r", "\n      connection: local")
+                              + _use("_r"), None, True),
+    "block-connection-local": ("- hosts: all\n  tasks:\n    - connection: local\n      block:\n        - name: r\n"
+                               "          ansible.builtin.command: echo r\n          register: _r\n"
+                               "          changed_when: false\n        - ansible.builtin.debug:\n"
+                               "            msg: \"{{ _r.stdout }}\"\n", None, True),
+    "delegated-to-a-device": (_LOCAL_PLAY + _read("r", "_r", "\n      delegate_to: \"{{ item }}\"") + _use("_r"),
+                              None, False),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_EDGES))
+def test_the_corpus_and_the_scope_at_their_edges(tmp_path, case):
+    """One read-only resolver `_r`, flagged exactly where a later task can read it on the control node: read only
+    on a `#` line of a template or of a block scalar (output Jinja renders), in a play whose `hosts:` is templated
+    to default to `localhost` or is the string `localhost,127.0.0.1`, in a play run with the `ansible_connection`
+    play var, or a task run with `connection: local` (on itself or on its block). Not flagged: named only in task
+    names, or by another play's `register:` of its own; in a play templated to default to a device group; or
+    delegated to a device.
+
+    Guards T24's fold-2 read: a `#` line dropped whole hid a real read (N3, a regression from fold 1, which read the
+    raw text); a task name or a same-named register elsewhere kept a stale `_EXEMPT` row alive and flagged an unread
+    resolver (N4); and the scope missed control-node plays written these ways, or swept in a task that runs its
+    command on a device (N8)."""
+    playbook, template, flagged = _EDGES[case]
+    books = tmp_path / "ansible" / "playbooks"
+    books.mkdir(parents=True)
+    (books / "p.yml").write_text(playbook, encoding="utf-8")
+    if template is not None:
+        (tmp_path / "prom").mkdir()
+        (tmp_path / "prom" / "x.conf.j2").write_text(template, encoding="utf-8")
+    assert unforced_reads(str(tmp_path)) == ({("p.yml", "_r")} if flagged else set())
 
 
 def test_a_forced_read_in_a_device_role_is_refused(tmp_path):
