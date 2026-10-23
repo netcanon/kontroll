@@ -36,8 +36,9 @@ belongs once in `tests/_canned.py`, with a row in `tests/unit/test_mock_conforma
 the real function's answer on a fixture: a mock shaped by belief keeps a UI test green while the server emits
 something else (S33). The e2e server's seams are enforced in the replacement forms the conformance file's parse
 reads or refuses; the forms it does not read, and whether a body or a route test's fake comes from `_canned.py`, are
-held only by review. Both, and the fakes still written by hand, are listed in [../tests/README.md](../tests/README.md). The live lab and the Playwright flows are never in the blind hermetic
-gate (`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
+held only by review. [../tests/README.md](../tests/README.md) lists the fakes still written by hand and points to
+the parse's own list of the forms it does not read. The live lab and the Playwright flows are never in the blind
+hermetic gate (`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
 
 ---
 

@@ -24,7 +24,7 @@ os.environ.setdefault("GUI_USER", "admin")
 os.environ.setdefault("GUI_PASSWORD", "test-password-e2e")
 os.environ.setdefault("GUI_AUDIT_LOG", os.path.join(tempfile.gettempdir(), "kontroll-e2e-audit.log"))
 
-import _canned  # noqa: E402  (tests/_canned.py — every canned shape, each with a conformance row)
+import _canned  # noqa: E402  (tests/_canned.py — each canned shape has a conformance row, bar E2E_UNIT)
 import app as gui  # noqa: E402  (after sys.path is set up)
 from kontroll import catalog as _catalog  # noqa: E402  (search/classify run the service layer in-process)
 from kontroll import probe as _probe  # noqa: E402

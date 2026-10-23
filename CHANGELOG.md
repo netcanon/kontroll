@@ -27,10 +27,11 @@ where the route names no ref), and the unit-pick e2e's list lacked `collection` 
 - `tests/unit/test_mock_conformance.py` builds the smallest real fixture for each, calls the real function (the
   keygen answer through the real route) and compares key sets and value types. A seam the e2e server replaces with
   no row fails it, and so does one it does not hand back to be restored, or one replaced in a form the file's parse
-  refuses (a nested target, a `setattr` by a variable name, a monkeypatch object, an assignment through an imported
-  name outside the seam function, `unittest.mock`, or a write through `__dict__`, `vars` or `exec`), or a conftest
-  without its one restore loop. A replacement outside the seam function through a name that is not an import is not
-  read, and review holds it.
+  refuses (a nested target, a `setattr` by a variable name or handed on, a monkeypatch object's `.setattr`, an
+  assignment through an imported name outside the seam function, `unittest.mock`, or a write through `__dict__`,
+  `vars` or `exec`), or a conftest without its one restore loop. The forms the parse does not read (among them a
+  replacement outside the seam function through a name that is not an import, a patching fixture, one made in
+  another file; `_seams`' docstring lists them) are held by review.
 - Round-trip tests feed a generator's real output to its real reader: gen-backup's schedules file to
   configure-semaphore (driven against a fake Semaphore; the retention and destination it describes the template
   with), gen-requirements' trust sidecar to the provenance view (its pins, policies, default policy and keyring),

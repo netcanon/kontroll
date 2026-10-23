@@ -1,7 +1,8 @@
 """Canned shapes: the dictionaries a browser test or a route test is served in place of a real service call (S33).
 
-Each lives here once, and `tests/unit/test_mock_conformance.py` holds a row for it that builds the smallest real
-fixture, calls the real function and compares the two SHAPES — the key set and each value's type, never the values.
+Each lives here once, and `tests/unit/test_mock_conformance.py` holds a row for each (bar `E2E_UNIT`, which the
+actuation registry's own validator holds) that builds the smallest real fixture, calls the real function and
+compares the two SHAPES — the key set and each value's type, never the values.
 A canned dict written from belief keeps a UI test green while the server emits something else (L16's second most
 recurrent fault), and a second hand copy drifts from the first. Add a dict here and its row there; a seam the e2e
 server replaces with no row fails `test_every_replaced_seam_has_a_conformance_row`. Nothing scans a `page.route` body

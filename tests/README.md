@@ -140,19 +140,19 @@ it. A fake whose answer has no shape to drift (an empty dict or list, `None`, a 
 for an external tool's output (`catalog._installed_json`) are not listed.
 A key whose value is by design one type or another is produced in both types by the row's fixture (the inbox's
 `vendor`), or, where the row's fixture does not, named in the row's `optional` set (the Pending rows'
-`repropose_hint`, whose canned value has a row of its own). A
-mock written from belief keeps a UI test green while the server emits something else, and a second hand copy drifts
-from the first (S33). A seam the e2e conftest replaces with no row fails
-`test_every_replaced_seam_has_a_conformance_row`, and so does one it replaces without handing it back to be
-restored, or one replaced in a form the parse refuses (a nested target, a `setattr` by a variable name, a
-monkeypatch object's `.setattr`, an assignment through an imported name outside `_mock_service_seams`, a
-`unittest.mock` import, a write through `__dict__`, `__setattr__`, `vars`, `exec` or `eval`), and so does a conftest
-without its one restore loop or whose `_mock_service_seams` does not return its `originals`. A replacement outside
-`_mock_service_seams` through a name that is not an import, or through a renamed `setattr`, is not read at all, so
-review holds it. A seam whose fake needs none (a record built by
-the real constructor, an empty list) is listed in `NO_ROW` with the reason. A seam hands out a copy of its canned
-dict, never the module object. Where a generator writes a file another part reads, a round-trip test feeds the real
-output to the real reader:
+`repropose_hint`, whose canned value has a row of its own). A mock written from belief keeps a UI test green while
+the server emits something else, and a second hand copy drifts from the first (S33). A seam the e2e conftest
+replaces with no row fails `test_every_replaced_seam_has_a_conformance_row`, and so does one it replaces without
+handing it back to be restored, or one replaced in a form the parse refuses (a nested target, a `setattr` by a
+variable name or handed on, a monkeypatch object's `.setattr`, an assignment through an imported name outside
+`_mock_service_seams`, a `unittest.mock` import, a write through `__dict__`, `__setattr__`, `vars`, `exec` or
+`eval`), and so does a conftest without its one restore loop or without a `return originals` in
+`_mock_service_seams`. Anything else is not read, so review holds it: for example a replacement outside
+`_mock_service_seams` through a name that is not an import, a fixture that patches (`mocker`), one made in another
+file, and whether the restore loop puts back what it was handed. The `_seams` docstring lists the rest. A seam
+whose fake needs none (a record built by the real constructor, an empty list) is listed in `NO_ROW` with the
+reason. A seam hands out a copy of its canned dict, never the module object. Where a generator writes a file
+another part reads, a round-trip test feeds the real output to the real reader:
 `test_configure_semaphore.py::test_reads_what_gen_backup_renders`,
 `test_provenance.py::test_reads_the_sidecar_gen_requirements_writes` and
 `test_pending.py::test_lists_a_proposal_the_real_stager_produced`. The C19 paint suite (`e2e/test_paint_rule.py`)
@@ -169,7 +169,7 @@ tests/unit/          # pure functions, no I/O
   test_fleet_edit.py         # enable_in_fleet idempotent, comment-preserving
   test_openapi.py            # derive_auth/derive_server/classify_endpoints heuristics
   test_service_layer.py      # service_* return structured data directly (no stdout-parsing)
-  test_mock_conformance.py   # S33: every canned shape in tests/_canned.py has the key set + value types of the real function's answer; every e2e-replaced seam has a row
+  test_mock_conformance.py   # S33: every canned shape in tests/_canned.py (bar `E2E_UNIT`, held by the registry's validator) has the key set + value types of the real function's answer; every e2e-replaced seam the parse reads has a row or a `NO_ROW` reason
   test_units.py              # runnable-unit prober + service_units resolver + SEC-3 traversal guard + validate_unit_config (R3 configure gate)
   test_actuation_registry.py # actuation/ registry: resolve_pins (exact-wins/fail-closed) + gen-actuation validation (incl. R3 curated knobs) + overlay loader
   test_actuation_service.py  # R4 preview + R5 write verb: build_actuation_plan render/staging-metadata (read-only) + apply_actuation_plan (idempotent write) + stage_plan drift gate

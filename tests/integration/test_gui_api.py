@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-import _canned             # tests/_canned.py: every canned shape, each with a conformance row
+import _canned             # tests/_canned.py: each canned shape has a conformance row, bar E2E_UNIT
 import app as gui          # gui/ is on sys.path (conftest); app.py is the GUI
 from kontroll import catalog, gitio, paths, probe
 
