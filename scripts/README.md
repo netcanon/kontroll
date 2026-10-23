@@ -212,7 +212,8 @@ python3 scripts/galaxy.py scaffold arista.eos --key arista_eos --group core_swit
 #   --key, --group, --secrets and --backend follow the onboard's rules for a name (and --group is not `all`,
 #   `ungrouped` or `localhost`); the file is written under the write root, like every other module write, and
 #   never beside a class the tool ships under the same key. Without --secrets the class gets the backend's
-#   `default_secrets_domain`; `onboard` without it reuses an existing class's own domain first
+#   `default_secrets_domain`; `onboard` stores a second device of a class in that class's own domain, whether
+#   --secrets is given or not
 python3 scripts/galaxy.py onboard arista.eos --key arista_sw --group core_switch --host 192.0.2.250
                                                      # dry-run plan: module + drop-in inventory host + fleet
 python3 scripts/galaxy.py onboard arista.eos --key arista_sw --group core_switch --host 192.0.2.250 \

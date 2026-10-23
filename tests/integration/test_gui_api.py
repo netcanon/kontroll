@@ -421,6 +421,25 @@ def test_onboard_cred_fields_reports_the_resolved_default_domain(client):
     assert named["secrets"] == "lab"
 
 
+def test_gui_cred_fields_answers_the_asked_backends_own_default(client, monkeypatch):
+    """The GUI's `GET /api/onboard/cred-fields` with no `secrets` answers the default of the backend it was asked
+    about, over a registry whose backends declare different ones, and null for one that declares none.
+
+    Guards the route resolving another backend's default (mutant D of T18's read, D6) — invisible while every
+    shipped backend defaults to `network`."""
+    reg = [dict(b) for b in catalog.load_backends()]
+    for b in reg:
+        if b["name"] == "api":
+            b["default_secrets_domain"] = "lab_api"
+    none = dict(next(b for b in reg if b["name"] == "netcommon_cli"), name="no_default")
+    none.pop("default_secrets_domain")
+    monkeypatch.setattr(gui, "_CATALOG", (catalog.load_vectors(), catalog.load_overrides(), reg + [none]))
+    want = next(b for b in reg if b["name"] == "netcommon_cli")["default_secrets_domain"]
+    for backend, expect in (("api", "lab_api"), ("netcommon_cli", want), ("no_default", None)):
+        b = client.get("/api/onboard/cred-fields?backend=" + backend, headers=_auth()).get_json()
+        assert b["secrets"] == expect, backend
+
+
 def test_gui_onboard_with_a_blank_domain_plans_into_the_backend_default(client, onboard_env):
     """The form's submit with its domain box left empty (`secrets: ""`) plans into the backend's default domain.
     Guards the GUI route's former `or "network"` fallback coming back as a literal."""

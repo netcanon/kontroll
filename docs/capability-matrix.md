@@ -186,8 +186,9 @@ attribute access, no Jinja — and its result is held to a charset
 (`catalog.render_template`); a default or a template that fails is the registry's
 fault, answered `repository_data`, never written. None of the planner, the scaffold,
 the routes, the form or the CLI names a domain or a param any more
-(`tests/unit/test_backend_defaults.py`, which also proves a new class's module file and
-drop-in are byte-identical to what the former code wrote).
+(`tests/unit/test_backend_defaults.py`, which also proves a new class's drop-in, its
+stored credentials, its domain and its module file's `backend_params` are what the former
+code wrote).
 
 **Adding a backend = drop the dir + role.** The classifier auto-discovers it. The
 entry's `role:` names the role; an entry without one may still classify (a search

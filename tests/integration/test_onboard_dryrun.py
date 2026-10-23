@@ -38,6 +38,16 @@ def mock_probe(monkeypatch, make_facts):
     monkeypatch.setattr(catalog, "local_installed", lambda: {})
 
 
+def test_cli_onboard_with_a_blank_domain_plans_into_the_backend_default(tmp_repo, mock_probe, capsys):
+    """`galaxy.py onboard --secrets ""` plans into the backend's `default_secrets_domain`, as an omitted flag does:
+    blank means omitted, as in the API and the GUI. Guards the CLI refusing a blank domain the other two surfaces
+    accept (T18's read, F10 / D12)."""
+    want = next(b for b in catalog.load_backends() if b["name"] == "netcommon_cli")["default_secrets_domain"]
+    for secrets in ("", None):
+        galaxy.cmd_onboard(_args(secrets=secrets, password="p"))
+        assert "encrypted into instance/secrets/%s.sops.yml" % want in capsys.readouterr().out
+
+
 def test_dryrun_writes_nothing(tmp_repo, mock_probe, capsys):
     """A bare onboard prints the full plan (module + drop-in host + fleet-enable) but writes
     NOTHING — the dry-run-by-default safety, asserted by an inert tmp repo."""

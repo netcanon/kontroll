@@ -4,6 +4,7 @@ commits + pushes the local canonical (git mocked, tmp_repo). The security-critic
 token-gated, dry-run by default, credentials NEVER returned or logged (only var names), a re-onboard
 with no change commits nothing, and the action is audited. docs/api-architecture.md §3/§8.
 """
+import dataclasses
 import os
 from types import SimpleNamespace
 
@@ -377,6 +378,32 @@ def test_cred_fields_reports_the_resolved_default_domain(onb):
         assert {cf["domain"] for cf in b["cred_fields"]} == {_registry_default(backend)}
     unknown = onb.client.get("/onboard/cred-fields", headers=AUTH, params={"backend": "no_such_backend"})
     assert unknown.status_code == 200 and unknown.json()["secrets"] is None
+
+
+def _two_defaults():
+    """The shipped registry with the api backend's default changed to `lab_api`, plus a copy of netcommon_cli that
+    declares none. Every shipped default is `network`, so only a registry like this one tells a route that resolves
+    the asked backend's default from one that resolves any other's."""
+    reg = [dict(b) for b in catalog.load_backends()]
+    for b in reg:
+        if b["name"] == "api":
+            b["default_secrets_domain"] = "lab_api"
+    none = dict(next(b for b in reg if b["name"] == "netcommon_cli"), name="no_default")
+    none.pop("default_secrets_domain")
+    return reg + [none]
+
+
+def test_cred_fields_answers_the_asked_backends_own_default(onb):
+    """`GET /onboard/cred-fields` with no `secrets` answers the default of the backend it was asked about, over a
+    registry whose backends declare different ones, and null for one that declares none.
+
+    Guards the route resolving another backend's default (mutant C of T18's read, D6) — invisible while every
+    shipped backend defaults to `network`, and exactly what S27 exists to let an operator change."""
+    onb.client.app.state.catalog = dataclasses.replace(onb.client.app.state.catalog, backends=_two_defaults())
+    for backend, want in (("api", "lab_api"), ("netcommon_cli", _registry_default("netcommon_cli")),
+                          ("no_default", None)):
+        b = onb.client.get("/onboard/cred-fields", headers=AUTH, params={"backend": backend}).json()
+        assert b["secrets"] == want, backend
 
 
 @pytest.mark.parametrize("over", [{}, {"secrets": ""}, {"secrets": None}], ids=["omitted", "blank", "null"])

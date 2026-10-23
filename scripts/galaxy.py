@@ -182,7 +182,7 @@ _NO_BACKEND_REMEDY = "pass --backend raw_ssh only if the target is an SSH host, 
 
 
 def cmd_scaffold(args):
-    res = build_scaffold(args.collection, args.key, args.group, args.secrets, args.backend)
+    res = build_scaffold(args.collection, args.key, args.group, args.secrets or None, args.backend)
     if res["error"] == "not_installed":
         sys.exit("install the collection first: ansible-galaxy collection install %s" % args.collection)
     if res["error"] == "no_backend":
@@ -215,7 +215,7 @@ def cmd_onboard(args):
     if args.push and not args.commit:
         args.commit = True              # push needs a commit to push
     plan = build_onboard_plan(args.collection, args.key, args.group, args.host,
-                              host_name=args.host_name, secrets=args.secrets, backend=args.backend,
+                              host_name=args.host_name, secrets=args.secrets or None, backend=args.backend,
                               username=args.username, password=args.password, api_token=args.api_token)
     if plan["error"] == "not_installed":
         sys.exit("install the collection first: ansible-galaxy collection install %s" % args.collection)
@@ -419,8 +419,8 @@ def main():
     ob.add_argument("--group", required=True, help="inventory group")
     ob.add_argument("--host", required=True, help="the host's mgmt IP/name")
     ob.add_argument("--host-name", help="inventory hostname (default: <key>-1)")
-    ob.add_argument("--secrets", help="secrets domain (default: the class's own, else the backend's "
-                    "default_secrets_domain)")
+    ob.add_argument("--secrets", help="secrets domain for a new class (default: the backend's "
+                    "default_secrets_domain); a second device of a class stores in the class's own")
     ob.add_argument("--backend", help="override the auto-chosen backend")
     ob.add_argument("--username", help="login user (SSH) — encrypted into the secrets domain, inline on the host")
     ob.add_argument("--password", help="login password (SSH) — encrypted into the secrets domain")

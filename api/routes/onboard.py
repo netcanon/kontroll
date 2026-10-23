@@ -163,8 +163,9 @@ def onboard_cred_fields(backend: str, secrets: Optional[str] = None, collection:
     confined (MF-S1: only for a locally-installed collection; a Galaxy result is never introspected here) and
     fail-safe (MF-S6). Read-only, no creds: pure schema, auth-gated like the rest of this router; a read surface
     never gates onboarding (INVARIANT D*). With no `secrets`, the domain is the backend's `default_secrets_domain`
-    (S27) and the answer's `secrets` says which — the form shows it as its placeholder; null for a backend this
-    install does not ship, which declares none."""
+    (S27) and the answer's `secrets` says which — the form shows it as its placeholder; null for a backend that
+    declares none (also one this install does not ship). A second device of a class stores in that class's own
+    domain whatever this answers: the planner, not this read, resolves a reuse."""
     if secrets:
         paths.component(secrets, "secrets domain")     # it is written into every descriptor this answers with
     bdef = next((b for b in cat.backends if b.get("name") == backend), {})

@@ -150,18 +150,19 @@ def test_a_module_file_that_is_not_a_mapping_is_repository_data(reuse, tmp_repo,
     assert "not a mapping" in str(stop.value)
 
 
-def _maps_to_passes(maps_to):
-    """The planner's rule for a credential field's `maps_to`: none, an identifier, or a template that renders, for a
-    representative credential key, inside catalog.MAPS_TO_RE."""
-    if isinstance(maps_to, str) and "{" in maps_to:
+def _maps_to_passes(maps_to, template_ok):
+    """The planner's rule for a credential field's `maps_to`: none, an identifier, or — in the backend registry
+    alone (`template_ok`) — a template that renders, for a representative credential key, inside
+    catalog.MAPS_TO_RE. A module file's entry names its var as written (T18's read, F1)."""
+    if template_ok and isinstance(maps_to, str) and "{" in maps_to:
         return bool(catalog.render_template(maps_to, {"cred_key": "sw2"}, catalog.MAPS_TO_RE))
     return maps_to is None or bool(onboard._STEM_RE.fullmatch(maps_to))
 
 
 def test_every_shipped_class_and_backend_passes_the_adoption_rule():
     """Every shipped module file passes the adoption rule for the names it holds, every credential field a shipped
-    module or backend declares maps to nothing, to an identifier or to a template (S27) that renders to a host var
-    name, every role a shipped backend declares passes the adopted role's rule, and its default domain passes the
+    module declares maps to nothing or to an identifier, one a shipped backend declares also to a template (S27)
+    that renders to a host var name, every role a shipped backend declares passes the adopted role's rule, and its default domain passes the
     request field's. Guards the re-check refusing a healthy shipped class: this is the corpus the rule was measured
     against, kept in the suite."""
     seen = 0
@@ -171,11 +172,11 @@ def test_every_shipped_class_and_backend_passes_the_adoption_rule():
         for field in onboard._ADOPTED:
             onboard._adopted(module, field, module.get("key") or "x")
         for entry in module.get("auth") or []:
-            assert _maps_to_passes(entry.get("maps_to")), path
+            assert _maps_to_passes(entry.get("maps_to"), template_ok=False), path
         seen += 1
     for backend in catalog.load_backends():
         for entry in backend.get("auth") or []:
-            assert _maps_to_passes(entry.get("maps_to")), backend.get("name")
+            assert _maps_to_passes(entry.get("maps_to"), template_ok=True), backend.get("name")
         onboard.default_secrets_domain(backend, backend["name"])         # raises RepositoryDataError if it fails
         if catalog.backend_role(backend) is not None:                    # one with none is never chosen (S26)
             assert onboard._role_of(backend, "x", False)

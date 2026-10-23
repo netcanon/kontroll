@@ -16,6 +16,8 @@ highest-blast-radius device in the fleet:
               is always None and an onboarded host gets `<host>_api_token` — a name the role never looked
               up. paths.py defines RECIPES_DIR and no Python reads it. The documented design was never
               implemented, so the check could not have authenticated even with a perfect credential.
+              (That is the planner before S27. Since S27 the api backend's `api_token` entry names the
+              per-host var as data, a `maps_to` template; still nothing resolves a recipe's `token_var`.)
 
   F-CENSORED  `lookup('vars', X)` raises AnsibleUndefinedVariable for a missing name, and the resolve task
               carries `no_log: true`, so that fatal arrived CENSORED. ping.yml's block/rescue turned it into

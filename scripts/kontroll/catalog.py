@@ -369,6 +369,10 @@ _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 # templated `maps_to` names a host var after the host's credential key — the inventory host name with `-` as `_` —
 # so the charset of every host name the request boundary accepts: letters of either case, digits, `_`, and the `.`
 # and `:` of a dotted name or an IP literal. Never a brace, a space or a quote; the var is a key of the drop-in.
+# On a clock: ansible-core 2.19 warns on every inventory load that a var name with a `.` or a `:` is accepted until
+# 2.23 (measured, T18's read F2). The former code wrote the same names, so this charset keeps them; before the stack
+# reaches 2.23 the var name must swap them for `_`, here and in backend_api's lookup, with a migration for the
+# api drop-ins that hold one.
 PARAM_RE = re.compile(r"[a-z0-9_.]{1,256}\Z")
 MAPS_TO_RE = re.compile(r"[A-Za-z0-9_.:]{1,320}\Z")
 

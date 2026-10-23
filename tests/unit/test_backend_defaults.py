@@ -20,8 +20,10 @@ from kontroll.service import onboard, scaffold
 
 pytestmark = pytest.mark.unit
 
-# Every shape of inventory host name the request boundary accepts (paths.inventory_host), with its credential key.
-HOST_NAMES = ["sw1", "SW-Core-1", "sw.lab.example", "192.0.2.9", "2001:db8::9"]
+# Every shape of inventory host name the request boundary accepts (paths.inventory_host), with its credential key —
+# the last the longest (253 characters: its `<cred key>_api_token` is 263, inside catalog.MAPS_TO_RE's bound).
+LONG_NAME = ".".join(["a" * 63, "b" * 63, "c" * 63, "d" * 61])
+HOST_NAMES = ["sw1", "SW-Core-1", "sw.lab.example", "192.0.2.9", "2001:db8::9", LONG_NAME]
 CLICONF = dict(plugins={"cliconf": ["edgeos"]}, modules=["edgeos_command"])
 HTTPAPI = dict(plugins={"httpapi": ["edgeos"]}, modules=["edgeos_api"])
 
@@ -106,11 +108,12 @@ def test_backend_data_reproduces_the_former_code_rules_for_an_api_device(probed,
     assert "backend_params" not in plan["module"]
 
 
-@pytest.mark.parametrize("backend", ["netcommon_cli", "api", "raw_ssh"])
+@pytest.mark.parametrize("backend", [b["name"] for b in catalog.load_backends() if catalog.backend_role(b)])
 def test_every_runnable_shipped_backend_stores_in_network_by_default(probed, backend):
     """With no domain in the request, a class of every shipped backend that declares a role stores its credentials
-    in `network` — the template's operational domain, whose `.sops.yaml` rule carries the runner's key. Guards the
-    default drifting per backend in the move."""
+    in `network` — the template's operational domain, whose `.sops.yaml` rule carries the runner's key. The backends
+    are read from the registry, so one added later is covered. Guards the default drifting per backend in the
+    move."""
     probed(**CLICONF)
     plan = _plan("h1", backend=backend, creds={"password": "p"})
     assert plan["error"] is None and plan["secrets"] == "network"
@@ -189,6 +192,7 @@ def test_every_derived_param_is_a_required_param_and_renders():
 def test_every_shipped_backend_names_a_default_domain():
     """Every shipped backend declares `default_secrets_domain`, as a valid name. Guards a backend shipped without
     one: its onboards would be refused until the request names a domain."""
+    assert REGISTRY, "no shipped backend was read"
     for b in REGISTRY:
         assert onboard.default_secrets_domain(b, b["name"]), b["name"]
 
@@ -303,15 +307,17 @@ def test_the_scaffold_takes_the_backend_default_domain(probed):
     {"requires": ["network_os"], "derive_params": {"network_os": "{collection}.{nmae}"}},   # a typo'd placeholder
     {"requires": ["network_os"], "derive_params": {"network_os": "{{ collection }}"}},      # Jinja
     {"requires": ["network_os"], "derive_params": ["network_os"]},                          # not a map
+    {"requires": ["a b"], "derive_params": {"a b": "{name}"}},                              # a param name that is not one
     {"auth": [{"field": "password", "kind": "password", "maps_to": "{cred_key}-pw"}]},      # renders to no var name
     {"auth": [{"field": "password", "kind": "password", "maps_to": "{host}_pw"}]},          # a placeholder it lacks
-], ids=["domain-path", "domain-bool", "domain-null", "param-typo", "param-jinja", "param-list", "maps-to-dash",
-        "maps-to-unknown"])
+], ids=["domain-path", "domain-bool", "domain-null", "param-typo", "param-jinja", "param-list", "param-name",
+        "maps-to-dash", "maps-to-unknown"])
 def test_a_registry_default_that_does_not_render_is_repository_data(probed, change):
-    """A default domain that is not a valid name, a `derive_params` template that does not render, and a `maps_to`
-    template that does not render to a variable name are the registry's fault: RepositoryDataError (409
-    `repository_data`), never a 422 blaming the request and never a written var. Guards a descriptor typo reaching
-    the module file or the drop-in."""
+    """A default domain that is not a valid name, a `derive_params` template that does not render or names a param
+    that is not an identifier, and a `maps_to` template that does not render to a variable name are the registry's
+    fault: RepositoryDataError (409 `repository_data`), never a 422 blaming the request and never a written var.
+    Guards a descriptor typo reaching the module file or the drop-in (a param's name is a key of the module file's
+    `backend_params`, matched against `connection:` holes)."""
     probed(**CLICONF)
     bdef = _lab(**dict({"default_secrets_domain": "lab"}, **change))
     with pytest.raises(paths.RepositoryDataError):
@@ -331,7 +337,8 @@ def test_a_required_param_the_backend_does_not_derive_is_left_out(probed):
 def test_an_api_token_names_its_own_var_when_its_descriptor_does(probed, tmp_repo):
     """A class whose own `auth:` block gives `api_token` a literal `maps_to` has the token written under that var.
     The former branch on the field's name wrote `<cred key>_api_token` whatever the descriptor said; a declared
-    var now holds. Pins a deliberate difference brief 14 §5.5 accepts (no shipped descriptor declares one)."""
+    var now holds. Pins a deliberate difference this change introduces (CHANGELOG [Unreleased]; brief 14 §5.5
+    does not list it), which no shipped descriptor reaches."""
     probed(**HTTPAPI)
     _curated(tmp_repo, backend="api", secrets_domain="network",
              auth=[{"field": "api_token", "kind": "token", "maps_to": "edgeos_token"}])
@@ -350,3 +357,73 @@ def test_an_api_token_with_no_var_on_a_backend_without_the_template_is_stored_on
     plan = _plan("h1", creds={"api_token": "t"})
     assert plan["creds_to_set"] == {"h1_api_token": "t"}
     assert "h1_api_token" not in dict(_host_vars(plan, "h1"))
+
+
+@pytest.mark.parametrize("maps_to", ["{cred_key}", "ansible_{cred_key}", "{cred_key}_password"])
+def test_a_module_files_auth_entry_may_not_hold_a_template(probed, tmp_repo, maps_to):
+    """A curated class whose own `auth:` entry gives `maps_to` a template its backend does not declare for that field
+    is refused as repository data, before any var is written; the same entry repeating the backend's own template
+    for `api_token` plans as the backend's would.
+
+    Guards the request's host name choosing WHICH host var a lookup lands in (T18's read, F1): rendered, such a
+    template put a SOPS lookup of a value the request supplied under `ansible_python_interpreter` or
+    `ansible_connection` for a host named for it. Only the registry and the generic union declare a template."""
+    probed(**HTTPAPI)
+    _curated(tmp_repo, backend="api", secrets_domain="network",
+             auth=[{"field": "password", "kind": "password", "maps_to": maps_to}])
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        _plan("h1", creds={"password": "p"})
+    assert "template" in str(refused.value)
+    (tmp_repo / "modules" / "edgeos" / "module.yml").unlink()
+    (tmp_repo / "modules" / "edgeos").rmdir()
+    _curated(tmp_repo, backend="api", secrets_domain="network",
+             auth=[{"field": "api_token", "kind": "token", "maps_to": "{cred_key}_api_token"}])
+    plan = _plan("h1", creds={"api_token": "t"})
+    assert ("h1_api_token", _former_lookup("h1_api_token")) in _host_vars(plan, "h1")
+
+
+def test_a_required_connection_param_the_backend_does_not_derive_is_repository_data(probed):
+    """A backend whose `connection:` block reads a param it requires and does not derive (an operator's copy of
+    netcommon_cli written before S27, with no `derive_params`) is refused as repository data naming the param; the
+    same backend deriving it plans with the param rendered into the host var.
+
+    Guards an unrendered `{{ network_os }}` reaching the drop-in (T18's read, F12): nothing defines it at run time,
+    so the plan used to succeed and the first play failed far from the cause."""
+    probed(**CLICONF)
+    copy = _lab(default_secrets_domain="lab", requires=["network_os"],
+                connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ network_os }}"})
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        _lab_plan(copy)
+    assert "network_os" in str(refused.value) and "derive_params" in str(refused.value)
+    plan = _lab_plan(dict(copy, derive_params={"network_os": "{collection}.{name}"}))
+    assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "acme.edgeos.edgeos"
+
+
+def test_a_backend_this_install_does_not_ship_is_named_as_such_in_the_refusal():
+    """With no domain from the request or a class, a backend this install does not ship (no registry entry) is
+    refused as the `secrets domain` field with a message saying so, not one blaming a registry entry that does not
+    exist. Guards the misattributed refusal T18's read found (F5): the fault is the class's module file."""
+    with pytest.raises(paths.RequestBoundaryError) as refused:
+        onboard._secrets_domain(None, {}, "nope")
+    assert "not one this install ships" in str(refused.value)
+    with pytest.raises(paths.RequestBoundaryError) as refused:
+        onboard._secrets_domain(None, {"name": "lab_cli"}, "lab_cli")
+    assert "registry entry declares no default" in str(refused.value)
+
+
+def test_only_a_templated_backend_maps_to_is_a_default_by_field_name(probed, monkeypatch):
+    """A TIER-B field that brings no `maps_to` and is named like a backend `auth:` entry whose `maps_to` is a LITERAL
+    (`password` → `ansible_password` on the api backend) is stored in SOPS with no host var; only a templated entry
+    (`api_token`) is a default by name.
+
+    Guards the by-name default widening from the registry's templates to every literal it declares (mutant A of
+    T18's read, D14): a field read from a module's argument spec would then reach a connection var."""
+    probed(**HTTPAPI)
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"acme.edgeos": "1.0.0"})
+    monkeypatch.setattr(authspec, "auth_fields_from_argspec", lambda coll, modules, **kw: [
+        {"field": "password", "kind": "password", "label": "password", "sops_stem": "password", "secret": True,
+         "required": True, "derivation": "no_log", "auth_set": "edgeos"}])
+    plan = _plan("h1", creds={"password": "p"}, deep=True)
+    assert plan["cred_source"] == "deep"
+    assert plan["creds_to_set"] == {"h1_password": "p"}
+    assert "ansible_password" not in dict(_host_vars(plan, "h1"))

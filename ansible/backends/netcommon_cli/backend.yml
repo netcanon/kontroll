@@ -14,7 +14,7 @@ classify:
 # them as a metrics:/logs: floor). A network_cli device universally supports agent-less snmp + blackbox + RFC5424
 # syslog — so a blind-onboarded switch is monitored + log-shippable on day one, no hand-typed module.
 confers: {actuate: true, backup: true, telemetry: [snmp, blackbox], logs: [syslog_push]}
-requires: [network_os]            # e.g. cisco.ios.ios — set per device class
+requires: [network_os]            # e.g. cisco.ios.ios — derived for a new class (below)
 # How the planner fills a `requires:` param for a new class (S27): a template in a closed grammar — `{collection}`,
 # `{namespace}`, `{name}` and nothing else; not Jinja — rendered into the class's `backend_params`. cisco.ios ->
 # cisco.ios.ios. A required param with no entry here is left for the operator to set on the class.
@@ -26,7 +26,7 @@ derive_params:
 default_secrets_domain: network
 role: backend_netcommon_cli       # the execution role (device class's device_role)
 # Connection vars the onboard planner renders into the host/group (network_os is
-# the per-device param supplied at onboard time).
+# the param derive_params fills; a required param read here must be derived, or the plan is refused).
 connection:
   ansible_connection: network_cli
   ansible_network_os: "{{ network_os }}"

@@ -104,8 +104,8 @@ def test_onboard_form_derives_ssh_login_for_a_switch_no_token_box(page):
 
 def test_the_domain_box_ships_empty_and_shows_the_backend_default(page):
     """S27 live: a switch's onboard form opens with its secrets-domain box EMPTY, and once the credential fields are
-    derived the box's placeholder names the domain the server resolved — the backend's `default_secrets_domain`,
-    read from the registry here. Guards the form's former `value="network"` literal coming back, and a placeholder
+    derived the box's placeholder names the backend's `default_secrets_domain`, read from the registry here (a new
+    class stores there). Guards the form's former `value="network"` literal coming back, and a placeholder
     never set: an operator could not see where an empty box stores the credentials."""
     want = next(b for b in catalog.load_backends() if b["name"] == "netcommon_cli")["default_secrets_domain"]
     page.goto("/")

@@ -1829,8 +1829,11 @@ declaring file's choice; see the limits below). A `maps_to` holding a `{placehol
 backend's and the generic union's `{cred_key}_api_token`, the var the former branch on the field's name wrote): it is
 rendered with the host's credential key alone — `catalog.render_template`'s closed `{name}` grammar, no attribute
 access, no Jinja — and its result is held to the charset of the host names the request boundary accepts
-(`catalog.MAPS_TO_RE`), not to an identifier, so a dotted or IP-literal host keeps the var it had; a template that
-does not render is the declaring file's, refused as repository data (`tests/unit/test_backend_defaults.py`). The
+(`catalog.MAPS_TO_RE`), not to an identifier, so a dotted or IP-literal host keeps the var it had — names
+ansible-core 2.19 accepts with a warning until 2.23, so they must change before the stack reaches it; a template that
+does not render is the declaring file's, refused as repository data (`tests/unit/test_backend_defaults.py`). Only the
+backend registry and the generic union declare a template: it lets the request's host name choose the var, so a
+module file's `auth:` entry holding one that is not its backend's for that field is refused as repository data. The
 backend registry's `default_secrets_domain`, which stands in for a domain the request omits, is held to the rule of
 a name as repository data before the plan uses it. The module-reuse path ADOPTS a class's group, secrets domain,
 backend and role from the module file already on disk; each one the plan takes is held, where it is taken and before
@@ -1996,10 +1999,12 @@ where the create route derives it; a directory made by hand with a longer name i
 board's `services.yaml` — at a shell, by the operator, into their own files. (`scripts/kontroll-promote.py`
 holds its `run_id` to the two minted shapes itself, whoever runs it; the promote play checks the same rule before
 it calls the script.) A credential
-field's `maps_to` is held to being a variable name, not to a set of variables: a module file's own `auth:` entry
-stored in SOPS may write its lookup under `ansible_connection`, `ansible_host` or any other host var of that class's
-hosts, and an `inline` flag may write `true` or `false` under any lower-case one (only an inline port is held to a
-`*_port` var) — a file an operator promotes, never a request, and never the request's text. The class seams refuse
+field's `maps_to` is held to being a variable name (or, for a template the backend registry declares, to
+`catalog.MAPS_TO_RE`), not to a set of variables: a module file's own `auth:` entry stored in SOPS may write its
+lookup under `ansible_connection`, `ansible_host` or any other host var of that class's hosts, and an `inline` flag
+may write `true` or `false` under any lower-case one (only an inline port is held to a `*_port` var) — a file an
+operator promotes, never a request. The request's text reaches a var's NAME only through the registry's template
+(`{cred_key}_api_token`), whose rendered name ends in its own suffix. The class seams refuse
 the names a NAME can tell; a PARENT group the inventory defines (the example's `network_devices`, `compute`) is a
 group like any other to them, and a class attached to one addresses its children wherever the class's group is a
 pattern. The identity dialog's charset for a

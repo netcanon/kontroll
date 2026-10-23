@@ -47,3 +47,11 @@ def test_onboard_form_template_wires_both_gates():
     assert "function onbPristine" in html                                   # collapse-gate predicate
     assert "btn.disabled = open && !onbPristine" in html                    # toggle disabled while the form is dirty
     assert "push:(g('push') ? g('push').checked : false)" in html           # submit guards the now-optional box
+
+
+def test_the_collapse_gate_counts_a_typed_secrets_domain_as_input():
+    """The onboard form's collapse predicate reads the secrets-domain box among its named fields. Guards the box,
+    which ships empty since S27 (its placeholder names the backend's default), being dropped from the list: a typed
+    domain would then be discarded by a collapse with no question asked (mutant G of T18's read, D5)."""
+    html = open(os.path.join(ROOT, "gui", "templates", "index.html"), encoding="utf-8").read()
+    assert "const named = ['group','host','host_name','secrets'].map(" in html

@@ -169,7 +169,7 @@ This is **schema-agnostic** (reads `method` if present, falls back to `job`), so
 # scripts/kontroll/service/onboard.py  (MODIFIED)
 # add to imports: from kontroll.service.classify import suggest_telemetry
 
-def build_onboard_plan(collection, key, group, host, host_name=None, secrets="network",
+def build_onboard_plan(collection, key, group, host, host_name=None, secrets="network",   # pre-S27 signature
                        backend=None, username=None, password=None, api_token=None,
                        backends=None, vectors=None):          # + vectors param
     backends = backends if backends is not None else catalog.load_backends()

@@ -186,7 +186,8 @@ def _secrets_domain(secrets, bdef, backend):
     if secrets is None:
         raise paths.RequestBoundaryError(
             "secrets domain", "secrets domain is required: the backend's registry entry declares no default "
-            "(default_secrets_domain)")
+            "(default_secrets_domain)" if bdef else "secrets domain is required: the backend is not one this "
+            "install ships, so it declares no default")
     return secrets
 
 
@@ -209,6 +210,8 @@ def backend_params(bdef, collection, backend):
     requires = bdef.get("requires") or []
     params = {}
     for param, tmpl in derive.items():
+        if not (isinstance(param, str) and _STEM_RE.fullmatch(param)):
+            raise paths.RepositoryDataError(*where)    # a key of `backend_params`, matched to `connection:` holes
         if param in requires:
             try:
                 params[param] = catalog.render_template(tmpl, ctx, catalog.PARAM_RE)
@@ -467,7 +470,15 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
     hostvars = {"device_role": role}
     for k, v in (bdef.get("connection") or {}).items():
         if isinstance(v, str) and v.strip().startswith("{{"):
-            v = params.get(v.strip().strip("{} "), v)
+            hole = v.strip().strip("{} ")
+            if hole in (bdef.get("requires") or []) and hole not in params:
+                # A param the backend requires and does not derive would reach the drop-in unrendered, and nothing
+                # defines it at run time, so the first play fails far from the cause. An operator's backend written
+                # before S27 (a copy of netcommon_cli without `derive_params`) is the one that meets this.
+                raise paths.RepositoryDataError(
+                    "backend registry", "the %s backend requires %s in its connection block and does not derive "
+                    "it — add it to `derive_params` in its backend.yml under ansible/backends/" % (backend, hole))
+            v = params.get(hole, v)
         hostvars[k] = v
     # S28: the TCP port the reachability probe (ping.yml) uses for a host of this backend when the host sets no
     # port of its own — the API port for `api`, where the SSH port the probe defaults to says nothing. A top-level
@@ -576,7 +587,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         # echoed.
         # `maps_to` is the NAME of the host var the field is written under. It is a key of the inventory drop-in,
         # so it is an identifier too: no brace, no space, no line break, no value that is not a string — or a
-        # template whose rendering with this host's credential key stays in catalog.MAPS_TO_RE (below). WHICH
+        # template the backend registry or the generic union declares for that field, whose rendering with this
+        # host's credential key stays in catalog.MAPS_TO_RE (below). WHICH
         # variable a SOPS-stored field names is the declaring file's to choose — a module's own `auth:` entry may
         # name `ansible_connection` as the registry names `ansible_user`; what lands there is a lookup, never the
         # request's text — and is not restricted here (SECURITY.md C22, limits). An inline field's variable is
@@ -593,9 +605,16 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         # A `maps_to` holding a placeholder is a TEMPLATE (S27 — the api backend's `{cred_key}_api_token`): rendered
         # with this host's credential key and held to catalog.MAPS_TO_RE, the charset of every host name the request
         # boundary accepts, so an upper-case, dotted or IP-literal host keeps the var it had. The host name cannot
-        # make the render fail; the template's own text can, so a failure is the declaring file's.
+        # make the render fail; the template's own text can, so a failure is the declaring file's. Only the backend
+        # registry and the generic union declare one: a template lets the request's host name choose WHICH var the
+        # lookup lands in, so a module file's `auth:` entry — curated, but not the registry — names its var as
+        # written, and one holding a template that is not its backend's for that field is refused (T18's read, F1).
         maps_to = cf.get("maps_to")
         if isinstance(maps_to, str) and "{" in maps_to:
+            if maps_to not in (templated.get(cf["field"]), (authspec.union_field(cf["field"]) or {}).get("maps_to")):
+                raise paths.RepositoryDataError(
+                    "credential field", "a credential field %s maps to a template, which only the backend registry "
+                    "declares — name the variable" % _where)
             try:
                 maps_to = catalog.render_template(maps_to, {"cred_key": cred_key}, catalog.MAPS_TO_RE)
             except ValueError:
