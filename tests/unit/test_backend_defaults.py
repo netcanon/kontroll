@@ -9,10 +9,13 @@ onboard writes today, spelled out by the former rules for each shape of host nam
 (lower case, upper case, dotted, IPv4, IPv6 — the upper-case and dotted names are the ones a lower-case-only output
 rule would refuse, MF-03). It is written against the code rules and must stay green, unchanged, under the data.
 """
+import os
+import re
+
 import pytest
 import yaml
 
-from kontroll import authspec, catalog, probe
+from kontroll import authspec, catalog, paths, probe
 from kontroll.service import onboard, scaffold
 
 pytestmark = pytest.mark.unit
@@ -138,3 +141,212 @@ def test_a_tier_b_api_token_still_gets_its_host_var(probed, monkeypatch):
     assert plan["cred_source"] == "deep"
     assert ("SW_Core_1_api_token", _former_lookup("SW_Core_1_api_token")) in _host_vars(plan, "SW-Core-1")
     assert plan["creds_to_set"] == {"SW_Core_1_api_token": "t"}
+
+
+# --- the defaults as registry data (S27): what the oracle above now runs on ------------------------------------- #
+REGISTRY = catalog.load_backends()
+CODE_SITES = ["scripts/kontroll/service/onboard.py", "scripts/kontroll/service/scaffold.py",
+              "scripts/kontroll/authspec.py", "api/routes/onboard.py", "gui/app.py", "gui/templates/index.html",
+              "scripts/galaxy.py"]
+
+
+def _lab(**kw):
+    """A backend descriptor the test owns: a role, an SSH password, and whatever the row adds."""
+    b = {"name": "lab_cli", "role": "backend_netcommon_cli", "requires": [],
+         "connection": {"ansible_connection": "network_cli"},
+         "auth": [{"field": "password", "kind": "password", "maps_to": "ansible_password"}]}
+    b.update(kw)
+    return b
+
+
+def _lab_plan(bdef, **kw):
+    kw.setdefault("creds", {"password": "p"})
+    return _plan("h1", backend=bdef["name"], backends=[bdef], **kw)
+
+
+def _curated(tmp_repo, **fields):
+    """A curated `edgeos` class already in the repository, declaring `acme.edgeos` — what a second device reuses."""
+    target = tmp_repo / "modules" / "edgeos"
+    target.mkdir(parents=True)
+    (target / "module.yml").write_text(yaml.safe_dump(dict({
+        "key": "edgeos", "collections": [{"name": "acme.edgeos", "version": ">=1.0.0"}],
+        "inventory_group": "edge_router"}, **fields)), encoding="utf-8")
+
+
+def test_every_derived_param_is_a_required_param_and_renders():
+    """Each shipped backend's `derive_params` names only params its `requires:` lists, and each template renders,
+    with the planner's closed context, to a value in the param charset. Guards a typo'd placeholder or a param no
+    class reads shipping in the registry — the planner would refuse every onboard of that backend."""
+    ctx = {"collection": "acme.edgeos", "namespace": "acme", "name": "edgeos"}
+    derived = [b for b in REGISTRY if b.get("derive_params") is not None]
+    assert derived, "netcommon_cli derives network_os — the registry must still say so"
+    for b in derived:
+        assert set(b["derive_params"]) <= set(b.get("requires") or []), b["name"]
+        for tmpl in b["derive_params"].values():
+            assert catalog.PARAM_RE.fullmatch(catalog.render_template(tmpl, ctx, catalog.PARAM_RE))
+
+
+def test_every_shipped_backend_names_a_default_domain():
+    """Every shipped backend declares `default_secrets_domain`, as a valid name. Guards a backend shipped without
+    one: its onboards would be refused until the request names a domain."""
+    for b in REGISTRY:
+        assert onboard.default_secrets_domain(b, b["name"]), b["name"]
+
+
+@pytest.mark.parametrize("host_name", HOST_NAMES)
+def test_every_templated_maps_to_renders_for_every_host_name_shape(host_name):
+    """Every `maps_to` template the registry or the generic union ships renders, for the credential key of each
+    shape of host name the boundary accepts, to `<cred key>_api_token`. Guards MF-03: an output rule narrower than
+    the host names would refuse an onboard that works today."""
+    ck = host_name.replace("-", "_")
+    templates = [e["maps_to"] for b in REGISTRY for e in (b.get("auth") or []) if "{" in str(e.get("maps_to"))]
+    templates.append(authspec.union_field("api_token")["maps_to"])
+    assert len(templates) == 2, "the api backend's token and the generic union's: a new one needs its own row"
+    for tmpl in templates:
+        assert catalog.render_template(tmpl, {"cred_key": ck}, catalog.MAPS_TO_RE) == ck + "_api_token"
+
+
+@pytest.mark.parametrize("tmpl, ctx", [
+    ("{host}", {"cred_key": "h1"}),                              # a placeholder the context does not fill
+    ("{collection.__class__}", {"collection": "a.b"}),           # attribute access: str.format's door
+    ("{{collection}}", {"collection": "a.b"}),                   # a Jinja opener
+    ("{collection", {"collection": "a.b"}),                      # a brace left over
+    ("collection}", {"collection": "a.b"}),
+    ("{% if x %}", {}),
+    ("{collection} x", {"collection": "a.b"}),                   # a space in the result
+    ("{collection}.IOS", {"collection": "a.b"}),                 # a param is lower case (an FQCN's charset)
+    ("{Collection}", {"Collection": "a.b"}),                     # placeholders are lower case
+    ("{collection}", {"collection": 1}),                         # a context value that is not text
+    (None, {}),                                                  # a template that is not text
+    (["{collection}"], {"collection": "a.b"}),
+    ("", {}),                                                    # renders to nothing
+])
+def test_template_renderer_refuses_unknown_placeholders_and_bad_output(tmpl, ctx):
+    """catalog.render_template refuses (ValueError) every template outside the closed `{name}` grammar or whose
+    result leaves the charset. Guards a descriptor template becoming an expression language — the value lands in a
+    module file and in a host var Ansible templates."""
+    with pytest.raises(ValueError):
+        catalog.render_template(tmpl, ctx, catalog.PARAM_RE)
+
+
+@pytest.mark.parametrize("tmpl", ["{{collection}}", "{collection", "collection}", "{% if x %}", "{Collection}"])
+def test_template_grammar_refuses_a_stray_brace_whatever_the_charset(tmpl):
+    """The `{name}` grammar refuses a brace that is not a placeholder even under a charset that would let it
+    through. Guards the grammar resting on today's charsets: both refuse a brace, so a template check that relied on
+    them alone would pass a Jinja opener the day one charset admits braces."""
+    with pytest.raises(ValueError):
+        catalog.render_template(tmpl, {"collection": "a.b", "Collection": "a.b"}, re.compile(r".{1,256}\Z"))
+
+
+def test_template_renderer_fills_each_placeholder():
+    """The positive half: each placeholder is replaced, as often as it appears, and the rest is kept as written.
+    Guards a renderer that refuses everything passing the refusal rows above."""
+    ctx = {"collection": "acme.edgeos", "namespace": "acme", "name": "edgeos"}
+    assert catalog.render_template("{namespace}.{name}.{name}_x", ctx, catalog.PARAM_RE) == "acme.edgeos.edgeos_x"
+    assert catalog.render_template("plain", ctx, catalog.PARAM_RE) == "plain"
+
+
+def test_no_code_names_a_secrets_domain():
+    """None of the planner, the scaffold, authspec, the routes, the form or the CLI holds the word `network` as a
+    quoted literal. Guards an eleventh copy of the default the registry now owns (S27). A tripwire, not a proof: a
+    default spelled another way passes it."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for rel in CODE_SITES:
+        with open(os.path.join(root, rel), encoding="utf-8") as fh:
+            text = fh.read()
+        assert '"network"' not in text and "'network'" not in text, rel
+
+
+def test_onboard_without_a_domain_uses_the_backend_default(probed, tmp_repo):
+    """With no domain in the request, a new class stores its credentials in the backend's `default_secrets_domain`:
+    the plan, the module file and the drop-in's lookup all name it. A request's domain wins over it, and a reused
+    class's own `secrets_domain` wins over both, as before. Guards the resolution order and a silent fallback to a
+    literal in code."""
+    probed(**CLICONF)
+    lab = _lab(default_secrets_domain="lab")
+    plan = _lab_plan(lab)
+    assert plan["secrets"] == "lab" and plan["module"]["secrets_domain"] == "lab"
+    assert "/../secrets/lab.sops.yml" in plan["host_text"] and "network.sops.yml" not in plan["host_text"]
+    assert _lab_plan(lab, secrets="ops")["secrets"] == "ops"
+    _curated(tmp_repo, role="backend_netcommon_cli", backend="lab_cli", secrets_domain="curated")
+    assert _lab_plan(lab, secrets="ops")["secrets"] == "curated"
+    assert _lab_plan(lab)["secrets"] == "curated"
+
+
+def test_a_backend_with_no_default_domain_requires_one(probed):
+    """A backend that declares no `default_secrets_domain` plans only when the request names a domain; without one
+    the plan is refused as the `secrets domain` field (422, `invalid_secrets_domain`), never filled from code. Guards
+    the former `network` fallback coming back for a backend an operator adds."""
+    probed(**CLICONF)
+    with pytest.raises(paths.RequestBoundaryError) as refused:
+        _lab_plan(_lab())
+    assert refused.value.code == "invalid_secrets_domain" and "required" in str(refused.value)
+    assert _lab_plan(_lab(), secrets="ops")["secrets"] == "ops"
+
+
+def test_the_scaffold_takes_the_backend_default_domain(probed):
+    """The scaffold, given no domain, writes the backend's default into the class it scaffolds, and refuses for a
+    backend that declares none. Guards the scaffold's own copy of the fallback."""
+    probed(**CLICONF)
+    res = scaffold.build_scaffold("acme.edgeos", "edgeos", "edge_router", backend="lab_cli",
+                                  backends=[_lab(default_secrets_domain="lab")])
+    assert res["error"] is None and res["module"]["secrets_domain"] == "lab"
+    assert scaffold.build_scaffold("acme.edgeos", "edgeos", "edge_router")["module"]["secrets_domain"] == "network"
+    with pytest.raises(paths.RequestBoundaryError):
+        scaffold.build_scaffold("acme.edgeos", "edgeos", "edge_router", backend="lab_cli", backends=[_lab()])
+
+
+@pytest.mark.parametrize("change", [
+    {"default_secrets_domain": "../x"},                                                     # not a path component
+    {"default_secrets_domain": True},                                                       # not text
+    {"default_secrets_domain": "null"},                                                     # YAML reads it back as None
+    {"requires": ["network_os"], "derive_params": {"network_os": "{collection}.{nmae}"}},   # a typo'd placeholder
+    {"requires": ["network_os"], "derive_params": {"network_os": "{{ collection }}"}},      # Jinja
+    {"requires": ["network_os"], "derive_params": ["network_os"]},                          # not a map
+    {"auth": [{"field": "password", "kind": "password", "maps_to": "{cred_key}-pw"}]},      # renders to no var name
+    {"auth": [{"field": "password", "kind": "password", "maps_to": "{host}_pw"}]},          # a placeholder it lacks
+], ids=["domain-path", "domain-bool", "domain-null", "param-typo", "param-jinja", "param-list", "maps-to-dash",
+        "maps-to-unknown"])
+def test_a_registry_default_that_does_not_render_is_repository_data(probed, change):
+    """A default domain that is not a valid name, a `derive_params` template that does not render, and a `maps_to`
+    template that does not render to a variable name are the registry's fault: RepositoryDataError (409
+    `repository_data`), never a 422 blaming the request and never a written var. Guards a descriptor typo reaching
+    the module file or the drop-in."""
+    probed(**CLICONF)
+    bdef = _lab(**dict({"default_secrets_domain": "lab"}, **change))
+    with pytest.raises(paths.RepositoryDataError):
+        _lab_plan(bdef)
+
+
+def test_a_required_param_the_backend_does_not_derive_is_left_out(probed):
+    """A param the backend requires but does not derive, and a derived param it does not require, are not written —
+    the class's `backend_params` holds only what is both. Guards the move widening what a new class is written
+    with."""
+    probed(**CLICONF)
+    plan = _lab_plan(_lab(default_secrets_domain="lab", requires=["network_os", "other"],
+                          derive_params={"network_os": "{namespace}_{name}", "extra": "{name}"}))
+    assert plan["module"]["backend_params"] == {"network_os": "acme_edgeos"}
+
+
+def test_an_api_token_names_its_own_var_when_its_descriptor_does(probed, tmp_repo):
+    """A class whose own `auth:` block gives `api_token` a literal `maps_to` has the token written under that var.
+    The former branch on the field's name wrote `<cred key>_api_token` whatever the descriptor said; a declared
+    var now holds. Pins a deliberate difference brief 14 §5.5 accepts (no shipped descriptor declares one)."""
+    probed(**HTTPAPI)
+    _curated(tmp_repo, backend="api", secrets_domain="network",
+             auth=[{"field": "api_token", "kind": "token", "maps_to": "edgeos_token"}])
+    plan = _plan("h1", creds={"api_token": "t"})
+    assert ("edgeos_token", _former_lookup("h1_api_token")) in _host_vars(plan, "h1")
+    assert "h1_api_token" not in dict(_host_vars(plan, "h1"))
+
+
+def test_an_api_token_with_no_var_on_a_backend_without_the_template_is_stored_only(probed, tmp_repo):
+    """On a backend whose registry entry has no `api_token` template, a class's own `api_token` with no `maps_to` is
+    stored in SOPS and given no host var — what any other field with no `maps_to` gets. Pins the second deliberate
+    difference brief 14 §5.5 accepts: no shipped module declares such a field."""
+    probed(**CLICONF)
+    _curated(tmp_repo, backend="netcommon_cli", secrets_domain="network",
+             auth=[{"field": "api_token", "kind": "token"}])
+    plan = _plan("h1", creds={"api_token": "t"})
+    assert plan["creds_to_set"] == {"h1_api_token": "t"}
+    assert "h1_api_token" not in dict(_host_vars(plan, "h1"))

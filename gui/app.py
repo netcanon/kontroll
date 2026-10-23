@@ -48,7 +48,7 @@ from kontroll.service import keygen as keygen_service  # noqa: E402  (the guided
 from kontroll.service import secrets as secrets_service  # noqa: E402  (the secret-onboarding dialog backend)
 from kontroll.service.classify import service_classify  # noqa: E402
 from kontroll.service.onboard import (  # noqa: E402  (in-process onboard)
-    apply_onboard_plan, build_onboard_plan, no_backend_message)
+    apply_onboard_plan, build_onboard_plan, default_secrets_domain, no_backend_message)
 from kontroll.service.pending import promote_hint  # noqa: E402  (the one promote instruction a staged write returns)
 from kontroll.service.search import service_search  # noqa: E402
 
@@ -508,12 +508,14 @@ def api_onboard_cred_fields():
     pve-exporter), not the generic single token box (F1 seam S1). Mirrors api/routes/onboard.onboard_cred_fields.
     Read-only, pure schema — no creds, no write; a read surface never gates onboarding (INVARIANT D*)."""
     backend = request.args.get("backend") or ""
-    secrets = request.args.get("secrets") or "network"
+    secrets = request.args.get("secrets") or None   # none: the backend's default_secrets_domain (S27)
     collection = request.args.get("collection") or None
     deep = (request.args.get("deep") or "").lower() in ("1", "true", "yes", "on")
-    paths.component(secrets, "secrets domain")     # it is written into every descriptor this answers with
+    if secrets:
+        paths.component(secrets, "secrets domain")     # it is written into every descriptor this answers with
     _vectors, _overrides, backends = _catalog_triple()
     bdef = next((b for b in backends if b.get("name") == backend), {})
+    secrets = secrets or default_secrets_domain(bdef, backend)
     module = _catalog.module_for_collection(collection) if collection else None
     # F1 TIER-B (Rung 3): SHARPEN to the EXACT argument_spec fields when the collection is installed (install-
     # confined — MF-S1 also fail-closes inside authspec). Mirrors api/routes/onboard.onboard_cred_fields.
@@ -549,7 +551,7 @@ def api_onboard():
     try:
         plan = build_onboard_plan(
             d["collection"], d["key"], d["group"], d["host"],
-            host_name=d.get("host_name"), secrets=d.get("secrets") or "network", backend=d.get("backend"),
+            host_name=d.get("host_name"), secrets=d.get("secrets") or None, backend=d.get("backend"),
             creds=creds, backends=backends, vectors=vectors, deep=bool(d.get("deep")))
     except ValueError as e:
         # A catchable planner guard fired pre-write (MF-S2 domain-confinement, or a partially-filled required

@@ -162,6 +162,61 @@ def _role_of(bdef, key, from_request):
     return role
 
 
+def default_secrets_domain(bdef, backend):
+    """The SOPS domain a class of `backend` stores its credentials in when neither the request nor a reused class
+    names one: what its registry entry declares (`default_secrets_domain`, S27 — `network` for every shipped
+    backend), or None where it declares none. It becomes a path, the module file's `secrets_domain` and part of a
+    lookup expression, so a declared one is held to the request field's rule; one that fails is the registry's
+    fault, answered as repository data naming the backend (a registry name), never as the request's."""
+    domain = (bdef or {}).get("default_secrets_domain")
+    if domain is None:
+        return None
+    if not (paths.is_component(domain) and plain_scalar(domain)):
+        raise paths.RepositoryDataError(
+            "backend registry", "the %s backend's default_secrets_domain is not a valid name — correct its "
+            "backend.yml under ansible/backends/" % backend)
+    return domain
+
+
+def _secrets_domain(secrets, bdef, backend):
+    """The domain a plan or a scaffold stores credentials in: the one already chosen (the request's, or a reused
+    class's), else the backend's default. With neither, the request must name one: refused as the `secrets domain`
+    field (a 422), since naming one is the remedy."""
+    secrets = secrets or default_secrets_domain(bdef, backend)
+    if secrets is None:
+        raise paths.RequestBoundaryError(
+            "secrets domain", "secrets domain is required: the backend's registry entry declares no default "
+            "(default_secrets_domain)")
+    return secrets
+
+
+def backend_params(bdef, collection, backend):
+    """The params a NEW class of `backend` is written with (its module file's `backend_params`): each param the
+    registry entry DERIVES (`derive_params`, S27 — netcommon_cli's `network_os: "{collection}.{name}"` turns
+    cisco.ios into cisco.ios.ios) that it also requires, rendered from the collection's names by
+    catalog.render_template. A required param it does not derive is the operator's to add (raw_ssh's backup command).
+    A block or a template that does not render is the registry's fault, refused as repository data before any
+    write. Shared by the planner and the scaffold."""
+    derive = bdef.get("derive_params")
+    if derive is None:
+        return {}
+    where = ("backend registry", "the %s backend's derive_params is not a map of params to templates that render "
+             "to a param value — correct its backend.yml under ansible/backends/" % backend)
+    if not isinstance(derive, dict):
+        raise paths.RepositoryDataError(*where)
+    namespace, name = collection.split(".", 1)
+    ctx = {"collection": collection, "namespace": namespace, "name": name}
+    requires = bdef.get("requires") or []
+    params = {}
+    for param, tmpl in derive.items():
+        if param in requires:
+            try:
+                params[param] = catalog.render_template(tmpl, ctx, catalog.PARAM_RE)
+            except ValueError:
+                raise paths.RepositoryDataError(*where) from None
+    return params
+
+
 def _facts_for(collection, bundled):
     """The facts a plan or a scaffold is built from, or None when the collection is not installed. A collection
     that ships inside ansible-core (`bundled` — a search card's, the plain SSH host) gets its empty DECLARED facts,
@@ -265,7 +320,7 @@ def _sops_ref(sops_expr, sops_key):
     return ("{{ (%s).%s }}" if sops_key.isidentifier() else "{{ (%s)['%s'] }}") % (sops_expr, sops_key)
 
 
-def build_onboard_plan(collection, key, group, host, host_name=None, secrets="network",
+def build_onboard_plan(collection, key, group, host, host_name=None, secrets=None,
                        backend=None, username=None, password=None, api_token=None,
                        ssh_private_key=None, backends=None, vectors=None, creds=None, deep=False):
     """Compute the onboard PLAN for `collection` as device-class `key` on `host`. Returns
@@ -299,8 +354,9 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
     paths.hostname(host, "host")
     if host_name is not None:
         paths.inventory_host(host_name)          # none of RESERVED_HOST_NAMES (the group's, and the two loopbacks)
-    paths.component(secrets, "secrets domain")
-    _plain_name(secrets, "secrets domain")
+    if secrets is not None:                      # None: the reused class's, else the backend's default (S27)
+        paths.component(secrets, "secrets domain")
+        _plain_name(secrets, "secrets domain")
     backend_from_request = backend is not None
     if backend_from_request:
         paths.component(backend, "backend")
@@ -361,9 +417,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
                     "declaring_class": None if module_reuse else _declaring_class(collection, backends)}
     bdef = next((b for b in backends if b.get("name") == backend), {})
     role = adopted_role or _role_of(bdef, key, backend_from_request)
-    params = {}
-    if "network_os" in (bdef.get("requires") or []):
-        params["network_os"] = "%s.%s" % (collection, collection.split(".")[-1])
+    secrets = _secrets_domain(secrets, bdef, backend)
+    params = backend_params(bdef, collection, backend)
     host_name = host_name or (key.replace("_", "-") + "-1")
 
     capability_gap = []   # the honest residual surfaced for a blind onboard (non-gating); a reused class shows none
@@ -463,6 +518,15 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             if extra is not None:
                 extra["domain"] = secrets
                 auth["fields"].append(extra)
+    # The backend's TEMPLATED `maps_to` entries are the default, by field name, for a field that brings none (S27): a
+    # TIER-B field read from a module's argument spec never sets one, and an `api_token` among them got its host var
+    # from the branch on the field's name this replaces. The same rule, stated as the registry's data.
+    templated = {e["field"]: e["maps_to"] for e in (bdef.get("auth") if isinstance(bdef.get("auth"), list) else [])
+                 if isinstance(e, dict) and isinstance(e.get("field"), str)
+                 and isinstance(e.get("maps_to"), str) and "{" in e["maps_to"]}
+    for cf in auth["fields"]:
+        if cf.get("maps_to") is None and cf["field"] in templated:
+            cf["maps_to"] = templated[cf["field"]]
 
     # MF-S2 domain confinement (the one NEW security guard) — a PRE-PASS before any creds_to_set write: every SECRET
     # field that has a value must target the onboard's own SOPS domain. Refuse (loud, catchable) BEFORE the mapping
@@ -511,7 +575,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # EXPRESSION below, so it is an identifier or the onboard is refused (SECURITY.md C22); the name is not
         # echoed.
         # `maps_to` is the NAME of the host var the field is written under. It is a key of the inventory drop-in,
-        # so it is an identifier too: no brace, no space, no line break, no value that is not a string. WHICH
+        # so it is an identifier too: no brace, no space, no line break, no value that is not a string — or a
+        # template whose rendering with this host's credential key stays in catalog.MAPS_TO_RE (below). WHICH
         # variable a SOPS-stored field names is the declaring file's to choose — a module's own `auth:` entry may
         # name `ansible_connection` as the registry names `ansible_user`; what lands there is a lookup, never the
         # request's text — and is not restricted here (SECURITY.md C22, limits). An inline field's variable is
@@ -525,8 +590,19 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         if not isinstance(stem, str) or not _STEM_RE.fullmatch(stem):
             raise paths.RepositoryDataError(
                 "credential field", "a credential field %s has a name that is not an identifier" % _where)
+        # A `maps_to` holding a placeholder is a TEMPLATE (S27 — the api backend's `{cred_key}_api_token`): rendered
+        # with this host's credential key and held to catalog.MAPS_TO_RE, the charset of every host name the request
+        # boundary accepts, so an upper-case, dotted or IP-literal host keeps the var it had. The host name cannot
+        # make the render fail; the template's own text can, so a failure is the declaring file's.
         maps_to = cf.get("maps_to")
-        if maps_to is not None and not (isinstance(maps_to, str) and _STEM_RE.fullmatch(maps_to)):
+        if isinstance(maps_to, str) and "{" in maps_to:
+            try:
+                maps_to = catalog.render_template(maps_to, {"cred_key": cred_key}, catalog.MAPS_TO_RE)
+            except ValueError:
+                raise paths.RepositoryDataError(
+                    "credential field", "a credential field %s maps to a template that does not render to a "
+                    "variable name" % _where) from None
+        elif maps_to is not None and not (isinstance(maps_to, str) and _STEM_RE.fullmatch(maps_to)):
             raise paths.RepositoryDataError(
                 "credential field", "a credential field %s maps to something that is not a variable name" % _where)
         sops_key = stem if cf.get("shared") else "%s_%s" % (cred_key, stem)
@@ -544,19 +620,9 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             # TIER-B-DERIVED ssh_key param (e.g. a module's `client_key`) has NO maps_to → SOPS-store it, but skip
             # the hostvar wiring (a None-keyed hostvar would be bogus — review-30 F-3). Its consumer reads the SOPS
             # value by name; only a maps_to field materializes the 0600 key file + declares the decrypt domain.
-            if cf.get("maps_to"):
-                hostvars[cf["maps_to"]] = "{{ kontroll_device_key_dir }}/%s.key" % cred_key
+            if maps_to:
+                hostvars[maps_to] = "{{ kontroll_device_key_dir }}/%s.key" % cred_key
                 hostvars["kontroll_ssh_key_domain"] = secrets
-        elif cf["field"] == "api_token":
-            # The token's hostvar. `params` only ever carries `network_os` (see the params block above), so
-            # `token_var` is NOT populated here and this resolves to the per-host convention in practice —
-            # roles/backend_api accepts that name as well as the recipe's declared `token_var`, and refuses
-            # naming both if neither is in scope. The `params` branch is kept for a backend that does declare
-            # one. Do NOT restore the old claim that the planner resolves it from the recipe: nothing reads
-            # paths.RECIPES_DIR, and believing otherwise cost a silently-broken edge-firewall check.
-            tok_var = (params.get("token_var") or "%s_api_token" % cred_key)
-            hostvars[tok_var] = _sops_ref(_sops, sops_key)
-            creds_to_set[sops_key] = val
         elif cf.get("inline"):
             # A non-secret literal host var (a port, a flag) — not SOPS, so the VALUE itself lands in the inventory,
             # where Ansible templates it (S28, SECURITY.md C22). authspec types it first, so what is written is an int
@@ -572,9 +638,11 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             # SOPS-store the value, and wire a hostvar inline-lookup ONLY if the field maps to one. A shared
             # domain cred (proxmox exporter token) has NO maps_to — it is read from the SOPS domain by its consumer
             # (deploy-stack renders it into the exporter .env via the class's secret_env_map), not via a hostvar.
+            # An API token is one of these since S27: its var is the api backend's `{cred_key}_api_token` template,
+            # rendered above. roles/backend_api reads that name, or the recipe's own `token_var` when one is in scope.
             creds_to_set[sops_key] = val
-            if cf.get("maps_to"):
-                hostvars[cf["maps_to"]] = _sops_ref(_sops, sops_key)
+            if maps_to:
+                hostvars[maps_to] = _sops_ref(_sops, sops_key)
     host_block = {group: {"hosts": {host_name: {"ansible_host": host, **hostvars}}}}
     host_text = yaml.safe_dump(host_block, sort_keys=False, allow_unicode=True, width=4096)
 

@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from api.auth import Principal, audit_action, require_token
 from api.deps import Catalog, get_catalog
 from kontroll import authspec, catalog, gitio, paths, probe
-from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan, no_backend_message
+from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan, default_secrets_domain, no_backend_message
 from kontroll.service.pending import promote_hint
 
 # What a `no_backend` answer tells an API or GUI caller to do (the CLI's names its own flag).
@@ -35,7 +35,7 @@ class OnboardIn(BaseModel):
     group: str
     host: str
     host_name: Optional[str] = None
-    secrets: str = "network"
+    secrets: Optional[str] = None   # omitted (or blank): a reused class's, else the backend's default_secrets_domain
     backend: Optional[str] = None
     # F1: the DERIVED per-backend credential fields, a {field: value} map (the form sends exactly the fields
     # authspec derived for the picked backend). The legacy scalars below are kept so an existing caller still
@@ -90,7 +90,7 @@ def onboard(body: OnboardIn, request: Request,
                  if v is not None}
     try:
         plan = build_onboard_plan(body.collection, body.key, body.group, body.host,
-                                  host_name=body.host_name, secrets=body.secrets, backend=body.backend,
+                                  host_name=body.host_name, secrets=body.secrets or None, backend=body.backend,
                                   creds=creds, backends=cat.backends, deep=body.deep)
     except ValueError as e:
         # A catchable planner guard fired BEFORE any write: the request boundary (C22 — a field that is not a closed
@@ -149,7 +149,7 @@ def onboard(body: OnboardIn, request: Request,
 
 
 @router.get("/onboard/cred-fields", summary="Derived credential fields for a backend (read-only, names only)")
-def onboard_cred_fields(backend: str, secrets: str = "network", collection: Optional[str] = None,
+def onboard_cred_fields(backend: str, secrets: Optional[str] = None, collection: Optional[str] = None,
                         deep: bool = False,
                         principal: Principal = Depends(require_token),
                         cat: Catalog = Depends(get_catalog)) -> dict:
@@ -162,9 +162,13 @@ def onboard_cred_fields(backend: str, secrets: str = "network", collection: Opti
     never blocked. `deep=true` SHARPENS the shape to the EXACT argument_spec fields (F1 TIER-B, Rung 3) — install-
     confined (MF-S1: only for a locally-installed collection; a Galaxy result is never introspected here) and
     fail-safe (MF-S6). Read-only, no creds: pure schema, auth-gated like the rest of this router; a read surface
-    never gates onboarding (INVARIANT D*)."""
-    paths.component(secrets, "secrets domain")     # it is written into every descriptor this answers with
+    never gates onboarding (INVARIANT D*). With no `secrets`, the domain is the backend's `default_secrets_domain`
+    (S27) and the answer's `secrets` says which — the form shows it as its placeholder; null for a backend this
+    install does not ship, which declares none."""
+    if secrets:
+        paths.component(secrets, "secrets domain")     # it is written into every descriptor this answers with
     bdef = next((b for b in cat.backends if b.get("name") == backend), {})
+    secrets = secrets or default_secrets_domain(bdef, backend)
     module = catalog.module_for_collection(collection) if collection else None
     # TIER-B is worth the introspection only for an INSTALLED collection (MF-S1 also fail-closes inside authspec);
     # deep-probe it once for the candidate module list, else stay on the coarse TIER-A shape (no ansible-doc cost).

@@ -9,10 +9,11 @@ import os
 import yaml
 
 from kontroll import catalog, paths, predicate
-from kontroll.service.onboard import _facts_for, _pins, _plain_name, _registered, _role_of, no_backend_signals
+from kontroll.service.onboard import (_facts_for, _pins, _plain_name, _registered, _role_of, _secrets_domain,
+                                      backend_params, no_backend_signals)
 
 
-def build_scaffold(collection, key, group, secrets, backend=None, backends=None):
+def build_scaffold(collection, key, group, secrets=None, backend=None, backends=None):
     """Compute the scaffolded device-class module for `collection`. Returns a dict with
     "error": "not_installed" (probe found nothing) | "no_backend" (no backend that declares a role
     auto-matched, and none given — with the planner's `signals`, for its sentence) | None; on success
@@ -23,14 +24,17 @@ def build_scaffold(collection, key, group, secrets, backend=None, backends=None)
     must be one the registry ships — and the role is the one the backend's registry entry declares, held to the
     role's rule, like the planner's: this is another writer of a class's identity keys (with the onboard and the
     identity reconfigure), and the file it writes is what a later onboard ADOPTS. With no `backend`, it chooses as
-    the planner does: the first match that declares a role."""
+    the planner does: the first match that declares a role. With no `secrets`, the class stores its credentials in
+    the backend's `default_secrets_domain`, and its `backend_params` are what the backend derives — the planner's
+    own helpers (S27)."""
     paths.collection_fqcn(collection)
     paths.component(key, "device-class key")
     _plain_name(key, "device-class key")
     paths.inventory_group(group)
     _plain_name(group, "inventory group")
-    paths.component(secrets, "secrets domain")
-    _plain_name(secrets, "secrets domain")
+    if secrets is not None:
+        paths.component(secrets, "secrets domain")
+        _plain_name(secrets, "secrets domain")
     backend_from_request = backend is not None
     if backend_from_request:
         paths.component(backend, "backend")
@@ -49,11 +53,8 @@ def build_scaffold(collection, key, group, secrets, backend=None, backends=None)
         if not backend:
             return {"error": "no_backend", "signals": no_backend_signals(f, matches)}
     bdef = next((b for b in backends if b.get("name") == backend), {})
-    requires = bdef.get("requires") or []
-    parts = collection.split(".")
-    params = {}
-    if "network_os" in requires:                 # ns.name -> ns.name.name (verify)
-        params["network_os"] = "%s.%s" % (collection, parts[-1])
+    secrets = _secrets_domain(secrets, bdef, backend)
+    params = backend_params(bdef, collection, backend)
     module = {
         "key": key,
         "description": "%s via %s backend (auto-scaffolded)" % (collection, backend),

@@ -406,6 +406,32 @@ def test_onboard_cred_fields_unknown_backend_falls_back(client):
     assert {cf["field"] for cf in b["cred_fields"]} == {"username", "password", "api_token", "ssh_private_key"}
 
 
+def test_onboard_cred_fields_reports_the_resolved_default_domain(client):
+    """With no `secrets`, the GUI's `GET /api/onboard/cred-fields` answers with the backend's
+    `default_secrets_domain` (read from the registry here, not written as a literal) and stamps it on every
+    descriptor; a backend this install does not ship names none. Guards the form's placeholder — set from this
+    answer since the box ships empty — going blank or drifting from the API route's (S27)."""
+    for backend in ("api", "netcommon_cli"):
+        want = next(b for b in catalog.load_backends() if b["name"] == backend)["default_secrets_domain"]
+        b = client.get("/api/onboard/cred-fields?backend=" + backend, headers=_auth()).get_json()
+        assert b["secrets"] == want and {cf["domain"] for cf in b["cred_fields"]} == {want}
+    unknown = client.get("/api/onboard/cred-fields?backend=no_such_backend", headers=_auth())
+    assert unknown.status_code == 200 and unknown.get_json()["secrets"] is None
+    named = client.get("/api/onboard/cred-fields?backend=api&secrets=lab", headers=_auth()).get_json()
+    assert named["secrets"] == "lab"
+
+
+def test_gui_onboard_with_a_blank_domain_plans_into_the_backend_default(client, onboard_env):
+    """The form's submit with its domain box left empty (`secrets: ""`) plans into the backend's default domain.
+    Guards the GUI route's former `or "network"` fallback coming back as a literal."""
+    want = next(b for b in catalog.load_backends() if b["name"] == "netcommon_cli")["default_secrets_domain"]
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "secrets": "", "creds": {"password": "p"}},
+                    headers=_auth())
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["plan"]["module"]["secrets_domain"] == want
+
+
 # --- the standalone secondary-capability dialog (in-process over the service layer) ------------------- #
 @pytest.fixture
 def cap_class(tmp_repo, monkeypatch):

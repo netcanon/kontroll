@@ -1825,7 +1825,14 @@ and an option of an installed module whose name is not an identifier is not offe
 third party's spelling never refuses an onboard; where such an option is required or marked `no_log`, the module's
 set is not exact and is not used). Its `maps_to` — the NAME of the host var a value is written under — is an
 identifier too, wherever a value is written under it, and an `inline` field must name one (which host var is the
-declaring file's choice; see the limits below). The module-reuse path ADOPTS a class's group, secrets domain,
+declaring file's choice; see the limits below). A `maps_to` holding a `{placeholder}` is a TEMPLATE (S27: the api
+backend's and the generic union's `{cred_key}_api_token`, the var the former branch on the field's name wrote): it is
+rendered with the host's credential key alone — `catalog.render_template`'s closed `{name}` grammar, no attribute
+access, no Jinja — and its result is held to the charset of the host names the request boundary accepts
+(`catalog.MAPS_TO_RE`), not to an identifier, so a dotted or IP-literal host keeps the var it had; a template that
+does not render is the declaring file's, refused as repository data (`tests/unit/test_backend_defaults.py`). The
+backend registry's `default_secrets_domain`, which stands in for a domain the request omits, is held to the rule of
+a name as repository data before the plan uses it. The module-reuse path ADOPTS a class's group, secrets domain,
 backend and role from the module file already on disk; each one the plan takes is held, where it is taken and before
 anything is written, to the rule of the request field of the same meaning — for the role, which no request carries,
 the rule of a name (`onboard._adopted`): the adopted domain is formatted into that same lookup expression, the role

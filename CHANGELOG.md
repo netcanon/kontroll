@@ -11,6 +11,30 @@ NetConfig project.
 
 ## [Unreleased]
 
+### refactor(onboard): the backend registry owns an onboard's defaults — domain, params, the token var (T18 / S27, 2026-10-22)
+
+The secrets domain `network`, the `network_os` rule and the api token's host var were code: copies of the
+domain's name across the planner, the scaffold, the routes, the form and the CLI, and two branches on a backend's or
+a field's name in the planner. A backend an operator adds could not change any of them. Each is now a field of
+`ansible/backends/<name>/backend.yml`, and a new class's module file and drop-in are byte-identical to what the
+former code wrote for every backend the tool ships (`tests/unit/test_backend_defaults.py`'s oracle).
+
+- `default_secrets_domain` (every shipped backend: `network`). An onboard or scaffold that names no domain stores
+  credentials there; a request's domain wins over it, and a reused class's own `secrets_domain` over both, as before.
+  A backend that declares none makes a domain required (422 `invalid_secrets_domain`).
+- `derive_params` (`netcommon_cli`: `network_os: "{collection}.{name}"`): what a new class's `backend_params` are
+  written with. Only a param the backend `requires:` is written.
+- A templated `maps_to` (`api` and the generic union's `api_token`: `{cred_key}_api_token`) names the host var a
+  token is written under. A template is a closed `{name}` grammar rendered to a fixed charset; a default or template
+  that fails is answered `repository_data` and never written.
+- Two differences, pinned by tests: a class's own `api_token` with a literal `maps_to` is now written under that var
+  (it was `<cred key>_api_token` whatever the file said), and a class's own `api_token` with no `maps_to`, on a
+  backend without the template, is stored in SOPS with no host var. No shipped module declares either.
+- API and GUI: `secrets` is optional on `POST /onboard` and `GET /onboard/cred-fields` — a blank value now means
+  omitted (it was a 422) — and `cred-fields` answers the domain it resolved. The onboard form's domain box ships
+  empty, its placeholder naming that domain; a typed domain now counts as input to the form's collapse check. The
+  CLI's `--secrets` has no default of its own.
+
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 
 `ping.yml` decides a host is reachable with a TCP connect from the control node, on `mgmt_port` or 22 — and nothing

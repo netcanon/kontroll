@@ -409,7 +409,7 @@ def main():
     sc.add_argument("collection")
     sc.add_argument("--key", required=True, help="device-class key (modules/<key>/)")
     sc.add_argument("--group", required=True, help="inventory group it feeds")
-    sc.add_argument("--secrets", default="network", help="secrets domain (default network)")
+    sc.add_argument("--secrets", help="secrets domain (default: the backend's default_secrets_domain)")
     sc.add_argument("--backend", help="override the auto-chosen backend")
     sc.add_argument("--dry-run", action="store_true")
     sc.set_defaults(func=cmd_scaffold)
@@ -419,7 +419,8 @@ def main():
     ob.add_argument("--group", required=True, help="inventory group")
     ob.add_argument("--host", required=True, help="the host's mgmt IP/name")
     ob.add_argument("--host-name", help="inventory hostname (default: <key>-1)")
-    ob.add_argument("--secrets", default="network", help="secrets domain (default network)")
+    ob.add_argument("--secrets", help="secrets domain (default: the class's own, else the backend's "
+                    "default_secrets_domain)")
     ob.add_argument("--backend", help="override the auto-chosen backend")
     ob.add_argument("--username", help="login user (SSH) — encrypted into the secrets domain, inline on the host")
     ob.add_argument("--password", help="login password (SSH) — encrypted into the secrets domain")

@@ -18,17 +18,21 @@ classify:
 # gap). backup also omitted — it needs a per-API recipe.
 confers: {actuate: true, telemetry: [blackbox], logs: []}
 requires: []
+# The SOPS domain a class of this backend stores its credentials in when the onboard request names none and the
+# class is new (a reused class keeps its own `secrets_domain`). Read by service/onboard.py and the scaffold, and
+# shown as the onboard form's default; no code names a domain (S27). A new name needs a rule in .sops.yaml.
+default_secrets_domain: network
 role: backend_api
 # Onboarded api hosts are reached by localhost-delegated `uri`, not SSH/httpapi —
 # so the host connection is local. The recipe (backend_api_recipe) + its token var
 # carry everything else.
 #
-# TOKEN VAR — how it ACTUALLY resolves (this comment used to claim the planner did it; it never did).
-# service/onboard.py builds `backend_params` with `network_os` only, so its `params.get("token_var")` is
-# always None and an onboarded api host gets the per-host convention `<host with - as _>_api_token`.
-# roles/backend_api therefore accepts EITHER name: the recipe's declared `token_var` first, then that
-# convention, refusing loudly and naming both if neither is in scope. Fixed 2026-07-28 after the mismatch
-# had silently reported a healthy FortiGate as UNREACHABLE for the whole life of the class.
+# TOKEN VAR — an onboarded api host's token var is `<host with - as _>_api_token`: this file's `api_token` entry
+# below says so as a `maps_to` TEMPLATE, which service/onboard.py renders per host (S27). roles/backend_api accepts
+# EITHER name: the recipe's declared `token_var` first, then that per-host one, refusing loudly and naming both if
+# neither is in scope. Nothing resolves a recipe's `token_var` at onboard time — a comment here once claimed the
+# planner did, and the mismatch silently reported a healthy FortiGate as UNREACHABLE for the life of the class
+# (fixed 2026-07-28).
 connection:
   ansible_connection: local
 # The TCP port ping.yml's reachability probe uses for a host of this backend (S28): the planner writes it into the
@@ -38,10 +42,11 @@ connection:
 probe_port: 443
 # Self-describing credential SHAPE (F1 TIER-A): a REST/httpapi device authenticates with an API TOKEN (or basic
 # auth) — NOT an SSH key. Deriving exactly these fields stops the form showing dead SSH boxes for a REST device (the
-# operator's headline gap). The token's hostvar is the recipe's token_var (resolved by the planner). The exact
-# multi-field API auth (e.g. proxmox api_user+api_token_id+api_token_secret) is a TIER-B/Rung-1 sharpening; this is
-# the generic REST shape. Read by scripts/kontroll/authspec.py.
+# operator's headline gap). The token's host var is the `maps_to` template below (the TOKEN VAR note above); the
+# planner also gives it, by field name, to an `api_token` that a module's argument spec derives without one (TIER-B).
+# A template takes `{cred_key}` only. The exact multi-field API auth (e.g. proxmox api_user+api_token_id+
+# api_token_secret) is a TIER-B/Rung-1 sharpening; this is the generic REST shape. Read by scripts/kontroll/authspec.py.
 auth:
-  - {field: api_token, kind: token, label: "API token / key"}
+  - {field: api_token, kind: token, label: "API token / key", maps_to: "{cred_key}_api_token"}
   - {field: username, kind: identity, label: "API username (basic auth)", maps_to: ansible_user}
   - {field: password, kind: password, label: "API password (basic auth)", maps_to: ansible_password}

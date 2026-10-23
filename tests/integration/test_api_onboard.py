@@ -359,3 +359,33 @@ def test_onboard_refuses_a_reserved_host_name_before_any_write(onb, word):
     r = onb.client.post("/onboard", headers=AUTH, json=_body(host_name=word))
     assert r.status_code == 422 and r.json()["code"] == "invalid_host_name", r.text
     assert not (onb.repo / "modules" / "edgeos").exists() and onb.calls == []
+
+
+def _registry_default(backend):
+    """The registry's own `default_secrets_domain` for `backend` — what the answers below must equal, read from the
+    data rather than written here as a literal."""
+    return next(b for b in catalog.load_backends() if b["name"] == backend)["default_secrets_domain"]
+
+
+def test_cred_fields_reports_the_resolved_default_domain(onb):
+    """With no `secrets`, `GET /onboard/cred-fields` answers with the backend's `default_secrets_domain` and stamps it
+    on every descriptor; for a backend this install does not ship it names none (null). Guards the form's
+    placeholder, which shows this answer, going blank or naming a domain the plan would not use (S27)."""
+    for backend in ("api", "netcommon_cli"):
+        b = onb.client.get("/onboard/cred-fields", headers=AUTH, params={"backend": backend}).json()
+        assert b["secrets"] == _registry_default(backend)
+        assert {cf["domain"] for cf in b["cred_fields"]} == {_registry_default(backend)}
+    unknown = onb.client.get("/onboard/cred-fields", headers=AUTH, params={"backend": "no_such_backend"})
+    assert unknown.status_code == 200 and unknown.json()["secrets"] is None
+
+
+@pytest.mark.parametrize("over", [{}, {"secrets": ""}, {"secrets": None}], ids=["omitted", "blank", "null"])
+def test_onboard_with_no_domain_plans_into_the_backend_default(onb, over):
+    """An onboard body that omits `secrets`, sends it blank or sends null plans into the backend's default domain.
+    Guards the request model's former literal coming back, and a blank meaning anything but "omitted" (the form
+    sends one when its box is empty)."""
+    r = onb.client.post("/onboard", headers=AUTH, json=_body(creds={"password": "p"}, **over))
+    assert r.status_code == 200, r.text
+    assert r.json()["plan"]["module"]["secrets_domain"] == _registry_default("netcommon_cli")
+    named = onb.client.post("/onboard", headers=AUTH, json=_body(creds={"password": "p"}, secrets="lab")).json()
+    assert named["plan"]["module"]["secrets_domain"] == "lab"

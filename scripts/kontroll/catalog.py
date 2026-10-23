@@ -10,6 +10,7 @@ them). local_installed + galaxy_search are the I/O SEAM the tests monkeypatch
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import urllib.error
@@ -357,6 +358,36 @@ def made_up_roles(backends=None):
     PURE."""
     backends = backends if backends is not None else load_backends()
     return ["backend_%s" % b.get("name") for b in backends if backend_role(b) is None]
+
+
+# A backend descriptor's TEMPLATES (S27): a `derive_params` value and a templated `maps_to`. The grammar is closed and
+# is not Jinja: `{name}` placeholders filled from a fixed context, and nothing else — no attribute access (what
+# `str.format` would give `{collection.__class__}`), no expression, no filter.
+_PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+# What a rendered value may hold. A derived param is written into the module file and, through `connection:`, into a
+# host var Ansible templates (`ansible_network_os`): the collection's own charset and the dot that joins its names. A
+# templated `maps_to` names a host var after the host's credential key — the inventory host name with `-` as `_` —
+# so the charset of every host name the request boundary accepts: letters of either case, digits, `_`, and the `.`
+# and `:` of a dotted name or an IP literal. Never a brace, a space or a quote; the var is a key of the drop-in.
+PARAM_RE = re.compile(r"[a-z0-9_.]{1,256}\Z")
+MAPS_TO_RE = re.compile(r"[A-Za-z0-9_.:]{1,320}\Z")
+
+
+def render_template(tmpl, ctx, out_re):
+    """`tmpl` with each `{name}` placeholder replaced from `ctx` (a {name: text} map), held to `out_re`. A template
+    that is not text, a placeholder `ctx` does not fill, a brace left once the placeholders are gone, or a result
+    `out_re` does not match raises ValueError: a descriptor typo is a refused plan, never a written var. PURE."""
+    if not isinstance(tmpl, str):
+        raise ValueError("a template is not text")
+    rest = _PLACEHOLDER.sub("", tmpl)
+    if "{" in rest or "}" in rest:
+        raise ValueError("a template holds a brace that is not a placeholder")
+    if any(not isinstance(ctx.get(name), str) for name in _PLACEHOLDER.findall(tmpl)):
+        raise ValueError("a template names a placeholder it cannot fill")
+    out = _PLACEHOLDER.sub(lambda m: ctx[m.group(1)], tmpl)
+    if not out_re.fullmatch(out):
+        raise ValueError("a template renders to a value outside its charset")
+    return out
 
 
 def runnable(names, backends=None):
