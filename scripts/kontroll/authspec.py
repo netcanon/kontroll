@@ -32,7 +32,7 @@ import json
 import logging
 import re
 
-from kontroll import catalog, probe
+from kontroll import catalog, paths, probe
 
 log = logging.getLogger("kontroll.authspec")
 
@@ -43,6 +43,64 @@ KINDS = frozenset({"ssh_key", "password", "token", "host", "identity", "port", "
 # Kinds that are secret by default (masked input → creds_to_set → SOPS, never printed/logged). A backend entry may
 # override with an explicit `secret:` but these are the safe defaults.
 _SECRET_KINDS = frozenset({"ssh_key", "password", "token"})
+
+# The kinds an `inline: true` field may have (S28). An inline value is written INTO the inventory drop-in as a
+# literal host var, and Ansible templates inventory variables, so each kind here has a validator that turns the
+# request's string into a typed value — an int, a bool. The request never chooses the bytes that reach the drop-in
+# (SECURITY.md C22). A kind with no validator cannot be inline; adding one means adding its branch to inline_value.
+INLINE_KINDS = frozenset({"port", "bool"})
+_PORT_RE = re.compile(r"[0-9]{1,5}\Z")               # "22\n", " 22", "+22", "２２" are not ports
+_INLINE_TARGET_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+
+
+def port_number(value):
+    """The TCP port `value` names, as an int in 1..65535, or None when it names none. An int (never a bool) in that
+    range, or a string of one to five ASCII digits whose number is in it: no sign, no space, no line break, no digit
+    of another script — `re.fullmatch` over `[0-9]`, because `re.match` with `$` accepts a trailing newline (the trap
+    the C22 review found in three validators). Shared by an inline port the request types and the `probe_port` a
+    backend descriptor declares; each caller raises its own error type."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str) and _PORT_RE.fullmatch(value):
+        value = int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 65535:
+        return value
+    return None
+
+
+def inline_target(cf):
+    """The host var an inline field writes, or None when its descriptor may not write one: the kind must have a
+    validator (INLINE_KINDS), `maps_to` must be a lower-case identifier, and a `port` lands only in a `*_port` var.
+    A descriptor cannot aim a typed value at an arbitrary variable — a valid int written as `ansible_user` is still
+    the wrong thing in the wrong place. A None is the declaring file's fault, and the planner refuses it as
+    repository data, before any write."""
+    target = cf.get("maps_to")
+    if cf.get("kind") not in INLINE_KINDS or not isinstance(target, str) or not _INLINE_TARGET_RE.fullmatch(target):
+        return None
+    if cf["kind"] == "port" and not target.endswith("_port"):
+        return None
+    return target
+
+
+def inline_value(cf, raw):
+    """The TYPED literal an inline field writes into its host var: kind `port` → an int in 1..65535 (port_number);
+    kind `bool` → True or False, from a bool or exactly "true" / "false". Anything else is refused as a request
+    field (paths.RequestBoundaryError, a 422 naming the field and the rule — never the value). Only a kind
+    inline_target accepts reaches here; any other kind is refused the same way, so a new inline kind cannot be
+    written as text by mistake."""
+    field, kind = cf["field"], cf.get("kind")
+    if kind == "port":
+        port = port_number(raw)
+        if port is not None:
+            return port
+        raise paths.RequestBoundaryError(field, "%s is not a TCP port (a whole number from 1 to 65535)" % field)
+    if kind == "bool":
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str) and raw in ("true", "false"):
+            return raw == "true"
+        raise paths.RequestBoundaryError(field, "%s is not true or false" % field)
+    raise paths.RequestBoundaryError(field, "%s cannot be written into the inventory" % field)
 
 # The generic 4-field union — TODAY's static onboard fields (onboard.py's former if-ladder), kept as the FALLBACK
 # shape when a backend declares no `auth:` block, so a brand-new/unclassified device degrades to EXACTLY today's
@@ -60,8 +118,8 @@ _GENERIC_UNION = (
 
 def _normalize(entry):
     """Fill a backend `auth:` entry into a complete CredField (defaults: `sops_stem`=field, secret-by-kind). Pure;
-    carries NO value. `inline:true` marks a non-secret literal hostvar (host/port/bool) the planner renders inline,
-    not as a SOPS lookup."""
+    carries NO value. `inline:true` marks a non-secret literal hostvar (a port or a flag: INLINE_KINDS) the planner
+    writes as a typed value (inline_value), not as a SOPS lookup."""
     field = entry["field"]
     kind = entry.get("kind", "password")
     cf = {"field": field,

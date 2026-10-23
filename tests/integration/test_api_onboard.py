@@ -140,6 +140,10 @@ def test_cred_fields_derives_ssh_login_for_a_network_backend(onb):
     assert {"username", "password", "ssh_private_key", "enable_password"} <= names and "api_token" not in names
     for cf in b["cred_fields"]:
         assert "value" not in cf and "secret_value" not in cf      # names-only on the wire
+    # S28: the SSH port box — inline (written into the drop-in as an int, never stored in SOPS), never secret
+    port = next(cf for cf in b["cred_fields"] if cf["field"] == "port")
+    assert port["kind"] == "port" and port["inline"] is True and port["secret"] is False
+    assert port["maps_to"] == "ansible_port"
 
 
 def test_cred_fields_for_a_rest_backend_offers_a_token_not_an_ssh_box(onb):
@@ -148,6 +152,7 @@ def test_cred_fields_for_a_rest_backend_offers_a_token_not_an_ssh_box(onb):
     b = onb.client.get("/onboard/cred-fields", headers=AUTH, params={"backend": "api"}).json()
     names = {cf["field"] for cf in b["cred_fields"]}
     assert "api_token" in names and "ssh_private_key" not in names
+    assert "port" not in names            # S28: an api host's probe port is the backend's, never an operator's box
 
 
 def test_cred_fields_unknown_backend_falls_back_to_the_union(onb):
@@ -230,6 +235,24 @@ def test_onboard_a_backend_nothing_can_run_is_a_422_and_audited(onb, backend, ap
     audit = open(onb.audit_log, encoding="utf-8").read()
     assert "onboard-refuse" in audit and "reason=request-boundary field=backend" in audit
     assert backend not in audit.replace("onboard-refuse", "")
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["dry-run", "apply"])
+@pytest.mark.parametrize("port", ["{{ lookup('pipe', 'id') }}", "65536", "22x"])
+def test_onboard_bad_port_is_a_422_and_writes_nothing(onb, port, apply):
+    """A typed SSH port that is not a TCP port is answered 422 with the code `invalid_port` and a message that does
+    not quote it, nothing written and git untouched — on a dry-run and on an apply — and one `onboard-refuse` audit
+    line naming the field, never the value. Guards S28's new path, the first on which a request value lands in an
+    inventory host var: a Jinja value there would be templated on the control node by the next play (MF-02 asked
+    for this exact audit shape; a bare ValueError would have read `field=input`)."""
+    r = onb.client.post("/onboard", headers=AUTH,
+                        json=_body(creds={"username": "admin", "port": port}, apply=apply))
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "invalid_port" and port not in r.json()["detail"]
+    assert onb.calls == [] and not (onb.repo / "modules" / "edgeos").exists()
+    audit = open(onb.audit_log, encoding="utf-8").read()
+    assert "onboard-refuse" in audit and "reason=request-boundary field=port" in audit
+    assert port not in audit
 
 
 @pytest.mark.parametrize("apply", [False, True], ids=["dry-run", "apply"])

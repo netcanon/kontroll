@@ -61,6 +61,17 @@ Auth types: `bearer` (`Authorization: Bearer <token>`), `apikey_header`
 endpoints must be **read-only** (GET / export). Output is `no_log` — the request
 carries the token, the response the secret-bearing config.
 
+**Two ports, two owners (S28).** The recipe's `port:` governs the check and backup
+requests. The reachability probe that runs *before* them (`ping.yml`) reads the host's
+`kontroll_probe_port`, which the onboard writes from the backend descriptor's `probe_port`
+(443, the recipes' default) — an api host used to be probed on the SSH port and read
+`UNREACHABLE` with its check never run. A recipe on another port needs its hosts to set
+`ansible_port` or `mgmt_port`, which the probe reads first; binding a recipe to a host is
+S22's channel. A host onboarded before S28 has no `kontroll_probe_port`, and is probed on
+22 as before, until the line is added to its drop-in or it is re-onboarded **with its
+token** — a re-onboard replaces the host's vars, and a blank token box drops its token var
+(the check then fails with "no API token is in scope").
+
 ## See also
 - [../../backends/api/backend.yml](../../backends/api/backend.yml) — classifier metadata
 - [../../backends/api/recipes/](../../backends/api/recipes/) — the recipe registry (drop-in)

@@ -35,3 +35,5 @@ auth:
   - {field: username, kind: identity, label: "username (SSH; default root)", maps_to: ansible_user}
   - {field: password, kind: password, label: "password (SSH)", maps_to: ansible_password}
   - {field: ssh_private_key, kind: ssh_key, label: "SSH private key (PEM)", maps_to: ansible_ssh_private_key_file}
+  # S28: inline — written into the drop-in as an int (authspec.inline_value), not stored in SOPS; blank writes nothing.
+  - {field: port, kind: port, inline: true, maps_to: ansible_port, label: "SSH port (blank = 22)"}

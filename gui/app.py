@@ -535,7 +535,9 @@ def api_onboard():
     STAGED as `proposed/<run_id>` when the deploy armed `KONTROLL_STAGE_PUSHES` (C10, propose-then-promote),
     else direct to `main`. Bootstrap (collection install + live-verify) is DEFERRED to a post-promote
     Semaphore enact — never run inline (the network surface runs no Ansible, and bootstrapping a host that
-    lives only in an un-promoted proposal would be premature). Creds are NEVER returned or logged."""
+    lives only in an un-promoted proposal would be premature). Creds are NEVER returned or logged — an `inline`
+    field's value (the SSH port, S28) is no secret: it is written into the drop-in, and the plan's host block shows
+    it."""
     d = request.get_json(force=True) or {}
     for req in ("collection", "key", "group", "host"):
         if not d.get(req):

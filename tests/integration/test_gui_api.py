@@ -235,6 +235,67 @@ def test_gui_onboard_a_backend_nothing_can_run_is_a_422_with_a_code(client, onbo
     assert backend not in refusals[0]
 
 
+@pytest.mark.parametrize("port", ["{{ lookup('pipe', 'id') }}", "0", "22 "])
+def test_gui_onboard_bad_port_is_a_422_with_a_field_code(client, onboard_env, monkeypatch, port):
+    """The GUI onboard route answers a typed SSH port that is not a TCP port with 422 and the code `invalid_port`,
+    a message that does not quote it, nothing written, and one `onboard-refuse` audit line naming the field, never
+    the value. Guards GUI parity with the planner's S28 refusal: the port is the first request value written into an
+    inventory host var, and the form sends whatever is typed in its box."""
+    lines = []
+    monkeypatch.setattr(gui, "_audit", lambda action, detail="": lines.append((action, detail)))
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "creds": {"username": "admin", "port": port},
+                                          "apply": True}, headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    assert r.get_json()["code"] == "invalid_port" and port.strip() not in r.get_json()["error"]
+    assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "edgeos").exists()
+    refusals = [detail for action, detail in lines if action == "onboard-refuse"]
+    assert len(refusals) == 1 and "reason=request-boundary field=port" in refusals[0], lines
+    assert port.strip() not in refusals[0]
+
+
+def test_gui_onboard_dry_run_with_a_port_plans_it_as_an_int(client, onboard_env):
+    """A GUI dry-run with the SSH port box filled (`"2222"`, the text a form sends) answers 200 with a plan whose
+    host block carries `ansible_port: 2222` as an int, and the port is not among the creds sent to SOPS. Guards the
+    route and the planner together on the happy path: the e2e row stubs the POST, so without this row nothing
+    shows a typed port getting through the GUI route to the plan (T17 review, N4)."""
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "creds": {"username": "admin", "port": "2222"}},
+                    headers=_auth())
+    assert r.status_code == 200, r.get_data(as_text=True)
+    plan = r.get_json()["plan"]
+    host = plan["host_block"]["edge_router"]["hosts"][plan["host_name"]]
+    assert host["ansible_port"] == 2222 and type(host["ansible_port"]) is int
+    assert not [name for name in plan["creds"] if "port" in name]
+
+
+@pytest.mark.parametrize("creds", [["admin"], "admin", 7], ids=["a-list", "a-string", "a-number"])
+def test_gui_onboard_creds_that_are_not_an_object_are_a_422(client, onboard_env, creds):
+    """A GUI onboard whose `creds` is a JSON list, string or number answers 422 with the code `invalid_creds` and
+    writes nothing. Guards the 500 it used to be: the GUI's JSON body is not typed the way the API's model is, and
+    the planner's first touch of `creds` raised an AttributeError that the route's ValueError handler let through
+    (T17 review, N4)."""
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "creds": creds, "apply": True}, headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    assert r.get_json()["code"] == "invalid_creds"
+    assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "edgeos").exists()
+
+
+@pytest.mark.parametrize("creds", [{"ssh_private_key": ["x"]}, {"password": 7}, {"username": {"a": 1}}],
+                         ids=["a-list-key", "a-number-password", "an-object-username"])
+def test_gui_onboard_a_credential_value_that_is_not_text_is_a_422(client, onboard_env, creds):
+    """A GUI onboard whose credential VALUE is a list, a number or an object (for a field that is not inline) answers
+    422 `invalid_creds` and writes nothing. Guards the 500 an SSH key's list raised in the planner, and a number or an
+    object going into the SOPS domain as itself (T17 fold review, N1): the GUI's JSON body is untyped, and only an
+    inline field (a port, a flag) takes anything but text."""
+    r = client.post("/api/onboard", json={"collection": "acme.edgeos", "key": "edgeos", "group": "edge_router",
+                                          "host": "192.0.2.50", "creds": creds, "apply": True}, headers=_auth())
+    assert r.status_code == 422, r.get_data(as_text=True)
+    assert r.get_json()["code"] == "invalid_creds"
+    assert onboard_env.calls == [] and not (onboard_env.repo / "modules" / "edgeos").exists()
+
+
 def test_onboard_dryrun_returns_plan_no_git(client, onboard_env):
     """A dry-run (apply omitted) returns the PLAN (backend, default host name, repo-rel paths) and touches
     NO git — dry-run by default is the security-relevant invariant, asserted as data."""

@@ -233,12 +233,13 @@ def test_a_credential_field_whose_name_is_not_an_identifier_is_refused(monkeypat
     assert not isinstance(e.value, ValueError)
 
 
-def test_an_inline_credential_field_reaches_the_inventory_only_as_a_plain_word(monkeypatch):
+def test_an_inline_credential_field_reaches_the_inventory_only_as_a_typed_value(monkeypatch):
     """For a credential field marked `inline: true` the PLANNER writes the value itself into the host's inventory
-    variables — and refuses a value that is not one plain word, with the field named, while `8443` lands unchanged.
-    The helper is pinned on its own elsewhere; this pins the CALL SITE, because no shipped backend declares an
-    inline field and nothing else would notice the check being bypassed. Guards `{{ … }}` in a literal host var,
-    which Ansible evaluates on the runner when a play touches the host."""
+    variables — and refuses a value that is not a port, with the field named, while `8443` lands as the int 8443.
+    The helper is pinned on its own elsewhere; this pins the CALL SITE for a field authspec.derive_auth hands the
+    planner (the shipped SSH port's call site is pinned in tests/unit/test_onboard_port.py), so the check cannot be
+    bypassed on either. Guards `{{ … }}` in a literal host var, which Ansible evaluates on the runner when a play
+    touches the host, and the request's text being written where a typed value belongs (S28)."""
     from kontroll import paths
     monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"fields": [
         {"field": "api_port", "kind": "port", "label": "port", "maps_to": "ansible_httpapi_port",
@@ -247,5 +248,6 @@ def test_an_inline_credential_field_reaches_the_inventory_only_as_a_plain_word(m
         _plan(monkeypatch, creds={"api_port": "{{ 7*7 }}"})
     assert e.value.field == "api_port"
     plan = _plan(monkeypatch, creds={"api_port": "8443"})
-    assert plan["host_block"]["core_switch"]["hosts"]["sw1"]["ansible_httpapi_port"] == "8443"
+    written = plan["host_block"]["core_switch"]["hosts"]["sw1"]["ansible_httpapi_port"]
+    assert written == 8443 and type(written) is int
     assert "api_port" not in str(plan["creds_to_set"])                   # an inline value is not a SOPS secret

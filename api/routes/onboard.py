@@ -39,7 +39,8 @@ class OnboardIn(BaseModel):
     backend: Optional[str] = None
     # F1: the DERIVED per-backend credential fields, a {field: value} map (the form sends exactly the fields
     # authspec derived for the picked backend). The legacy scalars below are kept so an existing caller still
-    # works — they are folded into `creds` when `creds` is None. Values are SOPS-encrypted at apply, never echoed.
+    # works — they are folded into `creds` when `creds` is None. Values are SOPS-encrypted at apply, never echoed —
+    # except an `inline` field's (the SSH port, S28), which is not a secret and is written into the drop-in as an int.
     creds: Optional[Dict[str, str]] = None
     username: Optional[str] = None
     password: Optional[str] = None

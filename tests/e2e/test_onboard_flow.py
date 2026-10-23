@@ -4,6 +4,7 @@ API contract are covered hermetically by tests/integration/test_gui_api.py; this
 UX: search → result card → open the form → dry-run → the plan renders. Selectors are data-testid only
 (never CSS/text), per the data-testid SOP (docs/testing-standards.md §3). opt-in via the `e2e` marker.
 """
+import json
 import re
 
 import pytest
@@ -97,6 +98,38 @@ def test_onboard_form_derives_ssh_login_for_a_switch_no_token_box(page):
     expect(card.get_by_test_id("field-cred-username")).to_be_visible()
     expect(card.get_by_test_id("field-cred-enable_password")).to_be_visible()
     expect(card.get_by_test_id("field-cred-api_token")).to_have_count(0)   # no dead REST token box on a switch
+
+
+def test_an_ssh_backend_form_offers_a_plain_port_box_that_reaches_the_request(page):
+    """S28 live: a switch's onboard form shows the SSH port box (`field-cred-port`) as a plain, unmasked input,
+    and what is typed in it is sent in the request's `creds` as `port`. Guards the port field never reaching the
+    form (the descriptor added, the renderer skipping a non-secret kind) or being masked like a secret, and the
+    submit's harvest leaving it out. The request is answered by a stub, so the in-process planner writes nothing."""
+    posts = []
+
+    def stub(route):
+        if route.request.method != "POST":
+            return route.continue_()
+        posts.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"error": "e2e stub"}))
+    page.route("**/api/onboard", stub)
+    page.goto("/")
+    page.get_by_test_id("search-input").fill("cisco")
+    page.get_by_test_id("search-btn").click()
+    card = page.get_by_test_id("card").first
+    expect(card).to_be_visible()
+    card.get_by_test_id("onboard-toggle").click()
+    port = card.get_by_test_id("field-cred-port")
+    expect(port).to_be_visible()
+    assert port.evaluate("el => el.tagName.toLowerCase() + ':' + el.type") == "input:text"   # not a password box
+    port.fill("2222")
+    card.get_by_test_id("field-key").fill("cisco_ios")
+    card.get_by_test_id("field-group").fill("core_switch")
+    card.get_by_test_id("field-host").fill("192.0.2.44")
+    card.get_by_test_id("field-cred-username").fill("admin")
+    card.get_by_test_id("run").click()
+    expect(card.get_by_test_id("output")).to_contain_text("e2e stub")   # answered, so the request was recorded
+    assert len(posts) == 1 and posts[0]["creds"].get("port") == "2222"
 
 
 def test_onboard_form_groups_proxmox_api_token_as_one_auth_set(page):

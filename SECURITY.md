@@ -1809,8 +1809,16 @@ refuses, offline — also at the promote-time gate, which resolves without rende
 name is not `namespace.name` with each half starting with a letter or whose version holds anything but version
 characters, and a unit's trust statement whose signature policy is outside the closed set or whose digest is
 not one: the policy stands unquoted in the trust sidecar, where one with line breaks added an entry for another
-collection. A literal host var from a backend's or a class's `inline` credential field is a bool, an int or one
-plain word (`onboard._inline_literal`), because Ansible templates inventory variables; and a credential field's stem
+collection. A literal host var from a backend's or a class's `inline` credential field is TYPED before it is
+written, because Ansible templates inventory variables and the request must not choose the bytes (S28): a `port` is
+an int in 1..65535 parsed from one to five ASCII digits (`re.fullmatch`, so a trailing newline or another script's
+digits are not one), a `bool` is True or False from exactly `true` / `false` (`authspec.inline_value`, refused as the
+field otherwise, 422 `invalid_<field>`); no other kind may be inline, and a port lands only in a `*_port` var
+(`authspec.inline_target`, refused as repository data otherwise). The first such field shipped is the SSH backends'
+`port` → `ansible_port`, which `ping.yml`'s probe templates on the control node; a blank value is no value. A
+backend's `probe_port`, written to every host of that backend as `kontroll_probe_port`, is a YAML integer port or
+every plan on the backend is refused (`tests/unit/test_onboard_port.py`; the request half also by the route rows
+in `tests/integration/test_api_onboard.py` and `test_gui_api.py`). And a credential field's stem
 is an identifier before it is formatted into the host var's lookup expression — a field the backend registry or a
 class's module file declares with another name is refused once a value is given for it (as repository data, below),
 and an option of an installed module whose name is not an identifier is not offered as a field at all (`authspec`: a
@@ -1982,10 +1990,12 @@ board's `services.yaml` — at a shell, by the operator, into their own files. (
 holds its `run_id` to the two minted shapes itself, whoever runs it; the promote play checks the same rule before
 it calls the script.) A credential
 field's `maps_to` is held to being a variable name, not to a set of variables: a module file's own `auth:` entry
-marked `inline` may write `ansible_connection`, `ansible_host` or any other host var of that class's hosts — a file
-an operator promotes, never a request. The class seams refuse the names a NAME can tell; a PARENT group the
-inventory defines (the example's `network_devices`, `compute`) is a group like any other to them, and a class
-attached to one addresses its children wherever the class's group is a pattern. The identity dialog's charset for a
+stored in SOPS may write its lookup under `ansible_connection`, `ansible_host` or any other host var of that class's
+hosts, and an `inline` flag may write `true` or `false` under any lower-case one (only an inline port is held to a
+`*_port` var) — a file an operator promotes, never a request, and never the request's text. The class seams refuse
+the names a NAME can tell; a PARENT group the inventory defines (the example's `network_devices`, `compute`) is a
+group like any other to them, and a class attached to one addresses its children wherever the class's group is a
+pattern. The identity dialog's charset for a
 NEW value is narrower than the onboard field's — no hyphen, no leading digit: a class onboarded with such a group or
 domain keeps it and stays editable (a value read back unchanged is not judged), and the dialog cannot set one. The
 `backend` knob is bounded like a name, not checked against the registry: on a class whose module file names no

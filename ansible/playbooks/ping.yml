@@ -10,6 +10,12 @@
 # May break:           none (read-only liveness checks)
 # Fallback required:   no
 # Blast radius:        none — pure reads
+#
+# The probe's port, first set wins (S28): `mgmt_port` (a hand override, normally unset) → `ansible_port` (what
+# Ansible itself connects on; the onboard form's SSH port) → `kontroll_probe_port` (the port the host's backend
+# declares, written at onboard: 443 for `api`) → 22. A host that sets none of the three is probed on 22, as before.
+# A var set to null or empty counts as unset (`default(…, true)`): `wait_for` with no port only sleeps and reports
+# ok, so a hand-written `ansible_port: ~` used to pass the probe with nothing listening.
 
 - name: Fleet preamble — stamp the run id + materialize per-host SSH keys
   ansible.builtin.import_playbook: _fleet-preamble.yml
@@ -23,7 +29,8 @@
         - name: TCP reachability probe from the control node
           ansible.builtin.wait_for:
             host: "{{ ansible_host }}"
-            port: "{{ mgmt_port | default(22) }}"
+            port: >-
+              {{ mgmt_port | default(ansible_port | default(kontroll_probe_port | default(22, true), true), true) }}
             timeout: 5
           delegate_to: localhost
 
