@@ -49,8 +49,8 @@ _SECRET_KINDS = frozenset({"ssh_key", "password", "token"})
 # request's string into a typed value — an int, a bool. The request never chooses the bytes that reach the drop-in
 # (SECURITY.md C22). A kind with no validator cannot be inline; adding one means adding its branch to inline_value.
 INLINE_KINDS = frozenset({"port", "bool"})
-_PORT_RE = re.compile(r"[0-9]{1,5}")                 # fullmatch only: "22\n", " 22", "+22", "２２" are not ports
-_INLINE_TARGET_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_PORT_RE = re.compile(r"[0-9]{1,5}\Z")               # "22\n", " 22", "+22", "２２" are not ports
+_INLINE_TARGET_RE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 
 
 def port_number(value):

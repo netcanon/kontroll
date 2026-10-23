@@ -178,29 +178,32 @@ def test_a_credential_fields_host_var_name_is_an_identifier(reuse, monkeypatch, 
     """A credential field whose `maps_to` — the NAME of the host var it is written under — is not an identifier (a
     brace, a line break, a space, a number, an empty string, a list) is refused as repository data, before any
     host var is built, with the class and the backend named; `ansible_user` is accepted, and so is
-    `ansible_connection`.
+    `ansible_connection`, for a field stored in SOPS.
 
     Guards a host-var KEY that is not a name reaching the inventory drop-in. It does NOT guard which host var a
-    data file chooses: `maps_to: ansible_connection` is an identifier and is still written (asserted below, so
-    the limit is pinned and not implied closed)."""
+    SOPS-stored field names: `maps_to: ansible_connection` is an identifier and its lookup is still written there
+    (asserted below, so the limit is pinned and not implied closed). An INLINE field's var is narrower since S28 —
+    a port only into a `*_port` var (authspec.inline_target) — and that is asserted last."""
     reuse()
-    field = {"field": "mode", "kind": "host", "label": "mode", "sops_stem": "mode", "inline": True}
+    field = {"field": "mode", "kind": "port", "label": "mode", "sops_stem": "mode", "inline": True}
     monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"source": "shallow", "fields": [
         dict(field, maps_to=maps_to)]})
     with pytest.raises(paths.RepositoryDataError) as stop:
-        _plan(creds={"mode": "local"})
+        _plan(creds={"mode": "22"})
     message = str(stop.value)
     assert stop.value.what == "credential field" and "ansible_connection" not in message
     assert "demo_sw" in message and "netcommon_cli" in message          # where to look
-    monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"source": "shallow", "fields": [
-        dict(field, maps_to="ansible_user"), {"field": "token", "kind": "token", "label": "t", "sops_stem": "tok",
-                                              "secret": True}]})
-    plan = _plan(creds={"mode": "admin", "token": "t"})
-    assert plan["host_block"]["core_switch"]["hosts"]["sw2"]["ansible_user"] == "admin"
+    stored = {"field": "mode", "kind": "password", "label": "mode", "sops_stem": "mode", "secret": True}
+    for name in ("ansible_user", "ansible_connection"):
+        monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"source": "shallow", "fields": [
+            dict(stored, maps_to=name)]})
+        plan = _plan(creds={"mode": "local"})
+        written = plan["host_block"]["core_switch"]["hosts"]["sw2"][name]
+        assert "lookup(" in written and "local" not in written, name     # a SOPS lookup, never the value
     monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"source": "shallow", "fields": [
         dict(field, maps_to="ansible_connection")]})
-    plan = _plan(creds={"mode": "local"})
-    assert plan["host_block"]["core_switch"]["hosts"]["sw2"]["ansible_connection"] == "local"
+    with pytest.raises(paths.RepositoryDataError):
+        _plan(creds={"mode": "22"})
 
 
 @pytest.mark.parametrize("maps_to", [None, ABSENT], ids=["null", "absent"])
@@ -211,13 +214,14 @@ def test_an_inline_credential_field_names_the_host_var_it_is_written_under(reuse
     Guards a drop-in holding the line `null: <value>`: an inline value is not stored in SOPS, so the host var is
     the only place it can go, and the planner used to index the host block with whatever `maps_to` was."""
     reuse()
-    field = {"field": "mode", "kind": "host", "label": "mode", "sops_stem": "mode", "inline": True}
+    field = {"field": "mode", "kind": "port", "label": "mode", "sops_stem": "mode", "inline": True}
     if maps_to is not ABSENT:
         field["maps_to"] = maps_to
     monkeypatch.setattr(authspec, "derive_auth", lambda *a, **k: {"source": "shallow", "fields": [dict(field)]})
     with pytest.raises(paths.RepositoryDataError) as stop:
-        _plan(creds={"mode": "local"})
-    assert stop.value.what == "credential field" and "names no host var" in str(stop.value)
+        _plan(creds={"mode": "22"})
+    assert stop.value.what == "credential field" and "inline credential field" in str(stop.value)
+    assert "demo_sw" in str(stop.value)                                  # where to look
     plan = _plan()
     assert plan["error"] is None and None not in plan["host_block"]["core_switch"]["hosts"]["sw2"]
 

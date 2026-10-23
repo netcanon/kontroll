@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from kontroll import catalog, gitio, paths, probe
+from kontroll import authspec, catalog, gitio, paths, probe
 from kontroll.service import actuation, backup, capability, hostvars, identity, logsvc, observe, onboard, refresh
 
 pytestmark = pytest.mark.unit
@@ -269,23 +269,30 @@ def test_a_unit_key_followed_by_a_newline_matches_no_unit(monkeypatch):
     assert actuation.build_actuation_plan("backup-ios\n", {})["error"] == "no_unit"
 
 
-@pytest.mark.parametrize("value", [True, 8443, "8443", "192.0.2.9", "fw.lab.example", "2001:db8::1", "true"])
-def test_an_inline_host_var_accepts_plain_hosts_ports_and_flags(value):
+@pytest.mark.parametrize("kind, value, written", [
+    ("port", 8443, 8443), ("port", "8443", 8443), ("port", "1", 1), ("port", "65535", 65535),
+    ("bool", True, True), ("bool", "true", True), ("bool", "false", False),
+], ids=["port-int", "port-text", "port-lowest", "port-highest", "bool", "bool-true", "bool-false"])
+def test_an_inline_host_var_accepts_ports_and_flags_as_typed_values(kind, value, written):
     """A backend's or a class's `inline: true` credential field is written into the inventory as a literal host
-    var: a bool, an int, or one word of letters, digits, `.`, `_`, `:` and `-` passes unchanged. Guards the check
-    growing stricter than the values such a field exists for (a host, a port, a flag) — an operator who cannot
-    enter `8443` would work around the form."""
-    assert onboard._inline_literal(value, "api_port") == value
+    var, so authspec.inline_value turns the request's value into a TYPED one: a port is an int, a flag a bool. Guards
+    the check growing stricter than the values such a field exists for (an operator who cannot enter `8443` would work
+    around the form), and the value being written as the request's text (S28: `"8443"` used to land as a string)."""
+    cf = {"field": "api_port", "kind": kind, "inline": True, "maps_to": "ansible_httpapi_port"}
+    got = authspec.inline_value(cf, value)
+    assert got == written and type(got) is type(written)
 
 
 @pytest.mark.parametrize("value", ["{{ lookup('pipe', 'id') }}", "a b", "x;y", "8443\n", "", None, ["8443"],
-                                   "{% raw %}", "a" * 254])
+                                   "{% raw %}", "a" * 254, "192.0.2.9", "fw.lab.example", "2001:db8::1"])
 def test_an_inline_host_var_refuses_anything_ansible_could_template(value):
-    """Anything else is refused with the FIELD named: Ansible templates inventory variables, so a string with braces
-    in a literal host var is an expression that runs on the runner when a play touches the host. No shipped backend
-    declares an inline field today; this pins the boundary for the first one that does."""
+    """Anything else is refused with the FIELD named and the value left out: Ansible templates inventory variables,
+    so a string with braces in a literal host var is an expression that runs on the runner when a play touches the
+    host. A host name or an address is refused too: no inline kind takes one since S28 (T01's check let one plain
+    word of any kind through), and the SSH port field is the first inline field a shipped backend declares."""
+    cf = {"field": "api_port", "kind": "port", "inline": True, "maps_to": "ansible_httpapi_port"}
     with pytest.raises(paths.RequestBoundaryError) as e:
-        onboard._inline_literal(value, "api_port")
+        authspec.inline_value(cf, value)
     assert e.value.field == "api_port" and "lookup" not in str(e.value)
 
 
@@ -411,11 +418,12 @@ def test_no_boundary_pattern_accepts_a_trailing_newline_even_with_match():
     genreq = _load_script("gen_requirements_patterns", "gen-requirements.py")
     samples = [
         (paths._COMPONENT_RE, "cisco_ios"), (paths._FQCN_RE, "cisco.ios"), (paths._HOSTNAME_RE, "sw1.example.test"),
-        (paths._IP_LITERAL_RE, "192.0.2.10"), (onboard._INLINE_RE, "host.example"), (onboard._STEM_RE, "api_token"),
-        (settings._REMOTE_NAME, "offsite"), (_validate._HOSTNAME_LABEL, "sw1"), (schema.KEY_RE, "my-unit"),
-        (schema.KNOB_KEY_RE, "port"), (schema.PIN_VERSION_RE, "8.0.4"), (schema.SHA256_RE, "a" * 64),
-        (actuation._KEY_RE, "my-unit"), (schema.UNIT_NAME_RE, "ios_facts"), (genreq._LOCK_NAME_RE, "cisco.ios"),
-        (genreq._LOCK_VERSION_RE, ">=8.0.0"), (genreq._LOCK_DIGEST_RE, "a" * 64),
+        (paths._IP_LITERAL_RE, "192.0.2.10"), (authspec._PORT_RE, "8443"), (onboard._STEM_RE, "api_token"),
+        (authspec._INLINE_TARGET_RE, "ansible_port"), (settings._REMOTE_NAME, "offsite"),
+        (_validate._HOSTNAME_LABEL, "sw1"), (schema.KEY_RE, "my-unit"), (schema.KNOB_KEY_RE, "port"),
+        (schema.PIN_VERSION_RE, "8.0.4"), (schema.SHA256_RE, "a" * 64), (actuation._KEY_RE, "my-unit"),
+        (schema.UNIT_NAME_RE, "ios_facts"), (genreq._LOCK_NAME_RE, "cisco.ios"), (genreq._LOCK_VERSION_RE, ">=8.0.0"),
+        (genreq._LOCK_DIGEST_RE, "a" * 64),
     ]
     for pattern, valid in samples:
         assert pattern.match(valid) is not None, pattern.pattern

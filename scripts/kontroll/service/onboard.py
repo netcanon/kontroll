@@ -505,9 +505,10 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # echoed.
         # `maps_to` is the NAME of the host var the field is written under. It is a key of the inventory drop-in,
         # so it is an identifier too: no brace, no space, no line break, no value that is not a string. WHICH
-        # variable it names is the declaring file's to choose — a module's own `auth:` entry may name
-        # `ansible_connection` as the registry names `ansible_user` — and is not restricted here (SECURITY.md
-        # C22, limits). Neither name is anything the caller sent: the backend registry or the class's module
+        # variable a SOPS-stored field names is the declaring file's to choose — a module's own `auth:` entry may
+        # name `ansible_connection` as the registry names `ansible_user`; what lands there is a lookup, never the
+        # request's text — and is not restricted here (SECURITY.md C22, limits). An inline field's variable is
+        # narrower: authspec.inline_target, below. Neither name is anything the caller sent: the backend registry or the class's module
         # file declared it (an option name out of an installed module that is not an identifier is not offered
         # at all — authspec), so the refusal is the repository-data one and says where to look.
         _where = ("declared for the %s device class (its module file's `auth:` block, or the %s backend's "
