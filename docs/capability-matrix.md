@@ -165,7 +165,7 @@ classify:
   any_of:
     - {plugin: cliconf}
 confers: {actuate: true, backup: true}
-requires: [network_os]           # read per-device from module.yml's backend_params
+requires: [network_os]           # a NEW class gets it from derive_params, below
 derive_params:                   # what a NEW class is written with, from its collection
   network_os: "{collection}.{name}"
 default_secrets_domain: network  # where an onboard stores credentials when it names no domain
@@ -178,7 +178,8 @@ when the request names none — a request's domain wins over it, a reused class'
 `secrets_domain` wins over both, and a backend without one makes a domain required),
 `derive_params` (each entry a template for one of the backend's `requires:` params,
 rendered from the class's collection; a param the backend requires but does not derive
-is the operator's to add) and a **templated** `maps_to` on an `auth:` field (the api
+is the operator's to set at run time, and one its `connection:` block reads refuses the
+plan as `repository_data`) and a **templated** `maps_to` on an `auth:` field (the api
 backend's `{cred_key}_api_token`: the host var a token is written under, rendered per
 host). A template is a closed grammar — `{name}` placeholders from a fixed set
 (`collection`, `namespace`, `name` for a param; `cred_key` for a `maps_to`), no

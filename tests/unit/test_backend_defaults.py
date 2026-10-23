@@ -308,16 +308,20 @@ def test_the_scaffold_takes_the_backend_default_domain(probed):
     {"requires": ["network_os"], "derive_params": {"network_os": "{{ collection }}"}},      # Jinja
     {"requires": ["network_os"], "derive_params": ["network_os"]},                          # not a map
     {"requires": ["a b"], "derive_params": {"a b": "{name}"}},                              # a param name that is not one
+    {"requires": ["network_os"],                                                            # …and one it does not require
+     "derive_params": {"network_os": "{collection}.{name}", "bad-name": "{collection}"}},
     {"auth": [{"field": "password", "kind": "password", "maps_to": "{cred_key}-pw"}]},      # renders to no var name
     {"auth": [{"field": "password", "kind": "password", "maps_to": "{host}_pw"}]},          # a placeholder it lacks
 ], ids=["domain-path", "domain-bool", "domain-null", "param-typo", "param-jinja", "param-list", "param-name",
-        "maps-to-dash", "maps-to-unknown"])
+        "param-name-unrequired", "maps-to-dash", "maps-to-unknown"])
 def test_a_registry_default_that_does_not_render_is_repository_data(probed, change):
     """A default domain that is not a valid name, a `derive_params` template that does not render or names a param
-    that is not an identifier, and a `maps_to` template that does not render to a variable name are the registry's
-    fault: RepositoryDataError (409 `repository_data`), never a 422 blaming the request and never a written var.
-    Guards a descriptor typo reaching the module file or the drop-in (a param's name is a key of the module file's
-    `backend_params`, matched against `connection:` holes)."""
+    that is not an identifier (one the backend requires or not), and a `maps_to` template that does not render to a
+    variable name are the registry's fault: RepositoryDataError (409 `repository_data`), never a 422 blaming the
+    request and never a written var. Guards a descriptor typo reaching the module file or the drop-in (a param's name
+    is a key of the module file's `backend_params`, matched against `connection:` holes); the unrequired row guards
+    the name check moving behind the `requires` filter (mutant M4 of T18's fold read), where the CHANGELOG says every
+    name is held."""
     probed(**CLICONF)
     bdef = _lab(**dict({"default_secrets_domain": "lab"}, **change))
     with pytest.raises(paths.RepositoryDataError):
@@ -387,8 +391,8 @@ def test_a_required_connection_param_the_backend_does_not_derive_is_repository_d
     netcommon_cli written before S27, with no `derive_params`) is refused as repository data naming the param; the
     same backend deriving it plans with the param rendered into the host var.
 
-    Guards an unrendered `{{ network_os }}` reaching the drop-in (T18's read, F12): nothing defines it at run time,
-    so the plan used to succeed and the first play failed far from the cause."""
+    Guards an unrendered `{{ network_os }}` reaching the drop-in (T18's read, F12): unless a group var happened to
+    define it, the plan succeeded and the first play failed far from the cause."""
     probed(**CLICONF)
     copy = _lab(default_secrets_domain="lab", requires=["network_os"],
                 connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ network_os }}"})
@@ -397,6 +401,62 @@ def test_a_required_connection_param_the_backend_does_not_derive_is_repository_d
     assert "network_os" in str(refused.value) and "derive_params" in str(refused.value)
     plan = _lab_plan(dict(copy, derive_params={"network_os": "{collection}.{name}"}))
     assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "acme.edgeos.edgeos"
+
+
+@pytest.mark.parametrize("derive", [None, {"network_os": "{collection}.{name}"}], ids=["underived", "derived"])
+def test_a_required_connection_param_read_through_an_expression_is_repository_data(probed, derive):
+    """A backend whose `connection:` block reads a required param through a filter (`{{ network_os | lower }}`) is
+    refused as repository data naming the param and the bare form, whether the backend derives it or not.
+
+    Guards the filtered form escaping F12's check (T18's fold read, N5): only a bare `{{ param }}` is filled from the
+    derived params, so the drop-in would hold the expression unrendered and the first play would fail."""
+    probed(**CLICONF)
+    bdef = _lab(default_secrets_domain="lab", requires=["network_os"],
+                connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ network_os | lower }}"})
+    if derive:
+        bdef["derive_params"] = derive
+    with pytest.raises(paths.RepositoryDataError) as refused:
+        _lab_plan(bdef)
+    assert "network_os" in str(refused.value) and "expression" in str(refused.value)
+
+
+def test_a_connection_param_the_backend_does_not_require_is_left_for_run_time(probed):
+    """A backend whose `connection:` block reads a param it does not require plans, the param left as written for a
+    group var to define at run time; only a required param must be derived.
+
+    Guards F12's refusal widening to every `{{ … }}` in a `connection:` block (mutant M3 of T18's fold read): a
+    backend that reads a site's own group var through its connection block would then be refused."""
+    probed(**CLICONF)
+    plan = _lab_plan(_lab(default_secrets_domain="lab", requires=[],
+                          connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ site_os }}"}))
+    assert dict(_host_vars(plan, "h1"))["ansible_network_os"] == "{{ site_os }}"
+
+
+def test_a_legacy_api_token_on_a_backend_without_the_template_gets_the_unions_var(probed):
+    """An onboard of a cliconf class that passes an `api_token` (a legacy caller's field the backend does not
+    declare) writes the token's lookup under `<cred key>_api_token`, the generic union's template — what the former
+    code wrote on any backend.
+
+    Guards the union arm of the module-file template check (T18's fold read, N1, mutant M1): checking a template
+    against the backend registry alone refuses every such onboard as repository data."""
+    probed(**CLICONF)
+    plan = _plan("sw1", creds={"username": "u", "api_token": "t"})
+    assert ("sw1_api_token", _former_lookup("sw1_api_token")) in _host_vars(plan, "sw1")
+
+
+def test_a_module_file_may_repeat_its_backends_own_template(probed, tmp_repo):
+    """A curated class whose own `auth:` entry repeats the template its backend's registry entry declares for that
+    field (an operator's registry, `password` -> `{cred_key}_pw`) plans, the lookup of the host's password written
+    under the rendered var.
+
+    Guards the registry arm of the module-file template check (T18's fold read, N1, mutant M2): checking a template
+    against the generic union alone refuses a class that repeats its own backend's template."""
+    probed(**CLICONF)
+    field = {"field": "password", "kind": "password", "maps_to": "{cred_key}_pw"}
+    bdef = _lab(default_secrets_domain="lab", auth=[field])
+    _curated(tmp_repo, backend="lab_cli", secrets_domain="lab", auth=[field])
+    plan = _plan("h1", backends=[bdef], creds={"password": "p"})
+    assert ("h1_pw", _former_lookup("h1_password", "lab")) in _host_vars(plan, "h1")
 
 
 def test_a_backend_this_install_does_not_ship_is_named_as_such_in_the_refusal():

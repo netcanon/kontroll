@@ -16,9 +16,9 @@ NetConfig project.
 The secrets domain `network`, the `network_os` rule and the api token's host var were code: copies of the
 domain's name across the planner, the scaffold, the routes, the form and the CLI, and two branches on a backend's or
 a field's name in the planner. A backend an operator adds could not change any of them. Each is now a field of
-`ansible/backends/<name>/backend.yml`. For a new class of every backend the tool ships, the drop-in, the
-credentials it stores, its domain and its module file's `backend_params` are what the former code wrote
-(`tests/unit/test_backend_defaults.py`'s oracle).
+`ansible/backends/<name>/backend.yml`. For a new class of the `netcommon_cli` and `api` backends, the drop-in, the
+credentials it stores and its module file's `backend_params` are what the former code wrote, and every runnable
+backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s oracle).
 
 - `default_secrets_domain` (every shipped backend: `network`). An onboard or scaffold that names no domain stores
   credentials there; a request's domain wins over it, and a reused class's own `secrets_domain` over both, as before.
@@ -26,25 +26,32 @@ credentials it stores, its domain and its module file's `backend_params` are wha
   operator's own `backend.yml` written before this change must name one until the file declares a default. A class
   whose module file names a backend this install does not ship is told so in the same refusal.
 - `derive_params` (`netcommon_cli`: `network_os: "{collection}.{name}"`): what a new class's `backend_params` are
-  written with. Only a param the backend `requires:` is written, and a param's name is held to an identifier. A
-  backend whose `connection:` block reads a param it requires and does not derive is refused as `repository_data`
-  (the former code wrote it unrendered, and the first play failed): an operator's copy of `netcommon_cli` written
-  before this change must add `derive_params: {network_os: "{collection}.{name}"}`.
+  written with. Only a param the backend `requires:` is written, and every param's name is held to an identifier.
+  A backend whose `connection:` block reads a param it requires and does not derive, or reads one through a filter
+  or an expression, is refused as `repository_data`: the drop-in would hold it unrendered. The former code filled
+  `network_os` by name for any backend that required it; the registry now says how, so an operator's copy of
+  `netcommon_cli` written before this change must add `derive_params: {network_os: "{collection}.{name}"}`. An
+  operator's backend whose `connection:` block reads a required value set at run time (a group var) is refused too,
+  where the former code planned it: set that connection var in the class's group vars instead. The planner reads no
+  class's own `backend_params`, a reused class's included.
 - A templated `maps_to` (`api` and the generic union's `api_token`: `{cred_key}_api_token`) names the host var a
   token is written under. A template is a closed `{name}` grammar rendered to a fixed charset; a default or template
   that fails is answered `repository_data` and never written. Only the registry and the generic union declare one:
   a template lets the request's host name choose the var, so a module file's own `auth:` entry names its var as
-  written, and one holding another template is refused as `repository_data`. The rendered names keep the former
-  code's dotted and IP-literal var names, which ansible-core 2.19 accepts with a warning until 2.23: they must
-  change before the stack reaches 2.23.
+  written; it may repeat, for the same field, the template its backend's registry entry or the generic union
+  declares (today only `api_token`'s), and any other template is refused as `repository_data` once a value is
+  given. The rendered names keep the former code's var names for a dotted, IP-literal or digit-first host, which
+  ansible-core 2.19 accepts with a warning until 2.23 (a var name that is not an identifier): before the stack
+  reaches 2.23 they must become identifiers, `_` for `.` and `:` and a leading letter or `_`.
 - Two differences, pinned by tests: a class's own `api_token` with a literal `maps_to` is now written under that var
   (it was `<cred key>_api_token` whatever the file said), and a class's own `api_token` with no `maps_to`, on a
   backend without the template, is stored in SOPS with no host var. No shipped module declares either.
 - API and GUI: `secrets` is optional on `POST /onboard` and `GET /onboard/cred-fields` — a blank value now means
   omitted (it was a 422) — and `cred-fields` answers the backend's default as its `secrets`, and shows the api
   token's descriptor with its template `maps_to` (`{cred_key}_api_token`), where it showed none. The onboard form's
-  domain box ships empty, its placeholder naming the backend's default (a second device of a class stores in that
-  class's own domain, whatever the box shows) or saying a domain is required; a typed domain now counts as input to
+  domain box ships empty, its placeholder naming the backend's default (an onboard under the key of a class that
+  already exists — one the tool ships, or one onboarded before — stores in that class's own domain, whatever the box
+  shows) or saying a domain is required; a typed domain now counts as input to
   the form's collapse check. The CLI's `--secrets` has no default of its own, and a blank one means omitted, as in
   the API.
 

@@ -420,7 +420,8 @@ def main():
     ob.add_argument("--host", required=True, help="the host's mgmt IP/name")
     ob.add_argument("--host-name", help="inventory hostname (default: <key>-1)")
     ob.add_argument("--secrets", help="secrets domain for a new class (default: the backend's "
-                    "default_secrets_domain); a second device of a class stores in the class's own")
+                    "default_secrets_domain); an onboard under the key of a class that already exists "
+                    "stores in the class's own")
     ob.add_argument("--backend", help="override the auto-chosen backend")
     ob.add_argument("--username", help="login user (SSH) — encrypted into the secrets domain, inline on the host")
     ob.add_argument("--password", help="login password (SSH) — encrypted into the secrets domain")

@@ -55,3 +55,12 @@ def test_the_collapse_gate_counts_a_typed_secrets_domain_as_input():
     domain would then be discarded by a collapse with no question asked (mutant G of T18's read, D5)."""
     html = open(os.path.join(ROOT, "gui", "templates", "index.html"), encoding="utf-8").read()
     assert "const named = ['group','host','host_name','secrets'].map(" in html
+
+
+def test_the_domain_box_says_a_domain_is_required_when_the_backend_names_no_default():
+    """The onboard form's domain-box placeholder falls back, for a backend whose registry entry declares no default
+    domain, to a line saying one is required. Guards the box going silently blank for such a backend (T18's read,
+    D13; mutant M5 of its fold read restored the former `if (sd && r.secrets)` line and survived every suite): the
+    operator would then submit no domain and meet a refusal the form never warned of."""
+    html = open(os.path.join(ROOT, "gui", "templates", "index.html"), encoding="utf-8").read()
+    assert "if (sd) sd.placeholder = r.secrets || (backend ? 'required — this backend names no default domain'" in html

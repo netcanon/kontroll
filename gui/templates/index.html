@@ -324,9 +324,10 @@ async function loadCredFields(f, backend, secrets, collection) {
             + (collection ? '&collection=' + encodeURIComponent(collection) + '&deep=true' : '');
     const r = await (await fetch(credFieldsUrl)).json();
     renderCredFields(box, r.cred_fields, r.cred_source);
-    // an empty domain box sends nothing and a new class stores into the backend's default (S27; a second device
-    // of a class, into the class's own): say which, as the box's placeholder — a property, never markup. A backend
-    // that declares none needs a typed domain, or the submit is refused.
+    // an empty domain box counts as omitted, and a new class stores into the backend's default (S27; an onboard
+    // under the key of a class that already exists — shipped, or onboarded before — into the class's own): say
+    // which, as the box's placeholder — a property, never markup. A backend that declares none needs a typed domain,
+    // or the submit is refused.
     const sd = f.querySelector('[name=secrets]');
     if (sd) sd.placeholder = r.secrets || (backend ? 'required — this backend names no default domain'
                                                    : "the backend's default");

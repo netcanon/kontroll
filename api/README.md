@@ -25,7 +25,7 @@ for a row whose route is gone.
 | `POST /refresh` | token | rebuild the (gitignored) capability-matrix cache, written under the write root (the propose clone on a baked install) → `{count, run_id}` |
 | `POST /capture-exceptions` | token | add a capture-exception + commit + push the canonical → what changed |
 | `POST /onboard` | token | dry-run plan, or apply (module + drop-in host + fleet-enable + creds→SOPS + commit + push); `secrets` is optional — a reused class's own domain wins over it; omitted, null or blank, a new class's credentials go to the backend's `default_secrets_domain` (422 `invalid_secrets_domain` for a backend that declares none) |
-| `GET /onboard/cred-fields?backend=…&secrets=…&collection=…&deep=` | token | the credential fields a backend (or a curated class) asks for — names, kinds and labels, never values; `secrets` is optional, and the answer's `secrets` is the domain the fields are described for (the backend's `default_secrets_domain` when none is given; a second device of a class stores in that class's own, which this answer does not resolve) |
+| `GET /onboard/cred-fields?backend=…&secrets=…&collection=…&deep=` | token | the credential fields a backend (or a curated class) asks for — names, kinds and labels, never values; `secrets` is optional, and the answer's `secrets` is the domain the fields are described for (the backend's `default_secrets_domain` when none is given; an onboard under the key of a class that already exists (one the tool ships, or one onboarded before) stores in that class's own, which this answer does not resolve) |
 | `GET /capability/{cap}/suggest?key=…` | token | **read-only**: whether capability `cap` (telemetry, logging, backup) fits onboarded class `key`, and with which methods |
 | `POST /capability/{cap}` | token | propose (a dry-run plan + an anti-drift token) or promote (apply — audited) a capability for a class; the write is staged, never pushed to `main`, under the gated deploy |
 | `GET /secrets/{domain}/fields` | token | **read-only**: a secret domain's form fields — their names and which are already set, never a value |
@@ -68,12 +68,15 @@ field=<name>` for a refused field and `reason=planner-guard` (body `code: invali
 that is not about one field, such as a partially filled credential set. When what stops a request is the
 repository's own data or layout — a class's module file holds a group, domain, backend or role that is not a name; a
 credential field is declared with a name that is not one; a class's module file names no role and its backend
-declares none (or the backend's registry entry holds a role that is not a name); a write target does not resolve
-inside the repository; a block of a module file is written with its value on the key's line, or twice — the answer
+declares none (or the backend's registry entry holds a role that is not a name); the backend registry's own data (a
+default domain, a `derive_params` entry or a `maps_to` template that does not render, or a `connection:` param it
+requires and does not derive, or reads through an expression); a class's module file holds a `maps_to` template its
+backend does not declare for that field; a write target does not resolve inside the repository; a block of a module
+file is written with its value on the key's line, or twice — the answer
 is **409** `repository_data` with a sentence that says where to look, and the audit action is `repository-refuse`:
 nothing in the request is wrong, and the remedy is the file or the layout. A `backend` an onboard sends must be one
-this install ships whose registry entry declares a `role:` (`ansible/backends/<name>/`) — a second device of a class
-whose module file declares its own role keeps that role, so there the entry needs none; any other is **422**
+this install ships whose registry entry declares a `role:` (`ansible/backends/<name>/`) — an onboard under the key
+of a class that already exists and whose module file declares its own role keeps that role, so there the entry needs none; any other is **422**
 `invalid_backend`, answered before the collection is probed. An onboard with no `backend` of a collection that
 carries no signal a backend kontroll can run classifies on (S24 — `raw_ssh` is never auto-matched) is **422**
 `no_backend` with a sentence naming what it showed (plugin types and a module count, never a plugin's name) and the

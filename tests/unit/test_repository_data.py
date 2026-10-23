@@ -594,6 +594,28 @@ def test_cmd_scaffold_writes_under_the_write_root(tmp_path, monkeypatch, make_fa
     assert not (code_root / "modules" / "ios_x").exists()
 
 
+def test_cmd_scaffold_with_a_blank_domain_takes_the_backend_default(tmp_path, monkeypatch, make_facts, capsys):
+    """`galaxy.py scaffold --secrets ""` writes the class with the backend's `default_secrets_domain`, as an omitted
+    flag does: blank means omitted, as in `onboard`, the API and the GUI.
+
+    Guards the scaffold half of T18's read F10 (mutant M6 of its fold read passed the blank through, and the
+    scaffold refused it as a domain that is not a name)."""
+    import galaxy
+    (tmp_path / "modules").mkdir()
+    monkeypatch.setattr(paths, "ROOT", str(tmp_path))
+    monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(tmp_path))
+    monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(
+        collection=coll, plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
+    monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
+        *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
+                       "default_secrets_domain": "lab", "match": {"any": [{"plugin": "cliconf"}]}}]))
+    for secrets in ("", None):
+        galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
+                                               secrets=secrets, backend="netcommon_cli", dry_run=True))
+        assert "secrets_domain: lab" in capsys.readouterr().out
+
+
 def test_cmd_scaffold_does_not_shadow_a_class_the_code_root_ships(tmp_path, monkeypatch, make_facts, capsys):
     """`galaxy.py scaffold` for a key whose class exists under the CODE root only — a shipped class on an install
     whose write root is elsewhere — refuses to overwrite, and creates nothing under the write root.

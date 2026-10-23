@@ -72,6 +72,8 @@ def _module_collections(mod):
 
 
 _STEM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+# The first name a backend's `connection:` value reads (`{{ network_os | lower }}` -> network_os).
+_HOLE_NAME_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)")
 _NOT_A_NAME = "%s is a word YAML reads as another type (null, a boolean, a number, a date)"
 
 
@@ -195,7 +197,8 @@ def backend_params(bdef, collection, backend):
     """The params a NEW class of `backend` is written with (its module file's `backend_params`): each param the
     registry entry DERIVES (`derive_params`, S27 — netcommon_cli's `network_os: "{collection}.{name}"` turns
     cisco.ios into cisco.ios.ios) that it also requires, rendered from the collection's names by
-    catalog.render_template. A required param it does not derive is the operator's to add (raw_ssh's backup command).
+    catalog.render_template. A required param it does not derive is the operator's to set at run time (raw_ssh's
+    backup command, a group var its role reads); the planner refuses one the backend's `connection:` block reads.
     A block or a template that does not render is the registry's fault, refused as repository data before any
     write. Shared by the planner and the scaffold."""
     derive = bdef.get("derive_params")
@@ -468,16 +471,30 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         module_text = yaml.safe_dump(module, sort_keys=False, allow_unicode=True, width=4096)
 
     hostvars = {"device_role": role}
+    required = bdef.get("requires") or []
     for k, v in (bdef.get("connection") or {}).items():
         if isinstance(v, str) and v.strip().startswith("{{"):
             hole = v.strip().strip("{} ")
-            if hole in (bdef.get("requires") or []) and hole not in params:
-                # A param the backend requires and does not derive would reach the drop-in unrendered, and nothing
-                # defines it at run time, so the first play fails far from the cause. An operator's backend written
-                # before S27 (a copy of netcommon_cli without `derive_params`) is the one that meets this.
+            first = _HOLE_NAME_RE.match(v.strip())
+            name = first.group(1) if first else hole
+            if name in required and name != hole:
+                # Only a bare `{{ param }}` is filled from `params`: a required param read through a filter or an
+                # expression would reach the drop-in unrendered, derived or not (T18's fold read, N5).
+                raise paths.RepositoryDataError(
+                    "backend registry", "the %s backend's connection block reads %s, which it requires, through an "
+                    "expression the planner does not render — write it as `{{ %s }}` in its backend.yml under "
+                    "ansible/backends/" % (backend, name, name))
+            if name in required and hole not in params:
+                # A required param the backend does not derive would reach the drop-in unrendered, and the first play
+                # fails far from the cause unless a group var happens to define it. An operator's backend written
+                # before S27 (a copy of netcommon_cli without `derive_params`) meets this, and so does one whose
+                # `connection:` block reads a required value set at run time: that var belongs in the class's group
+                # vars. The planner reads no class's own `backend_params`, a reused class's included (T18's read,
+                # F12; its fold read, N5).
                 raise paths.RepositoryDataError(
                     "backend registry", "the %s backend requires %s in its connection block and does not derive "
-                    "it — add it to `derive_params` in its backend.yml under ansible/backends/" % (backend, hole))
+                    "it — add it to `derive_params` in its backend.yml under ansible/backends/, or, for a value set "
+                    "at run time, set that connection var in the class's group vars instead" % (backend, hole))
             v = params.get(hole, v)
         hostvars[k] = v
     # S28: the TCP port the reachability probe (ping.yml) uses for a host of this backend when the host sets no
@@ -608,13 +625,15 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         # make the render fail; the template's own text can, so a failure is the declaring file's. Only the backend
         # registry and the generic union declare one: a template lets the request's host name choose WHICH var the
         # lookup lands in, so a module file's `auth:` entry — curated, but not the registry — names its var as
-        # written, and one holding a template that is not its backend's for that field is refused (T18's read, F1).
+        # written. It may repeat, for the same field, the template its backend's registry entry or the generic union
+        # declares (today only `api_token`'s `{cred_key}_api_token`); any other template is refused once a value is
+        # given (T18's read, F1; its fold read, N2).
         maps_to = cf.get("maps_to")
         if isinstance(maps_to, str) and "{" in maps_to:
             if maps_to not in (templated.get(cf["field"]), (authspec.union_field(cf["field"]) or {}).get("maps_to")):
                 raise paths.RepositoryDataError(
-                    "credential field", "a credential field %s maps to a template, which only the backend registry "
-                    "declares — name the variable" % _where)
+                    "credential field", "a credential field %s maps to a template its backend does not declare "
+                    "for that field — name the variable" % _where)
             try:
                 maps_to = catalog.render_template(maps_to, {"cred_key": cred_key}, catalog.MAPS_TO_RE)
             except ValueError:

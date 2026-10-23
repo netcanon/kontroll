@@ -17,7 +17,8 @@ confers: {actuate: true, backup: true, telemetry: [snmp, blackbox], logs: [syslo
 requires: [network_os]            # e.g. cisco.ios.ios — derived for a new class (below)
 # How the planner fills a `requires:` param for a new class (S27): a template in a closed grammar — `{collection}`,
 # `{namespace}`, `{name}` and nothing else; not Jinja — rendered into the class's `backend_params`. cisco.ios ->
-# cisco.ios.ios. A required param with no entry here is left for the operator to set on the class.
+# cisco.ios.ios. A required param with no entry here is the operator's to set at run time (a group var); if the
+# `connection:` block below reads it, the plan is refused (S27).
 derive_params:
   network_os: "{collection}.{name}"
 # The SOPS domain a class of this backend stores its credentials in when the onboard request names none and the
@@ -26,7 +27,8 @@ derive_params:
 default_secrets_domain: network
 role: backend_netcommon_cli       # the execution role (device class's device_role)
 # Connection vars the onboard planner renders into the host/group (network_os is
-# the param derive_params fills; a required param read here must be derived, or the plan is refused).
+# the param derive_params fills; a required param read here must be derived and read bare, as
+# `{{ network_os }}`, or the plan is refused).
 connection:
   ansible_connection: network_cli
   ansible_network_os: "{{ network_os }}"
