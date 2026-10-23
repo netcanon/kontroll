@@ -90,13 +90,19 @@ one is old):
 | a Dockerfile's base | `FROM <image>:<tag>@sha256:<digest>` — the digest is pulled, the tag is its label | each `Dockerfile` (Vector's also in `services/vector.yaml`, in lock-step) |
 | the Python packages an image adds | one `name==version` per package, installed `--no-deps`, then `pip check` | `semaphore-runner/requirements.txt`, `installer/requirements.txt` |
 | the runner's apk packages | `~=<major.minor>` (the patch revision still moves: an Alpine branch keeps only its newest) | `semaphore-runner/Dockerfile` |
-| a downloaded file (a binary, an apt key) | its SHA-256: a `curl`/`wget` to a named file that `sha256sum -c` checks in the same `RUN`, or `ADD --checksum=sha256:` | `installer/Dockerfile` (sops, Docker's apt key) |
+| a downloaded file (a binary, an apt key) | its SHA-256, written in the tree: a `curl`/`wget` to a named file, then `echo "$<ARG>  <file>" \| sha256sum -c -` in the same `RUN` (an `ARG` or `ENV` holding the 64 hex), or `ADD --checksum=sha256:` | `installer/Dockerfile` (sops, Docker's apt key) |
 | a compose image | an exact tag (at least major.minor), or a digest under a tag | `services/*.yaml`, `../telemetry/*.yml` |
 
-A check that is switched off counts as missing: a `pip check` or `sha256sum -c` behind `|| true`, or followed by a
-pipe, or by `;` in a `RUN` that does not open with `set -e`, cannot fail the build. The test also refuses what it cannot read (an exec-form `RUN`, a heredoc) and
-a `# syntax=` frontend not pinned by digest. The installer's and Vector's **apt** packages still float inside their
-pinned base; the published image's digest in [`images.lock.yml`](images.lock.yml) is the full pin
+A check that is switched off counts as missing. A `pip install`, `pip check`, `apk add`, download or `sha256sum -c`
+fails the build only if every operator after it to the end of the `RUN` is `&&` (a pipe after a later `&&` too): a
+`|| true` or `; rm …` anywhere later, a pipe right after it, an `if` around it or a `!` before it switches it off.
+Under `set -e` (or `set -o errexit`) a `;` right after it is enough, but not a `;` after a later `&& …`: errexit spares
+every command of an `&&` list but the last. A checksum fetched beside the file is no pin either — whoever swaps the
+file swaps it too — so the digest must be one the tree holds. The rules are in
+[`tests/unit/_build_read.py`](../tests/unit/_build_read.py), and the pip-audit step is held to them too. The test also
+refuses what it cannot read (an exec-form `RUN`, a heredoc, an `# escape=` directive, a Dockerfile outside this
+directory) and a `# syntax=` frontend not pinned by digest. The installer's and Vector's **apt** packages still float
+inside their pinned base; the published image's digest in [`images.lock.yml`](images.lock.yml) is the full pin
 ([SECURITY.md](../SECURITY.md) § Accepted risks, R-IMG-2).
 
 One procedure, the same for a Dependabot PR and a hand bump. It is an authoring-time act with network; nothing in
@@ -121,7 +127,7 @@ it runs on a deploy path.
    range `scripts/install-prereqs.sh` puts on the host, which `tests/unit/test_image_pins.py` holds: unconstrained,
    the resolve lands on the next series. A new sops version changes `SOPS_VERSION` and
    both `SOPS_SHA256_*` from the release's `checksums.txt` together.
-4. **Prove it.** Build all three images from the change (the control image after `python3
+4. **Prove it.** Build every image from the change (the control image after `python3
    scripts/gen-requirements.py --all-modules`, as the publish workflow does) — `pip check`, the import line, the
    checksums and the apk constraints run in the build. In the built control image, `ansible --version`, `sops
    --version`, `age --version`, `snmpbulkwalk -V` and `ssh -V`; copy `/opt/kontroll` out and run

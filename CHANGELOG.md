@@ -35,8 +35,9 @@ were built from was not.
   reads the pin files too. The compose tags have no bot: Dependabot's compose fetcher reads no `<service>.yaml`
   name, so they are bumped by hand, Postgres's included. Promtool and vector in CI are held to the compose tags.
 - `tests/unit/test_image_pins.py` fails when a pin is missing or its check is switched off (a `pip check` or
-  `sha256sum -c` behind `|| true`), never because one is old. The refresh procedure is `docker/README.md`
-  § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+  `sha256sum -c` a later `|| true`, `;`, pipe or `if` keeps from failing the build, or a checksum not held in the
+  tree), never because one is old; `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same rules.
+  The refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
 The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is
 in `docker/services/semaphore.yaml`, not the image lock). A box that builds locally also rebuilds the control image

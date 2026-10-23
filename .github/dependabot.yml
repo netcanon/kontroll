@@ -11,7 +11,7 @@
 # floors that means none; floors are raised by hand when a release matters. The default strategy chased every
 # release with a floor bump (five PRs the first week). docker/semaphore-runner/ and docker/installer/ hold the
 # EXACT pins the images install, so they keep the default strategy: each release is a PR. Vulnerabilities are
-# gated by pip-audit (security.yml) over all five files; Dependabot security updates add to that only where a
+# gated by pip-audit (security.yml) over every pin file and floor; Dependabot security updates add to that only where a
 # resolvable version exists.
 # A bot PR that touches an image is merged only after the image builds and runs (docker/README.md § Refreshing a
 # pin, steps 3-4) — no PR job builds an image, so green checks alone prove nothing about it:

@@ -309,6 +309,17 @@ what it would ask of a clean repository. `seam_without()` gives the seam's envir
 named entries, for showing that one entry is the one that answers a planted thing. These
 tests run real git and take the suite's `isolated_git` fixture.
 
+## How a build's shell is read (`tests/unit/_build_read.py`)
+
+`test_image_pins.py` (a Dockerfile `RUN`) and `test_ci_workflows.py` (a workflow step's `run:`)
+both hold that a check the build runs — a `pip check`, a `sha256sum -c`, a `pip-audit` — can
+fail it. They share one reading of when it can: `commands()` splits the text on `&&`, `||`,
+`;` and `|`, and `gate_faults()` names a check that a later `|| true` or `; cmd`, a pipe, an
+`if`/`while` condition or a `!` keeps from failing it, reading errexit the way `/bin/sh` does
+(a `;` after `set -e` counts only for the last command of its `&&` list). The rules are the
+module's docstring. A new check on a build's shell text calls `gate_faults()` rather than
+reading the operators itself, so the two tests cannot drift apart.
+
 ## Playbook and role hygiene sweeps
 
 Two faults that pass `--syntax-check` and `ansible-lint` and fail only on a real run are swept
