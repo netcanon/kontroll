@@ -6,7 +6,8 @@
 # Design-of-record: docs/reviews/2026-06-29-compose-native-install/99-synthesis.md (Phase A).
 #
 # Usage:
-#   scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/
+#   scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated \
+#       --break-glass-recipient <age1…>                                       # scaffold instance/ (docs/break-glass.md)
 #   $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
 #   scripts/kontroll-installer.sh check                                         # the mandated --check --diff dry-run
 #   scripts/kontroll-installer.sh                                               # bootstrap → deploy-stack (verb 'init')

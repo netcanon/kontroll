@@ -6,7 +6,8 @@
 # scripts/kontroll-installer.sh, or ./kontroll in a launch kit — which passes the repository path and the
 # operator's identity that docker/services/installer.yaml requires. These are the verbs it forwards:
 #
-#   fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ + mint control key
+#   fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated \
+#              --break-glass-recipient <age1…>                           # scaffold instance/ + mint control key
 #   check                                                                # the mandated --check --diff dry-run
 #   init   (the default when no verb is given)                           # bootstrap → deploy-stack
 #   configure-semaphore                                                  # wire a running Semaphore (:3001)

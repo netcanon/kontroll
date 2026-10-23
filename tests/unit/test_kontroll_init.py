@@ -104,15 +104,20 @@ def test_main_idempotent_node_makes_no_change_and_never_prints_private(monkeypat
 # --- --fresh: the brand-new-node path (scaffold instance/ + YOUR-key-only .sops.yaml) --------------------
 
 MINTED = "age1freshtestpubkey00000000000000000000000000000000000000"   # the control key a fresh node mints
+BG = "age1breakglasstestpubkey000000000000000000000000000000000"       # a break-glass PUBLIC key made elsewhere
+BG_PRIVATE = "AGE-SECRET-KEY-1FAKEBREAKGLASSPRIVATE"                     # a minted one's private half (a fake)
+_FRESH = ["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]
 
 
 @pytest.fixture
 def fresh_repo(tmp_path, monkeypatch):
     """A throwaway ROOT holding ONLY the shipped instance.example/ skeleton and NO instance/ overlay — the state
     a brand-new node clones into. --fresh scaffolds instance/ from it; ROOT is repointed so the run never touches
-    the real tree. Mirrors conftest.tmp_repo but for the fresh-install path."""
+    the real tree, and the default control-key path is repointed under it so a run never reads the operator's
+    own key file. Mirrors conftest.tmp_repo but for the fresh-install path."""
     shutil.copytree(os.path.join(paths.ROOT, "instance.example"), tmp_path / "instance.example")
     monkeypatch.setattr(paths, "ROOT", str(tmp_path))
+    monkeypatch.setattr(ki, "AGE_KEY_FILE", str(tmp_path / "age" / "keys.txt"))
     return tmp_path
 
 
@@ -127,20 +132,22 @@ def _mock_fresh_seams(monkeypatch, minted=MINTED):
                         lambda p: {"changed": False, "error": None, "paths": []})
 
 
-def test_fresh_writes_sops_with_only_new_recipient(fresh_repo, monkeypatch, capsys):
-    """SECURITY CONTRACT of --fresh: the scaffolded instance/.sops.yaml names ONLY the freshly-minted control
-    key, in EVERY domain — the shipped placeholder is REPLACED, never appended to. This is the guard against the
-    inherit-recipients footgun the blind-Joe audit found: if a fresh node kept another instance's recipients, a
-    stranger could decrypt the new node's secrets (and the new node's own secrets could be encrypted to a key it
-    doesn't hold). Also asserts the control private key is never printed."""
+def test_fresh_writes_sops_with_only_this_instances_recipients(fresh_repo, monkeypatch, capsys):
+    """SECURITY CONTRACT of --fresh: the scaffolded instance/.sops.yaml names ONLY this instance's recipients, in
+    EVERY domain — the freshly-minted control key and the break-glass key the operator chose — and the shipped
+    placeholder is REPLACED, never appended to. This is the guard against the inherit-recipients footgun the
+    blind-Joe audit found: if a fresh node kept another instance's recipients, a stranger could decrypt the new
+    node's secrets (and the new node's own secrets could be encrypted to a key it doesn't hold). Also asserts the
+    control private key is never printed."""
     _mock_fresh_seams(monkeypatch)
-    rc = ki.main(["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"])
+    rc = ki.main(["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test",
+                  "--break-glass-recipient", BG])
     assert rc == 0
     sops_path = os.path.join(fresh_repo, "instance", ".sops.yaml")
     assert os.path.exists(sops_path)
     text = open(sops_path, encoding="utf-8").read()
     recips = keygen._resolve_recipients(text)
-    assert recips and all(s == {MINTED} for s in recips.values())   # only the minted key, in every domain
+    assert recips and all(s == {MINTED, BG} for s in recips.values())   # this instance's two keys, in every domain
     assert keygen.FRESH_PLACEHOLDER not in text                     # placeholder fully replaced (none left)
     assert "AGE-SECRET-KEY" not in capsys.readouterr().out
 
@@ -151,7 +158,7 @@ def test_fresh_scaffolds_skeleton_without_secrets_and_sets_instance_yml(fresh_re
     key, and must not inherit ciphertext. The --mgmt-ip/--domain flags are written into instance/instance.yml so
     deploy-stack renders the right ${KONTROLL_MGMT_IP}/${KONTROLL_DOMAIN} (PR-2)."""
     _mock_fresh_seams(monkeypatch)
-    assert ki.main(["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
+    assert ki.main(["--fresh", "--no-break-glass", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
     inst = os.path.join(fresh_repo, "instance")
     assert os.path.exists(os.path.join(inst, "instance.yml"))
     assert os.path.exists(os.path.join(inst, "fleet.yml"))
@@ -185,7 +192,7 @@ def test_fresh_personalizes_homepage_tiles(fresh_repo, monkeypatch):
     kontroll-init's sentinel substitution. The Grafana tile carries the scheme Grafana SERVES (plain HTTP on
     :3002): the template said `https://` for it, so every fresh portal's Grafana tile was dead on first boot."""
     _mock_fresh_seams(monkeypatch)
-    assert ki.main(["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
+    assert ki.main(["--fresh", "--no-break-glass", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
     hp = os.path.join(fresh_repo, "instance", "dashboards", "homepage", "services.yaml")
     text = open(hp, encoding="utf-8").read()
     head = text.split("# >>> kontroll fleet")[0]                     # the kontroll-init-personalized control-plane region
@@ -201,7 +208,7 @@ def test_personalize_homepage_is_idempotent_and_clobber_safe(fresh_repo, monkeyp
     operator hand-edited the file) finds no sentinels and changes NOTHING — matching the scaffold's never-overwrite
     posture. Guards a re-run of kontroll-init from re-substituting / corrupting an already-personalized portal."""
     _mock_fresh_seams(monkeypatch)
-    assert ki.main(["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
+    assert ki.main(["--fresh", "--no-break-glass", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
     hp = os.path.join(fresh_repo, "instance", "dashboards", "homepage", "services.yaml")
     before = open(hp, encoding="utf-8").read()
     assert ki._personalize_homepage("9.9.9.9", "other.test") == []   # no sentinels remain → no tokens replaced
@@ -213,9 +220,9 @@ def test_fresh_refuses_configured_overlay(fresh_repo, monkeypatch, capsys):
     already-configured node (the source instance, or an accidental second --fresh) from being re-initialised as
     brand-new. The guard fires BEFORE any scaffold/personalize write, so a configured tree is never mutated."""
     _mock_fresh_seams(monkeypatch)
-    assert ki.main(["--fresh", "--trust-mode", "separated"]) == 0                                 # first run seeds (placeholder -> minted)
+    assert ki.main(["--fresh", "--no-break-glass", "--trust-mode", "separated"]) == 0                                 # first run seeds (placeholder -> minted)
     capsys.readouterr()
-    rc2 = ki.main(["--fresh", "--trust-mode", "separated"])                                       # second run: real recipient, no placeholder
+    rc2 = ki.main(["--fresh", "--no-break-glass", "--trust-mode", "separated"])                                       # second run: real recipient, no placeholder
     assert rc2 == 1 and "already names real recipients" in capsys.readouterr().err
 
 
@@ -256,7 +263,7 @@ def test_fresh_skips_fully_provisioned_bootstrap_domain(fresh_repo, monkeypatch)
                         lambda d, s, r=None: planned.append(d) or {"error": None, "view": []})   # mirror the 3-arg sig
     monkeypatch.setattr(secrets_service, "apply_secret_plan",
                         lambda p: {"changed": False, "error": None, "paths": []})
-    assert ki.main(["--fresh", "--trust-mode", "separated", "--mgmt-ip", "1.2.3.4", "--domain", "x.test"]) == 0
+    assert ki.main(["--fresh", "--no-break-glass", "--trust-mode", "separated", "--mgmt-ip", "1.2.3.4", "--domain", "x.test"]) == 0
     assert planned == []                                  # neither domain re-planned → no secret rotation
 
 
@@ -267,7 +274,7 @@ def test_fresh_requires_trust_mode(fresh_repo, monkeypatch, capsys):
     human-reviewed (separated) or an auto (solo) promote. Guards a fresh node silently defaulting its trust posture
     (the one setting that, unlike tls_mode, must fail LOUD not safe)."""
     _mock_fresh_seams(monkeypatch)
-    rc = ki.main(["--fresh", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"])      # no --trust-mode
+    rc = ki.main(["--fresh", "--no-break-glass", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"])      # no --trust-mode
     assert rc == 1
     assert "requires --trust-mode" in capsys.readouterr().err
     assert not os.path.exists(os.path.join(fresh_repo, "instance", "instance.yml"))   # refused BEFORE any scaffold
@@ -279,8 +286,275 @@ def test_fresh_writes_chosen_trust_mode_uncommenting_the_template(fresh_repo, mo
     is the durable, deploy-read value and no stale commented default survives. Guards the chosen posture silently
     not landing (which would then hard-fail deploy-stack's assert) or the wrong value persisting."""
     _mock_fresh_seams(monkeypatch)
-    assert ki.main(["--fresh", "--trust-mode", "solo", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
+    assert ki.main(["--fresh", "--no-break-glass", "--trust-mode", "solo", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]) == 0
     iy = open(os.path.join(fresh_repo, "instance", "instance.yml"), encoding="utf-8").read()
     assert "trust_mode: solo" in iy                       # active, uncommented, the chosen value
     assert "trust_mode: separated" not in iy              # the commented template default is GONE (replaced)
     assert "# trust_mode:" not in iy                      # the assignment line is no longer commented
+
+
+# --- T11 (S12): a break-glass recipient from an instance's first commit -------------------------------------------
+
+def _rules():
+    """{path_regex: recipients} of the scaffolded instance/.sops.yaml, read as keygen reads it (anchors expanded)."""
+    return keygen._resolve_recipients(
+        open(os.path.join(paths.ROOT, "instance", ".sops.yaml"), encoding="utf-8").read())
+
+
+def _write_key(path, public):
+    """An age identity file at `path` whose public half is `public` (the private line is a fake)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("# public key: %s\nAGE-SECRET-KEY-1FAKEZZ\n" % public)
+
+
+def _never(what):
+    """A stub that fails the test if the step it replaces is reached."""
+    def stub(*_a, **_k):
+        pytest.fail("reached %s" % what)
+    return stub
+
+
+def test_fresh_requires_a_break_glass_choice(fresh_repo, monkeypatch, capsys):
+    """`--fresh` with none of `--break-glass-recipient`, `--mint-break-glass` and `--no-break-glass` exits 1, names
+    all three — the recipient made elsewhere first, as the preferred one — and writes nothing: no instance/, no key.
+    Guards the tool silently creating an instance whose secrets one key opens (the state every instance was in
+    before T11), and equally a silent mint: a default that printed a private key would put it in the log of every
+    captured run."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    assert ki.main(_FRESH) == 1
+    err = capsys.readouterr().err
+    assert "--fresh requires a break-glass choice" in err and "preferred" in err
+    assert err.index("--break-glass-recipient") < err.index("--mint-break-glass") < err.index("--no-break-glass")
+    assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
+def test_fresh_with_a_supplied_recipient_has_two_recipients_before_the_first_secret(fresh_repo, monkeypatch, capsys):
+    """With `--break-glass-recipient`, at the moment each bootstrap secret is written every rule of
+    instance/.sops.yaml already names exactly the control key and that recipient — the stubbed secret write reads
+    the file when it is called. Guards the order: a recipient added after the first write leaves that file wrapped to
+    one key, and a fresh install never runs the re-wrap that would fix it. The real seed and the real additive writer
+    run; only the key mint and sops are stubbed."""
+    _mock_fresh_seams(monkeypatch)
+    seen = []
+    monkeypatch.setattr(secrets_service, "apply_secret_plan",
+                        lambda p: seen.append(_rules()) or {"changed": False, "error": None, "paths": []})
+    assert ki.main(_FRESH + ["--break-glass-recipient", BG]) == 0
+    assert len(seen) == len(ki.BOOTSTRAP_DOMAINS)
+    assert all(rules and all(s == {MINTED, BG} for s in rules.values()) for rules in seen)
+    out = capsys.readouterr().out
+    assert "break-glass recipient: %s (ADDED" % BG in out and "AGE-SECRET-KEY" not in out
+
+
+def test_minted_break_glass_is_shown_once_and_written_nowhere(fresh_repo, monkeypatch, capsys):
+    """`--mint-break-glass` on a terminal: the minted private half appears exactly once on standard output, never on
+    standard error, and in no file under the scratch root (the overlay, the key directory); its public half is a
+    recipient of every rule. Guards the private half reaching disk — where a backup, a snapshot or a commit would
+    carry it — and its being printed twice (a log line besides the block) or not at all (a recipient nobody holds)."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    monkeypatch.setattr(keygen, "generate_keypair", lambda: {"public": BG, "private": BG_PRIVATE})
+    assert ki.main(_FRESH + ["--mint-break-glass"]) == 0
+    out, err = capsys.readouterr()
+    assert out.count(BG_PRIVATE) == 1 and BG_PRIVATE not in err
+    assert all(s == {MINTED, BG} for s in _rules().values())
+    for directory, _dirs, names in os.walk(fresh_repo):
+        for name in names:
+            with open(os.path.join(directory, name), "rb") as fh:
+                assert BG_PRIVATE.encode() not in fh.read(), os.path.join(directory, name)
+
+
+def test_the_private_half_is_shown_even_when_a_later_step_fails(fresh_repo, monkeypatch, capsys):
+    """When the bootstrap-secret step fails after the minted recipient was written (sops absent, say), kontroll-init
+    exits 1 — and the private half was still shown, once, before the failure. Guards a half-finished init leaving a
+    recipient in .sops.yaml whose private half nobody was shown: a count of two and a recovery of zero."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    monkeypatch.setattr(keygen, "generate_keypair", lambda: {"public": BG, "private": BG_PRIVATE})
+    monkeypatch.setattr(secrets_service, "apply_secret_plan",
+                        lambda p: {"changed": False, "error": "sops: not found", "paths": []})
+    assert ki.main(_FRESH + ["--mint-break-glass"]) == 1
+    out, err = capsys.readouterr()
+    assert out.count(BG_PRIVATE) == 1 and "could not write the dashboards domain" in err
+    assert all(BG in s for s in _rules().values())
+
+
+def test_no_break_glass_is_explicit_and_says_what_it_costs(fresh_repo, monkeypatch, capsys):
+    """`--no-break-glass` creates the instance with one recipient per rule, the control key, and says what that
+    costs: the key file whose loss destroys every secret, R-KEY-1, and the document that adds a recipient later.
+    Guards the opt-out turning into a quiet default — fine for the scratch instance it exists for, and the state
+    every instance was in before T11 for one that took it without reading why."""
+    _mock_fresh_seams(monkeypatch)
+    assert ki.main(_FRESH + ["--no-break-glass"]) == 0
+    assert all(s == {MINTED} for s in _rules().values())
+    out = capsys.readouterr().out
+    assert "NO break-glass recipient" in out and "R-KEY-1" in out and "docs/break-glass.md" in out
+    assert "Losing %s destroys every secret" % ki.AGE_KEY_FILE in out
+
+
+@pytest.mark.parametrize("recipient,expect", [
+    (BG_PRIVATE, "was given a PRIVATE key"),
+    ("age1short", "is not an age public key"),
+    ("age1BREAKGLASSUPPERCASEPUB000000000000000000000000000000", "is not an age public key"),
+    (BG + "," + MINTED, "is not an age public key"),
+], ids=["private-key", "too-short", "upper-case", "two-joined"])
+def test_a_malformed_or_private_recipient_is_refused_before_any_write(fresh_repo, monkeypatch, capsys,
+                                                                     recipient, expect):
+    """A `--break-glass-recipient` that is a PRIVATE key, or is not an age public key as age-keygen prints one, exits
+    1 before anything is written, and the value is not echoed back; a valid key with more after it (two keys
+    joined by a comma) is refused whole. Guards a typo creating a recipient nobody can decrypt with (every later
+    secret written to it), a check that reads only a valid prefix, and a private key pasted by mistake being printed
+    to the terminal or its log a second time."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    assert ki.main(_FRESH + ["--break-glass-recipient", recipient]) == 1
+    err = capsys.readouterr().err
+    assert expect in err and recipient not in err and "Nothing was written" in err
+    assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
+def test_a_recipient_equal_to_the_control_key_is_refused(fresh_repo, monkeypatch, capsys):
+    """A break-glass recipient that IS this node's control key is refused before anything is written when the key file
+    already exists, and, as a belt, at the write step when the key was minted in this same run — so the copy is never
+    added. Guards a copy of the control key counted as a second recipient: the rule would name one key twice, and
+    losing it would still destroy every secret."""
+    _mock_fresh_seams(monkeypatch)
+    _write_key(ki.AGE_KEY_FILE, BG)
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    assert ki.main(_FRESH + ["--break-glass-recipient", BG]) == 1
+    assert "is this node's control key" in capsys.readouterr().err
+    assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+    os.remove(ki.AGE_KEY_FILE)                         # the belt: nothing to compare before the run mints the key
+    _mock_fresh_seams(monkeypatch, minted=BG)
+    assert ki.main(_FRESH + ["--break-glass-recipient", BG]) == 1
+    assert "is this node's control key" in capsys.readouterr().err
+    assert all(s == {BG} for s in _rules().values())   # the control recipient alone; the copy was not added
+
+
+def _existing_instance(fresh_repo, monkeypatch):
+    """An instance created with one recipient, then a node whose control key file is where kontroll-init looks and
+    whose bootstrap domains are fully set — the state an existing instance is in. Returns its .sops.yaml path."""
+    _mock_fresh_seams(monkeypatch)
+    assert ki.main(_FRESH + ["--no-break-glass"]) == 0
+    _write_key(ki.AGE_KEY_FILE, MINTED)
+    monkeypatch.setattr(ki, "ensure_control_key", lambda kf: (ki._read_public(kf), False))
+    full = {d: {f["key"] for f in catalog.secret_form(d)["fields"]} for d in ki.BOOTSTRAP_DOMAINS}
+    monkeypatch.setattr(secrets_service, "_existing_keys", lambda d: full.get(d, set()))
+    return os.path.join(fresh_repo, "instance", ".sops.yaml")
+
+
+def test_existing_instance_adds_the_recipient_additively_and_names_the_re_wrap(fresh_repo, monkeypatch, capsys):
+    """Without --fresh, `--break-glass-recipient` adds the key to every rule — under BOTH recipient anchors, so the
+    operational domains (network, proxmox) get it too — removes no line of .sops.yaml, and prints the re-wrap
+    (`keygen.SOPS_UPDATEKEYS`) and the runbook; a second run changes nothing and asks for no re-wrap. Guards the shell
+    procedure for an existing instance (docs/break-glass.md) under-granting the operational domains, as a hand edit
+    under one anchor does, or dropping a recipient the existing ciphertext is wrapped to."""
+    sops_path = _existing_instance(fresh_repo, monkeypatch)
+    before = open(sops_path, encoding="utf-8").read()
+    capsys.readouterr()
+    assert ki.main(["--break-glass-recipient", BG]) == 0
+    after = open(sops_path, encoding="utf-8").read()
+    assert all(s == {MINTED, BG} for s in _rules().values())
+    assert set(before.splitlines()) <= set(after.splitlines())      # only added: every line of the old file is kept
+    out = capsys.readouterr().out
+    assert keygen.SOPS_UPDATEKEYS in out and "docs/break-glass.md" in out
+    assert ki.main(["--break-glass-recipient", BG]) == 0
+    out = capsys.readouterr().out
+    assert "already present" in out and keygen.SOPS_UPDATEKEYS not in out
+    assert open(sops_path, encoding="utf-8").read() == after
+
+
+def test_a_recipient_without_fresh_and_no_control_key_is_refused_and_mints_nothing(fresh_repo, monkeypatch, capsys):
+    """Without --fresh, `--break-glass-recipient` where no control key file exists exits 1 before anything is written:
+    .sops.yaml is unchanged, no key file is created, and the message names the installer shell where the key is.
+    Guards the non-fresh path minting a NEW control key (its step 1) and adding it to every domain before it reaches
+    the break-glass step — an unrequested recipient whose private half sits wherever the command happened to run,
+    such as a shell without the key directory's bind (MF-04)."""
+    sops_path = _existing_instance(fresh_repo, monkeypatch)
+    os.remove(ki.AGE_KEY_FILE)
+    before = open(sops_path, encoding="utf-8").read()
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    capsys.readouterr()
+    assert ki.main(["--break-glass-recipient", BG]) == 1
+    err = capsys.readouterr().err
+    assert "no control key" in err and "kontroll-installer.sh shell" in err
+    assert open(sops_path, encoding="utf-8").read() == before and not os.path.exists(ki.AGE_KEY_FILE)
+
+
+def test_mint_refuses_when_standard_output_is_not_a_terminal(fresh_repo, monkeypatch, capsys):
+    """`--mint-break-glass` whose standard output is not a terminal (a pipe, a file, a captured CI or dogfood run)
+    exits 1 before anything is minted or written, and names `--break-glass-recipient` as the unattended form; the
+    real terminal check reads pytest's capture as not a terminal. Guards a show-once private key landing in a log
+    nobody chose to keep, and — were the show suppressed instead — a recipient whose private half nobody was shown
+    (MF-05)."""
+    assert ki._stdout_is_terminal() is False
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: False)
+    monkeypatch.setattr(keygen, "generate_keypair", _never("the mint"))
+    assert ki.main(_FRESH + ["--mint-break-glass"]) == 1
+    err = capsys.readouterr().err
+    assert "not a terminal" in err and "--break-glass-recipient" in err
+    assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
+@pytest.mark.parametrize("flag", ["--mint-break-glass", "--no-break-glass"])
+def test_the_mint_and_the_opt_out_are_choices_for_fresh_only(fresh_repo, monkeypatch, capsys, flag):
+    """`--mint-break-glass` and `--no-break-glass` without --fresh exit 1 before any write and point at
+    `--break-glass-recipient` and docs/break-glass.md; two of the three choices together are an argparse error.
+    Guards an existing instance minting a key on the node outside the one flow that shows it at birth, and a
+    `--no-break-glass` on an existing instance reading as though it removed a recipient."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    assert ki.main([flag]) == 1
+    err = capsys.readouterr().err
+    assert "choices for --fresh" in err and "--break-glass-recipient" in err and "docs/break-glass.md" in err
+    with pytest.raises(SystemExit) as exc:
+        ki.main(_FRESH + [flag, "--break-glass-recipient", BG])
+    assert exc.value.code == 2
+
+
+def test_a_failed_mint_writes_nothing(fresh_repo, monkeypatch, capsys):
+    """When `--mint-break-glass` cannot mint (age-keygen absent or failing), kontroll-init exits 1 with the reason,
+    before the control key or instance/ is made. Guards the mint's failure surfacing as a traceback halfway through
+    — or, were it caught later, an instance created without the recipient its operator chose."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    monkeypatch.setattr(keygen, "generate_keypair", lambda: None)
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    assert ki.main(_FRESH + ["--mint-break-glass"]) == 1
+    assert "could not mint the break-glass key" in capsys.readouterr().err
+    assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
+@pytest.mark.parametrize("choice", [["--break-glass-recipient", BG], ["--mint-break-glass"]], ids=["supplied", "minted"])
+def test_a_failed_recipient_write_stops_before_any_secret(fresh_repo, monkeypatch, capsys, choice):
+    """When the break-glass recipient cannot be added to .sops.yaml, kontroll-init exits 1 with the writer's reason
+    and writes no secret; a minted key is then never shown (its public half is in no rule, so its private half opens
+    nothing). Guards the first secrets being written to the control key alone while the operator believes there are
+    two recipients — the state T11 exists to end — and a private key shown for a recipient that was never added."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    monkeypatch.setattr(keygen, "generate_keypair", lambda: {"public": BG, "private": BG_PRIVATE})
+    real = keygen.add_recipient
+    monkeypatch.setattr(keygen, "add_recipient", lambda public, anchors: (
+        {"changed": False, "error": "planted", "recipient_domains": []} if public == BG else real(public, anchors)))
+    monkeypatch.setattr(secrets_service, "apply_secret_plan", _never("a secret write"))
+    assert ki.main(_FRESH + choice) == 1
+    out, err = capsys.readouterr()
+    assert "could not add the break-glass recipient to .sops.yaml: planted" in err
+    assert BG_PRIVATE not in out and BG_PRIVATE not in err
+    assert all(s == {MINTED} for s in _rules().values())
+
+
+def test_a_missing_break_glass_role_is_refused_before_any_write(fresh_repo, monkeypatch, capsys):
+    """The groups a break-glass recipient joins come from key-roles/break-glass.yml, as the GUI dialog's do; with that
+    role absent, or naming no groups, kontroll-init exits 1 before anything is written. Guards the CLI and the dialog
+    disagreeing about which domains the key opens — a list of the CLI's own would drift from the role file."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    for role in (None, {"role": "break-glass", "recipient_groups": []}):
+        monkeypatch.setattr(catalog, "key_role", lambda r, role=role: role)
+        assert ki.main(_FRESH + ["--break-glass-recipient", BG]) == 1
+        assert "key-roles/break-glass.yml" in capsys.readouterr().err
+        assert not os.path.exists(os.path.join(fresh_repo, "instance"))

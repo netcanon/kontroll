@@ -127,31 +127,22 @@ python3 scripts/kontroll-init.py     # existing overlay: ADD your control recipi
 It ensures the control age key, adds its public half to `instance/.sops.yaml` (additive +
 parse-verified), and mints
 the onboard-GUI password (`GUI_PASSWORD`), the Grafana admin password, and the C10 API token into the
-`dashboards` SOPS domain — **showing the login passwords once** (save them). Then do the break-glass key
-(step 2 below) and the remaining service secrets (the GUI **"Secrets"** dialog after deploy, or `sops`).
+`dashboards` SOPS domain — **showing the login passwords once** (save them). Then check the break-glass
+recipient (step 2 below) and add the remaining service secrets (the GUI **"Secrets"** dialog after deploy, or `sops`).
 The manual equivalents:
 
 1. Put the age recipient the bootstrap printed into **`instance/.sops.yaml`** (replace the
    placeholder). *(kontroll-init does this.)*
-2. **Set up a break-glass recovery key.** (The `kontroll-init` fast path above already
-   minted the `dashboards` bootstrap secrets to your control key, so add the break-glass
-   recipient now and **re-wrap** them with the `updatekeys` command below — that is what
-   makes them recoverable retroactively. Do it before creating any *further* secrets.)
-   On a **trusted machine (not the control node)**, generate a second age key and
-   store its **private** half offline (password manager + paper) — it must never
-   touch the control node, and never sit inside a checkout of this repository:
-   ```bash
-   age-keygen -o ~/kontroll-breakglass.key    # in your HOME, not in the repo; prints "# public key: age1..."
-   ```
-   (A private key left in the repository directory would be an untracked file like any
-   other. `.gitignore` ignores `*.key`, and the deploy refuses to commit a file that holds
-   a private key — but the key belongs on another machine.)
-   Add **both** recipients (control-node + break-glass) to `instance/.sops.yaml` so every
-   secret encrypts to both; then re-wrap with the overlay config:
-   `sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml`.
-   Now losing the control-node key is *recoverable* (the offline key decrypts
-   everything) instead of catastrophic. Also keep a copy of the control-node key
-   (`~/.config/sops/age/keys.txt`) in your password manager.
+2. **The break-glass recovery key.** A brand-new node chose it at `kontroll-init --fresh`
+   (`--break-glass-recipient`, `--mint-break-glass` or `--no-break-glass`), and the first
+   secrets were written to both recipients. If you declined it, or this overlay predates
+   the choice, every domain has ONE recipient: add one now with
+   [break-glass.md](break-glass.md) — it makes the key on a trusted machine, adds its
+   public half under both recipient anchors and re-wraps the existing files — before
+   creating any further secrets. Either way, prove the key opens every domain (that
+   page's "Verify"): kontroll counts recipients and cannot know whether the private half
+   was kept. Also keep a copy of the control-node key (`~/.config/sops/age/keys.txt`) in
+   your password manager — a backup of that key, not a second recipient.
 3. Create the per-domain secret files the bootstrap listed. Prefer the GUI **"Secrets"**
    dialog after deploy (the value is encrypted on the box, never in your shell history);
    the CLI fallback is:

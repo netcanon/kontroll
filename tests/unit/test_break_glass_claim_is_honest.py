@@ -1,101 +1,177 @@
-"""SECURITY.md's break-glass claim must match the number of age recipients actually shipped.
+"""SECURITY.md's break-glass claim must match what `kontroll-init --fresh` actually produces.
 
 C1-FALSE (2026-07-28 fleet-restore review). `SECURITY.md` C1 stated:
 
     "every secret is encrypted to **two** age recipients — the control-VM operational key and an offline
      break-glass recovery key ... losing the VM key is recoverable, not catastrophic"
 
-and the accepted-risks table repeated it ("Mitigated: every secret is encrypted to an offline break-glass
-second recipient"). Both were false. Every `key_groups` in the SHIPPED `instance.example/.sops.yaml` names
-exactly ONE recipient, so no instance ever created from it had a break-glass key — verified additionally on
-both live boxes, each naming only its own control key.
+and the accepted-risks table repeated it. Both were false: every `key_groups` in the shipped
+`instance.example/.sops.yaml` named exactly ONE recipient, `--fresh` wrote the same shape, and both live boxes named
+only their own control key. A security document claiming a control that does not exist is worse than one admitting
+the gap, because decisions get made on it — "losing the VM key is recoverable" is the sentence that makes destroying
+the only holder of a key sound safe.
 
-Why this is the worst kind of documentation bug: a security document claiming a control that does not exist
-is more dangerous than one admitting the gap, because decisions get made on it. This specific claim is what a
-"reclaim the old box" decision would rest on — "losing the VM key is recoverable" is precisely the sentence
-that makes destroying the only holder of a key sound safe. It isn't; it is irreversible loss of every device
-credential in the instance.
-
-The test is deliberately BIDIRECTIONAL. Asserting only "the doc admits the gap" would go stale the moment
-break-glass is actually implemented, leaving a doc that understates its own security. So: the recipient count
-in the shipped template decides which claim the doc is required to make.
+T11 (S12). `--fresh` now requires a break-glass choice and applies it before the first secret is written, so the
+template keeps one placeholder by design and is no longer the oracle. The claim is three-state: an instance created
+by `--fresh` has a second recipient unless it was created with `--no-break-glass`; an instance created earlier has
+one until docs/break-glass.md is run on it; and the tool counts recipients but cannot know whether anyone kept the
+private half. So the oracle here is what `--fresh` writes for each choice — the real scaffold, the real seed and the
+real additive writer, run in a scratch root with only the key mint and sops stubbed — and the test stays
+BIDIRECTIONAL: should `--fresh` stop producing a second recipient, the document is required to say break-glass is
+not implemented again.
 """
+import importlib.util
 import os
 import re
+import shutil
 
+import pytest
 import yaml
+
+from kontroll import paths
+from kontroll.service import keygen
+from kontroll.service import secrets as secrets_service
+
+pytestmark = pytest.mark.unit
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMPLATE = os.path.join(_ROOT, "instance.example", ".sops.yaml")
 _SECURITY = os.path.join(_ROOT, "SECURITY.md")
+_CHOICES = {"recipient": ["--break-glass-recipient", "age1honestybreakglasspub0000000000000000000000000000000"],
+            "mint": ["--mint-break-glass"],
+            "none": ["--no-break-glass"]}
+# A sentence that claims the control key's loss is survivable must carry the condition that makes it true.
+_CLAIM = re.compile(r"\brecoverable\b|\bboth recipients\b|\+ offline break-glass", re.I)
+_CONDITION = re.compile(r"\b(where|if|unless|until|only|once)\b", re.I)
+_SECOND = re.compile(r"second recipient|break-glass recipient|break-glass key", re.I)
 
 
-def _recipients_per_domain():
-    """{path_regex: recipient count} for the shipped scaffold template."""
-    doc = yaml.safe_load(open(_TEMPLATE, encoding="utf-8"))
-    out = {}
-    for rule in doc["creation_rules"]:
-        groups = rule.get("key_groups") or []
-        out[rule["path_regex"]] = sum(len(g.get("age") or []) for g in groups)
-    return out
+def _load_init():
+    """scripts/kontroll-init.py, loaded by path (its name is not importable)."""
+    spec = importlib.util.spec_from_file_location("kontroll_init_honesty",
+                                                  os.path.join(_ROOT, "scripts", "kontroll-init.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _fresh_counts(tmp_path, monkeypatch):
+    """{choice: the fewest recipients any rule of the new instance/.sops.yaml names} for each break-glass choice of
+    `kontroll-init --fresh`, each run in its own scratch root."""
+    ki = _load_init()
+    monkeypatch.setattr(ki, "ensure_control_key", lambda kf: ("age1honestycontrolpub000000000000000000000000000000000", True))
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    monkeypatch.setattr(keygen, "generate_keypair",
+                        lambda: {"public": "age1honestymintedpub0000000000000000000000000000000000",
+                                 "private": "AGE-SECRET-KEY-1FAKEHONESTY"})
+    monkeypatch.setattr(secrets_service, "_existing_keys", lambda d: set())
+    monkeypatch.setattr(secrets_service, "build_secret_plan", lambda d, s: {"error": None, "view": []})
+    monkeypatch.setattr(secrets_service, "apply_secret_plan", lambda p: {"changed": False, "error": None, "paths": []})
+    counts = {}
+    for choice, flags in _CHOICES.items():
+        root = tmp_path / choice
+        shutil.copytree(os.path.join(_ROOT, "instance.example"), root / "instance.example")
+        monkeypatch.setattr(paths, "ROOT", str(root))
+        monkeypatch.setattr(ki, "AGE_KEY_FILE", str(root / "age" / "keys.txt"))
+        assert ki.main(["--fresh", "--trust-mode", "separated"] + flags) == 0, choice
+        rules = keygen._resolve_recipients(open(root / "instance" / ".sops.yaml", encoding="utf-8").read())
+        assert rules, "no creation_rules parsed from the new instance's .sops.yaml — the rest proves nothing"
+        counts[choice] = min(len(s) for s in rules.values())
+    return counts
 
 
 def _security_text():
-    return open(_SECURITY, encoding="utf-8").read()
+    with open(_SECURITY, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _section(text, heading):
+    """The body of the `### <heading> —` section."""
+    return text.split("### %s —" % heading, 1)[1].split("\n### ", 1)[0]
+
+
+def _risk_row(text, risk):
+    """The accepted-risks table row whose first cell names `risk`."""
+    return next(line for line in text.splitlines() if line.startswith("| **%s**" % risk))
+
+
+def unconditional_claims(text):
+    """The sentences of `text` that say the control key's loss is recoverable, or that every secret is encrypted to
+    both recipients, or that the key is kept "+ offline break-glass" — without both a condition and the second
+    recipient it depends on. Markdown line breaks are joined before the text is split into sentences."""
+    flat = re.sub(r"\s+", " ", text)
+    return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z*(`\[])", flat)
+            if _CLAIM.search(s) and not (_CONDITION.search(s) and _SECOND.search(s))]
 
 
 def test_the_template_recipient_count_is_visible_at_all():
-    """Guard the guard: if the template stops parsing or loses key_groups, every other assertion here would
-    vacuously pass."""
-    counts = _recipients_per_domain()
-    assert counts, "no creation_rules parsed from the shipped .sops.yaml — the rest of this file proves nothing"
-    assert all(n >= 1 for n in counts.values()), \
-        "a domain with ZERO recipients would be unencryptable: %r" % counts
+    """Guard the guard: the shipped template still parses and names at least one recipient per rule — the
+    placeholder `--fresh` replaces. If it stopped parsing or lost its key_groups, the seed the oracle below runs
+    would have nothing to replace and every assertion here could pass on an empty instance."""
+    doc = yaml.safe_load(open(_TEMPLATE, encoding="utf-8"))
+    counts = {r["path_regex"]: sum(len(g.get("age") or []) for g in r.get("key_groups") or [])
+              for r in doc["creation_rules"]}
+    assert counts and all(n >= 1 for n in counts.values()), counts
 
 
-def test_the_doc_claim_matches_the_shipped_recipient_count():
-    """THE BIDIRECTIONAL CHECK. Single-recipient reality requires the doc to say break-glass is not
-    implemented; multi-recipient reality requires it to stop saying so."""
-    counts = _recipients_per_domain()
-    single = {k: n for k, n in counts.items() if n < 2}
+def test_the_doc_claim_matches_what_fresh_actually_produces(tmp_path, monkeypatch):
+    """THE BIDIRECTIONAL CHECK, against what `--fresh` writes for each choice. When a supplied and a minted
+    break-glass key each give every rule a second recipient, C1 must say the three-state truth: a `--fresh` instance
+    has one unless created with `--no-break-glass` (all three flags named), an earlier instance has one only after
+    docs/break-glass.md is run, and the tool cannot know whether the private half was kept — and R-KEY-1 must stay
+    listed, naming the opt-out and the runbook. Should a choice stop producing a second recipient, C1 must say
+    break-glass is NOT IMPLEMENTED again. Guards the document drifting from the code in either direction."""
+    counts = _fresh_counts(tmp_path, monkeypatch)
+    assert counts["none"] == 1, "--no-break-glass must leave exactly the control key: %r" % counts
     text = _security_text()
-
-    if single:
-        assert "NOT IMPLEMENTED" in text, (
-            "%d domain(s) in the shipped template have a single age recipient, so there is no break-glass "
-            "key — SECURITY.md C1 must say so plainly: %s" % (len(single), sorted(single))
-        )
-        assert "R-KEY-1" in text, "the gap must carry an accepted-risk id so it is trackable, not just prose"
-        assert not re.search(r"encrypted to \*\*two\*\* age recipients", text), \
-            "the old false claim must not survive anywhere in the document"
-        assert not re.search(r"encrypted to an offline \*\*break-glass\*\* second recipient", text), \
-            "the accepted-risks table repeated the same false claim — it must be corrected too"
+    c1 = _section(text, "C1")
+    if counts["recipient"] >= 2 and counts["mint"] >= 2:
+        assert "NOT IMPLEMENTED" not in c1, "every --fresh choice but the opt-out gives two recipients: say so"
+        for flag in ("--break-glass-recipient", "--mint-break-glass", "--no-break-glass"):
+            assert flag in c1, "C1 must name the choice %s" % flag
+        assert "break-glass.md" in c1, "C1 must point an instance created earlier at the procedure"
+        assert re.search(r"cannot (know|verify|prove)", c1), \
+            "C1 must say the tool counts recipients but cannot know the private half was kept"
+        row = _risk_row(text, "R-KEY-1")
+        assert "--no-break-glass" in row and "break-glass.md" in row, \
+            "R-KEY-1 stays open for the instances with one recipient, and names how to close it"
     else:
-        assert "NOT IMPLEMENTED" not in text, (
-            "every shipped domain now has 2+ recipients, so break-glass IS implemented — C1 must be updated "
-            "to claim it, and R-KEY-1 retired"
-        )
+        assert "NOT IMPLEMENTED" in c1, "a --fresh choice leaves one recipient: C1 must say break-glass is missing"
+        assert "R-KEY-1" in text
+
+
+def test_no_unconditional_recoverable_claim_survives():
+    """No sentence of C1 or C8 says the control key's loss is recoverable, that every secret is encrypted to both
+    recipients, or that the key is kept "+ offline break-glass", without a condition and the second recipient it
+    rests on. The rule is shown to catch the two sentences that stood in C1 and C8 until T11 and to pass a
+    conditional one. Guards an unconditional claim — true only of an instance someone gave a second recipient —
+    being read as true of every instance, the reasoning a reclaim decision would rest on (the sentence C1 carried,
+    which the test before T11 did not see)."""
+    text = _security_text()
+    for heading in ("C1", "C8"):
+        assert unconditional_claims(_section(text, heading)) == [], heading
+    assert len(unconditional_claims(
+        "Losing it is **recoverable** via the offline break-glass key (every\nsecret is encrypted to both "
+        "recipients), so it is no longer a single point. The age key is on the VM + offline break-glass, never in "
+        "any of those artifacts.")) == 2
+    assert unconditional_claims("Losing it is recoverable only where a break-glass recipient was added.") == []
 
 
 def test_the_correction_states_the_consequence_not_just_the_fact():
-    """"One recipient" is a fact an operator can read past. "Losing the key destroys every credential" is the
-    decision-relevant consequence, and it is the part that was actively inverted before."""
-    text = _security_text()
-    if not any(n < 2 for n in _recipients_per_domain().values()):
-        return  # break-glass implemented; this assertion no longer applies
-    c1 = text.split("### C1 —", 1)[1].split("\n### ", 1)[0]
+    """"One recipient" is a fact an operator can read past; "losing the key destroys every credential" is the
+    decision-relevant consequence, and the part that was actively inverted before. It still holds for every instance
+    created before T11 and every one created with `--no-break-glass`, so C1 keeps saying it, with the count and the
+    re-wrap that closes it."""
+    c1 = _section(_security_text(), "C1")
     assert "catastrophic" in c1, "the correction must name the actual consequence of key loss"
     assert "ONE" in c1, "and state the true recipient count"
     assert "sops updatekeys" in c1, "and name the remedy that would close it"
 
 
 def test_the_off_box_key_copy_is_not_described_as_break_glass():
-    """The mitigation actually in place is a COPY of the single private key. Calling that break-glass would
-    re-introduce the same false comfort in new words: a copy shares the single point of failure, a second
-    recipient removes it. The distinction is the whole control."""
-    text = _security_text()
-    if not any(n < 2 for n in _recipients_per_domain().values()):
-        return
-    c1 = text.split("### C1 —", 1)[1].split("\n### ", 1)[0]
+    """The fallback an instance without a second recipient has is a COPY of the single private key. Calling that
+    break-glass would re-introduce the same false comfort in new words: a copy shares the single point of failure, a
+    second recipient removes it. The distinction is the whole control, so C1 keeps it."""
+    c1 = _section(_security_text(), "C1")
     assert "not a break-glass recipient" in c1, \
         "the off-box key copy must be explicitly distinguished from a break-glass recipient"

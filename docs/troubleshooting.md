@@ -326,7 +326,26 @@ exit but 0 the worktree keeps its commit and the canonical is untouched.
 | `remote: C10: refused refs/heads/main — refs/heads/main is never pushed, by anyone …` | a `git push` by hand into the canonical | the canonical's hook refuses a push of `main` from everyone: nothing legitimate pushes it | `python3 scripts/kontroll-land.py` from the checkout (`--check` first to see what would land) |
 | `local-canonical: the operator (…) has uid 1001 …` | the deploy, first task | the operator's uid is the network service's; the canonical's grant and hook cannot tell the two apart | deploy as an account with another uid |
 
+## 11. kontroll-init refused the break-glass choice
+
+`kontroll-init` checks the break-glass flags before it writes anything: every refusal below leaves `instance/` and
+the key directory as they were, and exits non-zero. The choices and the runbook are
+[break-glass.md](break-glass.md).
+
+| What you read | What it means | What to do |
+|---|---|---|
+| `--fresh requires a break-glass choice` | `--fresh` (the installer's `fresh-init`) was given none of the three | add `--break-glass-recipient <age1…>` (preferred), `--mint-break-glass` or `--no-break-glass` |
+| `--mint-break-glass and --no-break-glass are choices for --fresh` | one of them was passed to an existing instance | on an existing instance, make the key on another machine and run [break-glass.md](break-glass.md) |
+| `--break-glass-recipient was given a PRIVATE key` | the value starts `AGE-SECRET-KEY`; it is not echoed back | pass the `age1…` line instead, and clear the private key from your shell history (`history -d`, or the history file) |
+| `--break-glass-recipient is not an age public key` | the value is not `age1` followed by lower-case letters and digits | copy the `Public key:` line `age-keygen` printed, whole |
+| `no control key at …, and without --fresh kontroll-init never mints one` | the command ran where the control key is not mounted (on the host floor, outside the installer shell) | run it in `scripts/kontroll-installer.sh shell`, or name the key with `--key-file` |
+| `the break-glass recipient is this node's control key` | the value is the control key's own public half | make a second key on another machine; a copy of the control key is not a second recipient |
+| `--mint-break-glass shows a private key once, and standard output is not a terminal` | the run's output goes to a pipe, a file or a captured log | run it on a terminal, or make the key elsewhere and pass `--break-glass-recipient` |
+| `the break-glass key role (key-roles/break-glass.yml) is missing or names no recipient groups` | the shipped role file is gone or emptied, so kontroll-init cannot tell which anchors take the key | restore `key-roles/break-glass.yml` from the release |
+| `could not add the break-glass recipient to .sops.yaml: …` | the control recipient was written and the break-glass one was not | nothing was encrypted yet: correct what the sentence names, then add the key with [break-glass.md](break-glass.md) before any secret is written |
+
 ## See also
+- [break-glass.md](break-glass.md) — the break-glass key: the choice at install and the runbook for an instance without one
 - [logging-architecture.md](logging-architecture.md) — the layered design + the degrade-path source of truth
 - [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, the refusal that is the repository's own, and a
   fleet line that is not a class key

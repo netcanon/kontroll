@@ -24,7 +24,10 @@
 > #                      bash src/scripts/install.sh kontroll-<version>.tar.gz && cd kontroll   # a local git tree, no remote
 > sudo bash scripts/install-prereqs.sh                                  # Docker + compose + git + the C10 gid-1001 group
 > #   If it says it added you to the docker group, log out and back in before the next line.
-> scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ + mint control key (§1–§2)
+> # On ANOTHER machine first: age-keygen -o ~/kontroll-breakglass.key — keep that file offline, bring only the
+> #   age1… line it prints (the break-glass key, §1; docs/break-glass.md).
+> scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated \
+>     --break-glass-recipient <age1…>                                  # scaffold instance/ + mint control key (§1–§2)
 > $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
 > scripts/kontroll-installer.sh check          # deploy-stack --check --diff (the mandated dry-run)
 > #   On a node where nothing has ever been applied this is a PARTIAL preview and says so: --check does not
@@ -81,22 +84,32 @@ and scaffold a private `instance/` overlay with your own keys, never the tool au
 > in `instance/instance.yml`, so a wrong guess is recoverable.
 
 ```bash
-python3 scripts/kontroll-init.py --fresh --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated
+python3 scripts/kontroll-init.py --fresh --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated \
+    --break-glass-recipient <age1…>
 ```
 
 > `--trust-mode separated` puts a human review gate on every staged proposal (the recommended posture). What
 > `solo` does, and what `--fresh` does when the flag is left out, depends on the edition you are installing — read
 > [trust-mode.md](trust-mode.md) before choosing anything else.
+>
+> **The break-glass choice.** `--fresh` will not create an instance until you choose what recovers it if the
+> control key is lost: `--break-glass-recipient <age1…>`, the public half of a key you made on another machine
+> (preferred); `--mint-break-glass`, which mints it here and shows its private half once, on this terminal; or
+> `--no-break-glass`, which leaves every domain with ONE recipient — losing the control key then loses every
+> secret, so keep it for a scratch instance. The choices, and the line that makes the key:
+> [break-glass.md](break-glass.md).
 
 `--fresh` copies `instance.example/` to `instance/` (your keys only — it never inherits
 another instance's recipients), mints your control age key, seeds `instance/.sops.yaml`,
-fills `instance/instance.yml`'s `mgmt_ip`/`domain` **and the Homepage portal tiles** (so a
+adds the break-glass recipient you chose before the first secret is written, fills `instance/instance.yml`'s `mgmt_ip`/`domain` **and the Homepage portal tiles** (so a
 fresh `:3000` shows your real control-plane services — onboard-GUI/Semaphore/Grafana/
 Prometheus/API — not the TEST-NET stubs), and mints the bootstrap logins.
 
 > ⚠️ **`--fresh` prints generated passwords (onboard-GUI, Grafana, Semaphore admin) ONCE, then exits — copy the
 > whole output to your password manager now.** Your GUI login at §8 is the field printed as **`gui_admin_password`**
-> (the onboard-GUI `admin` password). To recover any of them later:
+> (the onboard-GUI `admin` password). With `--mint-break-glass` it also prints the break-glass private key once,
+> in a block of its own: that one goes to offline storage, never to a file on this node. To recover any of the
+> passwords later:
 > `SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/dashboards.sops.yml`.
 
 Then declare your hardware in the overlay **under `instance/`** (not `config/` or `instance.example/`):
@@ -110,8 +123,9 @@ Then declare your hardware in the overlay **under `instance/`** (not `config/` o
 ## 2. Keys + all secrets — **[B] SECURITY BOUNDARY → guided onboarding** (the first control key + GUI_PASSWORD are `kontroll-init --fresh`; everything else is the GUI Keys/Secrets dialogs)
 
 > **During install you do almost nothing here — `kontroll-init --fresh` (§1) already minted your control key and
-> bootstrap logins.** The break-glass key, the scoped-Semaphore key, and all device/service secrets are entered
-> **later, through the GUI** (§8). On the compose-native path there is nothing to do now — `init` generates the
+> bootstrap logins, and added the break-glass recipient you chose.** The scoped-Semaphore key and all
+> device/service secrets are entered **later, through the GUI** (§8) — and so is a break-glass key you declined at
+> install ([break-glass.md](break-glass.md)). On the compose-native path there is nothing to do now — `init` generates the
 > fleet SSH key as well; on the legacy host path generate it (the bullet below). The rest of this section explains
 > *why* the boundary exists — skim it and continue to §3.
 
@@ -120,7 +134,8 @@ candidates for a **guided key-gen + secret-entry wizard** (generate-on-box, encr
 offline break-glass backup):
 
 - **age keys** (`age-keygen`): the **control-VM key** (`~/.config/sops/age/keys.txt`), the **offline break-glass
-  key** (shown once, stored offline), and the **scoped Semaphore key** (`~/.config/semaphore/age/keys.txt`,
+  key** (chosen at `--fresh`: made on another machine and passed as its public half, or minted there and shown
+  once; added later with [break-glass.md](break-glass.md) if you declined it), and the **scoped Semaphore key** (`~/.config/semaphore/age/keys.txt`,
   recipient of `network`+`proxmox` only). `.sops.yaml` already encodes the per-domain recipiency.
   **[Resolved — the GUI "Keys" dialog]:** the **break-glass**, **scoped-Semaphore**, and **control-rotation**
   keys are now minted through the GUI (`key-roles/<role>.yml` → `/api/keygen`): generate-on-box, the **private
@@ -135,7 +150,7 @@ offline break-glass backup):
   box: `network` (device creds), `proxmox` (read-only API token), `compute` (docker-host SSH), `dashboards`
   (Grafana admin pw, GUI pw, **`kontroll_api_token`** for C10), `semaphore` (DB/admin pw, access-key
   encryption), `snmp_observability` (the SNMPv3 v3 read user). A new domain gets `base_recipients`
-  (control+break-glass) via the `.sops.yaml` catch-all.
+  (the control key, and the break-glass key where one was chosen) via the `.sops.yaml` catch-all.
 - **SSH keys** (the fleet/device SSH key, the GitHub deploy key) — generated on the box. On the compose-native path
   `init` generates the fleet key for you (`bootstrap.yml`); on the legacy host path **generate it now** —
   `configure-semaphore` (§6) reads it, and stops without it:

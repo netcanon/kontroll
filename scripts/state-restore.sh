@@ -4,7 +4,8 @@
 # (a clean checkout, a release bundle, or the runner image's code) to reconstitute an
 # instance: base code ⊕ restored state.
 #
-# After restoring you still need: the age key in place (offline break-glass), then
+# After restoring you still need: an age key that opens the secrets in place (the control key's
+# off-box copy, or the offline break-glass key — docs/break-glass.md), then
 # re-seed the local canonical (ansible/playbooks/local-canonical.yml) and run
 # ansible/playbooks/deploy-stack.yml. See docs/local-source-of-truth.md.
 #

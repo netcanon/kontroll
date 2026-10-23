@@ -57,8 +57,23 @@ def logical_lines(text):
     return out
 
 
+# kontroll-init's three break-glass choices; a scaffold command names one (T11).
+BREAK_GLASS_CHOICES = ("--break-glass-recipient", "--mint-break-glass", "--no-break-glass")
+
+
 def scaffold_commands_without_a_trust_mode(files=None, root=ROOT):
     """["path:line"] of every written scaffold command that does not carry `--trust-mode`."""
+    return _scaffold_commands_missing(lambda line: "--trust-mode" in line, files, root)
+
+
+def scaffold_commands_without_a_break_glass_choice(files=None, root=ROOT):
+    """["path:line"] of every written scaffold command that names none of the break-glass choices."""
+    return _scaffold_commands_missing(lambda line: any(c in line for c in BREAK_GLASS_CHOICES), files, root)
+
+
+def _scaffold_commands_missing(carries, files, root):
+    """["path:line"] of every written scaffold command, outside the tests, the changelog and the dossiers, whose
+    logical line `carries` refuses."""
     missing = []
     for rel in sorted(_tracked_files() if files is None else files):
         if rel.startswith(NOT_INSTRUCTIONS):
@@ -68,7 +83,7 @@ def scaffold_commands_without_a_trust_mode(files=None, root=ROOT):
         except (OSError, UnicodeDecodeError):
             continue
         missing += ["%s:%d" % (rel, number) for number, line in logical_lines(text)
-                    if SCAFFOLD.search(line) and "--trust-mode" not in line]
+                    if SCAFFOLD.search(line) and not carries(line)]
     return missing
 
 
@@ -94,6 +109,29 @@ def test_every_written_scaffold_command_names_a_trust_mode(tmp_path):
         path.write_text(text, encoding="utf-8")
     assert scaffold_commands_without_a_trust_mode(files=list(planted), root=str(tmp_path)) == [
         "docs/a.md:3", "scripts/b.sh:1"]
+
+
+def test_every_written_scaffold_command_names_a_break_glass_choice(tmp_path):
+    """No document, usage header, comment or epilogue in the tree shows a scaffold command without one of
+    `--break-glass-recipient`, `--mint-break-glass` or `--no-break-glass` on the same logical line. Guards a copied
+    command that `kontroll-init --fresh` refuses at step one since T11 — on every edition — so a stranger following
+    any copy but the quickstart stops there. The scan is shown to find a planted line in both spellings and over a
+    continuation, and to accept each of the three choices."""
+    assert scaffold_commands_without_a_break_glass_choice() == [], \
+        "add a break-glass choice to the command (`--break-glass-recipient <age1…>`, docs/break-glass.md)"
+    planted = {
+        "docs/a.md": "    scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <d> --trust-mode separated\n",
+        "scripts/b.sh": "#   python3 scripts/kontroll-init.py --fresh --trust-mode separated \\\n#       --mgmt-ip <ip>\n",
+        "docs/c.md": "./kontroll fresh-init --trust-mode separated \\\n    --break-glass-recipient <age1…>\n",
+        "docs/d.md": "./kontroll fresh-init --trust-mode separated --mint-break-glass\n",
+        "docs/e.md": "python3 scripts/kontroll-init.py --fresh --trust-mode solo --no-break-glass\n",
+    }
+    for rel, text in planted.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    assert scaffold_commands_without_a_break_glass_choice(files=list(planted), root=str(tmp_path)) == [
+        "docs/a.md:1", "scripts/b.sh:1"]
 
 
 EPILOGUES = ["scripts/install-prereqs.sh", "scripts/install.sh", "scripts/make-launch-kit.sh",

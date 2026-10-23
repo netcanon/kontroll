@@ -11,7 +11,8 @@
 # repo because scripts/kontroll/ is the Python service package — the name would collide).
 #
 # Usage (verbs mirror docker/installer/entrypoint.sh):
-#   ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ + the control key
+#   ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated \
+#       --break-glass-recipient <age1…>                   # scaffold instance/ + the control key (docs/break-glass.md)
 #   $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
 #   ./kontroll check                                         # the mandated --check --diff dry-run
 #   ./kontroll init                                          # bootstrap → deploy-stack (pulls runner/vector by digest)

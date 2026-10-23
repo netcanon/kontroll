@@ -163,8 +163,9 @@ cat <<'NEXT'
 
 ==> Done (idempotent — safe to re-run). The C10 canonical group (gid 1001) was provisioned above.
   Next, from your kontroll/ directory — after logging out and back in, if this run added you to the docker group:
-    scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated
-  (from a launch kit: ./kontroll in place of scripts/kontroll-installer.sh)
+    scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated --break-glass-recipient <age1…>
+  (from a launch kit: ./kontroll in place of scripts/kontroll-installer.sh; <age1…> is the public half of a key you
+  make on another machine — docs/break-glass.md)
   The whole sequence, and what --trust-mode decides: docs/install-from-scratch.md, the quickstart at the top.
   (optional) sudo bash scripts/host-systemd.sh            # qemu-guest-agent + the host-systemd residual
 NEXT

@@ -216,6 +216,17 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
     assert "exit $rc" in block, "the scaffold's own exit code must survive the chown"
 
 
+def test_fresh_init_output_is_never_teed_to_a_log():
+    """None of the three places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch
+    kit's (scripts/kontroll.sh) and the image's dispatcher (docker/installer/entrypoint.sh) — routes output through
+    `run_log_init` or a `tee`. Guards the show-once break-glass private key `kontroll-init --mint-break-glass` prints
+    landing in a persistent run log. A tee that also kept the container's terminal would not trip kontroll-init's
+    own non-terminal refusal, so this guard is the one that sees it; it passes today and guards the future."""
+    for rel in ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "docker/installer/entrypoint.sh"):
+        for line in _active_lines(rel):
+            assert "run_log_init" not in line and not re.search(r"\btee\b", line), "%s: %s" % (rel, line)
+
+
 def test_installer_bakes_the_core_base_without_fabricating_a_fleet():
     """The installer Dockerfile derives its collection base with `gen-requirements.py --core` and writes no fleet
     file. Guards two failures: the fabricated `enabled_modules: [docker_host]` fleet coming back (a file written

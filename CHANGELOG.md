@@ -11,6 +11,46 @@ NetConfig project.
 
 ## [Unreleased]
 
+### feat(scripts): a new instance gets a break-glass recipient before its first secret, unless the operator declines one (T11, 2026-10-23)
+
+SECURITY.md said every secret had two recipients: the control key and an offline break-glass key. It was false for
+every instance. `kontroll-init --fresh` wrote a `.sops.yaml` naming only the minted control key, so losing that key
+destroyed every device credential, API token and service password in the instance (R-KEY-1).
+
+- **Changed (breaking for a scripted install).** `kontroll-init --fresh`, and so `fresh-init`, refuses to run
+  without a break-glass choice:
+  - `--break-glass-recipient <age1…>`: the public half of a key made on another machine (preferred);
+  - `--mint-break-glass`: minted on the node, with its private half printed once in a delimited block and written
+    nowhere;
+  - `--no-break-glass`: one recipient per domain; the run says what that costs.
+  The choice is applied under both recipient anchors (the groups `key-roles/break-glass.yml` names) before the
+  first secret is written, so a fresh instance never needs a re-wrap. A scaffold command copied from an older
+  document stops at that refusal.
+- **Refusals, before anything is written:**
+  - a private key passed as the recipient (not echoed back), or a value that is not an age public key;
+  - the control key's own public half;
+  - `--mint-break-glass` when standard output is not a terminal, so the key cannot land in a pipe or a log;
+  - `--mint-break-glass` or `--no-break-glass` on an existing instance;
+  - `--break-glass-recipient` without `--fresh` where no control key file exists. The non-fresh path would
+    otherwise mint a control key and add it to every domain first.
+  docs/troubleshooting.md §11 maps each refusal to its remedy.
+- **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors.
+  docs/break-glass.md is the runbook. It runs in the installer shell and has:
+  - a quiet window and a proven off-box control-key copy first;
+  - the re-wrap's dry run, then the apply;
+  - the check with the control key, the hand-back of root-owned files, and a scoped commit;
+  - the landing with `--check --diff` first, a rollback, and the operator's own proof that the key opens every
+    domain.
+- **Security.**
+  - The bootstrap play's warning counts recipients per creation rule. It used to count across rules, so a second
+    recipient on one rule hid a rule with one.
+  - SECURITY.md C1, C8, C11 and R-KEY-1 state three cases: an instance with a second recipient from its first
+    secret; one with a single recipient until the runbook is run; and in either case, that kontroll cannot know
+    whether anyone kept the private half.
+  - `tests/unit/test_break_glass_claim_is_honest.py` runs `--fresh` for each choice and holds C1 to what it writes.
+  - No launcher routes `fresh-init` through a run log or a `tee` (`tests/unit/test_installer_phase1.py`).
+  - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).
+
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 
 `ping.yml` decides a host is reachable with a TCP connect from the control node, on `mgmt_port` or 22 — and nothing

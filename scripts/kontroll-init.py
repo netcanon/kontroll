@@ -7,9 +7,13 @@ that are chicken-and-egg for the GUI (it needs them to run) or that were manual 
      decryptor the GUI/Semaphore mount read-only;
   2. adds its PUBLIC half to /.sops.yaml (base + ops groups) via the shared, parse-verified
      keygen.add_recipient (additive + idempotent — closes the manual SETUP §5.1 step);
+  2b. with `--break-glass-recipient <age1…>` (or, with --fresh, `--mint-break-glass`), adds a break-glass recovery
+     recipient to every domain BEFORE step 3, so a fresh node's first secrets are written to two recipients and
+     never need a re-wrap. `--fresh` requires the choice (or `--no-break-glass`, which says what it costs) — the
+     same never-guess rule as --trust-mode. A minted key's private half is shown once and written nowhere;
   3. mints the `dashboards` BOOTSTRAP secrets if absent — the onboard-GUI password (rendered to GUI_PASSWORD;
      the genuine chicken-and-egg — the GUI can't set the password it needs to start), the Grafana admin
-     password, and the C10 API token — encrypted into the dashboards SOPS domain (the recipient from step 2).
+     password, and the C10 API token — encrypted into the dashboards SOPS domain (the recipients from step 2).
 
 Unlike the GUI keygen (show-once, never persisted), this WRITES the control private key to its canonical 0600
 path: the operator IS the trusted actor here and a running GUI mounts that file read-only, so only a local CLI
@@ -20,10 +24,13 @@ See docs/SETUP.md §5 + docs/install-from-scratch.md §2 (the keygen split) + SE
 A BRAND-NEW node instead runs `--fresh`: it scaffolds a private `instance/` overlay from the shipped
 `instance.example/` skeleton, writes a `.sops.yaml` naming ONLY the freshly-minted control key (never inheriting
 another instance's recipients — the default path is additive, which a fresh Joe must NOT do), and fills
-`instance.yml`'s mgmt_ip/domain from flags. See docs/install-from-scratch.md (the genericization overlay).
+`instance.yml`'s mgmt_ip/domain from flags. See docs/install-from-scratch.md (the genericization overlay), and
+docs/break-glass.md for the recovery key on an instance created without one.
 
 Usage:  python3 scripts/kontroll-init.py                                   # existing overlay: add your key (additive)
-        python3 scripts/kontroll-init.py --fresh --mgmt-ip <ip> --domain <d> --trust-mode separated   # brand-new node
+        python3 scripts/kontroll-init.py --break-glass-recipient <age1…>   # existing overlay: docs/break-glass.md
+        python3 scripts/kontroll-init.py --fresh --mgmt-ip <ip> --domain <d> --trust-mode separated \
+            --break-glass-recipient <age1…>        # brand-new node (or --mint-break-glass, or --no-break-glass)
 """
 import argparse
 import os
@@ -43,6 +50,11 @@ CONTROL_ANCHORS = ["base_recipients", "ops_recipients"]   # the control key must
 BOOTSTRAP_DOMAINS = ["dashboards", "semaphore"]            # auto-mintable bootstrap domains deploy-stack's .env needs
 #   dashboards: GUI/Grafana passwords + the C10 API token; semaphore: DB pw + admin login + access-key key.
 #   Device-cred domains (proxmox, network, …) stay operator-provided (real creds) — minted via onboarding.
+_AGE_RECIPIENT_RE = re.compile(r"age1[0-9a-z]{20,}")         # an age PUBLIC key, the shape _parse_age_public reads
+_BREAK_GLASS_CHOICES = (
+    "--break-glass-recipient <age1…> (preferred: the PUBLIC half of a key you made on another machine; its private "
+    "half never touches this node), --mint-break-glass (mint it here and show its private half once), or "
+    "--no-break-glass (ONE recipient per domain — for a scratch instance)")
 
 
 def _parse_age_public(text):
@@ -53,6 +65,84 @@ def _parse_age_public(text):
         return m.group(1)
     m = re.search(r"\bage1[0-9a-z]{20,}\b", text)
     return m.group(0) if m else None
+
+
+def _read_public(key_file):
+    """The age public key in key_file, or None when the file is absent or unreadable. Reads only — never mints."""
+    try:
+        with open(key_file, encoding="utf-8") as fh:
+            return _parse_age_public(fh.read())
+    except OSError:
+        return None
+
+
+def _stdout_is_terminal():
+    """Whether standard output is a terminal: the one place a minted break-glass private key may be shown. A pipe,
+    a file or a captured run would put it in a log nobody chose to keep (MF-05). The seam the tests patch."""
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _break_glass_refusal(args, tty, control_public):
+    """Why the break-glass flags as given are refused, or None. Runs before anything is written, so every
+    refusal leaves the tree and the key directory as they were. `tty` is whether stdout is a terminal;
+    `control_public` the control key's public half if its file exists, else None. Pure (testable).
+
+    Refused: `--fresh` without a choice (kontroll never silently creates an instance whose secrets one key opens);
+    `--mint-break-glass` / `--no-break-glass` without `--fresh` (an existing instance adds a recipient it made
+    elsewhere); a recipient that is a PRIVATE key, or not an age public key (the value is never echoed back); a
+    recipient without `--fresh` where no control key file exists (the non-fresh path would otherwise MINT a control
+    key and add it to every domain before reaching the break-glass step — MF-04); a recipient equal to the control
+    key (a copy is not a second recipient); and a mint whose output is not a terminal (MF-05)."""
+    recipient = args.break_glass_recipient
+    if args.fresh and recipient is None and not args.mint_break_glass and not args.no_break_glass:
+        return ("ERROR: --fresh requires a break-glass choice — kontroll never silently creates an instance whose "
+                "secrets only one key can open. Pass one of: %s. Without a second recipient, losing the control "
+                "key destroys every secret (SECURITY.md R-KEY-1). See docs/break-glass.md." % _BREAK_GLASS_CHOICES)
+    if (args.mint_break_glass or args.no_break_glass) and not args.fresh:
+        return ("ERROR: --mint-break-glass and --no-break-glass are choices for --fresh. On an existing instance, "
+                "add a recipient you made on another machine with --break-glass-recipient <age1…>; the procedure, "
+                "with its re-wrap, is docs/break-glass.md.")
+    if recipient is not None:
+        if recipient.strip().upper().startswith("AGE-SECRET-KEY"):
+            return ("ERROR: --break-glass-recipient was given a PRIVATE key. Pass the PUBLIC half (the age1… line "
+                    "age-keygen prints) and keep the private half off this machine — and out of your shell history. "
+                    "Nothing was written.")
+        if not _AGE_RECIPIENT_RE.fullmatch(recipient):
+            return ("ERROR: --break-glass-recipient is not an age public key (age1 then lower-case letters and "
+                    "digits, as age-keygen prints it). Nothing was written.")
+        if not args.fresh and control_public is None:
+            return ("ERROR: no control key at %s, and without --fresh kontroll-init never mints one — run this where "
+                    "the control key is (the installer shell, `scripts/kontroll-installer.sh shell`: "
+                    "docs/break-glass.md), or name it with --key-file. Nothing was written." % args.key_file)
+        if recipient == control_public:
+            return ("ERROR: the break-glass recipient is this node's control key — a copy of the control key is not "
+                    "a second recipient. Nothing was written.")
+    if args.mint_break_glass and not tty:
+        return ("ERROR: --mint-break-glass shows a private key once, and standard output is not a terminal — the key "
+                "would land in a pipe or a log nobody chose to keep. For an unattended run, make the key on another "
+                "machine and pass --break-glass-recipient <age1…> (docs/break-glass.md). Nothing was written.")
+    return None
+
+
+def _show_break_glass_once(private, warning):
+    """Print the minted break-glass PRIVATE key — the only time it exists outside this process — in a delimited
+    block with the break-glass role's warning (the GUI dialog shows the same text), then flush. Called straight after
+    its public half is written to .sops.yaml, before any later step can fail, so no recipient is left that nobody
+    was shown. Never logged, never written to a file."""
+    bar = "=" * 76
+    print(bar)
+    print("BREAK-GLASS PRIVATE KEY — shown ONCE and NOT saved anywhere. Copy it to offline storage now:")
+    print()
+    print("    " + private)
+    print()
+    if warning:
+        print(" ".join(str(warning).split()))
+    print("Then prove it opens every domain, from the machine that holds it: docs/break-glass.md (verify).")
+    print(bar)
+    sys.stdout.flush()
 
 
 def bootstrap_secret_values(form, existing):
@@ -192,6 +282,17 @@ def _fresh_guard():
 def main(argv):
     ap = argparse.ArgumentParser(description="Bootstrap a fresh kontroll control node (keygen split, CLI half).")
     ap.add_argument("--key-file", default=AGE_KEY_FILE, help="control age key path (default: %(default)s)")
+    bg = ap.add_mutually_exclusive_group()
+    bg.add_argument("--break-glass-recipient", metavar="AGE1…",
+                    help="the PUBLIC half of a recovery key you generated on another machine; added as a recipient "
+                         "of every domain. The private half never touches this node (preferred). Without --fresh: "
+                         "the existing-instance procedure, docs/break-glass.md")
+    bg.add_argument("--mint-break-glass", action="store_true",
+                    help="(with --fresh) mint the recovery key here and show its private half ONCE; nothing is "
+                         "written to disk. Store it offline before you continue. Needs a terminal")
+    bg.add_argument("--no-break-glass", action="store_true",
+                    help="(with --fresh) create the instance with ONE recipient per domain. Losing the control key "
+                         "then destroys every secret (SECURITY.md R-KEY-1). For scratch instances")
     ap.add_argument("--fresh", action="store_true",
                     help="scaffold a BRAND-NEW instance overlay from instance.example/ with YOUR key only "
                          "(never inherits another instance's recipients)")
@@ -205,6 +306,30 @@ def main(argv):
                          "auto-promote; this edition has no auto-promoter, so it behaves like 'separated'). NEVER "
                          "defaulted — choose. See docs/trust-mode.md.")
     args = ap.parse_args(argv)
+
+    # The break-glass choice is judged — and a minted key minted — before anything is written, so every refusal and
+    # every failure to mint leaves the tree and the key directory exactly as they were.
+    refusal = _break_glass_refusal(args, _stdout_is_terminal(),
+                                   _read_public(args.key_file) if args.break_glass_recipient else None)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
+    bg_role = bg_public = bg_private = None
+    if args.break_glass_recipient or args.mint_break_glass:
+        bg_role = catalog.key_role("break-glass")        # the groups it joins + the warning, as the GUI dialog's
+        if not bg_role or not bg_role.get("recipient_groups"):
+            print("ERROR: the break-glass key role (key-roles/break-glass.yml) is missing or names no recipient "
+                  "groups. Nothing was written.", file=sys.stderr)
+            return 1
+        if args.mint_break_glass:
+            pair = keygen.generate_keypair()             # age-keygen into memory only; nothing on disk (gitio.age_keygen)
+            if not pair:
+                print("ERROR: could not mint the break-glass key (is age-keygen installed?). Nothing was written.",
+                      file=sys.stderr)
+                return 1
+            bg_public, bg_private = pair["public"], pair["private"]
+        else:
+            bg_public = args.break_glass_recipient
 
     # 0. --fresh: scaffold a BRAND-NEW overlay (YOUR key only) before the keygen steps -------------------
     if args.fresh:
@@ -265,6 +390,31 @@ def main(argv):
     if w["changed"] and not args.fresh:
         print("    NEXT: re-wrap any pre-existing secrets to this recipient: %s" % keygen.SOPS_UPDATEKEYS)
 
+    # 2b. break-glass recipient — added BEFORE the first secret is written, so a fresh node never needs a re-wrap ----
+    if bg_public:
+        if bg_public == public:                          # belt: the check above could compare only a key that existed
+            print("ERROR: the break-glass recipient is this node's control key — a copy of the control key is not a "
+                  "second recipient. It was not added.", file=sys.stderr)
+            return 1
+        w2 = keygen.add_recipient(bg_public, bg_role["recipient_groups"])   # additive, parse-verified, idempotent
+        if w2["error"]:
+            print("ERROR: could not add the break-glass recipient to .sops.yaml: %s. It was not added%s; add one "
+                  "later per docs/break-glass.md." % (w2["error"], ", and the minted key is discarded unshown"
+                                                      if bg_private else ""), file=sys.stderr)
+            return 1
+        print("==> break-glass recipient: %s (%s; domains: %s)"
+              % (bg_public, "ADDED" if w2["changed"] else "already present",
+                 ", ".join(w2["recipient_domains"]) or "(none)"))
+        if bg_private:
+            _show_break_glass_once(bg_private, bg_role.get("warning"))   # the ONLY place the private half is emitted
+        if w2["changed"] and not args.fresh:
+            print("    NEXT: re-wrap the existing secrets to it — the dry run, the apply and the checks are "
+                  "docs/break-glass.md: %s" % keygen.SOPS_UPDATEKEYS)
+    elif args.fresh and args.no_break_glass:
+        print("==> NO break-glass recipient (--no-break-glass): every domain has ONE recipient, the control key. "
+              "Losing %s destroys every secret in this instance (SECURITY.md R-KEY-1). Add one before real "
+              "secrets: docs/break-glass.md." % args.key_file)
+
     # 3. bootstrap secrets for the auto-mintable domains — deploy-stack's docker/.env render REQUIRES the
     #    dashboards (GUI/Grafana pw + C10 token) AND semaphore (DB pw + admin login + access-key) domains BEFORE
     #    the GUI (where the remaining, operator-provided secrets are entered) can come up. ------------------
@@ -303,7 +453,16 @@ def main(argv):
 
     print("\n==> kontroll-init done. Next:")
     print("    - SAVE the GUI/Grafana passwords above (your onboard-GUI + Grafana logins).")
-    print("    - Break-glass + scoped Semaphore keys: the GUI 'Keys' dialog (after deploy), or SETUP.md §5.2.")
+    if bg_private:
+        print("    - Store the break-glass key shown above OFFLINE, then prove it opens every domain from the machine")
+        print("      that holds it: docs/break-glass.md.")
+    elif bg_public:
+        print("    - Prove the break-glass key opens every domain, from the machine that holds it: docs/break-glass.md.")
+    elif args.fresh:
+        print("    - NO break-glass recipient: add one before real secrets — docs/break-glass.md.")
+    else:
+        print("    - A break-glass recovery key, if this instance has none: docs/break-glass.md.")
+    print("    - A scoped Semaphore key: the GUI 'Keys' dialog (after deploy).")
     print("    - Enter the remaining service secrets: the GUI 'Secrets' dialog, or `sops instance/secrets/<d>.sops.yml`.")
     print("    - Next: edit instance/fleet.yml and instance/inventory/hosts.yml, then the dry-run —")
     print("      `scripts/kontroll-installer.sh check` (`./kontroll check` from a launch kit).")

@@ -88,23 +88,37 @@ an armored key INLINED in another file whose body does not follow its header dir
 where its header begins a line); a PEM header with nothing key-like after it, a key stored
 base64-encoded as a whole, an age key in lower case, a key file saved as UTF-16, a binary
 key store.
-**Break-glass — NOT IMPLEMENTED (this row previously claimed otherwise).** The
-*intended* design is two age recipients per domain: the control-VM operational
-key plus an **offline break-glass recovery key** whose private half never touches
-the VM or the repo (SETUP.md §5). **As built, every `key_groups` in the shipped
-`instance.example/.sops.yaml` names exactly ONE recipient, and `kontroll-init --fresh`
-writes an instance `.sops.yaml` naming only the newly minted control key** — correct
-in itself (an instance never inherits another's recipients), but it means no instance
-created from the template has a break-glass key unless its operator added one by hand,
-a documented manual step. Until a second recipient is added and the domains re-wrapped
-(`sops updatekeys`), **losing the control key IS catastrophic**: every device
-credential, API token and service password in that instance becomes permanently
-unreadable. This row asserted the opposite for months, which is worse than
-documenting no control at all — it invited exactly the "key loss is recoverable"
-reasoning a reclaim decision would rest on.
+**Break-glass — a second recipient from an instance's first secret, unless declined.** A
+break-glass key is a second age recipient on every domain whose private half the operator
+holds offline; it never touches the VM or the repo ([docs/break-glass.md](docs/break-glass.md)).
+The shipped `instance.example/.sops.yaml` keeps ONE placeholder per rule by design:
+`kontroll-init --fresh` replaces it with the newly minted control key (an instance never
+inherits another's recipients), then requires a choice and applies it before the first
+secret is written — `--break-glass-recipient <age1…>` (the public half of a key made on
+another machine; preferred), `--mint-break-glass` (minted on the node, its private half
+shown once on a terminal and written nowhere), or `--no-break-glass` (ONE recipient per
+domain, for a scratch instance). The claim therefore has three states:
+- An instance created by `--fresh` with either of the first two has a second recipient on
+  every domain from its first secret.
+- An instance created with `--no-break-glass`, or before `--fresh` asked, has ONE recipient
+  per domain until [docs/break-glass.md](docs/break-glass.md) is run on it, which adds the
+  recipient under both anchors and re-wraps the files (`sops updatekeys`). For such an
+  instance **losing the control key IS catastrophic**: every device credential, API token
+  and service password in it becomes permanently unreadable.
+- In either case kontroll counts recipients and **cannot know whether anyone kept the
+  private half**: a recipient whose private half was discarded is a count of two and a
+  recovery of zero. Only the operator's own check proves it — decrypting every domain with
+  the break-glass key, off the box (docs/break-glass.md, "Verify").
+
+This row once said every secret had two recipients, which was false for every instance —
+worse than documenting no control at all, because it invited the reasoning a reclaim
+decision would rest on.
 An off-box *copy of the private key* is a backup, **not a break-glass recipient**: it
-shares the single point of failure rather than removing it. Tracked as **R-KEY-1** under
-[Accepted risks](#accepted-risks--known-limitations).
+shares the single point of failure rather than removing it.
+Tracked as **R-KEY-1** under [Accepted risks](#accepted-risks--known-limitations). The
+bootstrap play warns, per creation rule, when a domain has fewer than two recipients
+(`tests/unit/test_bootstrap_break_glass_warning.py`); `tests/unit/test_break_glass_claim_is_honest.py`
+runs `--fresh` for each choice and holds this paragraph to what it writes.
 
 **Pending:** the `compute` (docker SSH), `dashboards`, and `semaphore` secret files.
 
@@ -115,9 +129,8 @@ vars plugin. One file per domain (network / proxmox / dashboards / semaphore / a
 
 **Key management:** the age private key lives only at
 `~/.config/sops/age/keys.txt` (mode 600) on the control VM, is **never
-committed**. Losing it is **recoverable** via the offline break-glass key (every
-secret is encrypted to both recipients), so it is no longer a single point of
-total loss. This is the analog of NetConfig's
+committed**. It stops being the single point of total loss only where a break-glass
+recipient was added and its private half kept (above). This is the analog of NetConfig's
 OS-keyring Fernet key, with a different mechanism (documented choice, PLAN.md §7).
 
 ### C2 — Secrets never logged  ⬚ planned
@@ -228,7 +241,8 @@ crown jewel — protect it where it lives, not at a remote.
   canonical, the commits that take a whole worktree unread are gated by
   `scripts/lib/plaintext-guard.sh`; a commit made by hand and then mirrored, and the scoped
   commits of the API and the GUI, are not re-read (C1, "Not covered"). The
-  age key is on the VM + offline break-glass, never in any of those artifacts.
+  control key is on the VM — and, where a break-glass recipient was added, that key's
+  private half is offline with the operator — never in any of those artifacts.
 - The local canonical (`/srv/kontroll.git`) is operator-owned; the runner mounts it
   **read-only** unless the privileged tier is armed (C10: `api_privileged` renders the mount `:rw`, which is what
   lets the `promote-proposal` task fast-forward `main`); the secret captures (`/var/lib/kontroll/backups`) are
@@ -1087,6 +1101,13 @@ distinct control.
   response for the operator to store (offline for break-glass; at the control/Semaphore key path otherwise) and
   is **never** written to the box, the repo, an audit line, or a log. The audit + the commit message carry only
   the **public** recipient.
+- **The CLI's show-once path is the same.** `--mint-break-glass`, a choice `kontroll-init --fresh` takes, mints the
+  break-glass keypair with the same primitive (`keygen.generate_keypair`, nothing on disk), adds its public half
+  under the groups `key-roles/break-glass.yml` names (the dialog's), and prints the private half **once**, in a
+  delimited block, straight after the recipient is written — before any later step can fail, so no recipient is
+  left that nobody was shown. It refuses before minting anything when standard output is not a terminal, so the key cannot land in a
+  pipe or a captured log, and no launcher routes `fresh-init` through a run log or a `tee`.
+  `--break-glass-recipient` takes a public key made elsewhere and refuses a private one without echoing it.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing
@@ -1102,7 +1123,10 @@ distinct control.
 `tests/unit/test_keygen_service.py` (private key only in the result; `.sops.yaml` edit additive + idempotent +
 anchor-scoped; the parse-verify gate rejects a dropped/smuggled recipient and writes nothing; `age_keygen`
 prints nothing) + `tests/integration/test_gui_api.py` keygen cases (show-once response, audit/commit carry only
-the public key, staged not `main`); `gitleaks` (CI) scans every commit for an `AGE-SECRET-KEY` (C6).
+the public key, staged not `main`); `tests/unit/test_kontroll_init.py` break-glass cases (the minted private half
+printed exactly once and in no file, shown even when a later step fails, refused on a non-terminal; a private or
+malformed recipient refused unechoed) + `tests/unit/test_installer_phase1.py`
+(`test_fresh_init_output_is_never_teed_to_a_log`); `gitleaks` (CI) scans every commit for an `AGE-SECRET-KEY` (C6).
 
 **Residual (tracked):** a minted **private key** and submitted **secret values** traverse the mgmt-side hop in
 the response/request body — protected by the surface's TLS (GUI) or the operator's reverse proxy
@@ -2088,7 +2112,7 @@ Fleet index.
 | Item | Risk | Accepted? | Rationale |
 |---|---|---|---|
 | Single operator, no RBAC beyond Semaphore | Anyone with control-VM access controls the fleet | Yes | Single-user homelab; Semaphore adds per-user RBAC for the UI layer in Phase 3 |
-| **R-KEY-1** — age key loss | Encrypted secrets become **permanently** unrecoverable | Yes (**uncompensated**) | **Corrected 2026-07-28 — this row previously claimed the mitigation existed.** It does not: every `key_groups` in the shipped `.sops.yaml` names exactly **ONE** recipient, and `kontroll-init --fresh` mints the same shape. There is **no break-glass second recipient**, so losing the control key destroys every device credential, API token and service password in that instance. An off-box **copy of the private key** is the only fallback — a backup that shares the single point of failure rather than removing it. Secrets are low-volume and re-enterable *in principle*, but re-entering them means recovering each one from its device, and for a token-only credential (an API token) the plaintext exists nowhere else and must be reissued on the device. **Fix:** add a second offline recipient to every domain and `sops updatekeys`; until then treat the control key as irreplaceable. See [C1](#c1--secrets-encrypted-at-rest-sops--age). |
+| **R-KEY-1** — age key loss | Encrypted secrets become **permanently** unrecoverable | Yes (**uncompensated** for an instance with one recipient) | **Corrected 2026-07-28; narrowed by T11.** An instance created by `kontroll-init --fresh` with `--break-glass-recipient` or `--mint-break-glass` has a second recipient on every domain from its first secret. An instance created with `--no-break-glass`, or before `--fresh` asked, has **ONE** recipient per domain: losing its control key destroys every device credential, API token and service password in it. Secrets are low-volume and re-enterable *in principle*, but re-entering them means recovering each one from its device, and for a token-only credential (an API token) the plaintext exists nowhere else and must be reissued on the device. **Fix for such an instance:** [docs/break-glass.md](docs/break-glass.md) — add the recipient, re-wrap, verify. The risk stays open for every instance whose break-glass key has not been proven to open every domain (kontroll counts recipients; it cannot know whether the private half was kept), and an off-box **copy of the private key** never closes it — a copy shares the single point of failure. See [C1](#c1--secrets-encrypted-at-rest-sops--age). |
 | API rate-limit counters in-process | Counters reset on restart + are per-process (wrong if the API is ever run multi-worker / multi-replica) | Yes | One uvicorn container today (mgmt-only, single-operator); the store is a swappable seam → move to a shared backend (Redis) the moment the API scales horizontally |
 | API rate-limit `X-Forwarded-For` trust | A spoofed XFF could shift an inquiry IP bucket | Yes | mgmt-VLAN-only; any fronting proxy is operator-controlled. When SSO/proxy lands (cluster 2c), trust XFF only from the known proxy hop |
 | Private git remote holds encrypted secrets | Push exposes ciphertext | Yes | SOPS ciphertext is safe to host; the age key is never pushed |

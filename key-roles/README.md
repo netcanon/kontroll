@@ -60,3 +60,6 @@ public-key operations — so it fits C10's no-key posture (the decrypt-needing `
 - [secret-forms/README.md](../secret-forms/README.md) — the sibling secret-onboarding registry
 - [docs/install-from-scratch.md](../docs/install-from-scratch.md) §2 — the keys + secrets boundary
 - [SECURITY.md](../SECURITY.md) — C11 (guided secret + key onboarding, no-leak)
+- [docs/break-glass.md](../docs/break-glass.md) — the break-glass key end to end: the choice `kontroll-init --fresh`
+  asks for (its `--mint-break-glass` uses this directory's `break-glass.yml` groups), and the runbook for an instance
+  created without one
