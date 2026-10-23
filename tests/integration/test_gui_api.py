@@ -8,6 +8,7 @@ or touches the repo/lab. The conftest sets GUI_PASSWORD before import (the GUI i
 import a usable app without it).
 """
 import base64
+import copy
 import os
 import subprocess
 from types import SimpleNamespace
@@ -1046,7 +1047,7 @@ def test_homepage_get_returns_the_board(client, monkeypatch):
     """GET /api/homepage returns the normalized board (read-only) and is auth-gated. Guards the Homepage editor's
     read round-trip + the auth boundary on the new surface (#136)."""
     from kontroll.service import homepage
-    monkeypatch.setattr(homepage, "read_board", lambda: _canned.HOMEPAGE_BOARD)
+    monkeypatch.setattr(homepage, "read_board", lambda: copy.deepcopy(_canned.HOMEPAGE_BOARD))
     assert client.get("/api/homepage").status_code == 401               # auth gate (no creds)
     r = client.get("/api/homepage", headers=_auth())
     assert r.status_code == 200 and r.get_json()["sections"][0]["name"] == "A"
@@ -1057,7 +1058,7 @@ def test_homepage_propose_writes_nothing_and_returns_diff_token(client, monkeypa
     nothing) — the propose-purity boundary the operator reviews before staging. Guards a propose that secretly
     writes/stages (#136, C10: the GUI stages only on an explicit apply)."""
     from kontroll.service import homepage
-    monkeypatch.setattr(homepage, "build_homepage_plan", lambda board: _canned.HOMEPAGE_PLAN)
+    monkeypatch.setattr(homepage, "build_homepage_plan", lambda board: copy.deepcopy(_canned.HOMEPAGE_PLAN))
     called = []
     monkeypatch.setattr(homepage, "promote_board",
                         lambda b, t: called.append(1) or {"error": None, "changed": True, "paths": ["p"]})
@@ -1426,7 +1427,7 @@ def test_provenance_lists_classes_and_audits(client, monkeypatch, tmp_path):
     """GET /api/provenance returns the per-collection provenance + summary and audits `provenance-index` (counts by
     class — names only). The MF-5 surface: an unsigned-pinned collection is reported AMBER with the honest
     pin+checksum note, so a green 'installed' never implies a signature was checked."""
-    monkeypatch.setattr(provenance_service, "fleet_provenance", lambda: _canned.FLEET_PROVENANCE)
+    monkeypatch.setattr(provenance_service, "fleet_provenance", lambda: copy.deepcopy(_canned.FLEET_PROVENANCE))
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log")); monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.get("/api/provenance", headers=_auth())
     assert r.status_code == 200
@@ -1437,7 +1438,8 @@ def test_provenance_lists_classes_and_audits(client, monkeypatch, tmp_path):
 
 def test_provenance_unavailable_is_200_not_500(client, monkeypatch):
     """A not-yet-generated sidecar → available:false at HTTP 200 (never a 500/stack trace) — the GUI degrades."""
-    monkeypatch.setattr(provenance_service, "fleet_provenance", lambda: _canned.FLEET_PROVENANCE_UNAVAILABLE)
+    monkeypatch.setattr(provenance_service, "fleet_provenance",
+                        lambda: copy.deepcopy(_canned.FLEET_PROVENANCE_UNAVAILABLE))
     r = client.get("/api/provenance", headers=_auth())
     assert r.status_code == 200 and r.get_json()["available"] is False
 
@@ -1451,7 +1453,7 @@ def test_image_provenance_lists_classes_and_audits(client, monkeypatch, tmp_path
     """GET /api/image-provenance returns the per-image class + summary and audits `image-provenance-index` (counts by
     class — names only). The §7.3 surface: a `digest-pinned` image is AMBER with the honest 'not a signature' note, so
     a digest-pin is never mistaken for a verified signature (cosign deferred)."""
-    monkeypatch.setattr(provenance_service, "image_provenance", lambda: _canned.IMAGE_PROVENANCE)
+    monkeypatch.setattr(provenance_service, "image_provenance", lambda: copy.deepcopy(_canned.IMAGE_PROVENANCE))
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log")); monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.get("/api/image-provenance", headers=_auth())
     assert r.status_code == 200
@@ -1472,7 +1474,7 @@ def test_discovery_returns_inbox(client, monkeypatch):
     /api/pending), and the GUI panel depends on the {generated_at, sources, candidates} shape. The local import in
     the route resolves the patched module attribute, so this pins the wiring without a real sweep artifact."""
     inbox = _canned.DISCOVERY_INBOX
-    monkeypatch.setattr("kontroll.service.discovery.read_inbox", lambda: inbox)
+    monkeypatch.setattr("kontroll.service.discovery.read_inbox", lambda: copy.deepcopy(inbox))
     r = client.get("/api/discovery", headers=_auth())
     assert r.status_code == 200 and r.get_json() == inbox
 

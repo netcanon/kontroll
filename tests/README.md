@@ -121,14 +121,21 @@ omitted so the SOPS shell-out is never invoked.
 ### A canned shape lives once, in `tests/_canned.py`
 
 A dict a test is served in place of a real service call — a seam the e2e server replaces, a route test's
-`monkeypatch` return, a `page.route` body — is written once in [_canned.py](_canned.py), and
+`monkeypatch` return, a `page.route` body — belongs once in [_canned.py](_canned.py), and
 [unit/test_mock_conformance.py](unit/test_mock_conformance.py) holds a row for it that builds the smallest real
 fixture, calls the real function and compares the two SHAPES: the key set and each value's type, never the values.
+Only the seams are enforced (below). A `page.route` body or a route test's fake is held by its row once it is in
+`_canned.py`, but nothing scans the tests for one written by hand, so a new one is caught only in review. Still
+written by hand: `e2e/test_pending_changes.py`'s `_payload` / `_proposal` builders (conformant to `list_pending`
+when T21's read measured them), the onboard flow's error stub, and route-test fakes in
+`integration/test_gui_api.py` (`promote_board`, `discard_proposal`, `local_installed`). Move one into `_canned.py`,
+with a row, when you next touch it.
 A key whose value is by design one type or another (a hint that is a dict or None) is named in the row's `optional`
 set. A mock written from belief keeps a UI test green while the server emits something else, and a second hand copy
 drifts from the first (S33). A seam the e2e conftest replaces with no row fails
-`test_every_replaced_seam_has_a_conformance_row`; a seam whose fake needs none (a record built by the real
-constructor, an empty list) is listed in `NO_ROW` with the reason. Where a generator writes a file another part
+`test_every_replaced_seam_has_a_conformance_row`, and so does one it replaces without handing it back to be
+restored; a seam whose fake needs none (a record built by the real constructor, an empty list) is listed in
+`NO_ROW` with the reason. A seam hands out a copy of its canned dict, never the module object. Where a generator writes a file another part
 reads, a round-trip test feeds the real output to the real reader:
 `test_configure_semaphore.py::test_reads_what_gen_backup_renders`,
 `test_provenance.py::test_reads_the_sidecar_gen_requirements_writes` and

@@ -4,11 +4,14 @@ Each lives here once, and `tests/unit/test_mock_conformance.py` holds a row for 
 fixture, calls the real function and compares the two SHAPES — the key set and each value's type, never the values.
 A canned dict written from belief keeps a UI test green while the server emits something else (L16's second most
 recurrent fault), and a second hand copy drifts from the first. Add a dict here and its row there; a seam the e2e
-server replaces with no row fails `test_every_replaced_seam_has_a_conformance_row`.
+server replaces with no row fails `test_every_replaced_seam_has_a_conformance_row`. Nothing scans a `page.route` body
+or a route test's fake, so one written by hand in its test is caught only in review: tests/README.md lists the ones
+that still are.
 
 Values are RFC-5737 / RFC-7042 examples and shaped fakes only — never a real key, address or host. Not collected by
 pytest (the leading underscore), like `_hermetic.py`.
 """
+import copy
 
 # A REGISTERED actuation unit, so the Index Automations section and the configure dialog render in a real browser
 # (`catalog.load_actuation_units`). `_actuation_schema.validate_unit` must accept it.
@@ -118,6 +121,21 @@ KEYGEN_RESULT = {"error": None, "changed": True, "role": "break-glass",
                  "next_steps": ["Store the shown private key OFFLINE on trusted media — it is not saved here.",
                                 "So the new recipient lands on main, promote proposed/<run_id>: …"],
                  "paths": [".sops.yaml"]}
+
+
+def keygen_answer(changed, staged):
+    """`POST /api/keygen/<role>`'s answer over `KEYGEN_RESULT`: STAGED as `proposed/<run_id>`, committed to `main` (a
+    deploy that does not stage), or nothing changed (the key was already a recipient, so nothing was committed and
+    the route names no ref)."""
+    run_id = "0123456789ab"
+    out = copy.deepcopy({k: KEYGEN_RESULT[k] for k in ("role", "private_key", "public_key", "placement",
+                                                       "private_key_path", "recipient_domains", "high_blast",
+                                                       "sops_updatekeys")})
+    out.update({"changed": changed, "committed": changed, "staged": staged, "run_id": run_id,
+                "target_ref": "proposed/" + run_id if staged else ("main" if changed else None),
+                "next_steps": KEYGEN_RESULT["next_steps"][:2 if staged else 1],
+                "note": None if changed else "public key was already a recipient; nothing staged"})
+    return out
 
 
 def service_units(collection):

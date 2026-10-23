@@ -37,8 +37,9 @@ def _write_sidecar(tmp, policy="adaptive"):
 
 
 def test_reads_the_sidecar_gen_requirements_writes(tmp_path, monkeypatch):
-    """fleet_provenance, reading the trust sidecar gen-requirements renders for the example fleet, is available and
-    lists one row per collection the sidecar names, in its order, each with the sidecar's pin and policy.
+    """fleet_provenance, reading the trust sidecar gen-requirements renders for the example fleet, is available,
+    lists one row per collection the sidecar names, in its order, each with the sidecar's pin and policy, and reads
+    the sidecar's default policy and its keyring (present once the file it names exists).
 
     Guards the Supply-chain panel going silently empty, or losing a column, after a key is renamed on one side: the
     other tests here read a sidecar written by hand, so they pass whatever the generator writes (S33)."""
@@ -66,6 +67,12 @@ def test_reads_the_sidecar_gen_requirements_writes(tmp_path, monkeypatch):
     assert [row["name"] for row in view["collections"]] == [c["name"] for c in written]
     for row, c in zip(view["collections"], written):
         assert row["pin"] == c["version"] and row["policy"] == c["signature_policy"], c["name"]
+    side = yaml.safe_load(text)
+    assert view["default_policy"] == side["default_signature_policy"]
+    assert view["keyring_present"] is False                           # the file the sidecar names is not there yet
+    (tmp_path / side["keyring"]).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / side["keyring"]).write_bytes(b"keyring")
+    assert fleet_provenance()["keyring_present"] is True
 
 
 @pytest.fixture

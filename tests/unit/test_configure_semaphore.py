@@ -176,8 +176,9 @@ class _FakeSemaphore:
 def test_reads_what_gen_backup_renders(tmp_path, monkeypatch):
     """configure-semaphore, run against a fake Semaphore from a tree whose `schedules.generated.yml` is what
     gen-backup renders, registers one schedule per spec with the spec's name and cron, tied to a template that runs
-    the spec's playbook with the spec's `--limit` (`all` for a class with no group) and passes its retention — for
-    the example fleet's specs plus one carrying both optional knobs and one with no group.
+    the spec's playbook with the spec's `--limit` (`all` for a class with no group), passes its retention and
+    names its retention and destination in the template's description — for the example fleet's specs plus one
+    carrying both optional knobs and one with no group.
 
     Guards a format change on one side only — a key renamed in `render`, or read under another name in step 7 —
     registering no schedule, or one with the wrong limit, while every test stays green: test_gen_backup.py checks
@@ -219,3 +220,6 @@ def test_reads_what_gen_backup_renders(tmp_path, monkeypatch):
         assert args[args.index("--limit") + 1] == (s["limit"] or "all")
         retention = [a for a in args if a.startswith("kontroll_backup_retention=")]
         assert retention == (["kontroll_backup_retention=" + s["retention"]] if s.get("retention") else []), s["name"]
+        for knob in ("retention", "destination"):          # read with .get into the description, or absent from it
+            assert (("; %s %s" % (knob, s[knob])) in template["description"] if s.get(knob)
+                    else ("; %s " % knob) not in template["description"]), (s["name"], knob)

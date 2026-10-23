@@ -5,6 +5,7 @@ instead of uvicorn). HTTP Basic creds are supplied via the browser context (http
 Playwright-correct way. The hermetic auth/contract is covered by tests/integration/test_gui_api.py;
 this layer proves the rendered UX.
 """
+import copy
 import os
 import socket
 import sys
@@ -92,15 +93,17 @@ def _mock_service_seams():
     # One REGISTERED actuation unit, so the Index Automations section and the configure dialog render in a
     # real browser. Mocking the ONE underlying read flows through registered_units_view, configurable_view
     # and build_actuation_plan without overriding those higher seams. The Stage write is not driven (it commits).
-    _catalog.load_actuation_units = lambda: [dict(_canned.E2E_UNIT)]
+    _catalog.load_actuation_units = lambda: [copy.deepcopy(_canned.E2E_UNIT)]
     # MF-5 Supply-chain section: one canned unsigned-pinned collection so the amber badge renders in a real browser.
-    _prov.fleet_provenance = lambda: _canned.FLEET_PROVENANCE
+    # Each seam hands out a COPY: a route that annotated its answer in place would write into the module constant
+    # the conformance rows compare, for every later test in the process.
+    _prov.fleet_provenance = lambda: copy.deepcopy(_canned.FLEET_PROVENANCE)
     # Rung-1b discovery inbox: two un-onboarded candidates so the panel + the onboard pre-fill render in a real
     # browser — one normal host + one whose hostname is a `<script>` payload (the F6 XSS-safe-render e2e; the ET/
     # textContent rendering must show it as literal text, never execute it). P-1: RFC-5737 IPs + RFC-7042 MACs.
-    _disc.read_inbox = lambda: _canned.DISCOVERY_INBOX
+    _disc.read_inbox = lambda: copy.deepcopy(_canned.DISCOVERY_INBOX)
     # C1 images sub-panel (§7.3): one canned digest-pinned image so the amber image badge renders in a real browser.
-    _prov.image_provenance = lambda: _canned.IMAGE_PROVENANCE
+    _prov.image_provenance = lambda: copy.deepcopy(_canned.IMAGE_PROVENANCE)
     return originals
 
 

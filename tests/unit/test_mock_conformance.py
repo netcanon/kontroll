@@ -1,9 +1,10 @@
-"""Mock conformance (S33): every canned dictionary a browser test or a route test is served has the SHAPE of what the
-real function returns — the same key set and value types, compared on the smallest real fixture.
+"""Mock conformance (S33): every canned dictionary in tests/_canned.py has the SHAPE of what the real function returns
+— the same key set and value types, compared on the smallest real fixture.
 
 The canned dicts live in `tests/_canned.py`. A dict written from belief keeps a UI test green while the server
-emits something else; two homepage mocks, the Pending panel's payload and the discard answer had drifted (keys the
-producer emits that the mock lacked) before this file existed, and nothing noticed, because no test compared them.
+emits something else; two homepage mocks, the Pending panel's payload, the discard answers, the keygen answer and
+the unit list had drifted (keys the producer emits that the mock lacked) before this file existed, and nothing
+noticed, because no test compared them.
 Shape, not value: a value is the test's own choice, a key or a type is the producer's contract.
 """
 import ast
@@ -12,6 +13,7 @@ import functools
 import os
 
 import pytest
+import yaml
 
 import _canned
 import _canon_repo as R
@@ -72,7 +74,10 @@ def _real_read_inbox(tmp_path, monkeypatch):
         "schema": 1, "generated_at": "2026-07-03T00:00:00+00:00",
         "sources": [{"key": "opnsense", "method": "dhcp_leases_opnsense", "host": "192.0.2.1", "status": "ok",
                      "count": 2}],
+        # the second lease's MAC is locally administered, so no OUI names a vendor: both of `vendor`'s types occur
         "leases": [{"ip": "192.0.2.42", "mac": "00:00:5e:00:53:01", "hostname": "sw-lab-3",
+                    "source_key": "opnsense", "source_host": "192.0.2.1"},
+                   {"ip": "192.0.2.43", "mac": "de:ad:be:ef:00:01", "hostname": "h2",
                     "source_key": "opnsense", "source_host": "192.0.2.1"}]}), encoding="utf-8")
     return discovery.read_inbox(str(art))
 
@@ -134,6 +139,31 @@ def _real_keygen_result(tmp_path, monkeypatch):
     return keygen.apply_keygen_plan("break-glass")
 
 
+def _post_keygen(tmp_path, monkeypatch, changed, staged):
+    """The GUI's keygen route answering for the break-glass role. Only the service's apply is faked (to
+    KEYGEN_RESULT, so nothing is minted), and git's commands are recorded, not run: a staging deploy pushes
+    `proposed/<run_id>`, any other lands `main` (`land_main`, faked). The route and gitio.commit_and_push run."""
+    import app as gui
+    calls = []
+    monkeypatch.setattr(gui.keygen_service, "apply_keygen_plan",
+                        lambda role, run_id=None: dict(_canned.KEYGEN_RESULT, changed=changed))
+    monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
+    monkeypatch.setattr(gitio, "land_main", lambda run_id=None, skip_gate=False: 0)
+    if staged:
+        monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
+    else:
+        monkeypatch.delenv("KONTROLL_STAGE_PUSHES", raising=False)
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    gui.app.config["TESTING"] = True
+    auth = base64.b64encode(("%s:%s" % (gui.GUI_USER, gui.GUI_PASSWORD)).encode()).decode()
+    resp = gui.app.test_client().post("/api/keygen/break-glass", headers={"Authorization": "Basic " + auth},
+                                      json={"apply": True})
+    assert resp.status_code == 200, resp.get_json()
+    assert bool(calls) == changed                     # a commit was attempted exactly when the key was new
+    return resp.get_json()
+
+
 def _real_service_units(tmp_path, monkeypatch):
     (tmp_path / "ns" / "demo" / "roles" / "swarm").mkdir(parents=True)
     return units.service_units("ns.demo", installed={str(tmp_path): {"ns.demo": {"version": "1.0.0"}}})
@@ -144,12 +174,14 @@ def _real_local_installed(tmp_path, monkeypatch):
     return catalog.local_installed()
 
 
-# seam id → (the canned value, the real fixture, the keys whose value is not compared)
+# seam id → (the canned value, the real fixture, the keys whose value is not compared). The Pending rows keep
+# `repropose_hint` optional: the shared canonical fixture stages proposals whose hint is None and one whose hint is
+# a dict, and a list compares the SET of its elements' shapes, so the one-proposal canned payload holds only one.
 ROWS = {
     "kontroll.service.provenance.fleet_provenance": (_canned.FLEET_PROVENANCE, _real_fleet_provenance, ()),
     "fleet_provenance, no sidecar": (_canned.FLEET_PROVENANCE_UNAVAILABLE, _real_fleet_provenance_unavailable, ()),
     "kontroll.service.provenance.image_provenance": (_canned.IMAGE_PROVENANCE, _real_image_provenance, ()),
-    "kontroll.service.discovery.read_inbox": (_canned.DISCOVERY_INBOX, _real_read_inbox, ("vendor",)),
+    "kontroll.service.discovery.read_inbox": (_canned.DISCOVERY_INBOX, _real_read_inbox, ()),
     "GET /api/pending, the Discard e2e": (_canned.PENDING_STALE, _real_list_pending, ("repropose_hint",)),
     "GET /api/pending, the Re-propose e2e": (_canned.PENDING_STALE_ONBOARD, _real_list_pending, ("repropose_hint",)),
     "POST /api/pending/<run_id>/discard": (_canned.DISCARD_ANSWER, _real_discard_answer, ()),
@@ -157,6 +189,12 @@ ROWS = {
     "kontroll.service.homepage.read_board": (_canned.HOMEPAGE_BOARD, _real_read_board, ()),
     "kontroll.service.homepage.build_homepage_plan": (_canned.HOMEPAGE_PLAN, _real_build_homepage_plan, ()),
     "kontroll.service.keygen.apply_keygen_plan": (_canned.KEYGEN_RESULT, _real_keygen_result, ()),
+    "POST /api/keygen/<role>, staged": (_canned.keygen_answer(True, True),
+                                        functools.partial(_post_keygen, changed=True, staged=True), ()),
+    "POST /api/keygen/<role>, committed to main": (_canned.keygen_answer(True, False),
+                                                   functools.partial(_post_keygen, changed=True, staged=False), ()),
+    "POST /api/keygen/<role>, nothing changed": (_canned.keygen_answer(False, False),
+                                                 functools.partial(_post_keygen, changed=False, staged=False), ()),
     "kontroll.service.units.service_units": (_canned.service_units("ns.demo"), _real_service_units, ()),
     "kontroll.catalog.local_installed": (_canned.LOCAL_INSTALLED, _real_local_installed, ()),
 }
@@ -180,9 +218,11 @@ def test_canned_shape_matches_the_real_function(seam, tmp_path, monkeypatch):
     assert shape(canned, frozenset(optional)) == shape(real(tmp_path, monkeypatch), frozenset(optional))
 
 
-def _replaced_seams():
-    """`module.attr` for every assignment `_mock_service_seams` in tests/e2e/conftest.py makes, read from its
-    source (importing the conftest would boot its patches)."""
+def _seams():
+    """The seams `_mock_service_seams` in tests/e2e/conftest.py replaces and the ones it hands back to be restored,
+    read from its source (importing the conftest would boot its patches): `module.attr` for each `X.attr = …` it
+    makes (a tuple target included) and each `setattr(X, "attr", …)` it calls; and for each `(X, "attr")` key of
+    its `originals` dict, which live_server restores."""
     tree = ast.parse(open(os.path.join(ROOT, "tests", "e2e", "conftest.py"), encoding="utf-8").read())
     aliases = {}
     for node in ast.walk(tree):
@@ -190,18 +230,31 @@ def _replaced_seams():
             for a in node.names:
                 aliases[a.asname or a.name] = "%s.%s" % (node.module, a.name)
     fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_mock_service_seams")
-    return {"%s.%s" % (aliases[t.value.id], t.attr)
-            for node in ast.walk(fn) if isinstance(node, ast.Assign)
-            for t in node.targets if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)}
+    assigned, restored = set(), set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                for e in (t.elts if isinstance(t, ast.Tuple) else [t]):
+                    if isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name):
+                        assigned.add("%s.%s" % (aliases[e.value.id], e.attr))
+                if isinstance(t, ast.Name) and t.id == "originals" and isinstance(node.value, ast.Dict):
+                    restored |= {"%s.%s" % (aliases[k.elts[0].id], k.elts[1].value) for k in node.value.keys}
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr"
+              and isinstance(node.args[0], ast.Name) and isinstance(node.args[1], ast.Constant)):
+            assigned.add("%s.%s" % (aliases[node.args[0].id], node.args[1].value))
+    return assigned, restored
 
 
 def test_every_replaced_seam_has_a_conformance_row():
-    """Every module attribute the e2e server replaces has a shape row above, or a reason it needs none. Guards a new
-    seam mocked in the browser suite with nothing comparing its fake to the real function."""
-    seams = _replaced_seams()
-    assert "kontroll.service.provenance.fleet_provenance" in seams        # the parse reads the conftest it names
-    assert seams - set(ROWS) - set(NO_ROW) == set()
-    assert set(NO_ROW) <= seams, "a NO_ROW entry for a seam the conftest no longer replaces"
+    """Every attribute `_mock_service_seams` replaces — by a plain or tuple assignment, or a `setattr` — and every
+    one it hands back to be restored has a shape row above or a reason it needs none, and the two sets are the
+    same. Guards a new seam mocked in the browser suite with nothing comparing its fake to the real function, and
+    a seam replaced and never restored, whose fake then leaks into the rest of a combined run."""
+    assigned, restored = _seams()
+    assert "kontroll.service.provenance.fleet_provenance" in assigned     # the parse reads the conftest it names
+    assert assigned == restored, "a seam replaced and not restored, or restored and not replaced in a form read here"
+    assert assigned - set(ROWS) - set(NO_ROW) == set()
+    assert set(NO_ROW) <= assigned, "a NO_ROW entry for a seam the conftest no longer replaces"
 
 
 def test_the_shape_helper_catches_a_planted_missing_key():
@@ -216,6 +269,10 @@ def test_the_shape_helper_catches_a_planted_missing_key():
 
 
 def test_the_e2e_unit_is_a_valid_unit():
-    """The actuation unit the browser suite registers passes the registry's own validator. Guards the configure
-    dialog e2e exercising a unit the real registry would refuse to load."""
-    assert validate_unit(_canned.E2E_UNIT, _canned.E2E_UNIT["key"], None) == []
+    """The actuation unit the browser suite registers passes the registry's own validator, its target class held to
+    the example fleet's enabled modules as the registry holds a unit to the fleet's. Guards the configure dialog
+    e2e exercising a unit the real registry would refuse to load (with no fleet, the validator skips that check)."""
+    with open(os.path.join(ROOT, "instance.example", "fleet.yml"), encoding="utf-8") as fh:
+        enabled = paths.enabled_keys(yaml.safe_load(fh))
+    assert _canned.E2E_UNIT["target"]["device_class"] in enabled
+    assert validate_unit(_canned.E2E_UNIT, _canned.E2E_UNIT["key"], enabled) == []

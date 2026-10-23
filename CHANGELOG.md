@@ -16,15 +16,21 @@ NetConfig project.
 No runtime change. The dicts the browser suite and the route tests are served in place of a service call were
 written by hand, some of them twice, and nothing compared one with what the function returns. Compared, several had
 drifted: the Pending panel's payload lacked `changes_read`, `note_kind`, `main_note` and `skipped_note`, the discard
-answer lacked `run_id_audit`, both homepage mocks lacked keys the board and the plan carry, and a route test's copy
-of the discovery inbox lacked `vendor`.
+answer lacked `run_id_audit` and its refusal `run_id`, both homepage mocks lacked keys the board and the plan carry,
+a route test's copy of the discovery inbox lacked `vendor`, the keygen e2e's answer lacked `placement`,
+`private_key_path`, `recipient_domains`, `high_blast` and `sops_updatekeys` (and named `main` where nothing changed,
+where the route names no ref), and the unit-pick e2e's list lacked `collection` and each unit's `id`.
 
-- `tests/_canned.py` holds each canned dict once; the e2e conftest, the Pending e2e tests and the route tests read it.
-- `tests/unit/test_mock_conformance.py` builds the smallest real fixture for each, calls the real function and
-  compares key sets and value types. A seam the e2e server replaces with no row fails it.
+- `tests/_canned.py` holds each canned dict once; the e2e conftest, the Discard, Re-propose, keygen and unit-pick e2e
+  tests and the route tests read it, and each seam hands out a copy. A few bodies are still written by hand in
+  their tests; `tests/README.md` lists them.
+- `tests/unit/test_mock_conformance.py` builds the smallest real fixture for each, calls the real function (the
+  keygen answer through the real route) and compares key sets and value types. A seam the e2e server replaces with
+  no row fails it, and so does one it does not hand back to be restored.
 - Round-trip tests feed a generator's real output to its real reader: gen-backup's schedules file to
-  configure-semaphore (driven against a fake Semaphore), gen-requirements' trust sidecar to the provenance view, and
-  a ref the real stager pushed to the Pending list.
+  configure-semaphore (driven against a fake Semaphore; the retention and destination it describes the template
+  with), gen-requirements' trust sidecar to the provenance view (its pins, policies, default policy and keyring),
+  and a ref the real stager pushed to the Pending list.
 
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 
