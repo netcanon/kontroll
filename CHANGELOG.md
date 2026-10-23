@@ -20,11 +20,16 @@ ran (L12 F-5), and an SSH host on another port could not be onboarded as one.
 - `ping.yml` probes the first of `mgmt_port` (a hand override), `ansible_port` (what Ansible connects on),
   `kontroll_probe_port` (the backend's), then 22. A host that sets neither new var is probed exactly as before, and
   no host onboarded before this change sets either; a unit test renders the play's own expression over its truth
-  table and that invariant.
+  table and that invariant. A deployment that already sets `ansible_port` itself (a group_vars `all.yml` for SSH on
+  another port) now has those hosts probed on it, api hosts included; `mgmt_port` overrides. A port var set to null
+  or empty counts as unset: `wait_for` with no port only slept and reported ok.
 - The `api` backend declares `probe_port: 443`, and the onboard writes it into the host's drop-in as
-  `kontroll_probe_port` (an int). An api host onboarded earlier keeps the 22 probe until it is re-onboarded.
+  `kontroll_probe_port` (an int). An api host onboarded earlier keeps the 22 probe until it has that line: add it
+  to the host's drop-in, or re-onboard the host WITH its token (a re-onboard replaces the host's vars, and a blank
+  token box drops its token var).
 - `netcommon_cli` and `raw_ssh` offer an SSH port box on the onboard form (`field-cred-port`), written as
-  `ansible_port`. With nothing typed, the drop-in is byte-identical to before (a golden pins both).
+  `ansible_port` (a reused class with its own `auth:` block, such as proxmox, keeps its own fields). With nothing
+  typed, the drop-in is byte-identical to before (a golden pins both).
 - The boundary this opens — the first request value written into an inventory host var, which `ping.yml` then
   templates on the control node — is closed in the same change. `authspec.inline_value` types an inline field's
   value: a port is an int in 1..65535 parsed from one to five ASCII digits, a flag is `true`/`false`, and anything
@@ -32,11 +37,12 @@ ran (L12 F-5), and an SSH host on another port could not be onboarded as one.
   refuses, as repository data, an inline field of any other kind and a port aimed at a var not named `*_port`; a
   `probe_port` that is not a YAML integer port refuses every plan on its backend. This replaces T01's charset check
   (`onboard._inline_literal`), which let one plain word of any kind through.
-- A blank credential value is no value, for an API caller as for the form (MF-02): `"port": ""` means 22, and a
-  blank never overwrites a stored secret.
+- A blank credential value is no value, for an API caller as for the form (MF-02): `"port": ""` means 22, and an
+  API caller's `"password": ""` is no longer stored over the secret in SOPS. A GUI request whose `creds` is not an
+  object is a 422 (`invalid_creds`), not a 500.
 
-Before the first ping after a box has this change, the read-only pre-flight in `docs/troubleshooting.md` §4 lists
-each host's port; every host should keep the one it had. Tests: `tests/unit/test_probe_port.py`,
+Before the first ping after a box has this change, the read-only pre-flight in `docs/troubleshooting.md` §4 prints
+each host's port before and after; every host should read `N -> N`. Tests: `tests/unit/test_probe_port.py`,
 `tests/unit/test_onboard_port.py`, the route rows in `tests/integration/test_api_onboard.py` and `test_gui_api.py`,
 and an e2e row for the port box.
 

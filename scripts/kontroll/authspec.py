@@ -118,8 +118,8 @@ _GENERIC_UNION = (
 
 def _normalize(entry):
     """Fill a backend `auth:` entry into a complete CredField (defaults: `sops_stem`=field, secret-by-kind). Pure;
-    carries NO value. `inline:true` marks a non-secret literal hostvar (host/port/bool) the planner renders inline,
-    not as a SOPS lookup."""
+    carries NO value. `inline:true` marks a non-secret literal hostvar (a port or a flag: INLINE_KINDS) the planner
+    writes as a typed value (inline_value), not as a SOPS lookup."""
     field = entry["field"]
     kind = entry.get("kind", "password")
     cf = {"field": field,

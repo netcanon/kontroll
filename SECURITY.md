@@ -1817,8 +1817,8 @@ field otherwise, 422 `invalid_<field>`); no other kind may be inline, and a port
 (`authspec.inline_target`, refused as repository data otherwise). The first such field shipped is the SSH backends'
 `port` → `ansible_port`, which `ping.yml`'s probe templates on the control node; a blank value is no value. A
 backend's `probe_port`, written to every host of that backend as `kontroll_probe_port`, is a YAML integer port or
-every plan on the backend is refused (`tests/unit/test_onboard_port.py`, the route rows in
-`tests/integration/test_api_onboard.py` and `test_gui_api.py`). And a credential field's stem
+every plan on the backend is refused (`tests/unit/test_onboard_port.py`; the request half also by the route rows
+in `tests/integration/test_api_onboard.py` and `test_gui_api.py`). And a credential field's stem
 is an identifier before it is formatted into the host var's lookup expression — a field the backend registry or a
 class's module file declares with another name is refused once a value is given for it (as repository data, below),
 and an option of an installed module whose name is not an identifier is not offered as a field at all (`authspec`: a

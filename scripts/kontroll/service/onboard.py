@@ -438,6 +438,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         creds = {fld: val for fld, val in (("username", username), ("password", password),
                                            ("api_token", api_token), ("ssh_private_key", ssh_private_key))
                  if val is not None}
+    if not isinstance(creds, dict):   # the GUI's JSON body can carry a list or a string here; the API's model cannot
+        raise paths.RequestBoundaryError("creds", "creds is not a map of credential fields to values")
     # A blank value is no value (S28, MF-02): the GUI never sends one, and an API caller's "" means the same thing —
     # so "blank = 22" holds for both, and a blank never overwrites a stored secret.
     creds = {fld: val for fld, val in creds.items() if val != ""}

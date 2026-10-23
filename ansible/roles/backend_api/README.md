@@ -67,8 +67,10 @@ requests. The reachability probe that runs *before* them (`ping.yml`) reads the 
 (443, the recipes' default) — an api host used to be probed on the SSH port and read
 `UNREACHABLE` with its check never run. A recipe on another port needs its hosts to set
 `ansible_port` or `mgmt_port`, which the probe reads first; binding a recipe to a host is
-S22's channel. A host onboarded before S28 has no `kontroll_probe_port` until it is
-re-onboarded, and is probed on 22 as before.
+S22's channel. A host onboarded before S28 has no `kontroll_probe_port`, and is probed on
+22 as before, until the line is added to its drop-in or it is re-onboarded **with its
+token** — a re-onboard replaces the host's vars, and a blank token box drops its token var
+(the check then fails with "no API token is in scope").
 
 ## See also
 - [../../backends/api/backend.yml](../../backends/api/backend.yml) — classifier metadata

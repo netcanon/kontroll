@@ -55,13 +55,18 @@ def _render(expr, hostvars):
     ({"ansible_port": 2222, "kontroll_probe_port": 443}, "2222"),
     ({"mgmt_port": 8443}, "8443"),
     ({"mgmt_port": 8443, "ansible_port": 2222, "kontroll_probe_port": 443}, "8443"),
+    ({"ansible_port": None, "kontroll_probe_port": 443}, "443"),
+    ({"mgmt_port": "", "ansible_port": 2222}, "2222"),
+    ({"mgmt_port": None, "ansible_port": None, "kontroll_probe_port": None}, "22"),
 ], ids=["none", "backend-probe-port", "ssh-port", "ssh-port-wins-over-backend", "hand-override",
-        "hand-override-wins"])
+        "hand-override-wins", "null-falls-through", "empty-falls-through", "all-null"])
 def test_probe_port_expression_truth_table(hostvars, port):
     """The probe uses the first of `mgmt_port` (a hand override), `ansible_port` (what Ansible connects on), the
     backend's `kontroll_probe_port`, then 22. Guards a precedence slip that probes a live host on the wrong port and
     reports it UNREACHABLE, and the old expression coming back (rows two to four gave 22: an `api` host was probed
-    on the SSH port, L12 F-5)."""
+    on the SSH port, L12 F-5). A var set to null or empty counts as unset (the last three rows): `wait_for` given no
+    port only sleeps and reports ok, so a hand-written `ansible_port: ~` passed the probe with nothing listening
+    (T17 review, N1)."""
     assert _render(_probe_port_expression(), hostvars) == port
 
 

@@ -10,12 +10,17 @@ Ansible templates it on the control node. authspec types it — an int, or a 422
 value — so the request never chooses the bytes that reach the drop-in (SECURITY.md C22). The descriptor's half (the
 kinds that may be inline, and the var a port may land in) is repository data, refused as such.
 """
+import os
+import shutil
+
 import pytest
 
 from kontroll import authspec, catalog, paths, probe
 from kontroll.service import onboard
 
 pytestmark = pytest.mark.unit
+
+_SHIPPED = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # tmp_repo moves paths.ROOT
 
 # The drop-ins a cliconf and a raw-SSH onboard wrote BEFORE S28, captured from public main 6599484 with the same
 # inputs as _plan below. An SSH backend declares no probe_port and its port field writes nothing when blank, so
@@ -38,9 +43,10 @@ _GOLDEN_RAW_SSH = (
 
 @pytest.fixture
 def canned(tmp_repo, monkeypatch):
-    """A cliconf collection (cisco.ios) and an httpapi-only one (acme.rest) installed, each probing as its kind; no
-    lab, no install, no write outside tmp_repo."""
-    monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "5.0.0", "acme.rest": "1.0.0"})
+    """A cliconf collection (cisco.ios) and two httpapi-only ones (acme.rest, fortinet.fortios) installed, each
+    probing as its kind; no lab, no install, no write outside tmp_repo."""
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "5.0.0", "acme.rest": "1.0.0",
+                                                             "fortinet.fortios": "2.3.0"})
     monkeypatch.setattr(catalog, "local_shallow", lambda keywords, limit: [])
 
     def _fake(coll, version=None):
@@ -91,6 +97,20 @@ def test_api_onboard_writes_the_backend_probe_port_as_an_int(canned):
     assert "ansible_port" not in host                    # the API's port is the recipe's, never an operator's box
 
 
+def test_a_curated_api_class_on_the_reuse_path_gets_the_probe_port(canned):
+    """A second host of a curated api class — the shipped `fortigate` module file, onboarded on the REUSE path with
+    its own role adopted — carries `kontroll_probe_port: 443` too. Guards the hosts S28 was built for: the device
+    that read UNREACHABLE (L12 F-5) is a curated class, and every other row here onboards a fresh one, so a reuse
+    branch that skipped the write would fail nothing (T17 review, S1)."""
+    target = canned / "modules" / "fortigate"
+    target.mkdir(parents=True)
+    shutil.copy(os.path.join(_SHIPPED, "modules", "fortigate", "module.yml"), target / "module.yml")
+    plan = onboard.build_onboard_plan("fortinet.fortios", "fortigate", "edge_firewall", "192.0.2.1",
+                                      host_name="fw1", secrets="network", creds={"api_token": "t"}, vectors=[])
+    assert plan["error"] is None and plan["module_reuse"] is True and plan["backend"] == "api"
+    assert plan["host_block"]["edge_firewall"]["hosts"]["fw1"]["kontroll_probe_port"] == 443
+
+
 @pytest.mark.parametrize("creds", [{}, {"port": ""}], ids=["no-port-field", "a-blank-port"])
 def test_ssh_onboards_without_a_port_are_byte_identical(canned, creds):
     """A cliconf and a raw-SSH onboard with no port typed — absent, or the blank string an API caller may send —
@@ -99,6 +119,17 @@ def test_ssh_onboards_without_a_port_are_byte_identical(canned, creds):
     (MF-02)."""
     assert _cliconf({"username": "admin", "password": "pw", **creds})["host_text"] == _GOLDEN_CLICONF
     assert _raw_ssh({"username": "ops", "ssh_private_key": "K\n", **creds})["host_text"] == _GOLDEN_RAW_SSH
+
+
+def test_a_blank_secret_is_not_stored_and_wires_no_host_var(canned):
+    """An API caller's blank password (`"password": ""`) stores nothing in SOPS and writes no `ansible_password`
+    lookup; the username beside it is stored as before. Guards the secret half of "a blank is no value" (MF-02):
+    before S28 the blank was merged into the SOPS domain over the stored value, so a re-onboard that left the box
+    empty erased the device's password (T17 review, S5)."""
+    plan = _cliconf({"username": "admin", "password": ""})
+    assert plan["error"] is None
+    assert "sw1_password" not in plan["creds_to_set"] and "sw1_username" in plan["creds_to_set"]
+    assert "ansible_password" not in plan["host_block"]["core_switch"]["hosts"]["sw1"]
 
 
 @pytest.mark.parametrize("build", [_cliconf, _raw_ssh], ids=["netcommon_cli", "raw_ssh"])
@@ -179,3 +210,17 @@ def test_inline_bool_is_one_of_two_exact_words():
     for v in ("True", "yes", "1", "on", " true", "true\n", 1, None):
         with pytest.raises(paths.RequestBoundaryError):
             authspec.inline_value(cf, v)
+
+
+def test_the_two_inline_guards_each_hold_alone():
+    """inline_value refuses a kind it has no branch for, and inline_target refuses a var name that only BEGINS like
+    an identifier, each on its own. Guards the defence in depth the docstrings promise: the planner calls
+    inline_target before inline_value and checks every `maps_to` against its own identifier rule first, so a
+    `return raw` for an unknown kind (a new inline kind added without its validator), or a `match` for
+    `fullmatch` on a pattern without its end anchor, would pass every planner test (T17 review, S2: both mutants
+    survived)."""
+    with pytest.raises(paths.RequestBoundaryError):
+        authspec.inline_value({"field": "alias", "kind": "host"}, "a")
+    for target in ("x}}_port", "ansible_port\n", "ansible_port ", "x-y_port", "Ansible_port"):
+        assert authspec.inline_target({"kind": "port", "maps_to": target}) is None, target
+    assert authspec.inline_target({"kind": "port", "maps_to": "ansible_port"}) == "ansible_port"

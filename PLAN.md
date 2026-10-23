@@ -495,8 +495,9 @@ record is [CHANGELOG.md](CHANGELOG.md). This section kept that state until 2026-
   telemetry `target_shape`/`port` render, and the backends' connection params.
   *What exists (S28, 2026-10-22):* the SSH backends' onboard form has a port box (written as `ansible_port`, an
   int), the `api` backend declares the port its hosts are probed on (`probe_port` → `kontroll_probe_port`), and
-  `ping.yml` probes the first of `mgmt_port`, `ansible_port`, `kontroll_probe_port`, 22. Still wanted: the
-  `host:port` field type, and the telemetry target's port.
+  `ping.yml` probes the first of `mgmt_port`, `ansible_port`, `kontroll_probe_port`, 22. The typed port reaches
+  Ansible's own connections and that probe only: discovery's SSH read, Vector's SSH file tail and the blackbox TCP
+  targets do not read it yet. Still wanted: the `host:port` field type, and the telemetry target's port.
 
 Operational source of truth for "how do I stand this up / continue it" is
 [docs/SETUP.md](docs/SETUP.md); a deployment's live state is its own `instance/OPERATIONS.md`
