@@ -34,9 +34,10 @@ home modules — `kontroll.probe.{_ad,deep_probe}`, `kontroll.catalog.{local_ins
 Never patch below the seam. A dict served in place of a real call — a canned return, a `page.route` body —
 belongs once in `tests/_canned.py`, with a row in `tests/unit/test_mock_conformance.py` that compares its shape with
 the real function's answer on a fixture: a mock shaped by belief keeps a UI test green while the server emits
-something else (S33). The e2e server's seams are enforced; a body or a route test's fake is held only by review, and
-the ones still written by hand are listed in [../tests/README.md](../tests/README.md). The live lab and the Playwright flows are never in the blind hermetic gate
-(`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
+something else (S33). The e2e server's seams are enforced; that a body or a route test's fake comes from
+`_canned.py` is held only by review, and the ones still written by hand are listed in
+[../tests/README.md](../tests/README.md). The live lab and the Playwright flows are never in the blind hermetic
+gate (`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
 
 ---
 

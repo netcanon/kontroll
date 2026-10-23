@@ -127,16 +127,23 @@ fixture, calls the real function and compares the two SHAPES: the key set and ea
 Only the seams are enforced (below). A `page.route` body or a route test's fake is held by its row once it is in
 `_canned.py`, but nothing scans the tests for one written by hand, so a new one is caught only in review. Still
 written by hand: `e2e/test_pending_changes.py`'s `_payload` / `_proposal` builders (conformant to `list_pending`
-when T21's read measured them), the onboard flow's error stub, and route-test fakes in
-`integration/test_gui_api.py` (`promote_board`, `discard_proposal`, `local_installed`). Move one into `_canned.py`,
-with a row, when you next touch it.
-A key whose value is by design one type or another (a hint that is a dict or None) is named in the row's `optional`
-set. A mock written from belief keeps a UI test green while the server emits something else, and a second hand copy
-drifts from the first (S33). A seam the e2e conftest replaces with no row fails
+when T21's read measured them), the onboard flow's error stub, and route-test fakes —
+`integration/test_gui_api.py`'s `promote_board`, `discard_proposal`, `module_for_collection` (`_MODULE_LOW` /
+`_MODULE_HIGH`) and `local_installed`; `integration/test_api.py`'s `actuation_unit` (it lacks `schema` and
+`install`, so the registry's validator would refuse it), `units_in_collection` and `local_installed`;
+`integration/test_api_create_unit.py`'s `module_for_collection`; and the `local_installed` returns in the other
+`integration/test_api_*.py` files and `test_onboard_dryrun.py`. The answers some e2e tests hand a renderer through
+`page.evaluate` are written by hand too. Move one into `_canned.py`, with a row, when you next touch it.
+A key whose value is by design one type or another is produced in both types by the row's fixture (the inbox's
+`vendor`), or, where the fixture cannot, named in the row's `optional` set (the Pending rows' `repropose_hint`). A
+mock written from belief keeps a UI test green while the server emits something else, and a second hand copy drifts
+from the first (S33). A seam the e2e conftest replaces with no row fails
 `test_every_replaced_seam_has_a_conformance_row`, and so does one it replaces without handing it back to be
-restored; a seam whose fake needs none (a record built by the real constructor, an empty list) is listed in
-`NO_ROW` with the reason. A seam hands out a copy of its canned dict, never the module object. Where a generator writes a file another part
-reads, a round-trip test feeds the real output to the real reader:
+restored, or one replaced in a form the parse cannot name (a nested target, a `setattr` by a variable name, a
+monkeypatch object, a replacement outside `_mock_service_seams`); a seam whose fake needs none (a record built by
+the real constructor, an empty list) is listed in `NO_ROW` with the reason. A seam hands out a copy of its canned
+dict, never the module object. Where a generator writes a file another part reads, a round-trip test feeds the real
+output to the real reader:
 `test_configure_semaphore.py::test_reads_what_gen_backup_renders`,
 `test_provenance.py::test_reads_the_sidecar_gen_requirements_writes` and
 `test_pending.py::test_lists_a_proposal_the_real_stager_produced`. The C19 paint suite (`e2e/test_paint_rule.py`)

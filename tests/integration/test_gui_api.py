@@ -958,7 +958,7 @@ def keygen_env(monkeypatch):
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
     given = []
     monkeypatch.setattr(keygen_service, "apply_keygen_plan",
-                        lambda role, run_id=None: given.append(run_id) or dict(_FAKE_KEYGEN, role=role))
+                        lambda role, run_id=None: given.append(run_id) or dict(copy.deepcopy(_FAKE_KEYGEN), role=role))
     return SimpleNamespace(calls=calls, given=given)
 
 

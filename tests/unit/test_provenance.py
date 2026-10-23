@@ -70,6 +70,7 @@ def test_reads_the_sidecar_gen_requirements_writes(tmp_path, monkeypatch):
     side = yaml.safe_load(text)
     assert view["default_policy"] == side["default_signature_policy"]
     assert view["keyring_present"] is False                           # the file the sidecar names is not there yet
+    assert not os.path.isabs(side["keyring"]), "the example keyring must be repo-relative for this test"
     (tmp_path / side["keyring"]).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / side["keyring"]).write_bytes(b"keyring")
     assert fleet_provenance()["keyring_present"] is True

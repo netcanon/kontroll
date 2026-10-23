@@ -1,5 +1,6 @@
-"""Mock conformance (S33): every canned dictionary in tests/_canned.py has the SHAPE of what the real function returns
-— the same key set and value types, compared on the smallest real fixture.
+"""Mock conformance (S33): every canned dictionary in tests/_canned.py (bar `E2E_UNIT`, which the registry's own
+validator holds) has the SHAPE of what the real function returns — the same key set and value types, compared on the
+smallest real fixture.
 
 The canned dicts live in `tests/_canned.py`. A dict written from belief keeps a UI test green while the server
 emits something else; two homepage mocks, the Pending panel's payload, the discard answers, the keygen answer and
@@ -9,6 +10,7 @@ Shape, not value: a value is the test's own choice, a key or a type is the produ
 """
 import ast
 import base64
+import copy
 import functools
 import os
 
@@ -146,13 +148,14 @@ def _post_keygen(tmp_path, monkeypatch, changed, staged):
     import app as gui
     calls = []
     monkeypatch.setattr(gui.keygen_service, "apply_keygen_plan",
-                        lambda role, run_id=None: dict(_canned.KEYGEN_RESULT, changed=changed))
+                        lambda role, run_id=None: dict(copy.deepcopy(_canned.KEYGEN_RESULT), changed=changed))
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
     monkeypatch.setattr(gitio, "land_main", lambda run_id=None, skip_gate=False: 0)
     if staged:
         monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     else:
         monkeypatch.delenv("KONTROLL_STAGE_PUSHES", raising=False)
+    monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(tmp_path))     # a seam missed above meets no checkout
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
     monkeypatch.setattr(gui, "_audit_logger", None)
     gui.app.config["TESTING"] = True
@@ -175,8 +178,9 @@ def _real_local_installed(tmp_path, monkeypatch):
 
 
 # seam id → (the canned value, the real fixture, the keys whose value is not compared). The Pending rows keep
-# `repropose_hint` optional: the shared canonical fixture stages proposals whose hint is None and one whose hint is
-# a dict, and a list compares the SET of its elements' shapes, so the one-proposal canned payload holds only one.
+# `repropose_hint` optional: every proposal the shared canonical fixture stages has a None hint (none of its paths
+# is an onboard drop-in), while the canned payload's one proposal carries the dict hint the Re-propose e2e needs.
+# The hint's own shape is held by test_pending.py::test_lists_a_proposal_the_real_stager_produced.
 ROWS = {
     "kontroll.service.provenance.fleet_provenance": (_canned.FLEET_PROVENANCE, _real_fleet_provenance, ()),
     "fleet_provenance, no sidecar": (_canned.FLEET_PROVENANCE_UNAVAILABLE, _real_fleet_provenance_unavailable, ()),
@@ -218,43 +222,112 @@ def test_canned_shape_matches_the_real_function(seam, tmp_path, monkeypatch):
     assert shape(canned, frozenset(optional)) == shape(real(tmp_path, monkeypatch), frozenset(optional))
 
 
-def _seams():
+_CANNOT_NAME = "a replacement the seam parse cannot name, or one outside _mock_service_seams: "
+
+
+def _seams(source=None):
     """The seams `_mock_service_seams` in tests/e2e/conftest.py replaces and the ones it hands back to be restored,
     read from its source (importing the conftest would boot its patches): `module.attr` for each `X.attr = …` it
-    makes (a tuple target included) and each `setattr(X, "attr", …)` it calls; and for each `(X, "attr")` key of
-    its `originals` dict, which live_server restores."""
-    tree = ast.parse(open(os.path.join(ROOT, "tests", "e2e", "conftest.py"), encoding="utf-8").read())
+    makes (a tuple or annotated target included) and each `setattr(X, "attr", …)` it calls, X an imported name; and
+    for each `(X, "attr")` key of its `originals` dict, which live_server restores. Any other replacement, anywhere in
+    the conftest, fails here rather than pass unseen: an attribute target inside `_mock_service_seams` that is not
+    `X.attr` (a nested or a local alias's), an assignment to an imported name's attribute outside it, a `setattr` by
+    a variable name or on a nested object, and a monkeypatch object's `.setattr`. The one `setattr` let through is
+    live_server's restore loop: outside `_mock_service_seams`, on a name that is not an import."""
+    tree = ast.parse(source if source is not None else
+                     open(os.path.join(ROOT, "tests", "e2e", "conftest.py"), encoding="utf-8").read())
     aliases = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             for a in node.names:
                 aliases[a.asname or a.name] = "%s.%s" % (node.module, a.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                aliases[a.asname or a.name] = a.name
     fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_mock_service_seams")
+    inside = {id(n) for n in ast.walk(fn)}
     assigned, restored = set(), set()
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
+
+    def seam(obj, attr, node):
+        ok = id(node) in inside and isinstance(obj, ast.Name) and obj.id in aliases and isinstance(attr, str)
+        assert ok, _CANNOT_NAME + ast.unparse(node)
+        assigned.add("%s.%s" % (aliases[obj.id], attr))
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for t in (node.targets if isinstance(node, ast.Assign) else [node.target]):
                 for e in (t.elts if isinstance(t, ast.Tuple) else [t]):
-                    if isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name):
-                        assigned.add("%s.%s" % (aliases[e.value.id], e.attr))
-                if isinstance(t, ast.Name) and t.id == "originals" and isinstance(node.value, ast.Dict):
+                    if isinstance(e, ast.Attribute):
+                        root = e
+                        while isinstance(root, ast.Attribute):
+                            root = root.value
+                        if id(node) in inside or (isinstance(root, ast.Name) and root.id in aliases):
+                            seam(e.value, e.attr, node)
+                if (id(node) in inside and isinstance(t, ast.Name) and t.id == "originals"
+                        and isinstance(node.value, ast.Dict)):
                     restored |= {"%s.%s" % (aliases[k.elts[0].id], k.elts[1].value) for k in node.value.keys}
-        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr"
-              and isinstance(node.args[0], ast.Name) and isinstance(node.args[1], ast.Constant)):
-            assigned.add("%s.%s" % (aliases[node.args[0].id], node.args[1].value))
+        elif isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", None)) == "setattr":
+            restore_loop = (id(node) not in inside and isinstance(node.func, ast.Name)
+                            and isinstance(node.args[0], ast.Name) and node.args[0].id not in aliases)
+            if not restore_loop:
+                assert isinstance(node.func, ast.Name), _CANNOT_NAME + ast.unparse(node)
+                seam(node.args[0], node.args[1].value if isinstance(node.args[1], ast.Constant) else None, node)
     return assigned, restored
 
 
 def test_every_replaced_seam_has_a_conformance_row():
-    """Every attribute `_mock_service_seams` replaces — by a plain or tuple assignment, or a `setattr` — and every
-    one it hands back to be restored has a shape row above or a reason it needs none, and the two sets are the
-    same. Guards a new seam mocked in the browser suite with nothing comparing its fake to the real function, and
-    a seam replaced and never restored, whose fake then leaks into the rest of a combined run."""
+    """Every attribute `_mock_service_seams` replaces — by a plain, tuple or annotated assignment to `X.attr`, or a
+    `setattr(X, "attr", …)`, X an imported name — and every one it hands back to be restored has a shape row above or
+    a reason it needs none, and the two sets are the same; a replacement in any other form, or anywhere else in the
+    conftest, fails the parse (the planted test below). Guards a new seam mocked in the browser suite with nothing
+    comparing its fake to the real function, and a seam replaced and never restored, whose fake then leaks into the
+    rest of a combined run."""
     assigned, restored = _seams()
     assert "kontroll.service.provenance.fleet_provenance" in assigned     # the parse reads the conftest it names
     assert assigned == restored, "a seam replaced and not restored, or restored and not replaced in a form read here"
     assert assigned - set(ROWS) - set(NO_ROW) == set()
     assert set(NO_ROW) <= assigned, "a NO_ROW entry for a seam the conftest no longer replaces"
+
+
+_PLANT_HEAD = "from kontroll import catalog as _catalog\nfrom kontroll.service import discovery as _disc\n"
+
+
+@pytest.mark.parametrize("body", [
+    "def _mock_service_seams():\n    _disc.fleet._inventory_groups = lambda: {}\n",              # a nested target
+    "def _mock_service_seams():\n    c = _catalog\n    c.load = 1\n",                         # a local alias
+    "def _mock_service_seams():\n    n = 'load'\n    setattr(_catalog, n, 1)\n",             # setattr by a variable
+    "def _mock_service_seams():\n    setattr(_disc.fleet, 'load', 1)\n",                      # setattr on a nested object
+    "def _mock_service_seams():\n    mp = object()\n    mp.setattr(_catalog, 'load', 1)\n",  # a monkeypatch object
+    "def _mock_service_seams():\n    pass\n\n\ndef live_server():\n    _catalog.load = 1\n",  # outside the function
+    "def _mock_service_seams():\n    pass\n\n\n_catalog.load: object = 1\n",                 # annotated, at module level
+    "def _mock_service_seams():\n    pass\n\n\nsetattr(_catalog, 'load', 1)\n",             # setattr, at module level
+], ids=["nested", "local-alias", "setattr-variable", "setattr-nested", "monkeypatch-object", "outside", "module-level",
+        "setattr-module-level"])
+def test_the_seam_parse_refuses_a_replacement_it_cannot_name(body):
+    """The planted violations: a seam replaced in a form the parse cannot name as `module.attr`, or outside
+    `_mock_service_seams`, fails the parse. Guards the seam test passing over a replacement it never read — each of
+    these passed unseen before T21's fold read (N3), so the seam got no shape row and, unrestored, leaked."""
+    with pytest.raises(AssertionError, match="cannot name"):
+        _seams(_PLANT_HEAD + body)
+
+
+def test_the_seam_parse_reads_the_forms_it_names():
+    """A plain, tuple, annotated and literal-`setattr` replacement inside `_mock_service_seams` are each read as
+    `module.attr`, the `originals` keys as restored, and live_server's restore loop is let through. Guards the
+    planted refusals above being bought by a parse that refuses everything, the real conftest's forms included."""
+    src = _PLANT_HEAD + (
+        "def _mock_service_seams():\n"
+        "    originals = {(_catalog, 'a'): 0, (_disc, 'b'): 0}\n"
+        "    _catalog.a, _disc.b = 1, 2\n"
+        "    _catalog.c: object = 3\n"
+        "    setattr(_disc, 'd', 4)\n"
+        "    return originals\n\n\n"
+        "def live_server(orig):\n"
+        "    for (mod, name), fn in orig.items():\n"
+        "        setattr(mod, name, fn)\n")
+    assert _seams(src) == ({"kontroll.catalog.a", "kontroll.service.discovery.b", "kontroll.catalog.c",
+                            "kontroll.service.discovery.d"},
+                           {"kontroll.catalog.a", "kontroll.service.discovery.b"})
 
 
 def test_the_shape_helper_catches_a_planted_missing_key():
