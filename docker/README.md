@@ -90,16 +90,21 @@ one is old):
 | a Dockerfile's base | `FROM <image>:<tag>@sha256:<digest>` — the digest is pulled, the tag is its label | each `Dockerfile` (Vector's also in `services/vector.yaml`, in lock-step) |
 | the Python packages an image adds | one `name==version` per package, installed `--no-deps`, then `pip check` | `semaphore-runner/requirements.txt`, `installer/requirements.txt` |
 | the runner's apk packages | `~=<major.minor>` (the patch revision still moves: an Alpine branch keeps only its newest) | `semaphore-runner/Dockerfile` |
-| a downloaded binary or apt key | its SHA-256, checked in the same `RUN` | `installer/Dockerfile` (sops, Docker's apt key) |
-| a compose image | an exact tag (at least major.minor) | `services/*.yaml`, `../telemetry/*.yml` |
+| a downloaded file (a binary, an apt key) | its SHA-256: a `curl`/`wget` to a named file that `sha256sum -c` checks in the same `RUN`, or `ADD --checksum=sha256:` | `installer/Dockerfile` (sops, Docker's apt key) |
+| a compose image | an exact tag (at least major.minor), or a digest under a tag | `services/*.yaml`, `../telemetry/*.yml` |
 
-The installer's and Vector's **apt** packages still float inside their pinned base; the published image's digest
-in [`images.lock.yml`](images.lock.yml) is the full pin ([SECURITY.md](../SECURITY.md) § Accepted risks, R-IMG-2).
+A check that is switched off counts as missing: a `pip check` or `sha256sum -c` behind `|| true`, or followed by a
+pipe, or by `;` in a `RUN` that does not open with `set -e`, cannot fail the build. The test also refuses what it cannot read (an exec-form `RUN`, a heredoc) and
+a `# syntax=` frontend not pinned by digest. The installer's and Vector's **apt** packages still float inside their
+pinned base; the published image's digest in [`images.lock.yml`](images.lock.yml) is the full pin
+([SECURITY.md](../SECURITY.md) § Accepted risks, R-IMG-2).
 
 One procedure, the same for a Dependabot PR and a hand bump. It is an authoring-time act with network; nothing in
 it runs on a deploy path.
 
-1. **Change the tag** in the `FROM` line or the compose `image:` (or let Dependabot's PR do it). The exporter
+1. **Change the tag** in the `FROM` line or the compose `image:`. Dependabot opens the PR for a Dockerfile base
+   and for a pip pin. A compose `image:` has no bot (Dependabot's compose fetcher reads no `<service>.yaml` name),
+   so every compose tag, Postgres's in `services/semaphore.yaml` among them, is bumped here by hand. The exporter
    images are generated: bump them in `telemetry/*.yml` and run `scripts/gen-exporters.py`.
 2. **Resolve the digest** for that exact tag, and write it after the tag: `docker buildx imagetools inspect
    <image>:<tag>`, taking the top-level `Digest:` (the manifest list, so one pin serves every platform the publish
@@ -111,8 +116,10 @@ it runs on a deploy path.
      Dockerfile's import line holds it — unless the base stops shipping it;
    - re-read the apk constraints with `apk policy <package>` if the Alpine branch moved.
 
-   **The installer:** its `requirements.txt` is `pip freeze` in a build with `ansible-core`, `ansible-lint` and
-   `docker` installed (less Debian's own pip, setuptools and wheel). A new sops version changes `SOPS_VERSION` and
+   **The installer:** its `requirements.txt` is `pip freeze` in a build with `"ansible-core==<series>.*"`,
+   `ansible-lint` and `docker` installed (less Debian's own pip, setuptools and wheel). `<series>` stays inside the
+   range `scripts/install-prereqs.sh` puts on the host, which `tests/unit/test_image_pins.py` holds: unconstrained,
+   the resolve lands on the next series. A new sops version changes `SOPS_VERSION` and
    both `SOPS_SHA256_*` from the release's `checksums.txt` together.
 4. **Prove it.** Build all three images from the change (the control image after `python3
    scripts/gen-requirements.py --all-modules`, as the publish workflow does) — `pip check`, the import line, the

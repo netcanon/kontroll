@@ -109,7 +109,7 @@ recommends but hasn't wired it — we should, given galaxy.py + gui are real cod
 | ⬜ Container/image scan | **trivy** | runner image, onboard-gui, homepage/grafana/prom images | scan on build, fail on HIGH/CRITICAL fixable |
 | ⬜ Ansible content | **ansible-lint** security profile + **kics/checkov** (optional) | playbooks/roles | infra-as-code misconfig scanning |
 | ⬜ SAST (Python) | **bandit** | `scripts/`, `gui/` | the GUI is privileged — worth it |
-| ✅ Dependency updates | **Dependabot** (`.github/dependabot.yml`) | pip (floors and image pins), github-actions, docker (every Dockerfile), docker-compose | netcanon's config, widened to every image input; a PR that moves an image is merged after the build proof in `docker/README.md` § Refreshing a pin |
+| ✅ Dependency updates | **Dependabot** (`.github/dependabot.yml`) | pip (floors and image pins), github-actions, docker (every Dockerfile) | netcanon's config, widened to the image bases and pins; a PR that moves an image is merged after the build proof in `docker/README.md` § Refreshing a pin. The compose tags have no entry: the compose fetcher reads no `<service>.yaml` name, so they are bumped by hand. *Next:* rename the fragments `<name>.compose.yaml`, a name it reads |
 | ⬜ **GUI-specific** | auth + TLS + audit log before beta | `gui/` | tracked in [gui/README.md](../gui/README.md) security posture; the GUI can write the repo, encrypt secrets, push, and run Ansible — treat as a crown-jewel surface |
 
 ---
@@ -158,7 +158,7 @@ protection is one mis-click from a merge). A public repository has no such branc
 - **validate**: `tests/validate.sh --strict` — the SAME gate as local + the VM, with every tool it
   can run installed in the job (sha256-pinned sops, gitleaks, promtool, vector — promtool and vector at the
   compose pins' versions, held by `tests/unit/test_ci_workflows.py`; yamllint / ansible-core / ansible-lint
-  from `tests/requirements-dev.txt`), so a missing tool is a failure, never a silent skip. Covers yamllint,
+  pinned `==` inline in `ci.yml`), so a missing tool is a failure, never a silent skip. Covers yamllint,
   ansible-lint, `--syntax-check`, `docker compose config`, promtool, vector validate, the sops /
   secret-grep / gitleaks gates, every `gen-*.py --check`, the test-docstring, document-link and
   port-binding guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`), and
@@ -188,7 +188,7 @@ Its `gate` job refuses the publish when `STATUS.md` is more than a month old or 
 lock (`tests/check-status.py --release`; a warning never refuses it), beside the read-only pin and the
 baked-code manifest.
 
-### `.github/dependabot.yml` — pip (gui + api + tests; the `>=` floors use `increase-if-necessary`, so pure floors get no version PRs; the image pin files keep the default strategy), github-actions, docker (every Dockerfile's base), docker-compose (`docker/services`, less the generated exporter fragments); weekly, 7-day cooldown,
+### `.github/dependabot.yml` — pip (gui + api + tests; the `>=` floors use `increase-if-necessary`, so pure floors get no version PRs; the image pin files keep the default strategy), github-actions, docker (every Dockerfile's base); no docker-compose entry (its fetcher reads no fragment's name, so the compose tags are bumped by hand); weekly, 7-day cooldown,
 minor+patch grouped, PR limits (netcanon parity).
 
 > **Enforcement.** On the public repository `main` is governed by a ruleset: pull request required,

@@ -106,29 +106,100 @@ def test_pip_floors_use_increase_if_necessary_and_image_pins_do_not():
         assert "versioning-strategy" not in u, u
 
 
+# The file names Dependabot reads (dependabot-core docker/lib/dependabot/docker/file_fetcher.rb DOCKER_REGEXP and
+# docker_compose/file_fetcher.rb FILENAME_REGEX, each matched anywhere in a file's name).
+_DOCKERFILE_NAME = re.compile(r"dockerfile|containerfile", re.I)
+_COMPOSE_FETCHED = re.compile(r"(docker-)?compose(-[\w]+)?(?>\.[\w-]+)?\.ya?ml", re.I)
+
+
 def test_dependabot_covers_every_dockerfile_directory():
-    """Every directory under docker/ that holds a Dockerfile is in a `docker` ecosystem entry, so each pinned base
-    (tag and digest) has an update process. Guards a new image added with no way for its base to move but by hand
-    (the installer and Vector images had none)."""
-    found = glob.glob(os.path.join(ROOT, "docker", "**", "Dockerfile"), recursive=True)
-    dirs = {"/" + os.path.relpath(os.path.dirname(p), ROOT).replace(os.sep, "/") for p in found}
+    """Every directory under docker/ that holds a Dockerfile (a file Dependabot's docker fetcher reads as one:
+    `Dockerfile`, `Dockerfile.debug`, `x.containerfile`) is in a `docker` ecosystem entry, so each pinned base (tag
+    and digest) has an update process. Guards a new image added with no way for its base to move but by hand (the
+    installer and Vector images had none)."""
+    dirs = dockerfile_dirs()
     covered = set().union(*map(_directories, _updates("docker")))
     assert dirs and dirs <= covered, sorted(dirs - covered)
 
 
-def test_dependabot_compose_entry_ignores_generated_fragments():
-    """The `docker-compose` entry covers docker/services, and ignores every image a `*.generated.yaml` fragment
-    names: those fragments are generated from telemetry/*.yml, so a bot edit to one fails `gen-exporters.py --check`
-    and can never merge. Guards a compose entry going missing, and bot PRs that cannot land."""
-    compose = _updates("docker-compose")
-    assert [_directories(u) for u in compose] == [{"/docker/services"}], compose
-    ignored = {i["dependency-name"] for i in compose[0].get("ignore") or [] if not i.get("update-types")}
-    generated = set()
-    for path in glob.glob(os.path.join(ROOT, "docker", "services", "*.generated.yaml")):
-        with open(path, encoding="utf-8") as fh:
-            for svc in (yaml.safe_load(fh).get("services") or {}).values():
-                generated.add(svc["image"].split("@", 1)[0].rsplit(":", 1)[0])
-    assert generated and generated <= ignored, sorted(generated - ignored)
+def dockerfile_dirs(root=ROOT):
+    """{"/docker/<dir>"} of every directory under docker/ holding a file Dependabot's docker fetcher reads."""
+    return {"/" + os.path.relpath(d, root).replace(os.sep, "/")
+            for d, _, names in os.walk(os.path.join(root, "docker")) if any(map(_DOCKERFILE_NAME.search, names))}
+
+
+def test_dockerfile_dirs_follow_dependabots_name_rule(tmp_path):
+    """dockerfile_dirs() names a directory holding a `Dockerfile.debug` or a `build.containerfile`, and not one holding
+    only a README. Guards the coverage check reading only files named exactly `Dockerfile`, while Dependabot's
+    fetcher reads more (T29's read, S3: F2)."""
+    for rel in ("docker/a/Dockerfile.debug", "docker/b/build.containerfile", "docker/c/README.md"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("FROM scratch\n", encoding="utf-8")
+    assert dockerfile_dirs(str(tmp_path)) == {"/docker/a", "/docker/b"}
+
+
+def compose_entry_faults(update, root=ROOT):
+    """["<directory>: <reason>"] for one `docker-compose` dependabot.yml entry: a directory holding no file whose
+    name Dependabot's compose fetcher reads and whose `services:` name an `image:` (the entry can never open a PR,
+    and its run fails), and an image that a generated file the fetcher reads there names and the entry does not
+    ignore (a bot edit to it fails `gen-exporters.py --check`, so the PR can never merge)."""
+    faults = []
+    ignored = {i["dependency-name"] for i in update.get("ignore") or [] if not i.get("update-types")}
+    for directory in sorted(_directories(update)):
+        path = os.path.join(root, directory.lstrip("/"))
+        imaged = []
+        for name in sorted(os.listdir(path)) if os.path.isdir(path) else []:
+            if not _COMPOSE_FETCHED.search(name) or not os.path.isfile(os.path.join(path, name)):
+                continue
+            with open(os.path.join(path, name), encoding="utf-8") as fh:
+                doc = yaml.safe_load(fh)
+            services = (doc.get("services") if isinstance(doc, dict) else None) or {}
+            images = {s["image"].split("@", 1)[0].rsplit(":", 1)[0]
+                      for s in services.values() if isinstance(s, dict) and isinstance(s.get("image"), str)}
+            if images:
+                imaged.append(name)
+            if ".generated." in name:
+                faults += ["%s: %s names %s, not ignored" % (directory, name, i) for i in sorted(images - ignored)]
+        if not imaged:
+            faults.append("%s: no file Dependabot's compose fetcher reads names an image" % directory)
+    return faults
+
+
+def test_dependabot_compose_entries_read_a_compose_file():
+    """Every `docker-compose` entry's directory holds a file whose name Dependabot's compose fetcher reads
+    (`compose.yaml`, `docker-compose.yml`, `<name>.compose.yaml`) and whose `services:` name an image, and ignores the
+    images of the generated files there. Today there is no such entry: the fragments in docker/services are named
+    `<service>.yaml`, which the fetcher does not read, so the compose tags are bumped by hand (docker/README.md
+    § Refreshing a pin). Guards the dead entry coming back: T29 first shipped one on docker/services, which its header,
+    three docs and a test called coverage, and which could never open a PR (T29's read, B1)."""
+    assert [f for u in _updates("docker-compose") for f in compose_entry_faults(u)] == []
+
+
+_SERVICE = "services:\n  api:\n    image: x/api:1.2.3\n"
+
+
+@pytest.mark.parametrize("files,ignore,expected", [
+    ({"api.yaml": _SERVICE, "db.yaml": _SERVICE}, [], ["no file"]),
+    ({"compose.yaml": "include:\n  - api.yaml\n", "api.yaml": _SERVICE}, [], ["no file"]),
+    ({"api.compose.yaml": _SERVICE}, [], []),
+    ({"docker-compose.yml": _SERVICE}, [], []),
+    ({"api.compose.yaml": _SERVICE, "x.generated.compose.yaml": "services:\n  x:\n    image: prom/x:1.2.3\n"},
+     [], ["prom/x, not ignored"]),
+    ({"api.compose.yaml": _SERVICE, "x.generated.compose.yaml": "services:\n  x:\n    image: prom/x:1.2.3\n"},
+     ["prom/x"], []),
+], ids=["fragment-names", "include-only-root", "dot-compose", "docker-compose", "generated-unignored",
+        "generated-ignored"])
+def test_the_compose_entry_check_tells_a_read_directory_from_a_dead_one(tmp_path, files, ignore, expected):
+    """The compose-entry check flags a directory of `<service>.yaml` fragments (the shape T29 first shipped) and one
+    whose only fetched file holds `include:` and no `services:`, and a generated file's image the entry does not
+    ignore; it passes `<name>.compose.yaml` and `docker-compose.yml` files, and a generated image that is ignored.
+    Guards a check that passes the dead entry, or refuses a directory the fetcher reads."""
+    for name, text in files.items():
+        (tmp_path / "d" / name).parent.mkdir(exist_ok=True)
+        (tmp_path / "d" / name).write_text(text, encoding="utf-8")
+    entry = {"directory": "/d", "ignore": [{"dependency-name": n} for n in ignore]}
+    faults = compose_entry_faults(entry, str(tmp_path))
+    assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
 
 
 def _compose_tag(fragment, image):
@@ -151,15 +222,70 @@ def test_ci_tool_versions_match_the_compose_pins():
     assert vector == [_compose_tag("vector.yaml", "timberio/vector")], vector
 
 
+def pip_audit_faults(workflow):
+    """({the -r files the workflow's pip-audit runs read}, [faults]) of a parsed workflow. A step runs pip-audit when
+    a line of its `run:` that is not a comment starts a command with it (after a `;`, `&&`, `||` or `|`, or at the
+    start). A fault is such a step that cannot fail its job (`||` on the line, `set +e` in the step,
+    `continue-on-error` on the step or the job) or that runs on a condition (`if:` on the step or the job)."""
+    audited, faults = set(), []
+    for name, job in (workflow.get("jobs") or {}).items():
+        for step in job.get("steps") or []:
+            lines = [ln for ln in str(step.get("run") or "").splitlines() if not ln.lstrip().startswith("#")]
+            runs = [ln for ln in lines if re.search(r"(?:^|&&|\|\||;|\|)\s*pip-audit(?:\s|$)", ln)]
+            if not runs:
+                continue
+            for ln in runs:
+                audited |= set(re.findall(r"(?:^|\s)(?:-r|--requirement)[\s=]+(\S+)", ln))
+                if "||" in ln:
+                    faults.append("%s: `||` on a pip-audit line: %s" % (name, ln.strip()))
+            if any(re.search(r"\bset\s+\+\w*e", ln) for ln in lines):
+                faults.append("%s: `set +e` in a pip-audit step" % name)
+            for where, node in (("step", step), ("job", job)):
+                if node.get("continue-on-error"):
+                    faults.append("%s: continue-on-error on the pip-audit %s" % (name, where))
+                if "if" in node:
+                    faults.append("%s: the pip-audit %s runs on a condition" % (name, where))
+    return audited, faults
+
+
 def test_pip_audit_covers_the_image_requirement_files():
-    """The pip-audit job names every requirements file an image installs, as well as the floors. Guards the audit
+    """The pip-audit job reads every requirements file an image installs, as well as the floors, and nothing switches
+    it off. The workflow is read through its parsed steps, so a commented-out step reads nothing. Guards the audit
     going back to reading only the floors — which name no version an image runs — so a known vulnerability in a
-    pinned image package (one was found when this landed: certifi) would pass unseen."""
-    security = _read(".github/workflows/security.yml")
-    audited = set(re.findall(r"-r\s+(\S+)", " ".join(ln for ln in security.splitlines() if "pip-audit" in ln)))
+    pinned image package (one was found when this landed: certifi) would pass unseen; and a step that is still
+    there but cannot fail (T29's read, S2: W1, W2)."""
+    audited, faults = pip_audit_faults(yaml.safe_load(_read(".github/workflows/security.yml")))
     images = {d.lstrip("/") + "/requirements.txt" for d in _image_requirement_dirs()}
     assert images and images <= audited, sorted(images - audited)
     assert {"gui/requirements.txt", "api/requirements.txt", "tests/requirements-dev.txt"} <= audited, audited
+    assert faults == []
+
+
+_AUDIT = "pip-audit --no-deps -r docker/a/requirements.txt"
+
+
+@pytest.mark.parametrize("step,job,read,expected", [
+    ({"run": _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "pip install --quiet pip-audit"}, {}, set(), []),
+    ({"run": "echo pip-audit -r docker/a/requirements.txt"}, {}, set(), []),
+    ({"run": "# " + _AUDIT}, {}, set(), []),
+    ({"run": _AUDIT + " || true"}, {}, {"docker/a/requirements.txt"}, ["`||`"]),
+    ({"run": _AUDIT, "continue-on-error": True}, {}, {"docker/a/requirements.txt"}, ["continue-on-error"]),
+    ({"run": _AUDIT}, {"continue-on-error": True}, {"docker/a/requirements.txt"}, ["continue-on-error"]),
+    ({"run": "set +e\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["set +e"]),
+    ({"run": _AUDIT, "if": "false"}, {}, {"docker/a/requirements.txt"}, ["condition"]),
+    ({"run": "# never `set +e` here\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "cd x && " + _AUDIT + " --requirement=b.txt"}, {}, {"docker/a/requirements.txt", "b.txt"}, []),
+], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
+        "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd"])
+def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
+    """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too), reads
+    nothing from a commented-out run, the step that installs pip-audit or a command that only names it, and flags a
+    run that `|| true`, `continue-on-error`, `set +e` or an `if:` switches off (not a comment that names `set +e`).
+    Guards a check that counts a dead audit as coverage."""
+    audited, faults = pip_audit_faults({"jobs": {"a": dict(job, steps=[step])}})
+    assert audited == read
+    assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
 
 
 def test_third_party_actions_are_sha_pinned():

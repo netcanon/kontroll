@@ -1,7 +1,11 @@
-# Dependency updates (docs/qa-and-release-pipeline.md §3). Weekly PRs for the Python deps, the GitHub Actions,
-# the image bases and the compose images. netcanon parity (2026-10-08): a 7-day cooldown on every ecosystem (an
-# upstream yank/hotfix window closes before we adopt — zizmor's dependabot-cooldown rule has an internal minimum of
-# 7), minor+patch grouped so a week of bumps is one reviewable PR, and PR limits.
+# Dependency updates (docs/qa-and-release-pipeline.md §3). Weekly PRs for the Python deps, the GitHub Actions and
+# the image bases. The compose images' tags have no entry: Dependabot's docker-compose fetcher reads only a file
+# named like `compose.yaml` or `docker-compose.yml`, and the fragments in docker/services are `<service>.yaml`, so an
+# entry there would open no PR. They are bumped by hand (docker/README.md § Refreshing a pin), and
+# tests/unit/test_ci_workflows.py refuses a compose entry that reads no file.
+# netcanon parity (2026-10-08): a 7-day cooldown on every ecosystem (an upstream yank/hotfix window closes before we
+# adopt — zizmor's dependabot-cooldown rule has an internal minimum of 7), minor+patch grouped so a week of bumps is
+# one reviewable PR, and PR limits.
 # Two kinds of pip file. gui/, api/ and tests/ hold `>=` FLOORS (always test/run against the latest), so their
 # strategy is increase-if-necessary: a floor that already admits the newest release gets no version PR — for pure
 # floors that means none; floors are raised by hand when a release matters. The default strategy chased every
@@ -12,11 +16,13 @@
 # A bot PR that touches an image is merged only after the image builds and runs (docker/README.md § Refreshing a
 # pin, steps 3-4) — no PR job builds an image, so green checks alone prove nothing about it:
 # - a semaphoreui/semaphore base bump re-derives docker/semaphore-runner/requirements.txt and the apk constraints;
-# - a pin bump in either requirements file must still pass the build's `pip check`;
+# - a pin bump in either requirements file must still pass the build's `pip check`. The bot bumps each line to its
+#   newest release alone, without re-resolving the set or knowing the image's Python, so such a PR is usually
+#   answered by re-deriving the whole file (§ Refreshing a pin, step 3), not by merging its lines;
 # - timberio/vector is pinned twice (docker/vector-image/Dockerfile and the compose default in
 #   docker/services/vector.yaml): a one-sided bump fails tests/unit/test_file_tail_ssh.py, and the CI `vector`
-#   binary (ci.yml) moves with it, which tests/unit/test_ci_workflows.py holds; prom/prometheus and promtool the
-#   same way.
+#   binary (ci.yml) moves with it, which tests/unit/test_ci_workflows.py holds; prom/prometheus (a compose tag,
+#   bumped by hand) and promtool the same way.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -91,28 +97,6 @@ updates:
         update-types: ["version-update:semver-major"]
     labels: [dependencies, docker]
 
-  - package-ecosystem: docker-compose
-    directory: /docker/services           # the compose fragments' `image:` tags
-    schedule:
-      interval: weekly
-      day: monday
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 3
-    groups:
-      compose-minor-and-patch:
-        update-types: ["minor", "patch"]
-    ignore:
-      # The exporter fragments are GENERATED from telemetry/*.yml (scripts/gen-exporters.py): a bot edit to one fails
-      # `gen-exporters.py --check` and can never merge. Bump these by hand in telemetry/, then regenerate.
-      - dependency-name: prom/blackbox-exporter
-      - dependency-name: prompve/prometheus-pve-exporter
-      - dependency-name: prom/snmp-exporter
-      # A new Postgres major needs a dump and restore of Semaphore's database, never a tag bump.
-      - dependency-name: postgres
-        update-types: ["version-update:semver-major"]
-    labels: [dependencies, docker]
-
   - package-ecosystem: pip
     directory: /docker/semaphore-runner   # requirements.txt: the control image's exact pins (default strategy)
     schedule:
@@ -138,8 +122,9 @@ updates:
       installer-minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:
-      # The ansible-core series moves with the installer's base image (newer series need a newer Python than
-      # debian:12 ships), as one planned change; patch releases inside the series still come through.
+      # A new ansible-core series is a planned change: 2.19 leaves the `<2.19` range install-prereqs.sh puts on
+      # the host (held by tests/unit/test_image_pins.py), and 2.20 needs a newer Python than debian:12's 3.11.
+      # Patch releases inside the series still come through.
       - dependency-name: ansible-core
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
     labels: [dependencies, python, docker]

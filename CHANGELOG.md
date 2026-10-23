@@ -31,15 +31,18 @@ were built from was not.
   SHA-256** in the installer; **postgres** at `16.15-alpine`.
 - `api/requirements.txt` names plain `uvicorn`, as the image installs it; it and `gui/requirements.txt` stay the
   development floors, and a test holds that every package they name ships in the image.
-- **Dependabot** covers every Dockerfile, the compose fragments (less the generated exporters) and both pin files
-  (default strategy: exact pins); **pip-audit** reads the pin files too. Promtool and vector in CI are held to the
-  compose tags.
-- `tests/unit/test_image_pins.py` fails when a pin is missing, never because one is old. The refresh procedure is
-  `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+- **Dependabot** covers every Dockerfile's base and both pin files (default strategy: exact pins); **pip-audit**
+  reads the pin files too. The compose tags have no bot: Dependabot's compose fetcher reads no `<service>.yaml`
+  name, so they are bumped by hand, Postgres's included. Promtool and vector in CI are held to the compose tags.
+- `tests/unit/test_image_pins.py` fails when a pin is missing or its check is switched off (a `pip check` or
+  `sha256sum -c` behind `|| true`), never because one is old. The refresh procedure is `docker/README.md`
+  § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
-On a box that builds locally, the next deploy rebuilds the control image on the pinned base and pulls
-`postgres:16.15-alpine` (a minor move inside 16: no dump and restore). A box on the published images is unchanged
-until the next release re-pins them.
+The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is
+in `docker/services/semaphore.yaml`, not the image lock). A box that builds locally also rebuilds the control image
+on the pinned base, and recreates Vector's container once where it runs the stock image (its `image:` now names the
+digest it already runs, so nothing is pulled). A box on the published images keeps its control, Vector and installer
+images until the next release re-pins them.
 
 ### test: bind sources and check-mode resolvers are found by rule, not listed (T24 / S34 (a), (b), 2026-10-23)
 
