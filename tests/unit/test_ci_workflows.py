@@ -240,14 +240,19 @@ def test_ci_tool_versions_match_the_compose_pins():
 # The `if:` values that run a step or job whenever an unconditioned one would run, or more often.
 _UNCONDITIONED = {"always()", "success()", "!cancelled()"}
 
+# The env keys that change what bash runs: a file it sources first (`BASH_ENV`, `ENV`), options it starts with
+# (`SHELLOPTS`, `BASHOPTS`), where it finds a program (`PATH`) and a function it imports (`BASH_FUNC_<name>%%`).
+_BASH_ENV = r"BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PATH|BASH_FUNC_.*"
+
 
 def _script(run):
-    """A `run:` script as one line of shell text, read whole as bash reads it: a quote stays open across a newline
-    (the newline is then a character of the string), a backslash and newline outside single quotes are removed, a
-    backslash inside single quotes is literal, a backquoted command is read as a quote, a `#` that opens a word
-    outside quotes cuts the rest of its line (not one after a `)`: `$(…)#` is one word, so `(…)#` is refused too), and
-    the lines are joined with `;` (a newline ends a command list as `;` does), but a line ending in `&&`, `||` or `|`
-    with a space (the list goes on to the next line)."""
+    """A `run:` script as one line of shell text, read whole as bash reads it: a quote stays open across a newline (the
+    newline is then a character of the string), a backslash and newline outside single quotes are removed, a backslash
+    inside single quotes is literal, a backquoted command is read as a quote, a `#` that opens a word outside quotes
+    cuts the rest of its line (one right after a `)` is marked, and `pip_audit_faults` refuses the step: bash opens a
+    comment after a subshell's `)` and not after a `$(…)`'s), and the lines are joined with `;` (a newline ends a
+    command list as `;` does), but a line ending in `&&`, `||` or `|` with a space (the list goes on to the next
+    line)."""
     lines, buf, quote, k, text = [], "", None, 0, str(run or "")
     while k < len(text):
         ch = text[k]
@@ -265,6 +270,8 @@ def _script(run):
             while k < len(text) and text[k] != "\n":
                 k += 1
             continue
+        elif ch == "#" and buf.endswith(")"):
+            buf += "\x03#"
         elif ch == "\n":
             lines.append(buf.strip())
             buf = ""
@@ -300,28 +307,34 @@ def _named_unix_runner(runs_on):
 
 
 def pip_audit_faults(workflow):
-    """({the -r files the workflow's pip-audit runs read}, [faults]) of a parsed workflow. A step runs pip-audit when
-    a command of its script (`_script`, split as tests/unit/_build_read.py splits a RUN) starts with it. A fault is
-    such a step whose audit cannot fail its job: a `shell:` other than the default, `bash` or `sh` (each of those runs
-    with errexit; another one need not), an audit whose failure would not fail the script (a pipe or a lone `&` after
-    it, a later `||`, a `;` after it unless the audit starts its AND-OR list and that list ends there, a `;` inside a
-    compound, a compound behind `||`, `|`, `&` or `!`, a condition, a `$(…)` or quoted string around it, a function or
-    an alias in the step, a `trap`, `exec`, `return`, an `exit` other than `exit 1` to `exit 255`, or a `set -n` in the
-    step: the _build_read rules, errexit on at the start and off after a `set +e` or a `set` of a variable, `set $o`), a
-    `set +e`, `set +o errexit` or a `shopt` naming errexit anywhere in the step, a heredoc in the step (its body is not
-    read as the shell reads it), `continue-on-error` on the step or the job, a step that names no shell (itself or a
-    `defaults.run.shell`) under a `runs-on` that is no named Linux or macOS runner (`_named_unix_runner`: an expression,
-    which a repository variable may point at a Windows runner, a Windows image, or labels with no OS label or holding
-    an expression; a Windows runner's default shell is pwsh, which need not stop on a failure); or an audit that runs
-    on a condition (`if:` on the step or the job other than `always()`, `success()` or `!cancelled()`); a whitespace
-    character other than a space, a tab or a line feed, or a `${{` expression, in the step's script; or a `BASH_ENV`,
-    or an env that is not a mapping, on the step, the job or the workflow. It refuses sound
-    shapes too, each loudly: a pipe after the audit under `shell: bash` (which runs with pipefail), an `exit 0` after
-    it, and the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), an `&>` redirect
-    after the audit, an audit sent to the background and waited for (`& wait $!`), a `(…)#` (bash opens a comment there;
-    the check reads on), an ANSI-C `$'…'` in the audit's list, and the word `alias` in a message. It cannot see an
-    earlier step that writes `BASH_ENV`, or a PATH entry, through `$GITHUB_ENV` or `$GITHUB_PATH`: a later step's bash
-    runs that file, or a `pip-audit` that entry shadows."""
+    """({the -r files the workflow's pip-audit runs read}, [faults]) of a parsed workflow. A step runs pip-audit when a
+    command of its script (`_script`, split as tests/unit/_build_read.py splits a RUN) starts with it. A fault is such a
+    step whose audit cannot fail its job: a `shell:` other than the default, `bash` or `sh` (each of those runs with
+    errexit; another one need not), an audit whose failure would not fail the script (a pipe or a lone `&` after it, a
+    later `||`, a `;` after it unless the audit starts its AND-OR list and that list ends there, a `;` inside a
+    compound, a compound behind `||` or `!`, a condition, a `$(…)` or quoted string around it, a function or an alias in
+    the step or an entry in bash's command tables (`hash`, `enable`, `BASH_CMDS`, `BASH_ALIASES`), a `trap`, `exec`,
+    `return`, an `exit` other than `exit 1` to `exit 255`, or a `set -n` (or a `set` given a variable, a backquoted
+    command or a glob) in the step: the _build_read rules, errexit on at the start and off after a `set +e` or such a
+    `set`), a `set +e`, `set +o errexit` or a `shopt` naming errexit anywhere in the step, a heredoc in the step (its
+    body is not read as the shell reads it), `continue-on-error` on the step or the job, a step that names no shell
+    (itself or a `defaults.run.shell`) under a `runs-on` that is no named Linux or macOS runner (`_named_unix_runner`:
+    an expression, which a repository variable may point at a Windows runner, a Windows image, or labels with no OS
+    label or holding an expression; a Windows runner's default shell is pwsh, which need not stop on a failure); or an
+    audit that runs on a condition (`if:` on the step or the job other than `always()`, `success()` or `!cancelled()`);
+    a whitespace character other than a space, a tab or a line feed, a `${{` expression (in a comment too: GitHub writes
+    its value in first), a `#` right after a `)` (bash opens a comment after a subshell's `)`, not after a `$(…)`'s, and
+    this check tells neither), or a backslash-newline inside single quotes (an `eval` reads it as a continuation), in
+    the step's script; an env key bash reads (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PATH`, `BASH_FUNC_…`), or an
+    env that is not a mapping, on the step, the job or the workflow; or a `container:` on the job (its env and its
+    options reach bash unread). It refuses sound shapes too, each loudly: a pipe after the audit under `shell: bash`
+    (which runs with pipefail), an `exit 0` after it, and the word `exit`, `return`, `trap` or `exec` in a message
+    (`echo "will exit on error"`), an `&>` redirect after the audit, an audit sent to the background and waited for (`&
+    wait $!`), a `$(…)#` (to bash the `#` is part of a word), an ANSI-C `$'…'` in the audit's list, and the word
+    `alias`, `hash` or `enable` in a message. It cannot see an earlier step that writes `BASH_ENV`, or a PATH entry,
+    through `$GITHUB_ENV` or `$GITHUB_PATH`: a later step's bash runs that file, or a `pip-audit` that entry shadows;
+    nor a `working-directory:` or a `cd` that moves the file a `-r` names (a copy planted at `<dir>/docker/…` is then
+    audited instead; with none, pip-audit fails on the missing file)."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -349,14 +362,24 @@ def pip_audit_faults(workflow):
             if re.search(r"[^\S \t\n]", str(step.get("run"))):
                 faults.append("%s: a whitespace character other than a space, a tab or a line feed in a pip-audit "
                               "step (this check splits words on it and bash does not)" % name)
+            if "\x03" in _script(step.get("run")):
+                faults.append("%s: a `#` right after a `)` in a pip-audit step (bash opens a comment after a "
+                              "subshell's `)` and not after a `$(…)`'s; this check tells neither)" % name)
+            if re.search("'[^']*" + chr(92) * 2 + chr(10) + "[^']*'", str(step.get("run"))):
+                faults.append("%s: a backslash-newline inside single quotes in a pip-audit step (an `eval` reads it "
+                              "as a continuation)" % name)
             if "${{" in str(step.get("run")):
                 faults.append("%s: an expression in a pip-audit step's script (GitHub writes its value into the "
                               "script before bash reads it)" % name)
+            if "container" in job:
+                faults.append("%s: a `container:` on the pip-audit job (its env and its options reach bash and are "
+                              "not read here)" % name)
             for where, node in (("step", step), ("job", job), ("workflow", workflow)):
                 env = node.get("env")
-                if env is not None and (not isinstance(env, dict) or "BASH_ENV" in env):
-                    faults.append("%s: `BASH_ENV`, or an env that is not a mapping, on the pip-audit %s (bash runs "
-                                  "the file it names before the script)" % (name, where))
+                if env is not None and (not isinstance(env, dict) or any(re.fullmatch(_BASH_ENV, str(k)) for k in env)):
+                    faults.append("%s: `BASH_ENV` or another env key bash reads (`ENV`, `SHELLOPTS`, `BASHOPTS`, "
+                                  "`PATH`, `BASH_FUNC_…`), or an env that is not a mapping, on the pip-audit %s (each "
+                                  "changes what bash runs, or runs a file first)" % (name, where))
             for where, node in (("step", step), ("job", job)):
                 if node.get("continue-on-error"):
                     faults.append("%s: continue-on-error on the pip-audit %s" % (name, where))
@@ -463,7 +486,8 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
      ["names no shell"]),
     ({"run": "ex\\\nit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit 0`"]),
     ({"run": "set +\\\ne\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["set +e"]),
-    ({"run": "set `cat o`\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "set `cat o`\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `set", "not followed"]),
     ({"run": "shopt -s expand_aliases\n'alias' pip-audit=true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["a function or an alias"]),
     ({"run": "\"pip-audit\"() { :; }\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a function or an alias"]),
@@ -472,8 +496,10 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": _AUDIT + " &&\necho $'\\''\necho 'done'"}, {}, {"docker/a/requirements.txt"}, ["runs inside"]),
     ({"run": _AUDIT + " && echo $'\\'' & echo 'x'"}, {}, {"docker/a/requirements.txt"}, ["runs inside"]),
     ({"run": _AUDIT + " && echo `echo # ` || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
-    ({"run": _AUDIT + " && echo $(true)# || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
-    ({"run": _AUDIT + " && (true)# || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": _AUDIT + " && echo $(true)# || true"}, {}, {"docker/a/requirements.txt"},
+     ["not followed", "right after a `)`"]),
+    ({"run": _AUDIT + " && (true)# || true"}, {}, {"docker/a/requirements.txt"},
+     ["not followed", "right after a `)`"]),
     ({"run": "shopt -s lastpipe\ntrue |&exit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `&exit 0`"]),
     ({"run": "pip-audit --no-deps -r\xa0docker/a/requirements.txt"}, {}, {"docker/a/requirements.txt"},
@@ -482,6 +508,41 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": _AUDIT, "env": {"BASH_ENV": "/tmp/e"}}, {}, {"docker/a/requirements.txt"}, ["`BASH_ENV`"]),
     ({"run": _AUDIT}, {"env": {"BASH_ENV": "/tmp/e"}}, {"docker/a/requirements.txt"}, ["`BASH_ENV`"]),
     ({"run": _AUDIT, "env": "${{ fromJSON(vars.E) }}"}, {}, {"docker/a/requirements.txt"}, ["`BASH_ENV`"]),
+    ({"run": _AUDIT + " && (true)# it\'s fine\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["right after a `)`"]),
+    ({"run": _AUDIT + " && (cd .)# see `x\necho done"}, {}, {"docker/a/requirements.txt"}, ["right after a `)`"]),
+    ({"run": _AUDIT + "\x0b# || true"}, {}, {"docker/a/requirements.txt"}, ["a whitespace character"]),
+    ({"run": _AUDIT + "\u3000# || true"}, {}, {"docker/a/requirements.txt"}, ["a whitespace character"]),
+    ({"run": "# ${{ github.event.head_commit.message }}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["an expression"]),
+    ({"run": "(:)# && " + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["right after a `)`"]),
+    ({"run": "((1))#; " + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["right after a `)`"]),
+    ({"run": "hash -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["command tables"]),
+    ({"run": "BASH_CMDS[pip-audit]=/bin/true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["command tables"]),
+    ({"run": "shopt -s expand_aliases\nBASH_ALIASES[pip-audit]=true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["command tables"]),
+    ({"run": "enable -f ./x.so pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["command tables"]),
+    ({"run": "eval 'ex\\\nit 0'\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["backslash-newline inside single quotes"]),
+    ({"run": "x=n; set -$x\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `set"]),
+    ({"run": "set +[e]\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `set", "not followed"]),
+    ({"run": "set +?\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `set", "not followed"]),
+    ({"run": "set +*\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `set", "not followed"]),
+    ({"run": _AUDIT, "env": {"BASH_FUNC_pip-audit%%": "() { true; }"}}, {}, {"docker/a/requirements.txt"},
+     ["another env key bash reads"]),
+    ({"run": _AUDIT}, {"env": {"SHELLOPTS": "noexec"}}, {"docker/a/requirements.txt"}, ["another env key bash reads"]),
+    ({"run": _AUDIT}, {"env": {"BASHOPTS": "expand_aliases"}}, {"docker/a/requirements.txt"},
+     ["another env key bash reads"]),
+    ({"run": _AUDIT, "env": {"PATH": "/tmp/fake"}}, {}, {"docker/a/requirements.txt"}, ["another env key bash reads"]),
+    ({"run": _AUDIT, "env": {"ENV": "/tmp/e"}}, {}, {"docker/a/requirements.txt"}, ["another env key bash reads"]),
+    ({"run": _AUDIT, "env": {"PYTHONPATH": "/tmp/p", "ENVIRONMENT": "ci", "XBASH_ENV": "x"}}, {},
+     {"docker/a/requirements.txt"}, []),
+    ({"run": _AUDIT}, {"container": {"image": "python:3.12", "env": {"BASH_ENV": "/tmp/e"}}},
+     {"docker/a/requirements.txt"},
+     ["a `container:`"]),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -503,7 +564,14 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "hash-inside-backquotes", "hash-after-a-substitution", "hash-after-a-subshell",
         "exit-after-a-pipe-amp-under-lastpipe",
         "no-break-space-in-the-audit", "expression-in-the-script", "bash-env-on-the-step", "bash-env-on-the-job",
-        "env-not-a-mapping"])
+        "env-not-a-mapping", "quote-in-a-subshell-comment", "backquote-in-a-subshell-comment",
+        "vertical-tab-before-a-hash", "ideographic-space-before-a-hash", "expression-in-a-comment",
+        "audit-commented-after-a-subshell", "audit-commented-after-an-arithmetic-command", "hash-stands-in",
+        "bash-cmds-stands-in", "bash-aliases-stands-in", "enable-stands-in", "eval-rejoins-an-exit",
+        "set-of-a-variable-flag", "set-of-a-glob", "set-of-a-question-mark-glob", "set-of-a-star-glob",
+        "imported-function-on-the-step", "shellopts-on-the-job",
+        "bashopts-on-the-job", "path-on-the-step", "env-file-on-the-step", "env-keys-that-only-look-like-them",
+        "job-container"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -523,26 +591,32 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     is inside the string, no comment), an `exit 0` after the audit (sound, but refused), and no named shell under a
     Windows image, labels with no OS label or a Windows label beside a Linux one, or no `runs-on` at all; it passes a
     comment after a `;` or a closed quote that holds `|| true` or `set +e`, a self-hosted Linux runner and a macOS
-    image; and it flags a `|| true` after a double-quoted `"see #1"`. Fold 5's reads added: an audit a lone `&` sends
-    to the background, one in a subshell behind `||`, one in an `sh -c '…'` or after a `#` that an ANSI-C `$'…'` holds,
-    one sharing the step with a function or an alias named `pip-audit`, and no named shell under a label list holding
-    an expression; a step's script is read whole, so a quote open across a newline holds the `#` and `set +e` inside
-    it, and a line ending in `&&` or `||` joins the next (a guard or an `||` there is read), while it reads no audit
-    from a comment after a quote that spans two lines, passes `cd . &&` before the audit on the next line, and
-    passes a `#` after a single-quoted `'x\\'` (a backslash is literal there, so the `|| true` after it is comment).
-    Fold 6's mutants added: an `exit 0` and a `set +e` that a backslash-newline splits inside a word (the shell removes
-    it, so the word is whole). Fold 6's reads added: a `set` given a backquoted command; an alias or a function named
-    through quotes, and one defined with `function`; an ANSI-C `$'…'` in the audit's list (it hides a `#`, a quote's
-    end, a lone `&`: dash and bash read it differently); a `#` inside backquotes or after a `$(…)` (no comment: the `||
-    true` after it is read; a `(true)#`, where bash does open a comment, is refused too, sound); an `exit 0` after a
-    `|&`; a no-break space in the audit (the check splits the word there, bash does not); a `${{` expression in the
-    script (GitHub writes its value in first); and a `BASH_ENV`, or an env that is not a mapping, on the step or the job
-    (bash runs that file first). Each row's job runs on ubuntu-latest unless the row names another. Guards a check that
-    counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2
-    and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's
-    mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4:
-    A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3; its
-    read B, S2 to S4, N4: H1 to H5, FA2)."""
+    image; and it flags a `|| true` after a double-quoted `"see #1"`. Fold 5's reads added: an audit a lone `&` sends to
+    the background, one in a subshell behind `||`, one in an `sh -c '…'` or after a `#` that an ANSI-C `$'…'` holds, one
+    sharing the step with a function or an alias named `pip-audit`, and no named shell under a label list holding an
+    expression; a step's script is read whole, so a quote open across a newline holds the `#` and `set +e` inside it,
+    and a line ending in `&&` or `||` joins the next (a guard or an `||` there is read), while it reads no audit from a
+    comment after a quote that spans two lines, passes `cd . &&` before the audit on the next line, and passes a `#`
+    after a single-quoted `'x\\'` (a backslash is literal there, so the `|| true` after it is comment). Fold 6's mutants
+    added: an `exit 0` and a `set +e` that a backslash-newline splits inside a word (the shell removes it, so the word
+    is whole). Fold 6's reads added: a `set` given a backquoted command; an alias or a function named through quotes,
+    and one defined with `function`; an ANSI-C `$'…'` in the audit's list (it hides a `#`, a quote's end, a lone `&`:
+    dash and bash read it differently); a `#` inside backquotes or after a `$(…)` (no comment: the `|| true` after it is
+    read; fold 7's reads refuse a `#` right after any `)`, below); an `exit 0` after a `|&`; a no-break space in the
+    audit (the check splits the word there, bash does not); a `${{` expression in the script (GitHub writes its value in
+    first); and a `BASH_ENV`, or an env that is not a mapping, on the step or the job (bash runs that file first). Fold
+    7's reads added: a `#` right after a subshell's or an arithmetic command's `)` (bash comments out what follows, the
+    audit too; a quote or a backquote in that comment too), a VT or an ideographic space before a `#`, a `${{`
+    expression in a comment, a `hash`, `BASH_CMDS`, `BASH_ALIASES` or `enable` entry for `pip-audit`, an `eval` that
+    rejoins an `exit 0` split by a backslash-newline inside single quotes, a `set` given a variable flag or a glob (`set
+    -$x`, `set +[e]`, `set +?`, `set +*`), an imported function, `SHELLOPTS`, `BASHOPTS`, `PATH` or `ENV` in the env,
+    and a `container:` on the job; it passes env keys that only look like those (`PYTHONPATH`, `ENVIRONMENT`). Each
+    row's job runs on ubuntu-latest unless the row names another. Guards a check that counts a dead audit as coverage
+    (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5: PA-trap,
+    PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2;
+    its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to
+    H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4:
+    H1 to H5, FA2; fold 7's read A, S1 to S5; its read B, S1, S2, N6)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults

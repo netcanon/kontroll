@@ -34,18 +34,20 @@ were built from was not.
 - **Dependabot** covers every Dockerfile's base and both pin files (default strategy: exact pins); **pip-audit**
   reads the pin files too. The compose tags have no bot: Dependabot's compose fetcher reads no `<service>.yaml`
   name, so they are bumped by hand, Postgres's included. Promtool and vector in CI are held to the compose tags.
-- `tests/unit/test_image_pins.py` fails when a pin is missing or its check is switched off (a `pip check` or
-  `sha256sum -c` that a later `|| true`, a `;` errexit does not cover, a pipe, a background `&`, a condition, a
-  `$(…)` or quoted string, an ANSI-C `$'…'` before it or in its list, a compound behind `||` or `!`, a function or alias
-  in the `RUN`, a `set -n`, or a `trap`, `exec`, `return` or `exit 0` keeps from failing the build; a download
-  naming more than one URL or output; a comment inside a `RUN`; a `SHELL` other than Docker's default; a
-  whitespace character other than a space, a tab or a line feed; or a checksum not held in the tree), never because
-  one is old.
-  It reads a Dockerfile's lines as BuildKit joins them. `tests/unit/test_ci_workflows.py` holds the pip-audit step
-  to the same rules, reading its `run:` whole; the step must name its shell under any runner that is not a named
-  Linux or macOS one (a Windows image, a list with no OS label or an expression in it, no `runs-on`), may hold no
-  `${{` expression and no odd whitespace and run under no `BASH_ENV`, and the
-  pip-audit job now names its shell (`bash`), since a repository variable picks its runner.
+- `tests/unit/test_image_pins.py` fails when a pin is missing or its check is switched off (a `pip check` or `sha256sum
+  -c` that a later `|| true`, a `;` errexit does not cover, a pipe, a background `&`, a condition, a `$(…)` or quoted
+  string, an ANSI-C `$'…'` before it or in its list, a compound behind `||` or `!`, a function or alias (or a `hash` or
+  `enable` entry) in the `RUN`, a `set -n` (or a `set` given a variable, a backquoted command or a glob), or a `trap`,
+  `exec`, `return` or `exit 0` keeps from failing the build; a download naming more than one URL or output; a comment
+  inside a `RUN`; a `SHELL` other than Docker's default; a whitespace character other than a space, a tab or a line
+  feed; a `sha256sum` named by a path other than `/bin/` or `/usr/bin/`; or a checksum not held in the tree), never
+  because one is old.
+  It reads a Dockerfile's lines as BuildKit joins them. `tests/unit/test_ci_workflows.py` holds the pip-audit step to
+  the same rules, reading its `run:` whole; the step must name its shell under any runner that is not a named Linux or
+  macOS one (a Windows image, a list with no OS label or an expression in it, no `runs-on`), may hold no `${{`
+  expression (in a comment too), no odd whitespace, no `#` right after a `)` and no backslash-newline inside single
+  quotes, and run under no env key bash reads (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PATH`, `BASH_FUNC_…`) and no
+  job `container:`, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner.
   The refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
 The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is

@@ -23,13 +23,15 @@ Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the w
   one later in the check's own AND-OR list or pipeline hides where that list ends;
 - it does not run in a compound behind `||` or `!`: the shell skips it, or drops its status (one after a `|` or a
   lone `&` runs, and gives its status as any command does);
-- no function or alias is defined in the text: one can stand in for the checked program, or for `set`;
+- no function or alias is defined in the text, and no entry made in bash's command tables (`hash`, `enable`,
+  `BASH_CMDS`, `BASH_ALIASES`): each can stand in for the checked program, or for `set`;
 - no `trap`, `exec`, `return` or `exit` shares the text, but `exit 1` to `exit 255` (`exit 256` is 0): each of the
   others can end the text with a status that is not the failure's. One is read as a word anywhere in a command, as
   written or with its quotes and backslashes removed (`\\exit 0`, `"exit" 0`, `command exit 0`, `eval 'exit 0'`),
   after an `&`, `|` or redirect and before a redirect too (`true&exit 0`, `exit>/dev/null`);
-- no `set -n` or `set -o noexec` shares the text (a flag cluster holding `n`): the shell reads the rest of the text
-  and runs none of it.
+- no `set -n` or `set -o noexec` shares the text (a flag cluster holding `n`), nor a `set` given a variable, a
+  backquoted command or a glob (`set -$x`, `` set `cat o` ``, `set +[e]`: each can be one): the shell reads the rest
+  of the text and runs none of it.
 Inside a compound command (a brace group, a subshell, a function body, an `if`, `case`, `for`, `while` or `until`
 body) only `&&` to the end of the text counts: errexit is ignored inside a compound that is not the last of its
 AND-OR list (`{ a; b; } || true` runs `b` after `a` fails), so the `;` rule is not trusted there. A compound closed
@@ -37,14 +39,14 @@ before the command leaves nothing open; a `}`, `fi`, `done` or `esac` closes one
 a `;`, `&` or `|`, so `echo done` closes nothing) and before a delimiter (so `done=1` and `}x` close nothing), and a
 `${…}` is removed first.
 
-Errexit is switched on by a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command at the top
-of the text and runs whenever the text reaches it (not behind `&&` or `||`, not piped, not sent to the background,
-nothing open). It is switched off by a `set +e` or `set +o errexit` anywhere in the text (inside a compound, behind
-`eval` or `command`, written through quotes or backslashes), by a `set` given a variable (`set $o`) and by a `shopt`
-naming errexit. A `set -e` the reader cannot place switches nothing on, and a `set` it cannot rule out switches
-errexit off, so each misreading of these that it knows of refuses. The reader refuses what it knows it cannot read;
-what it still cannot see is listed in tests/unit/test_image_pins.py's docstring ("What the checks still cannot
-see").
+Errexit is switched on by a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command at the top of
+the text and runs whenever the text reaches it (not behind `&&` or `||`, not piped, not sent to the background, nothing
+open). It is switched off by a `set +e` or `set +o errexit` anywhere in the text (inside a compound, behind `eval` or
+`command`, written through quotes or backslashes), by a `set` given a variable, a backquoted command or a glob (`set
+$o`, `` set `cat o` ``, `set +[e]`) and by a `shopt` naming errexit. A `set -e` the reader cannot place switches nothing
+on, and a `set` it cannot rule out switches errexit off, so each misreading of these that it knows of refuses. The
+reader refuses what it knows it cannot read; what it still cannot see is listed in tests/unit/test_image_pins.py's
+docstring ("What the checks still cannot see").
 """
 import re
 
@@ -52,10 +54,10 @@ _OPERATORS = re.compile(r"(&&|\|\||;|\||\x02)")
 _LONE_AMP = re.compile(r"(?<![<>|&])&(?!&)")
 _CONDITION = re.compile(r"(?:if|elif|while|until)(?:\s|$)")
 _BODY = re.compile(r"(?:then|do)(?:\s|$)")
-_SET_OFF = re.compile(r"""\bset\s+(?:\S+\s+)*?(?:["'\\]*\+["'\\]*[a-zA-Z]*e|\+o\s+["']?errexit|\S*[$`])"""
+_SET_OFF = re.compile(r"""\bset\s+(?:\S+\s+)*?(?:["'\\]*\+["'\\]*[a-zA-Z]*e|\+o\s+["']?errexit|\S*[$`[*?])"""
                       r"|\bshopt\b.*\berrexit\b")
 _ENDER = re.compile(r"""(?:^|[\s;&|<>'"\\(){}!=])(trap|exec|exit|return)(?:["']?(?:\s+(.*))?$|["'\s;)<>&|])""")
-_NOEXEC = re.compile(r"\bset\s+(?:\S+\s+)*?(?:-[a-zA-Z]*n[a-zA-Z]*|-o\s+noexec)")
+_NOEXEC = re.compile(r"\bset\s+(?:\S+\s+)*?(?:-[a-zA-Z]*n[a-zA-Z]*|-o\s+noexec|\S*[$`[*?])")
 
 
 def _plain(command):
@@ -222,9 +224,10 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
     """["<what> …: <command>"] if a failure of cmds[i] would not fail the text (the module docstring's rules), else [].
     `on`: whether errexit is on at the start of the text."""
     command = cmds[i][0]
-    if any(_FUNCTION.search(t) or re.search(r"(?:^|\s)alias\s", t)
+    if any(_FUNCTION.search(t) or re.search(r"(?:^|\s)(?:alias|hash|enable)\s|\bBASH_(?:ALIASES|CMDS)\b", t)
            for c, _, _ in cmds for t in (_without_quotes(c), _plain(c))):
-        return ["%s shares the %s with a function or an alias, which can stand in for it: %s"
+        return ["%s shares the %s with a function or an alias, or an entry in bash's command tables (`hash`, "
+                "`enable`, `BASH_CMDS`, `BASH_ALIASES`), which can stand in for it: %s"
                 % (what, unit, command)]
     if conditions(cmds)[i]:
         return ["%s is a condition or negated (its failure would not fail the %s): %s" % (what, unit, command)]
