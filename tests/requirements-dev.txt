@@ -1,5 +1,5 @@
 # Dev/test deps for the code-half pytest suite (tests/unit + tests/integration).
-# Intentionally tiny — the suite mocks the ansible-doc/ansible-galaxy/urllib shell-outs
+# No ansible, no lab: the suite mocks the ansible-doc/ansible-galaxy/urllib shell-outs
 # (galaxy.py) and the GUI's in-process service seams (search/classify/onboard), so it needs
 # NEITHER ansible nor the lab. PyYAML + flask are import-time deps of the modules under test.
 pytest>=8

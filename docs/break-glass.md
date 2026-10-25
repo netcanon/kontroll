@@ -188,14 +188,16 @@ rm -rf "$ISO"
 Expect `ok` for every file and no `BROKEN` line.
 
 - `FAIL … (not wrapped to …)`: the re-wrap did not reach that file. Run it again (steps 3 and 4).
-- A bare `FAIL`: the file names the break-glass key and that key does not open it. The file's break-glass stanza is
-  damaged, and a re-wrap leaves it as it is (`already up to date`); or this sops is older than 3.7, which reads no
-  age key (`sops --version`; install a current stock build and run the block again first). Rotate that file's data
-  key on the node, in the installer shell (`sops -r -i instance/secrets/<domain>.sops.yml`), hand it back and land it
-  as steps 5 and 6 do, then verify again.
+- A bare `FAIL`: the file names the break-glass key and that key does not open it. First run `sops --version`: a sops
+  older than 3.7 reads no age key, so install a current stock build and run the block again. If the `FAIL` stays, the
+  file's break-glass stanza is damaged, and a re-wrap leaves it as it is (`already up to date`): rotate that file's
+  data key on the node, in the installer shell (`sops -r -i instance/secrets/<domain>.sops.yml`), hand it back and
+  land it as steps 5 and 6 do, then verify again.
 - `BROKEN: no sops runs here`: this machine cannot check anything yet. The block runs sops with no environment and an
-  empty home, so a shell function or an alias named `sops`, or a version-manager shim that needs your own home, does
-  not count: put a stock sops build on `PATH` (`command -v sops` should name a file, not a shim).
+  empty home, so a shell function or an alias named `sops`, or a version-manager shim that needs your own home or a
+  variable of its own, does not count: put a stock sops build on `PATH`.
+  `env -i PATH="$PATH" sops --help >/dev/null && echo runs` should then print `runs`. A `PATH` entry written `~/bin`
+  counts for your shell but not for this check: write it `$HOME/bin`.
 - A `BROKEN` line about `$BG`: the file is not the break-glass key alone (a copy of the control key or a keys.txt
   holding both, so the check would prove the wrong key; or a key line with something before it, which `age-keygen`
   cannot read); or `BGPUB` is not the break-glass recipient (left as `age1…`, with a stray space or carriage return,

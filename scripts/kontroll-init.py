@@ -24,8 +24,9 @@ run on a configured node makes no change. Reuses keygen.add_recipient + the secr
 See docs/SETUP.md §5 + docs/install-from-scratch.md §2 (the keygen split) + SECURITY.md C11.
 
 A BRAND-NEW node instead runs `--fresh`: it scaffolds a private `instance/` overlay from the shipped
-`instance.example/` skeleton, writes a `.sops.yaml` naming ONLY the freshly-minted control key (never inheriting
-another instance's recipients — the default path is additive, which a fresh Joe must NOT do), and fills
+`instance.example/` skeleton, writes a `.sops.yaml` naming only this instance's own keys — the freshly-minted
+control key and, unless `--no-break-glass`, the break-glass recipient (never inheriting another instance's
+recipients — the default path is additive, which a fresh Joe must NOT do) — and fills
 `instance.yml`'s mgmt_ip/domain from flags. See docs/install-from-scratch.md (the genericization overlay), and
 docs/break-glass.md for the recovery key on an instance created without one.
 
@@ -128,16 +129,17 @@ def _is_plugin_recipient(s):
 
 
 def _age_reads_public(key_file):
-    """The public half `age-keygen -y` derives from the first key in key_file: "" when age-keygen cannot read a key
-    there (a byte-order mark, a file holding only a public line), None when no age-keygen is on PATH (the check is
-    then skipped; the installer image has one). The seam the tests patch. Prints nothing: age-keygen's output is
-    captured, and holds only public halves."""
+    """The public half `age-keygen -y` derives from the first key in key_file, which it is given by its absolute path
+    (a file named `-k.txt` is not read as a flag): "" when age-keygen cannot read a key there (a byte-order mark, a
+    file holding only a public line), or cannot be run, runs past 60 s or prints what is not UTF-8; None when no
+    age-keygen is on PATH (the check is then skipped; the installer image has one). The seam the tests patch. Prints
+    nothing: age-keygen's output is captured, and holds only public halves."""
     exe = shutil.which("age-keygen")
     if not exe:
         return None
     try:
-        run = subprocess.run([exe, "-y", key_file], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
+        run = subprocess.run([exe, "-y", os.path.abspath(key_file)], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return ""
     words = run.stdout.split() if run.returncode == 0 else []
     return words[0] if words else ""
@@ -223,8 +225,9 @@ def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key
     bech32 checksum, X25519 length or padding fails, or a low-order X25519 point age refuses (the value is never
     echoed back); a recipient, or a `--fresh` run, where something is at the key file's path but kontroll-init cannot
     read a `# public key:` line from it (its key cannot be checked, and `--fresh` would scaffold the overlay before
-    failing to read it), or where age derives another public half from the file, or none (the run would write an
-    instance its control key cannot open); a recipient without `--fresh` where no control key file
+    failing to read it), or where age derives another public half from the file, or none (the line names a key the
+    file cannot open: a `--fresh` run would write the instance to it, and an existing instance's re-wrap would fail
+    with this file); a recipient without `--fresh` where no control key file
     exists (the non-fresh path would otherwise MINT a control key and add it to every domain before reaching the
     break-glass step), or where it holds a key that is not a recipient of every rule (step 2 would add THAT key to
     every domain beside the break-glass one); a recipient equal to the control key (a copy is not a second
@@ -258,7 +261,7 @@ def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key
         if not _is_age_recipient(recipient):
             return ("ERROR: --break-glass-recipient is not a valid age public key (its checksum, length or padding "
                     "does not match — a character was mistyped, added or lost in the copy, an l read as 1 among "
-                    "them). Nothing was written.")
+                    "them — or it was not printed by age-keygen). Nothing was written.")
         if _x25519_low_order(recipient):
             return ("ERROR: --break-glass-recipient is a low-order X25519 point: no key pair has it as its public "
                     "half, and age refuses to encrypt to it. Nothing was written.")
@@ -297,9 +300,10 @@ def _unread_key_file(key_file):
 def _misread_key_file(key_file):
     """The refusal for a key file whose `# public key:` line is not what age reads from it. Pure (testable)."""
     return ("ERROR: the `# public key:` line in %s is not the public half of the key age reads from that file, or age "
-            "cannot read a key there (a byte-order mark, a public line with no private key, another key's line), "
-            "so the instance would be written to a key that cannot open it. `age-keygen -y %s` prints the public "
-            "half age reads; correct the file, or name the right one with --key-file. Nothing was written."
+            "cannot read a key there (a byte-order mark, a public line with no private key, another key's line): "
+            "the line names a key this file cannot open (a --fresh run would write the instance to it; an existing "
+            "instance's re-wrap would fail with this file). `age-keygen -y %s` prints the public half age reads; "
+            "correct the file, or name the right one with --key-file. Nothing was written."
             % (key_file, key_file))
 
 
@@ -471,8 +475,8 @@ def main(argv):
                     help="(with --fresh) create the instance with ONE recipient per domain. Losing the control key "
                          "then destroys every secret (SECURITY.md R-KEY-1). For scratch instances")
     ap.add_argument("--fresh", action="store_true",
-                    help="scaffold a BRAND-NEW instance overlay from instance.example/ with YOUR key only "
-                         "(never inherits another instance's recipients)")
+                    help="scaffold a BRAND-NEW instance overlay from instance.example/ whose recipients are this "
+                         "instance's own keys (never another instance's)")
     ap.add_argument("--mgmt-ip", dest="mgmt_ip", help="(with --fresh) this node's management IP, written to instance.yml")
     ap.add_argument("--domain", help="(with --fresh) this instance's base domain, written to instance.yml")
     ap.add_argument("--tls-mode", dest="tls_mode", choices=["byo_proxy", "self_signed", "acme"],
@@ -529,7 +533,7 @@ def main(argv):
         else:
             bg_public = args.break_glass_recipient
 
-    # 0. --fresh: scaffold a BRAND-NEW overlay (YOUR key only) before the keygen steps -------------------
+    # 0. --fresh: scaffold a BRAND-NEW overlay (this instance's keys only) before the keygen steps -------
     if args.fresh:
         sc = scaffold_overlay()
         if sc is None:

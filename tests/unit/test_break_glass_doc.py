@@ -261,16 +261,19 @@ _NO_SOPS = ("BROKEN: no sops runs here as the check runs it (a stock sops build 
 
 
 @_BASH
-@pytest.mark.parametrize("sops", ["none", "a-shim-that-needs-home", "a-shell-function"])
+@pytest.mark.parametrize("sops", ["none", "a-shim-that-needs-home", "a-shim-that-needs-its-own-variable",
+                                  "a-shell-function"])
 def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
     """On a machine with age-keygen whose sops cannot run as the block runs it — none at all (a PATH that holds the
-    shell's own tools and the stand-in age-keygen only), a version-manager shim first on PATH that runs sops only
-    where the operator's own home is set, or a shell function named `sops` with no sops on PATH — the Verify block
-    prints one line, `BROKEN: no sops runs here as the check runs it`, and no FAIL or ok line. Guards a sops the
-    block cannot run reading as a bare `FAIL` for every file — the line the runbook gives for a damaged break-glass
-    stanza, whose remedy (a data-key rotation on the node) cannot help (T11 fold 4's read B, N3) — and a check that
-    asks only whether the shell finds a sops (`command -v`), which a function, an alias or a shim passes while the
-    block's `env -i` runs none (fold 5's reads, 70 S1 and 80 N5)."""
+    shell's own tools and the stand-in age-keygen only), a version-manager shim first on PATH that runs sops only where
+    the operator's own home is set, one that runs it only where a variable of its own is set (a version manager under a
+    custom root), or a shell function named `sops` with no sops on PATH — the Verify block prints one line, `BROKEN: no
+    sops runs here as the check runs it`, and no FAIL or ok line. Guards a sops the block cannot run reading as a bare
+    `FAIL` for every file — the line the runbook gives for a damaged break-glass stanza, whose remedy (a data-key
+    rotation on the node) cannot help (T11 fold 4's read B, N3) — and a check that asks only whether the shell finds a
+    sops (`command -v`), which a function, an alias or a shim passes while the block's `env -i` runs none (fold 5's
+    reads, 70 S1 and 80 N5), or a probe that keeps the environment, which the shim keyed on its own variable passes
+    (fold 6's read 100, S2)."""
     env, files, _ = _hostile_machine(tmp_path)
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -283,6 +286,13 @@ def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
         (tmp_path / "home" / ".shim-ok").write_text("", encoding="utf-8")
         shim = tools / "sops"
         shim.write_text('#!/usr/bin/env bash\n[ -f "$HOME/.shim-ok" ] || exit 126\nexec python3 "%s" "$@"\n'
+                        % (tmp_path / "bin" / "sops"), encoding="utf-8")
+        shim.chmod(0o755)
+        assert _bash("sops --help", env, files).returncode == 0, "the shim runs in the operator's own shell"
+    elif sops == "a-shim-that-needs-its-own-variable":
+        env["SHIM_ROOT"] = str(tmp_path)
+        shim = tools / "sops"
+        shim.write_text('#!/usr/bin/env bash\n[ -n "${SHIM_ROOT:-}" ] || exit 126\nexec python3 "%s" "$@"\n'
                         % (tmp_path / "bin" / "sops"), encoding="utf-8")
         shim.chmod(0o755)
         assert _bash("sops --help", env, files).returncode == 0, "the shim runs in the operator's own shell"

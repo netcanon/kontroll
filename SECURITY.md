@@ -1115,8 +1115,9 @@ distinct control.
   left that nobody was shown. It refuses before minting anything when standard output is not a terminal, so the key cannot land in a
   pipe or a file; the installer container's log driver is `none` for every verb but a deploy (`init`, `check`:
   both launchers choose it per verb, `docker/services/installer.yaml`), and no launcher routes `fresh-init`
-  through a run log or a `tee`. A terminal the operator records (`script`, a multiplexer's log) is
-  beyond kontroll's reach.
+  through a run log, a `tee`, a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `screen -L`,
+  `tmux pipe-pane`) or a command that files its output away from the terminal (`nohup`, `systemd-run`). A terminal
+  the operator records themselves is beyond kontroll's reach.
   `--break-glass-recipient` takes the public half of an X25519 key made elsewhere and, without echoing the value,
   refuses a private key, a plugin recipient (`age1<name>1…`: kontroll's images ship no age plugin) or a
   post-quantum one (it needs a sops whose age knows it on every machine), one whose checksum, X25519 length or
@@ -1146,8 +1147,9 @@ printed exactly once and in no file, shown even when a later step fails, refused
 malformed, mis-checksummed, plugin, post-quantum, low-order or non-zero-padding recipient refused unechoed, the
 low-order check held to `cryptography`'s X25519 by `test_the_low_order_check_agrees_with_x25519_itself`; a key file
 kontroll-init cannot read (empty, a directory, a FIFO, a link to nothing, not UTF-8) or one age reads otherwise,
-refused on both paths; a key file that is not the control recipient refused; the existing-instance run stopping
-before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
+refused on both paths, and at the path `--key-file` names
+(`test_the_key_file_flag_names_the_file_every_check_reads`); a key file that is not the control recipient refused;
+the existing-instance run stopping before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
 (`test_fresh_init_output_is_never_teed_to_a_log`, `test_the_installer_container_keeps_no_log`) +
 `tests/unit/test_installer_log_driver.py` (both launchers, run, choose the driver per verb); `gitleaks` (CI) scans
 every commit for an `AGE-SECRET-KEY` (C6).

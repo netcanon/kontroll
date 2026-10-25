@@ -11,6 +11,8 @@ model; a non-idempotent init would churn secrets on every re-run.
 import importlib.util
 import os
 import shutil
+import signal
+import subprocess
 import sys
 
 import pytest
@@ -425,53 +427,59 @@ def test_no_break_glass_is_explicit_and_says_what_it_costs(fresh_repo, monkeypat
     (_BAD_PADDING, "is not a valid age public key"),
     (bech32("age1yubikey", bytes(range(33))), "is a plugin or post-quantum age recipient"),
     (bech32("age1fido2-hmac", bytes(range(33))), "is a plugin or post-quantum age recipient"),
-    (bech32("age1pq", bytes(range(64))), "is a plugin or post-quantum age recipient"),
+    (bech32("age1pq", bytes(range(64))),
+     ("is a plugin or post-quantum age recipient",
+      "needs a sops whose age knows it on every machine that encrypts or decrypts")),
+    (bech32("age1ab!cd", bytes(range(1, 34))), "is not an age public key"),
     (bech32("age", bytes(32)), "is a low-order X25519 point"),
     (bech32("age", (1).to_bytes(32, "little")), "is a low-order X25519 point"),
 ], ids=["private-key", "private-key-lower-padded", "too-short", "upper-case", "two-joined", "checksum-typo",
         "outside-the-alphabet", "q-before-final-p", "an-l-copied-as-1", "a-1-added", "non-zero-padding",
-        "a-plugin-recipient", "a-plugin-name-with-a-hyphen", "a-post-quantum-recipient", "the-all-zero-point",
-        "the-point-u-1"])
+        "a-plugin-recipient", "a-plugin-name-with-a-hyphen", "a-post-quantum-recipient",
+        "a-plugin-name-outside-its-set", "the-all-zero-point", "the-point-u-1"])
 def test_a_malformed_or_private_recipient_is_refused_before_any_write(fresh_repo, monkeypatch, capsys,
                                                                      recipient, expect):
-    """A `--break-glass-recipient` that is a PRIVATE key, or is not an age public key as age-keygen prints one, exits
-    1 before anything is written, and the value is not echoed back; a private key in lower case or with a space
-    before it is still named as one; a valid key with more after it (two keys joined by a comma) is refused whole; a
-    value of the right shape whose bech32 checksum fails — one character changed, or one outside the bech32 alphabet
-    — is refused as one, and so is a `q` added before the final `p`, which the checksum cannot see and the length
-    can; an `l` copied as `1`, or a `1` added, which moves bech32's split so the value is shaped `age1<name>1…`, is
-    refused as a typo too, not as a plugin recipient; and one whose four padding bits are not zero (a value no
-    age-keygen printed, with a valid checksum) as not valid. A plugin or post-quantum recipient (`age1<name>1…`, such
-    as a hardware token's, its name holding a `-` as age allows) is refused as one, and so is a low-order X25519
-    point (the all-zero key, u = 1); the post-quantum row's 64 bytes are no real key, since the check reads the name
-    and the checksum. Guards a typo creating a recipient nobody can decrypt with (sops refuses it only at the first
-    encrypt, after the instance and its .sops.yaml are written, so the run fails half-way with an error that blames
-    the age key and no re-run repairs it), and the same for a padding bit (age and sops: "non-zero padding"), a
+    """A `--break-glass-recipient` that is a PRIVATE key, or is not an age public key as age-keygen prints one, exits 1
+    before anything is written, and the value is not echoed back; a private key in lower case or with a space before it
+    is still named as one; a valid key with more after it (two keys joined by a comma) is refused whole; a value of the
+    right shape whose bech32 checksum fails — one character changed, or one outside the bech32 alphabet — is refused as
+    one, and so is a `q` added before the final `p`, which the checksum cannot see and the length can; an `l` copied as
+    `1`, or a `1` added, which moves bech32's split so the value is shaped `age1<name>1…`, is refused as a typo too, not
+    as a plugin recipient; and one whose four padding bits are not zero (a value no age-keygen printed, with a valid
+    checksum) as not valid. A plugin or post-quantum recipient (`age1<name>1…`, such as a hardware token's, its name
+    holding a `-` as age allows) is refused as one, the post-quantum reason naming every machine that encrypts or
+    decrypts; a name holding a character outside age's plugin set (`age1ab!cd1…`) is refused as no age key; and so is a
+    low-order X25519 point (the all-zero key, u = 1); the post-quantum row's 64 bytes are no real key, since the check
+    reads the name and the checksum. Guards a typo creating a recipient nobody can decrypt with (sops refuses it only at
+    the first encrypt, after the instance and its .sops.yaml are written, so the run fails half-way with an error that
+    blames the age key and no re-run repairs it), and the same for a padding bit (age and sops: "non-zero padding"), a
     plugin recipient (sops encrypts to one only where `age-plugin-<name>` is installed, and kontroll's images ship
     none), a post-quantum one (it needs a sops whose age knows it on every machine that encrypts or decrypts) and a
-    low-order point (age refuses it: "low order point") — T11 fold 4's read A, S1; an `l` read as `1` told to make a
-    new key, and a plugin name with a `-` told it is no age key at all (fold 5's reads, 70 N1 and N3, 80 N1 and S2);
-    a check that reads only a valid prefix, a private key pasted by mistake being printed to the terminal or its log
-    a second time, and a lower-cased or padded one losing the advice that names it a private key."""
+    low-order point (age refuses it: "low order point") — T11 fold 4's read A, S1; an `l` read as `1` told to make a new
+    key, and a plugin name with a `-` told it is no age key at all (fold 5's reads, 70 N1 and N3, 80 N1 and S2); a
+    post-quantum recipient given a false reason, and a name outside that set given the plugin message (fold 6's read 90,
+    N5); a check that reads only a valid prefix, a private key pasted by mistake being printed to the terminal or its
+    log a second time, and a lower-cased or padded one losing the advice that names it a private key."""
     _mock_fresh_seams(monkeypatch)
     monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
     assert ki.main(_FRESH + ["--break-glass-recipient", recipient]) == 1
     err = capsys.readouterr().err
-    assert expect in err and recipient not in err and "Nothing was written" in err
+    expects = expect if isinstance(expect, tuple) else (expect,)
+    assert all(e in err for e in expects) and recipient not in err and "Nothing was written" in err
     assert not os.path.exists(os.path.join(fresh_repo, "instance"))
 
 
 def test_the_recipient_check_holds_the_human_part_and_the_x25519_length():
-    """`_is_age_recipient` accepts an X25519 recipient (32 bytes: 58 data characters, zero padding bits), and refuses
-    a plugin recipient even at that length (human part `age1<name>`, which `_is_plugin_recipient` names), BIP-173's
-    own valid vector `a12uel5l` (its checksum is right, its human part is not `age`), an X25519 recipient with a `q`
-    added before its final `p` (which the checksum cannot see), a 31-byte one, and the same 32 bytes with any one of
-    the four padding bits set; `_is_plugin_recipient` names a plugin recipient whose name holds a `-`, and not an
-    X25519 recipient with an `l` copied as `1`. Guards a recipient sops refuses ("invalid X25519 public key", "non-zero
-    padding", or a plugin it cannot start) passing the check, so the run fails at the first encrypt after .sops.yaml
-    is written (T11 fold 4's read A, S1: fold 4 accepted a plugin recipient here; fold 5's reads, 70 N3 and 80 S2:
-    fold 5 accepted a padding bit); a typo named a plugin recipient (70 N1, 80 N1); and the human-part clause, which no
-    caller reaches today (the plugin refusal comes first), being dropped unnoticed."""
+    """`_is_age_recipient` accepts an X25519 recipient (32 bytes: 58 data characters, zero padding bits), and refuses a
+    plugin recipient even at that length (human part `age1<name>`, which `_is_plugin_recipient` names), BIP-173's own
+    valid vector `a12uel5l` (its checksum is right, its human part is not `age`), an X25519 recipient with a `q` added
+    before its final `p` (which the checksum cannot see), a 31-byte one; and a 32-byte one (`bytes([1]) * 32`) that
+    passes, refused once any one of its four padding bits is set; `_is_plugin_recipient` names a plugin recipient whose
+    name holds a `-`, and not an X25519 recipient with an `l` copied as `1`. Guards a recipient sops refuses ("invalid
+    X25519 public key", "non-zero padding", or a plugin it cannot start) passing the check, so the run fails at the
+    first encrypt after .sops.yaml is written (T11 fold 4's read A, S1: fold 4 accepted a plugin recipient here; fold
+    5's reads, 70 N3 and 80 S2: fold 5 accepted a padding bit); a typo named a plugin recipient (70 N1, 80 N1); and the
+    human-part clause, which no caller reaches today (the plugin refusal comes first), being dropped unnoticed."""
     assert BG.endswith("p") and len(BG) == 62 and ki._is_age_recipient(BG)
     plugin = bech32("age1yubikey", bytes(range(1, 33)))
     assert not ki._is_age_recipient(plugin) and ki._is_plugin_recipient(plugin) and not ki._is_plugin_recipient(BG)
@@ -668,19 +676,26 @@ _FRESH_CHOICES = {"fresh-no-break-glass": ["--no-break-glass"], "fresh-mint": ["
                                   pytest.param("a-link-to-nothing", marks=_POSIX_ONLY),
                                   pytest.param("a-fifo", marks=_POSIX_ONLY)])
 @pytest.mark.parametrize("run", ["a-recipient-without-fresh"] + list(_FRESH_CHOICES))
-def test_a_key_file_without_its_public_line_is_named_as_such(fresh_repo, monkeypatch, capsys, run, kind):
-    """A run that reads the control key file — `--break-glass-recipient` without --fresh, or a `--fresh` run with
-    any of the three choices where something is at the key file's path — exits 1 before anything is written when
-    kontroll-init cannot read a `# public key:` line from it (the file holds only the `AGE-SECRET-KEY-` line, is
-    empty, is a directory, a link to nothing or a FIFO, or is not UTF-8), says so and how to add one, does not call
-    the key absent, mints nothing, and never echoes the private line: no instance/ on the fresh path, an unchanged
-    .sops.yaml on the other. Guards the refusal sending the operator to look for a control key that is there (sops
-    opens every domain with such a file), as "no control key at …" did; a `--fresh` run scaffolding instance/ before
-    it fails to read the key (T11 fold 4's read A, N7), for the choice that prints a private key too (fold 5's read
-    80, N3: only `--no-break-glass` was run); a link to nothing read as no file, so `--fresh` scaffolded instance/
-    and died in a traceback from age-keygen, and a FIFO opened, which hung the run (read 70, N4); a file it cannot
-    read named as one missing a line, with a remedy that fails the same way (read B, N7); and a not-UTF-8 file ending
-    the run in a traceback (read A, N5)."""
+def test_a_key_file_without_its_public_line_is_named_as_such(fresh_repo, monkeypatch, capsys, request, run, kind):
+    """A run that reads the control key file — `--break-glass-recipient` without --fresh, or a `--fresh` run with any of
+    the three choices where something is at the key file's path — exits 1 before anything is written when kontroll-init
+    cannot read a `# public key:` line from it (the file holds only the `AGE-SECRET-KEY-` line, is empty, is a
+    directory, a link to nothing or a FIFO, or is not UTF-8), says so and how to add one, does not call the key absent,
+    mints nothing, and never echoes the private line: no instance/ on the fresh path, an unchanged .sops.yaml on the
+    other. Guards the refusal sending the operator to look for a control key that is there (sops opens every domain with
+    such a file), as "no control key at …" did; a `--fresh` run scaffolding instance/ before it fails to read the key
+    (T11 fold 4's read A, N7), for the choice that prints a private key too (fold 5's read 80, N3: only
+    `--no-break-glass` was run); a link to nothing read as no file, so `--fresh` scaffolded instance/ and died in a
+    traceback from age-keygen, and a FIFO opened, which hung the run (read 70, N4), a regression there now failing
+    within 30 s rather than holding a shared runner for hours (fold 6's read 100, N2); a file it cannot read named as
+    one missing a line, with a remedy that fails the same way (read B, N7); and a not-UTF-8 file ending the run in a
+    traceback (read A, N5)."""
+    if kind == "a-fifo":
+        def _hung(*_):
+            raise AssertionError("kontroll-init opened the FIFO and blocked")
+        handler = signal.signal(signal.SIGALRM, _hung) or signal.SIG_DFL   # None: one set outside Python
+        signal.alarm(30)
+        request.addfinalizer(lambda: (signal.alarm(0), signal.signal(signal.SIGALRM, handler)))
     if run in _FRESH_CHOICES:
         _mock_fresh_seams(monkeypatch)
         monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
@@ -735,13 +750,41 @@ def test_a_key_file_age_reads_otherwise_is_refused(fresh_repo, monkeypatch, caps
         assert rc == 0 and wrote, err
 
 
+@_POSIX_ONLY
+def test_the_key_file_flag_names_the_file_every_check_reads(fresh_repo, monkeypatch, capsys, tmp_path):
+    """`--key-file` names the file that the `# public key:` read, the presence check and age's own read each see: a
+    misread file there is refused with age asked about that file, and a link to nothing there is refused before the
+    scaffold. Guards a check wired to the default path, which passed every other test (none passed --key-file): it
+    refuses every good `--key-file` run, or lets a link to nothing at the named path scaffold instance/ and die in a
+    traceback (T11 fold 6's read 100, S1)."""
+    _mock_fresh_seams(monkeypatch)
+    elsewhere = str(tmp_path / "elsewhere" / "keys.txt")
+    _write_key(elsewhere, MINTED)
+    seen = []
+    monkeypatch.setattr(ki, "_age_reads_public", lambda key_file: seen.append(key_file) or OTHER)
+    assert ki.main(_FRESH + ["--no-break-glass", "--key-file", elsewhere]) == 1
+    assert seen == [elsewhere] and "is not the public half" in capsys.readouterr().err
+    link = tmp_path / "linked" / "keys.txt"
+    link.parent.mkdir()
+    os.symlink(str(link.parent / "gone"), str(link))
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    assert ki.main(_FRESH + ["--no-break-glass", "--key-file", str(link)]) == 1
+    err = capsys.readouterr().err
+    assert "could not read a `# public key:` line from %s" % link in err
+    assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
 @pytest.mark.skipif(os.name == "nt", reason="runs a stand-in age-keygen from PATH")
-def test_the_age_read_runs_age_keygen_on_the_key_file(tmp_path, monkeypatch):
-    """`_age_reads_public` runs `age-keygen -y <key file>` from PATH and answers the first public half it prints, ""
-    when age-keygen fails (it cannot read a key there) whatever it printed, or prints nothing, and None when no
-    age-keygen is on PATH. Guards the seam the other tests patch: an argv that asks age-keygen something else, a
-    failure read as agreement, or a missing tool read as a key age cannot read, which would refuse every run on a
-    machine without age."""
+def test_the_age_read_runs_age_keygen_on_the_key_file(tmp_path, monkeypatch, capfd):
+    """`_age_reads_public` runs `age-keygen -y <key file>` from PATH, the file named by its absolute path, and answers
+    the first public half it prints; "" when age-keygen fails (it cannot read a key there) whatever it printed, prints
+    nothing, prints what is not UTF-8, cannot be run (a file that is no program) or runs past its bound; and None when
+    no age-keygen is on PATH. What age-keygen writes to stderr is captured, not shown. Guards the seam the other tests
+    patch: an argv that asks age-keygen something else, or hands it a file named `-k.txt` as a flag; a failure read as
+    agreement, or a missing tool read as a key age cannot read, which would refuse every run on a machine without age;
+    an age-keygen that cannot be run read as no age-keygen, which would skip the check (T11 fold 6's read 100, N1); and
+    a run with no bound, an output that is not UTF-8 ending the run in a traceback, and age-keygen's stderr reaching the
+    terminal (read 90, N4)."""
     bin_dir, key_file, argv_log = tmp_path / "bin", tmp_path / "keys.txt", tmp_path / "argv"
     bin_dir.mkdir()
     key_file.write_text("# public key: age1first\nAGE-SECRET-KEY-1FAKE\n", encoding="utf-8")
@@ -749,11 +792,26 @@ def test_the_age_read_runs_age_keygen_on_the_key_file(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(bin_dir))
     assert ki._age_reads_public(str(key_file)) is None
     for body, want in (('printf "age1first\\nage1second\\n"', "age1first"), ("echo age1stale; exit 1", ""),
-                       ("true", "")):
+                       ("true", ""), ("printf 'age1\\377\\n'", ""),
+                       ('echo "age-keygen: a note" >&2; echo age1first', "age1first")):
         stub.write_text('#!/bin/sh\necho "$@" > "%s"\n%s\n' % (argv_log, body), encoding="utf-8")
         stub.chmod(0o755)
+        capfd.readouterr()
         assert ki._age_reads_public(str(key_file)) == want, body
         assert argv_log.read_text(encoding="utf-8").split() == ["-y", str(key_file)]
+        assert capfd.readouterr().err == "", body
+    monkeypatch.chdir(tmp_path)
+    shutil.copy(str(key_file), "-k.txt")
+    assert ki._age_reads_public("-k.txt") == "age1first"
+    assert argv_log.read_text(encoding="utf-8").split() == ["-y", os.path.join(os.getcwd(), "-k.txt")]
+    stub.write_bytes(b"\x00not a program\n")
+    assert ki._age_reads_public(str(key_file)) == ""
+
+    def _past_its_bound(argv, **kw):
+        assert 0 < kw.get("timeout", 0) <= 60, kw
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+    monkeypatch.setattr(ki.subprocess, "run", _past_its_bound)
+    assert ki._age_reads_public(str(key_file)) == ""
 
 
 def test_an_existing_instance_break_glass_run_mints_and_changes_no_secret(fresh_repo, monkeypatch, capsys):

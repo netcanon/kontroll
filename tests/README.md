@@ -163,14 +163,14 @@ tests/e2e/           # GUI in a headless browser over the REAL booted Flask app 
 ```
 
 ```bash
-pip install -r tests/requirements-dev.txt          # tiny: pytest + pyyaml + flask
+pip install -r tests/requirements-dev.txt          # pytest, PyYAML, flask, FastAPI + httpx, cryptography, Playwright
 pytest -m "not e2e and not slow"                   # the hermetic default (CI runs this)
 pytest --cov=scripts --cov=gui --cov-report=term-missing
 ```
 
 `validate` runs this as its L2 step automatically when `pytest` is installed (it
 skips gracefully on a box without it); CI runs it as a dedicated matrix job
-(py3.11–3.13). `e2e`/`slow` are excluded from the default — the live lab and any
+(py3.11–3.14). `e2e`/`slow` are excluded from the default — the live lab and any
 Playwright GUI flow are never in the hermetic gate.
 
 ## Identifier-leak gate (`tests/_leak_guard.py`)
