@@ -12,6 +12,8 @@ import json
 import pytest
 from playwright.sync_api import expect
 
+import _canned
+
 pytestmark = pytest.mark.e2e
 
 
@@ -48,11 +50,8 @@ def test_the_keygen_result_says_whether_it_staged(page, changed, staged, header)
     def generate(route):
         if route.request.method != "POST":
             return route.fallback()
-        route.fulfill(status=200, content_type="application/json", body=json.dumps({
-            "role": "break-glass", "changed": changed, "committed": changed, "staged": staged,
-            "run_id": "0123456789ab", "target_ref": "proposed/0123456789ab" if staged else "main",
-            "private_key": "shown-once", "public_key": "recipient", "next_steps": ["store it offline"],
-            "note": None if changed else "public key was already a recipient; nothing staged"}))
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps(_canned.keygen_answer(changed, staged)))
     page.route("**/api/keygen/*", generate)
     page.goto("/")
     page.get_by_test_id("keygen-open").click()
