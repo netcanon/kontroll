@@ -164,15 +164,18 @@
 
     # Counted per creation rule and per key group, not over the whole file: a whole-file count was satisfied by a
     # control key plus a scoped Semaphore key (on the ops domains only) while every other domain had one recipient.
-    # A warning, not a gate — a --no-break-glass scratch instance is allowed. tests/unit/test_bootstrap_break_glass_warning.py
-    # renders `_sops_thin` on fixtures, so it uses only core Jinja (no Ansible-only filter).
+    # A warning, not a gate — a --no-break-glass scratch instance is allowed.
+    # tests/unit/test_bootstrap_break_glass_warning.py renders `_sops_thin` on fixtures, so it uses only core Jinja
+    # (no Ansible-only filter).
     - name: Warn if a secret domain has fewer than two age recipients (no break-glass key)
       vars:
-        _sops_rules: "{{ (lookup('file', repo_root ~ '/instance/.sops.yaml') | from_yaml).creation_rules | default([]) }}"
+        _sops_rules: >-
+          {{ (lookup('file', repo_root ~ '/instance/.sops.yaml') | from_yaml).creation_rules | default([]) }}
         _sops_thin: |-
           {%- set ns = namespace(thin=[]) -%}
           {%- for rule in _sops_rules -%}
-          {%- set groups = rule.key_groups if (rule is mapping and rule.key_groups is defined and rule.key_groups) else [rule] -%}
+          {%- set groups = rule.key_groups
+                if (rule is mapping and rule.key_groups is defined and rule.key_groups) else [rule] -%}
           {%- set r = namespace(thin=false) -%}
           {%- for g in groups -%}
           {%- set age = g.age if (g is mapping and g.age is defined and g.age) else [] -%}
@@ -184,11 +187,15 @@
           {%- endfor -%}
           {%- if seen.names | length < 2 -%}{%- set r.thin = true -%}{%- endif -%}
           {%- endfor -%}
-          {%- if r.thin -%}{%- set ns.thin = ns.thin + [rule.path_regex | default('(a rule with no path_regex)') | string] -%}{%- endif -%}
+          {%- if r.thin -%}
+          {%- set ns.thin = ns.thin + [rule.path_regex | default('(a rule with no path_regex)') | string] -%}
+          {%- endif -%}
           {%- endfor -%}
           {{ ns.thin | join(', ') }}
       ansible.builtin.debug:
-        msg: "Fewer than two age recipients for {{ _sops_thin }} - losing the control key would destroy those secrets. Add a break-glass recipient: docs/break-glass.md."
+        msg: >-
+          Fewer than two age recipients for {{ _sops_thin }} - losing the control key would destroy those secrets.
+          Add a break-glass recipient: docs/break-glass.md.
       when: _sops_thin | length > 0
 
     # ── 3b. Dedicated SSH key for reaching SSH-managed hosts ─────────────

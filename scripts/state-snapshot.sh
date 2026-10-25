@@ -6,9 +6,8 @@
 # Snapshots exactly the config/state-manifest.yml paths — the single boundary, so this
 # can never drift from what "state" means. Contents mirror the repo: SOPS-ENCRYPTED
 # secrets (safe to store) + inventory (holds lab IPs — keep the archive on trusted
-# media). No age key is included by design; a restore brings one separately (the control
-# key's off-box copy, or the offline break-glass key — docs/break-glass.md), so a leaked
-# snapshot alone can't decrypt anything.
+# media). No age key is included by design; a restore brings the control key separately (its
+# off-box copy), so a leaked snapshot alone can't decrypt anything.
 #
 # Usage:  scripts/state-snapshot.sh [<output-dir>]     # default: current dir
 # Restore: scripts/state-restore.sh <snapshot.tar.gz>
@@ -45,5 +44,5 @@ echo "Wrote $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"
 echo "Captured ${#PATHS[@]} state path(s):"
 printf '  - %s\n' "${PATHS[@]}"
 echo "NOTE: SOPS-encrypted secrets + inventory IPs inside; no age key is — a restore needs"
-echo "      the control key's off-box copy or the break-glass key (docs/break-glass.md)."
+echo "      the control key's off-box copy."
 echo "      Store this archive on trusted/offsite media."

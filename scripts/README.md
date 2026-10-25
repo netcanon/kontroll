@@ -78,8 +78,7 @@ drop-ins + group_vars, fleet selection, API recipes, dashboards) into a portable
 archive — restore anywhere with **no git** (`state-restore.sh <archive>` lays it back
 over a fresh base: code ⊕ state). The DR owner now that the instance, not GitHub, is the
 source of truth. SOPS-encrypted secrets + inventory IPs inside; no age key is included
-by design (a restore brings the control key's off-box copy, or the offline break-glass
-key — [docs/break-glass.md](../docs/break-glass.md)), so a leaked archive decrypts nothing. See
+by design (a restore brings the control key's off-box copy), so a leaked archive decrypts nothing. See
 [docs/local-source-of-truth.md](../docs/local-source-of-truth.md) (Phase C).
 
 ## `backup.sh` — optional offsite backup (pluggable remote)

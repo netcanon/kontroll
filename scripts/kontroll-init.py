@@ -10,7 +10,7 @@ that are chicken-and-egg for the GUI (it needs them to run) or that were manual 
   2b. with `--break-glass-recipient <age1…>` (or, with --fresh, `--mint-break-glass`), adds a break-glass recovery
      recipient to every domain BEFORE step 3, so a fresh node's first secrets are written to two recipients and
      never need a re-wrap. `--fresh` requires the choice (or `--no-break-glass`, which says what it costs) — the
-     same never-guess rule as --trust-mode. A minted key's private half is shown once and written nowhere;
+     same never-guess rule as --trust-mode. A minted key's private half is shown once and written to no file;
   3. mints the `dashboards` BOOTSTRAP secrets if absent — the onboard-GUI password (rendered to GUI_PASSWORD;
      the genuine chicken-and-egg — the GUI can't set the password it needs to start), the Grafana admin
      password, and the C10 API token — encrypted into the dashboards SOPS domain (the recipients from step 2).
@@ -288,8 +288,8 @@ def main(argv):
                          "of every domain. The private half never touches this node (preferred). Without --fresh: "
                          "the existing-instance procedure, docs/break-glass.md")
     bg.add_argument("--mint-break-glass", action="store_true",
-                    help="(with --fresh) mint the recovery key here and show its private half ONCE; nothing is "
-                         "written to disk. Store it offline before you continue. Needs a terminal")
+                    help="(with --fresh) mint the recovery key here and show its private half ONCE; kontroll "
+                         "writes it to no file. Store it offline before you continue. Needs a terminal")
     bg.add_argument("--no-break-glass", action="store_true",
                     help="(with --fresh) create the instance with ONE recipient per domain. Losing the control key "
                          "then destroys every secret (SECURITY.md R-KEY-1). For scratch instances")
@@ -443,7 +443,8 @@ def main(argv):
                   % (domain, applied["error"]), file=sys.stderr)
             return 1
         if applied["changed"]:
-            print("==> %s bootstrap secrets written (encrypted to the control key). SAVE these now:" % domain)
+            print("==> %s bootstrap secrets written (encrypted to every recipient .sops.yaml names). "
+                  "SAVE these now:" % domain)
             for v in plan["view"]:
                 if v["source"] in ("provided", "generated"):
                     shown = supplied.get(v["key"])

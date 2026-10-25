@@ -37,8 +37,8 @@ whole install sequence is the quickstart at the top of
    `--no-break-glass`, says that every domain has one recipient);
 5. fills `instance/instance.yml`'s `mgmt_ip` / `domain` from the flags (or leave them
    and edit by hand);
-6. mints the bootstrap `dashboards` login secrets, encrypted to your key and the
-   break-glass key.
+6. mints the bootstrap login secrets (the `dashboards` and `semaphore` domains),
+   encrypted to your key and to the break-glass key if you chose one.
 
 Add the scoped-Semaphore key afterward via the GUI **Keys** dialog — and a break-glass key the same way, or with
 [docs/break-glass.md](../docs/break-glass.md), if you declined one — then re-wrap:

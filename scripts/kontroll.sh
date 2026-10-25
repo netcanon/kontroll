@@ -85,7 +85,7 @@ verb="${1:-init}"
 # launch kit is a tarball extract with NO .git, so git-init it (the step scripts/install.sh does for the bundle path)
 # and capture the current tree — including a freshly-scaffolded instance/ — so the canonical seed has a HEAD to land.
 # Operator-owned, local-only, no remote. Idempotent: re-commits only when the tree changed (e.g. after fresh-init).
-# `shell` deploys nothing and captures nothing. It is the break-glass verb, and the only way to the image's sops on a
+# `shell` deploys nothing and captures nothing. It is the escape hatch, and the only way to the image's sops on a
 # host that has none — so a refusal of the gate below must not lock it out.
 if [ "$verb" != shell ]; then
   # A GIT_DIR exported in the operator's shell (some dotfile set-ups do) would send every git call below to THAT

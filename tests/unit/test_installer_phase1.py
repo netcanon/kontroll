@@ -10,6 +10,8 @@ parameterization (MF-1) and the host-task in-container guards (MF-6) must be pre
 """
 import os
 import re
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -66,6 +68,15 @@ def test_installer_is_ephemeral_and_portless():
     assert "ports" not in svc, "the installer must publish NO ports (portless — synthesis §5.5)"
     assert "restart" not in svc, "the installer must have NO restart policy (ephemeral one-shot — synthesis §5.5)"
     assert svc.get("network_mode") == "host", "the installer uses network_mode: host (localhost:3001 + host daemon)"
+
+
+def test_the_installer_container_keeps_no_log():
+    """The installer service's log driver is `none`: what `fresh-init` prints once — the bootstrap passwords and a
+    `--mint-break-glass` private key — reaches the operator's terminal and no Docker log. Guards the show-once
+    values landing in the daemon's json-file (until `--rm`), journald or a remote driver (beyond it) and, on a box
+    whose stack runs, in Loki through Vector's docker_logs source — measured with the real kontroll-init on a TTY
+    (T11 review). kontroll-init's own terminal check cannot see it: the container has a TTY."""
+    assert (_installer_service().get("logging") or {}).get("driver") == "none"
 
 
 def test_installer_uses_sops_age_key_file_not_literal_value():
@@ -216,15 +227,46 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
     assert "exit $rc" in block, "the scaffold's own exit code must survive the chown"
 
 
+# A route by which a script's output reaches a file or a log: a tee, the shell's own output redirected by `exec`,
+# `script` recording a terminal, `logger`.
+_LOG_ROUTE = re.compile(r"\btee\b|^\s*exec\s*[0-9]*>|\bscript\s+-|\blogger\b")
+
+
 def test_fresh_init_output_is_never_teed_to_a_log():
     """None of the three places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch
     kit's (scripts/kontroll.sh) and the image's dispatcher (docker/installer/entrypoint.sh) — routes output through
     `run_log_init` or a `tee`. Guards the show-once break-glass private key `kontroll-init --mint-break-glass` prints
-    landing in a persistent run log. A tee that also kept the container's terminal would not trip kontroll-init's
-    own non-terminal refusal, so this guard is the one that sees it; it passes today and guards the future."""
+    landing in a persistent run log — a `tee`, an `exec` redirect of the shell's output, `script` or `logger`. It
+    is the guard for the three scripts; the container's own log is held by
+    `test_the_installer_container_keeps_no_log`."""
     for rel in ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "docker/installer/entrypoint.sh"):
         for line in _active_lines(rel):
-            assert "run_log_init" not in line and not re.search(r"\btee\b", line), "%s: %s" % (rel, line)
+            assert "run_log_init" not in line and not _LOG_ROUTE.search(line), "%s: %s" % (rel, line)
+
+
+@pytest.mark.skipif(os.name == "nt" or not shutil.which("bash"),
+                    reason="runs the dispatcher's fresh-init branch in bash")
+def test_fresh_init_hands_the_scaffold_back_when_kontroll_init_refuses(tmp_path):
+    """The real docker/installer/entrypoint.sh, run as `fresh-init` with a `python3` that exits 3 and a `chown`
+    that records its arguments first on PATH, still hands `instance/` to the operator's uid and gid and exits 3.
+    Guards a refusal after the scaffold (kontroll-init's "could not add the break-glass recipient") ending the
+    dispatcher at a bare `rc=$?` — `set -e` exits on the failed command before it — and leaving the operator's
+    `instance/` root-owned, so the refusal's own remedy (correct the files) fails on permissions."""
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    log = tmp_path / "chown.log"
+    for name, body in (("python3", "exit 3"), ("chown", 'echo "$@" >> "%s"' % log)):
+        (stubs / name).write_text("#!/bin/sh\n%s\n" % body, encoding="utf-8")
+        (stubs / name).chmod(0o755)
+    (tmp_path / "instance").mkdir()
+    env = dict(os.environ, PATH="%s:%s" % (stubs, os.environ.get("PATH", "")), KONTROLL_REPO_ROOT=str(tmp_path),
+               KONTROLL_OPERATOR_UID="4242", KONTROLL_OPERATOR_GID="4243",
+               SOPS_AGE_KEY_FILE=str(tmp_path / "age" / "keys.txt"))
+    run = subprocess.run(["bash", os.path.join(ROOT, ENTRYPOINT), "fresh-init", "--no-break-glass"],
+                         capture_output=True, text=True, env=env, timeout=60)
+    assert run.returncode == 3, run.stderr
+    assert log.exists(), "the hand-back never ran"
+    assert "-R 4242:4243 %s/instance" % tmp_path in log.read_text(encoding="utf-8")
 
 
 def test_installer_bakes_the_core_base_without_fabricating_a_fleet():

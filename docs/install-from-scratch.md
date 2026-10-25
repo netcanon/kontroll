@@ -162,9 +162,10 @@ offline break-glass backup):
 > so Joe enters/generates creds in the browser and the box encrypts them — the agent never sees a value. Device
 > creds: `gui/app.py` `/api/onboard` (`--username/--password/--api-token` → SOPS). **Service/infra secrets:** the
 > **"Secrets"** dialog (`/api/secrets`, `secret-forms/<domain>.yml`). **age keys:** the **"Keys"** dialog
-> (`/api/keygen`, `key-roles/<role>.yml`) for break-glass/Semaphore/rotation. The only step that stays a CLI
-> bootstrap is the **first** control key + `GUI_PASSWORD` (`kontroll-init`, item E) — a running GUI can't mint
-> the key it needs to run. See SECURITY.md **C11**.
+> (`/api/keygen`, `key-roles/<role>.yml`) for Semaphore/rotation, and for break-glass on an instance created
+> without one. The steps that stay a CLI bootstrap are the **first** control key + `GUI_PASSWORD`
+> (`kontroll-init`, item E) — a running GUI can't mint the key it needs to run — and the break-glass choice
+> `--fresh` asks for before the first secret is written. See SECURITY.md **C11**.
 
 ## 3. The local canonical `/srv/kontroll.git` — **[A]** `ansible-playbook playbooks/local-canonical.yml`
 
@@ -329,7 +330,7 @@ kontroll-init showed once in §1; **not** the Semaphore password). Then the guid
 | To automate/GUI | Current state | Target |
 |---|---|---|
 | System prereqs (incl. Docker) | ~~manual apt~~ | ✓ `scripts/install-prereqs.sh` (idempotent; `./bootstrap.sh` shims it) |
-| age key-gen (break-glass / Semaphore / rotation) | ~~manual `age-keygen`~~ | ✓ GUI "Keys" dialog (`/api/keygen`, show-once private, additive `.sops.yaml`, staged) |
+| age key-gen (Semaphore / rotation; break-glass when declined at `--fresh`) | ~~manual `age-keygen`~~ | ✓ GUI "Keys" dialog (`/api/keygen`, show-once private, additive `.sops.yaml`, staged) |
 | first control key + `GUI_PASSWORD` | ~~manual `age-keygen` / `openssl`~~ | ✓ CLI `scripts/kontroll-init.py` — the bootstrap a running GUI can't do |
 | All service/infra secrets | manual `sops` | **per-domain GUI onboarding forms** (the main ask) |
 | Recursive canonical write-grant | ~~manual `chgrp/chmod`~~ | ✓ idempotent `local-canonical.yml` detect-then-apply pair (`kontroll-canonical.py --normalise`) |

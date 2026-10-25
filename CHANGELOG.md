@@ -13,15 +13,16 @@ NetConfig project.
 
 ### feat(scripts): a new instance gets a break-glass recipient before its first secret, unless the operator declines one (T11, 2026-10-23)
 
-SECURITY.md said every secret had two recipients: the control key and an offline break-glass key. It was false for
-every instance. `kontroll-init --fresh` wrote a `.sops.yaml` naming only the minted control key, so losing that key
-destroyed every device credential, API token and service password in the instance (R-KEY-1).
+SECURITY.md C1 had said since 2026-07-28 that break-glass was not implemented, but its key-management paragraph
+still said that losing the control key was recoverable because every secret was encrypted to both recipients. No
+instance had a second recipient: `kontroll-init --fresh` wrote a `.sops.yaml` naming only the minted control key, so
+losing that key destroyed every device credential, API token and service password in the instance (R-KEY-1).
 
 - **Changed (breaking for a scripted install).** `kontroll-init --fresh`, and so `fresh-init`, refuses to run
   without a break-glass choice:
   - `--break-glass-recipient <age1…>`: the public half of a key made on another machine (preferred);
-  - `--mint-break-glass`: minted on the node, with its private half printed once in a delimited block and written
-    nowhere;
+  - `--mint-break-glass`: minted on the node, with its private half printed once in a delimited block; kontroll
+    writes it to no file, and the installer container keeps no log;
   - `--no-break-glass`: one recipient per domain; the run says what that costs.
   The choice is applied under both recipient anchors (the groups `key-roles/break-glass.yml` names) before the
   first secret is written, so a fresh instance never needs a re-wrap. A scaffold command copied from an older
@@ -29,7 +30,7 @@ destroyed every device credential, API token and service password in the instanc
 - **Refusals, before anything is written:**
   - a private key passed as the recipient (not echoed back), or a value that is not an age public key;
   - the control key's own public half;
-  - `--mint-break-glass` when standard output is not a terminal, so the key cannot land in a pipe or a log;
+  - `--mint-break-glass` when standard output is not a terminal, so the key cannot land in a pipe or a file;
   - `--mint-break-glass` or `--no-break-glass` on an existing instance;
   - `--break-glass-recipient` without `--fresh` where no control key file exists. The non-fresh path would
     otherwise mint a control key and add it to every domain first.
@@ -44,11 +45,19 @@ destroyed every device credential, API token and service password in the instanc
 - **Security.**
   - The bootstrap play's warning counts recipients per creation rule. It used to count across rules, so a second
     recipient on one rule hid a rule with one.
-  - SECURITY.md C1, C8, C11 and R-KEY-1 state three cases: an instance with a second recipient from its first
-    secret; one with a single recipient until the runbook is run; and in either case, that kontroll cannot know
-    whether anyone kept the private half.
+  - SECURITY.md C1 and R-KEY-1 state three cases: an instance with a second recipient from its first secret; one
+    with a single recipient until the runbook is run; and in either case, that kontroll cannot know whether
+    anyone kept the private half. C8 conditions the offline half on a recipient having been added; C11 describes
+    the CLI's show-once path.
   - `tests/unit/test_break_glass_claim_is_honest.py` runs `--fresh` for each choice and holds C1 to what it writes.
-  - No launcher routes `fresh-init` through a run log or a `tee` (`tests/unit/test_installer_phase1.py`).
+  - The installer container keeps no log (`logging: none` in `docker/services/installer.yaml`). Through either
+    launcher, what `fresh-init` printed once — the bootstrap passwords, and now a minted break-glass key — reached
+    the Docker log driver: json-file until `--rm` removed the container, journald or a remote driver beyond it,
+    and Loki through Vector's docker_logs source on a box whose stack runs. The terminal still shows every line.
+  - No launcher routes `fresh-init` through a run log, a `tee` or an `exec` redirect
+    (`tests/unit/test_installer_phase1.py`).
+  - A refusal after the scaffold (`could not add the break-glass recipient`) left `instance/` root-owned: the
+    dispatcher read the exit code with a bare `rc=$?` under `set -e`, so the hand-back never ran. It runs now.
   - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).
 
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)

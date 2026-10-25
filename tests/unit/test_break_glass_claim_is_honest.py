@@ -41,9 +41,15 @@ _CHOICES = {"recipient": ["--break-glass-recipient", "age1honestybreakglasspub00
             "mint": ["--mint-break-glass"],
             "none": ["--no-break-glass"]}
 # A sentence that claims the control key's loss is survivable must carry the condition that makes it true.
-_CLAIM = re.compile(r"\brecoverable\b|\bboth recipients\b|\+ offline break-glass", re.I)
-_CONDITION = re.compile(r"\b(where|if|unless|until|only|once)\b", re.I)
-_SECOND = re.compile(r"second recipient|break-glass recipient|break-glass key", re.I)
+_CLAIM = re.compile(r"\brecoverable\b|\bsurvivable\b|\b(encrypted|wrapped) to (both|two)\b|every secret ha[sd] two "
+                    r"recipients|no longer (catastrophic|a single point)|\+\s*(an\s+)?offline break-glass", re.I)
+# The condition must govern the recipient's existence ("where a break-glass recipient was added"), not merely
+# co-occur with it ("if the control key is lost … with the break-glass key").
+_GUARD = re.compile(r"\b(where|if|unless|only where|once)\b[^.]*?\b(break-glass|second) recipient\b[^.]*?"
+                    r"\b(is|was|were|has been)\s+(added|chosen|kept)\b", re.I)
+# A sentence that reports what the document once said.
+_HISTORY = re.compile(r"\b(once said|previously claimed|was false)\b", re.I)
+_BREAK_GLASS_DOC = os.path.join(_ROOT, "docs", "break-glass.md")
 
 
 def _load_init():
@@ -96,12 +102,14 @@ def _risk_row(text, risk):
 
 
 def unconditional_claims(text):
-    """The sentences of `text` that say the control key's loss is recoverable, or that every secret is encrypted to
-    both recipients, or that the key is kept "+ offline break-glass" — without both a condition and the second
-    recipient it depends on. Markdown line breaks are joined before the text is split into sentences."""
+    """The sentences of `text` that say the control key's loss is recoverable or survivable, that every secret is
+    encrypted to two recipients, that the key is no longer a single point, or that it is kept "+ offline
+    break-glass" — unless a condition in the same sentence governs the second recipient's existence, or the
+    sentence reports what the document once said. Markdown line breaks are joined before the text is split into
+    sentences."""
     flat = re.sub(r"\s+", " ", text)
     return [s for s in re.split(r"(?<=[.!?])\s+(?=[A-Z*(`\[])", flat)
-            if _CLAIM.search(s) and not (_CONDITION.search(s) and _SECOND.search(s))]
+            if _CLAIM.search(s) and not (_GUARD.search(s) or _HISTORY.search(s))]
 
 
 def test_the_template_recipient_count_is_visible_at_all():
@@ -141,19 +149,25 @@ def test_the_doc_claim_matches_what_fresh_actually_produces(tmp_path, monkeypatc
 
 
 def test_no_unconditional_recoverable_claim_survives():
-    """No sentence of C1 or C8 says the control key's loss is recoverable, that every secret is encrypted to both
-    recipients, or that the key is kept "+ offline break-glass", without a condition and the second recipient it
-    rests on. The rule is shown to catch the two sentences that stood in C1 and C8 until T11 and to pass a
-    conditional one. Guards an unconditional claim — true only of an instance someone gave a second recipient —
-    being read as true of every instance, the reasoning a reclaim decision would rest on (the sentence C1 carried,
-    which the test before T11 did not see)."""
+    """No sentence of C1, C8, C11 or docs/break-glass.md makes the claim `unconditional_claims` reads for, unless a
+    condition governs the second recipient's existence. The rule is shown to catch the two sentences that stood in
+    C1 and C8 until T11, and three rewordings the first rule passed (the T11 review: no keyword, a condition on
+    the loss rather than the recipient, "+ an offline"), and to pass a conditional one. Guards an unconditional
+    claim — true only of an instance someone gave a second recipient — being read as true of every instance, the
+    reasoning a reclaim decision would rest on (the sentence C1 carried, which the test before T11 did not see)."""
     text = _security_text()
-    for heading in ("C1", "C8"):
+    for heading in ("C1", "C8", "C11"):
         assert unconditional_claims(_section(text, heading)) == [], heading
+    with open(_BREAK_GLASS_DOC, encoding="utf-8") as fh:
+        assert unconditional_claims(fh.read()) == [], "docs/break-glass.md"
     assert len(unconditional_claims(
         "Losing it is **recoverable** via the offline break-glass key (every\nsecret is encrypted to both "
         "recipients), so it is no longer a single point. The age key is on the VM + offline break-glass, never in "
         "any of those artifacts.")) == 2
+    for reworded in ("Losing the control key is no longer catastrophic: every secret is encrypted to two recipients.",
+                     "If the control key is lost, every secret stays recoverable with the offline break-glass key.",
+                     "The age key is kept on the VM + an offline break-glass copy, so its loss is survivable."):
+        assert len(unconditional_claims(reworded)) == 1, reworded
     assert unconditional_claims("Losing it is recoverable only where a break-glass recipient was added.") == []
 
 

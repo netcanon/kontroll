@@ -44,6 +44,8 @@ def test_the_runbook_uses_the_tools_own_commands():
     assert "--break-glass-recipient" in _init_help()
     assert "kontroll-init.py --break-glass-recipient age1" in doc
     assert "scripts/kontroll-installer.sh shell" in doc
-    assert "kontroll-installer.sh playbooks/local-canonical.yml --check --diff" in doc
+    dry = doc.index("kontroll-installer.sh playbooks/local-canonical.yml --check --diff")
+    assert re.search(r"kontroll-installer\.sh playbooks/local-canonical\.yml\n", doc[dry:]), \
+        "the landing's apply follows its dry run"
     assert re.search(r"git add -- instance/\.sops\.yaml instance/secrets\b", doc)
     assert not re.search(r"git add (-A|--all|\.)(\s|$)|git commit -a", doc)

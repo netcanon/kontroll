@@ -50,8 +50,10 @@ case "$verb" in
     # needed sudo (live-caught, 2026-07-28). MF-1 already injects the invoking operator's identity for exactly
     # this class of problem; it just never covered the fresh-init artifacts. Same numeric-uid discipline as
     # local-canonical.yml: the host operator has no /etc/passwd entry in here, so a NAME cannot resolve.
-    python3 "$REPO/scripts/kontroll-init.py" --fresh "$@"
-    rc=$?
+    # `|| rc=$?`, not a bare `rc=$?` on the next line: under `set -e` a refusal would end the script there, before
+    # the chown, and leave a scaffold it had already written root-owned (a refusal after step 0 does).
+    rc=0
+    python3 "$REPO/scripts/kontroll-init.py" --fresh "$@" || rc=$?
     if [ -n "${KONTROLL_OPERATOR_UID:-}" ]; then
       gid="${KONTROLL_OPERATOR_GID:-$KONTROLL_OPERATOR_UID}"
       # Best-effort: a chown failure must not fail a scaffold that otherwise succeeded — the operator can still
@@ -70,7 +72,7 @@ case "$verb" in
     exec python3 "$REPO/scripts/configure-semaphore.py" "$@"
     ;;
   shell)
-    # Break-glass: an interactive shell in the installer image to debug a failed apply. Ephemeral (run --rm).
+    # The escape hatch: an interactive shell in the installer image to debug a failed apply. Ephemeral (run --rm).
     exec /bin/bash "$@"
     ;;
   *)

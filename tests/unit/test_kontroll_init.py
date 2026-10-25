@@ -11,6 +11,7 @@ model; a non-idempotent init would churn secrets on every re-run.
 import importlib.util
 import os
 import shutil
+import sys
 
 import pytest
 
@@ -395,17 +396,19 @@ def test_no_break_glass_is_explicit_and_says_what_it_costs(fresh_repo, monkeypat
 
 @pytest.mark.parametrize("recipient,expect", [
     (BG_PRIVATE, "was given a PRIVATE key"),
+    (" " + BG_PRIVATE.lower(), "was given a PRIVATE key"),
     ("age1short", "is not an age public key"),
     ("age1BREAKGLASSUPPERCASEPUB000000000000000000000000000000", "is not an age public key"),
     (BG + "," + MINTED, "is not an age public key"),
-], ids=["private-key", "too-short", "upper-case", "two-joined"])
+], ids=["private-key", "private-key-lower-padded", "too-short", "upper-case", "two-joined"])
 def test_a_malformed_or_private_recipient_is_refused_before_any_write(fresh_repo, monkeypatch, capsys,
                                                                      recipient, expect):
     """A `--break-glass-recipient` that is a PRIVATE key, or is not an age public key as age-keygen prints one, exits
-    1 before anything is written, and the value is not echoed back; a valid key with more after it (two keys
-    joined by a comma) is refused whole. Guards a typo creating a recipient nobody can decrypt with (every later
-    secret written to it), a check that reads only a valid prefix, and a private key pasted by mistake being printed
-    to the terminal or its log a second time."""
+    1 before anything is written, and the value is not echoed back; a private key in lower case or with a space
+    before it is still named as one; a valid key with more after it (two keys joined by a comma) is refused whole.
+    Guards a typo creating a recipient nobody can decrypt with (every later secret written to it), a check that reads
+    only a valid prefix, a private key pasted by mistake being printed to the terminal or its log a second time, and
+    a lower-cased or padded one losing the advice that names it a private key."""
     _mock_fresh_seams(monkeypatch)
     monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
     assert ki.main(_FRESH + ["--break-glass-recipient", recipient]) == 1
@@ -480,6 +483,23 @@ def test_a_recipient_without_fresh_and_no_control_key_is_refused_and_mints_nothi
     err = capsys.readouterr().err
     assert "no control key" in err and "kontroll-installer.sh shell" in err
     assert open(sops_path, encoding="utf-8").read() == before and not os.path.exists(ki.AGE_KEY_FILE)
+
+
+def test_the_terminal_check_reads_standard_output(monkeypatch):
+    """`_stdout_is_terminal` follows standard output alone: True when only standard output is a terminal, False
+    when only standard input and standard error are. Guards the MF-05 seam reading the wrong stream — with it,
+    `--mint-break-glass > file` run with standard error on a terminal would print the private key into the file."""
+    class _Stream:
+        def __init__(self, tty):
+            self._tty = tty
+
+        def isatty(self):
+            return self._tty
+    for out, other, want in ((True, False, True), (False, True, False)):
+        monkeypatch.setattr(sys, "stdout", _Stream(out))
+        monkeypatch.setattr(sys, "stderr", _Stream(other))
+        monkeypatch.setattr(sys, "stdin", _Stream(other))
+        assert ki._stdout_is_terminal() is want
 
 
 def test_mint_refuses_when_standard_output_is_not_a_terminal(fresh_repo, monkeypatch, capsys):

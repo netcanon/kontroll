@@ -18,9 +18,10 @@ stack. Design-of-record: [docs/reviews/2026-06-29-compose-native-install/99-synt
 
 The sequence is written once: the quickstart at the top of
 [docs/install-from-scratch.md](../../docs/install-from-scratch.md) — the prerequisites, `fresh-init` with its
-`--trust-mode`, the three overlay files, `check`, the bare launcher, `configure-semaphore`. This file is the
-reference for what runs it: the verbs, the security model, and why the fragment is standalone. (The C10 canonical
-group, gid 1001, is provisioned by `install-prereqs.sh` and re-ensured by the launchers; there is no manual step.)
+`--trust-mode` and its break-glass choice, the three overlay files, `check`, the bare launcher,
+`configure-semaphore`. This file is the reference for what runs it: the verbs, the security model, and why the
+fragment is standalone. (The C10 canonical group, gid 1001, is provisioned by `install-prereqs.sh` and re-ensured
+by the launchers; there is no manual step.)
 
 The image is built locally on every `kontroll-installer.sh` run (`docker compose run --build` — near-noop when
 nothing changed, but a bundle update that changes the Dockerfile is always reflected). A fleet change does **not**

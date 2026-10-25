@@ -44,7 +44,8 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 - The onboard form's "install + verify (after promote)" checkbox changes nothing → not yet scheduled.
 - An instance created before `kontroll-init --fresh` asked for a break-glass choice, or with `--no-break-glass`,
   has one recipient per domain until docs/break-glass.md is run on it; and whether a break-glass key opens every
-  domain is checked by hand only (SECURITY.md R-KEY-1) → the operator's.
+  domain is checked by hand only (SECURITY.md R-KEY-1) → an operator action per instance: docs/break-glass.md,
+  then its Verify.
 - No gate checks that a task handling a credential carries `no_log` → SECURITY.md C2 (planned).
 - A second apply reporting `0 changed` is checked by hand, and no run of it is recorded here → not yet scheduled.
 

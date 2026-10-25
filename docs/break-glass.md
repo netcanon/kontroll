@@ -22,7 +22,7 @@ choice before the first secret is written, so a fresh instance never needs a re-
 | Choice | What happens | When |
 |---|---|---|
 | `--break-glass-recipient <age1…>` | the PUBLIC half of a key you made on another machine is added to every domain; its private half never touches the node | **preferred** |
-| `--mint-break-glass` | kontroll mints the key on the node and shows its private half **once**, on the terminal; it is written nowhere. It refuses when standard output is not a terminal (a pipe, a file, a captured run), because the key would land in that log | an interactive install with no second machine at hand |
+| `--mint-break-glass` | kontroll mints the key on the node and shows its private half **once**, on the terminal; kontroll writes it to no file, and the installer container keeps no log. It refuses when standard output is not a terminal (a pipe, a file, a captured run), because the key would land in that log | an interactive install with no second machine at hand |
 | `--no-break-glass` | every domain has ONE recipient, the control key; the run says what that costs | a scratch instance you will throw away |
 
 To make the key for `--break-glass-recipient`, on a trusted machine that is **not** the control node, in a directory

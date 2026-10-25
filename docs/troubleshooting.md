@@ -328,21 +328,22 @@ exit but 0 the worktree keeps its commit and the canonical is untouched.
 
 ## 11. kontroll-init refused the break-glass choice
 
-`kontroll-init` checks the break-glass flags before it writes anything: every refusal below leaves `instance/` and
-the key directory as they were, and exits non-zero. The choices and the runbook are
+`kontroll-init` checks the break-glass flags before it writes anything: every refusal below but the last leaves
+`instance/` and the key directory as they were, and exits non-zero. The choices and the runbook are
 [break-glass.md](break-glass.md).
 
 | What you read | What it means | What to do |
 |---|---|---|
 | `--fresh requires a break-glass choice` | `--fresh` (the installer's `fresh-init`) was given none of the three | add `--break-glass-recipient <age1…>` (preferred), `--mint-break-glass` or `--no-break-glass` |
 | `--mint-break-glass and --no-break-glass are choices for --fresh` | one of them was passed to an existing instance | on an existing instance, make the key on another machine and run [break-glass.md](break-glass.md) |
-| `--break-glass-recipient was given a PRIVATE key` | the value starts `AGE-SECRET-KEY`; it is not echoed back | pass the `age1…` line instead, and clear the private key from your shell history (`history -d`, or the history file) |
+| `--break-glass-recipient was given a PRIVATE key` | the value starts `AGE-SECRET-KEY`; it is not echoed back | treat that key as exposed: it was typed on the node a break-glass key must never reach, and sat on the run's command line. Discard it, make a new one on the other machine and pass its `age1…` line; clear the old one from your shell history (`history -d`, or the history file) |
 | `--break-glass-recipient is not an age public key` | the value is not `age1` followed by lower-case letters and digits | copy the `Public key:` line `age-keygen` printed, whole |
 | `no control key at …, and without --fresh kontroll-init never mints one` | the command ran where the control key is not mounted (on the host floor, outside the installer shell) | run it in `scripts/kontroll-installer.sh shell`, or name the key with `--key-file` |
 | `the break-glass recipient is this node's control key` | the value is the control key's own public half | make a second key on another machine; a copy of the control key is not a second recipient |
 | `--mint-break-glass shows a private key once, and standard output is not a terminal` | the run's output goes to a pipe, a file or a captured log | run it on a terminal, or make the key elsewhere and pass `--break-glass-recipient` |
+| `could not mint the break-glass key (is age-keygen installed?)` | the mint failed before anything was written, most likely on the legacy host toolchain without `age-keygen` | run it through `fresh-init` (the image has age), or make the key elsewhere and pass `--break-glass-recipient` |
 | `the break-glass key role (key-roles/break-glass.yml) is missing or names no recipient groups` | the shipped role file is gone or emptied, so kontroll-init cannot tell which anchors take the key | restore `key-roles/break-glass.yml` from the release |
-| `could not add the break-glass recipient to .sops.yaml: …` | the control recipient was written and the break-glass one was not | nothing was encrypted yet: correct what the sentence names, then add the key with [break-glass.md](break-glass.md) before any secret is written |
+| `could not add the break-glass recipient to .sops.yaml: …` | `.sops.yaml` names the control key but not the break-glass key. On a fresh node no secret was written yet; on an existing instance the files are as they were | correct what the sentence names, then add the key with [break-glass.md](break-glass.md) (re-running `fresh-init` is refused once `.sops.yaml` names a key) |
 
 ## See also
 - [break-glass.md](break-glass.md) — the break-glass key: the choice at install and the runbook for an instance without one

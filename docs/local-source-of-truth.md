@@ -118,8 +118,8 @@ onboarding a device + running it requires zero GitHub.
   no git) and [scripts/state-restore.sh](../scripts/state-restore.sh) lays it back over a
   fresh base. **Verified:** the archive holds only state (secrets/inventory/fleet/recipes/
   dashboards) — **zero code** — and round-trips clean. No age key is included by design
-  (a restore brings the control key's off-box copy, or the offline break-glass key —
-  [break-glass.md](break-glass.md)), so a leaked snapshot alone decrypts nothing.
+  (a restore brings the control key's off-box copy), so a leaked snapshot alone decrypts
+  nothing.
 - **Git-free install/update — done.** [scripts/make-bundle.sh](../scripts/make-bundle.sh)
   builds a release bundle (product code at HEAD, **minus the entire `instance/` overlay** +
   internal `docs/reviews/` snapshots — it ships the `instance.example/` stub only);
