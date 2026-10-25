@@ -313,11 +313,13 @@ def test_the_scaffold_takes_the_backend_default_domain(probed):
     {"auth": [{"field": "password", "kind": "password", "maps_to": "{cred_key}-pw"}]},      # renders to no var name
     {"auth": [{"field": "password", "kind": "password", "maps_to": "{host}_pw"}]},          # a placeholder it lacks
     {"requires": [], "derive_params": {"a" * 65: "{name}"}},                                # one past `requires:`
+    {"requires": [], "derive_params": {"r\u00e9seau": "{name}"}},                           # not ASCII
 ], ids=["domain-path", "domain-bool", "domain-null", "param-typo", "param-jinja", "param-list", "param-name",
-        "param-name-unrequired", "maps-to-dash", "maps-to-unknown", "param-name-len65"])
+        "param-name-unrequired", "maps-to-dash", "maps-to-unknown", "param-name-len65",
+        "param-name-non-ascii"])
 def test_a_registry_default_that_does_not_render_is_repository_data(probed, change):
     """A default domain that is not a valid name, a `derive_params` template that does not render or names a param
-    that is not an identifier or is longer than the 64 characters a `requires:` entry may hold (one the backend
+    that is not an ASCII identifier or is longer than the 64 characters a `requires:` entry may hold (one the backend
     requires or not), and a `maps_to` template that does not render to a variable name are the registry's fault:
     RepositoryDataError (409 `repository_data`), never a 422 blaming the request and never a written var. Guards a
     descriptor typo reaching the module file or the drop-in (a param's name is a key of the module file's
@@ -325,7 +327,8 @@ def test_a_registry_default_that_does_not_render_is_repository_data(probed, chan
     the `requires` filter (mutant M4 of T18's fold read), where the CHANGELOG says every name is held. The
     65-character row is a row because a key rule one longer than the `requires:` rule passed every suite, and the
     key, which could then never be required, was skipped where it is refused (T18's fold-6 read, N2: its mutant
-    S2)."""
+    S2). The non-ASCII row is a row because a key rule that took any Python identifier let such a key by the same
+    way (its fold-7 read, N2: mutants S4 and S5)."""
     probed(**CLICONF)
     bdef = _lab(**dict({"default_secrets_domain": "lab"}, **change))
     with pytest.raises(paths.RepositoryDataError):
@@ -536,21 +539,22 @@ def test_a_connection_value_that_reads_no_var_plans_as_written(probed, derive, v
 
 
 @pytest.mark.parametrize("looped", ["v: &a [*a]", "v: &a [[*a]]", "v: &a {k: *a}", "v: [x, &a [*a]]",
-                                    "v: &a [{k: [*a]}]"],
-                         ids=["self-list", "two-level", "self-map", "below-root", "three-level"])
+                                    "v: &a [{k: [*a]}]", "v: &a " + "[" * 32 + "*a" + "]" * 32],
+                         ids=["self-list", "two-level", "self-map", "below-root", "three-level", "deep"])
 @pytest.mark.parametrize("requires", [["network_os"], []], ids=["required", "not-required"])
 def test_a_connection_value_that_holds_itself_is_repository_data(probed, requires, looped):
     """A backend whose `connection:` value holds itself (a recursive YAML alias: a container met again anywhere on
-    its own path — one, two or three levels down, through a map, or below the root) is refused as repository data naming
-    the connection var, whether the backend requires a param or not; a value that holds one list twice (an alias
-    used twice, no cycle) plans.
+    its own path — one, two, three or thirty-two levels down, through a map, or below the root) is refused as
+    repository data naming the connection var, whether the backend requires a param or not; a value that holds one
+    list twice (an alias used twice, no cycle) plans.
 
     Guards the planner's template walk recursing until Python stops it: the API answered 500 where a malformed
     registry answers 409, for a backend whose params the rule never refuses too (T18's fold-4 read, N7). The
     two-level, map and below-root rows are rows because a walk that remembered only the parent, checked lists
     only, or checked the root only still caught `&a [*a]` (its fold-5 read, N3: mutants W1, W2 and W3), and the
     three-level row because a walk that remembered only the last two containers caught every two-level cycle (its
-    fold-6 read, N3: mutant W9)."""
+    fold-6 read, N3: mutant W9), and the deep row because a walk that remembered the last three containers caught
+    every three-level cycle (its fold-7 read, N4: mutant W15); no window a walk would keep is thirty-two long."""
     probed(**CLICONF)
     looped = yaml.safe_load(looped)["v"]
     bdef = _lab(default_secrets_domain="lab", requires=requires,

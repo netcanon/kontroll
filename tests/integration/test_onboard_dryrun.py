@@ -122,9 +122,10 @@ def _seed_class(tmp_repo, key="edgeos", collection="acme.edgeos"):
 
 
 def test_onboard_reuses_existing_class_not_clobbers_it(tmp_repo, mock_probe, capsys):
-    """Onboarding a collection the class under its key already declares REUSES the curated module — it is left
-    byte-for-byte unchanged (its metrics:/backup: blocks survive) and only the inventory host + fleet-enable are
-    written.
+    """Onboarding a collection the class under that key already declares (or, under a class with
+    `collections: []`, a collection ansible-core ships — the S24 test below) REUSES the curated module — it is
+    left byte-for-byte unchanged (its metrics:/backup: blocks survive) and only the inventory host + fleet-enable
+    are written.
 
     WHY (the live defect this guards): the operator's Overwrite replaced the rich shipped cisco_ios module with
     a 13-line minimal stub on .50 main, silently stripping its telemetry/backup capability and breaking the
