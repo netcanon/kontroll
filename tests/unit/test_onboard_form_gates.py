@@ -47,3 +47,23 @@ def test_onboard_form_template_wires_both_gates():
     assert "function onbPristine" in html                                   # collapse-gate predicate
     assert "btn.disabled = open && !onbPristine" in html                    # toggle disabled while the form is dirty
     assert "push:(g('push') ? g('push').checked : false)" in html           # submit guards the now-optional box
+
+
+def test_the_collapse_gate_counts_a_typed_secrets_domain_as_input():
+    """The onboard form's collapse predicate reads the secrets-domain box among its named fields. Guards the box,
+    which ships empty since S27 (its placeholder names the backend's default), being dropped from the list: a typed
+    domain would then be discarded by a collapse with no question asked (mutant G of T18's read, D5)."""
+    html = open(os.path.join(ROOT, "gui", "templates", "index.html"), encoding="utf-8").read()
+    assert "const named = ['group','host','host_name','secrets'].map(" in html
+
+
+def test_the_domain_box_says_a_domain_is_required_when_the_backend_names_no_default():
+    """The onboard form's domain-box placeholder falls back, for a backend whose registry entry declares no default
+    domain, to a line saying one is required, and, for a request that names no backend, to the backend's default.
+
+    Guards the box going silently blank for such a backend (T18's read, D13; mutant M5 of its fold read restored the
+    former `if (sd && r.secrets)` line and survived every suite): the operator would then submit no domain and meet
+    a refusal the form never warned of."""
+    html = open(os.path.join(ROOT, "gui", "templates", "index.html"), encoding="utf-8").read()
+    assert "if (sd) sd.placeholder = r.secrets || (backend ? 'required — this backend names no default domain'" in html
+    assert ": \"the backend's default\");" in html          # no backend named (fold-2 read, N3: X6)

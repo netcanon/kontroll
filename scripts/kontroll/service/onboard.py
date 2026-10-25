@@ -8,7 +8,8 @@ Split into the API-ready shape the workstream calls for:
   * apply_onboard_plan — performs the repo mutations for a plan (idempotent no-clobber
     writes + fleet-enable + SOPS encrypt), prints progress (the exemplar's pattern), and
     returns {"changed","paths"}.
-Onboarding a device whose CLASS already exists REUSES the curated module (adds only the host
+Onboarding a collection that the class under the device-class key already declares (under a class with
+`collections: []`, a collection ansible-core ships) REUSES the curated module (adds only the host
 + fleet-enable) rather than regenerating a minimal one that would strip its metrics:/backup:/
 logs: blocks (#124); the inventory drop-in MERGES so a 2nd device of a class never drops the
 1st. A genuinely DIFFERENT class colliding on a key still hard-stops (WriteConflict) unless the
@@ -26,7 +27,7 @@ import yaml
 
 from kontroll import authspec, catalog, gitio, paths, predicate, probe
 from kontroll.service._validate import plain_scalar
-from kontroll.service.classify import derive_class_capabilities, suggest_telemetry
+from kontroll.service.classify import derive_class_capabilities, requires_of, suggest_telemetry
 
 log = logging.getLogger("kontroll.service.onboard")
 
@@ -40,9 +41,10 @@ _INV_BANNER = "# Drop-in host, onboarded by scripts/galaxy.py onboard. Additive 
 def _existing_module(key):
     """Parse modules/<key>/module.yml via the modules overlay (paths.module_file — the write_root clone shadows the
     baked ROOT, Phase-B Fork B) if it exists, else None. This is the SHIPPED/already-onboarded device-class we must
-    REUSE rather than clobber when onboarding another device of the same class (#124): regenerating a minimal module
-    here would strip the curated metrics:/backup:/logs: blocks. Resolved so a baked deploy sees an operator class in
-    the propose clone AND a pristine shipped class in the image; a file that cannot be read or parsed degrades to
+    REUSE rather than clobber when onboarding a collection that class already declares (under a class with
+    `collections: []`, a collection ansible-core ships) (#124): regenerating a minimal module here would strip the
+    curated metrics:/backup:/logs: blocks. Resolved so a baked deploy sees an operator class in the propose clone
+    AND a pristine shipped class in the image; a file that cannot be read or parsed degrades to
     None (treated as absent → the normal generate path, which then no-clobbers). A file that parses to something
     other than a mapping — a list, a bare word — is neither absent nor a class: it is answered as the file it is
     (RepositoryDataError), not as the AttributeError its first `.get` would be."""
@@ -72,6 +74,14 @@ def _module_collections(mod):
 
 
 _STEM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+# A backend `connection:` value that is one bare `{{ param }}` — the only form the planner fills from the derived
+# params — and what makes ansible-core 2.19 template a string that can read a var (_jinja_bits.is_possibly_template,
+# less the comment marker): a `{{` or `{%` anywhere, or a `#jinja2:` override header. Every word of such a value
+# counts (T18's fold-3 read, S1: an unclosed `{{`, a `}}` inside a string literal and a header that changes the
+# delimiters each named a param a match of whole blocks did not see).
+_BARE_HOLE_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\Z")
+_TEMPLATED_RE = re.compile(r"\{[{%]|\A#jinja2:")
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NOT_A_NAME = "%s is a word YAML reads as another type (null, a boolean, a number, a date)"
 
 
@@ -160,6 +170,83 @@ def _role_of(bdef, key, from_request):
             "backend", "the backend registry entry chosen for the %s device class holds a `role` that is not a "
             "valid name — correct that entry (its backend.yml under ansible/backends/)" % key)
     return role
+
+
+def default_secrets_domain(bdef, backend):
+    """The SOPS domain a class of `backend` stores its credentials in when neither the request nor a reused class
+    names one: what its registry entry declares (`default_secrets_domain`, S27 — `network` for every shipped
+    backend), or None where it declares none. It becomes a path, the module file's `secrets_domain` and part of a
+    lookup expression, so a declared one is held to the request field's rule; one that fails is the registry's
+    fault, answered as repository data naming the backend (a registry name), never as the request's."""
+    domain = (bdef or {}).get("default_secrets_domain")
+    if domain is None:
+        return None
+    if not (paths.is_component(domain) and plain_scalar(domain)):
+        raise paths.RepositoryDataError(
+            "backend registry", "the %s backend's default_secrets_domain is not a valid name — correct its "
+            "backend.yml under ansible/backends/" % backend)
+    return domain
+
+
+def _secrets_domain(secrets, bdef, backend):
+    """The domain a plan or a scaffold stores credentials in: the one already chosen (the request's, or a reused
+    class's), else the backend's default. With neither, the request must name one: refused as the `secrets domain`
+    field (a 422), since naming one is the remedy."""
+    secrets = secrets or default_secrets_domain(bdef, backend)
+    if secrets is None:
+        raise paths.RequestBoundaryError(
+            "secrets domain", "secrets domain is required: the backend's registry entry declares no default "
+            "(default_secrets_domain)" if bdef else "secrets domain is required: the backend is not one this "
+            "install ships, so it declares no default")
+    return secrets
+
+
+def _jinja_reads(value, _within=()):
+    """Every word of a value ansible-core would template — a string holding a `{{` or a `{%`, or opening with a
+    `#jinja2:` header — or of each such string a list, a set or a map holds, a key too, at any depth. A quoted word, a
+    comment and an attribute count: fail closed. A name built at render time (`vars[...]`, or `lookup('vars', ...)` of a
+    joined key) is no word of the value and is not seen. A container that holds itself (a recursive YAML alias, `&a
+    [*a]`) raises ValueError: no render of it succeeds, and the walk would recurse until Python stops it (T18's fold-4
+    read, N7)."""
+    if isinstance(value, str):
+        return set(_NAME_RE.findall(value)) if _TEMPLATED_RE.search(value) else set()
+    if not isinstance(value, (dict, list, tuple, set, frozenset)):
+        return set()
+    if id(value) in _within:
+        raise ValueError("a value that holds itself")
+    within = _within + (id(value),)
+    items = list(value) + list(value.values()) if isinstance(value, dict) else value
+    return set().union(*(_jinja_reads(v, within) for v in items))
+
+
+def backend_params(bdef, collection, backend):
+    """The params a NEW class of `backend` is written with (its module file's `backend_params`): each param the
+    registry entry DERIVES (`derive_params`, S27 — netcommon_cli's `network_os: "{collection}.{name}"` turns
+    cisco.ios into cisco.ios.ios) that it also requires, rendered from the collection's names by
+    catalog.render_template. A required param it does not derive is the operator's to set at run time (raw_ssh's
+    backup command, a group var its role reads); the planner refuses one the backend's `connection:` block reads.
+    A block or a template that does not render, or a `requires:` that is not a list of names, is the registry's
+    fault, refused as repository data before any write. Shared by the planner and the scaffold."""
+    requires = requires_of(bdef, backend)
+    derive = bdef.get("derive_params")
+    if derive is None:
+        return {}
+    where = ("backend registry", "the %s backend's derive_params is not a map of params to templates that render "
+             "to a param value — correct its backend.yml under ansible/backends/" % backend)
+    if not isinstance(derive, dict):
+        raise paths.RepositoryDataError(*where)
+    namespace, name = collection.split(".", 1)
+    ctx = {"collection": collection, "namespace": namespace, "name": name}
+    params = {}
+    for param, tmpl in derive.items():
+        if not (isinstance(param, str) and _STEM_RE.fullmatch(param)):
+            raise paths.RepositoryDataError(*where)    # a key of `backend_params`, matched to `connection:` holes
+        if param in requires:
+            try:
+                params[param] = catalog.render_template(tmpl, ctx, catalog.PARAM_RE)
+            except ValueError:
+                raise paths.RepositoryDataError(*where) from None
+    return params
 
 
 def _facts_for(collection, bundled):
@@ -265,7 +352,7 @@ def _sops_ref(sops_expr, sops_key):
     return ("{{ (%s).%s }}" if sops_key.isidentifier() else "{{ (%s)['%s'] }}") % (sops_expr, sops_key)
 
 
-def build_onboard_plan(collection, key, group, host, host_name=None, secrets="network",
+def build_onboard_plan(collection, key, group, host, host_name=None, secrets=None,
                        backend=None, username=None, password=None, api_token=None,
                        ssh_private_key=None, backends=None, vectors=None, creds=None, deep=False):
     """Compute the onboard PLAN for `collection` as device-class `key` on `host`. Returns
@@ -299,8 +386,9 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
     paths.hostname(host, "host")
     if host_name is not None:
         paths.inventory_host(host_name)          # none of RESERVED_HOST_NAMES (the group's, and the two loopbacks)
-    paths.component(secrets, "secrets domain")
-    _plain_name(secrets, "secrets domain")
+    if secrets is not None:                      # None: the reused class's, else the backend's default (S27)
+        paths.component(secrets, "secrets domain")
+        _plain_name(secrets, "secrets domain")
     backend_from_request = backend is not None
     if backend_from_request:
         paths.component(backend, "backend")
@@ -361,9 +449,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
                     "declaring_class": None if module_reuse else _declaring_class(collection, backends)}
     bdef = next((b for b in backends if b.get("name") == backend), {})
     role = adopted_role or _role_of(bdef, key, backend_from_request)
-    params = {}
-    if "network_os" in (bdef.get("requires") or []):
-        params["network_os"] = "%s.%s" % (collection, collection.split(".")[-1])
+    secrets = _secrets_domain(secrets, bdef, backend)
+    params = backend_params(bdef, collection, backend)
     host_name = host_name or (key.replace("_", "-") + "-1")
 
     capability_gap = []   # the honest residual surfaced for a blind onboard (non-gating); a reused class shows none
@@ -410,9 +497,43 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         module_text = yaml.safe_dump(module, sort_keys=False, allow_unicode=True, width=4096)
 
     hostvars = {"device_role": role}
+    required = requires_of(bdef, backend)
     for k, v in (bdef.get("connection") or {}).items():
-        if isinstance(v, str) and v.strip().startswith("{{"):
-            v = params.get(v.strip().strip("{} "), v)
+        bare = _BARE_HOLE_RE.match(v.strip()) if isinstance(v, str) else None
+        hole = bare.group(1) if bare else None
+        try:
+            reads = _jinja_reads(v)
+        except ValueError:
+            raise paths.RepositoryDataError(
+                "backend registry", "the %s backend's connection var %s holds a value that refers to itself — "
+                "correct its backend.yml under ansible/backends/" % (backend, k)) from None
+        through = sorted(p for p in reads if p in required and p != hole)
+        if through:
+            # Only a bare `{{ param }}` is filled from `params`: a required param named anywhere else in a templated
+            # value — a filter, an expression, text beside it, a `{% %}` block, an unclosed `{{`, a `#jinja2:` header,
+            # a list, a set or a map — would reach the drop-in unrendered, derived or not (T18's fold read, N5; its
+            # fold-2 read, S1: a check of a value's first name let ten shapes by; its fold-3 read, S1: a match of
+            # whole blocks let six more by).
+            raise paths.RepositoryDataError(
+                "backend registry", "the %s backend's connection var %s names %s, which it requires, in a "
+                "templated value the planner does not fill — make the var's whole value `{{ %s }}`, in its "
+                "backend.yml under ansible/backends/%s" % (
+                    backend, k, through[0], through[0], "" if through[0] in params else
+                    ", and add it to `derive_params` (or, for a value set at run time, drop it from `requires:`)"))
+        if hole in required and hole not in params:
+            # A required param the backend does not derive would reach the drop-in unrendered, and the first play
+            # fails far from the cause unless a group var happens to define it. An operator's backend written
+            # before S27 (a copy of netcommon_cli without `derive_params`) meets this, and so does one whose
+            # `connection:` block reads a required value set at run time: dropping the param from `requires:` leaves
+            # it for the class's group vars, and so does moving the connection var there. The planner reads no
+            # class's own `backend_params`, a reused class's included (T18's read, F12; its fold reads, N5 and S2).
+            raise paths.RepositoryDataError(
+                "backend registry", "the %s backend's connection var %s reads %s, which it requires and does not "
+                "derive — add it to `derive_params` in its backend.yml under ansible/backends/; for a value set at "
+                "run time, drop it from that backend's `requires:` (the planner then leaves it for the class's group "
+                "vars), or move %s out of its connection block into the class's group vars" % (backend, k, hole, k))
+        if hole is not None:
+            v = params.get(hole, v)
         hostvars[k] = v
     # S28: the TCP port the reachability probe (ping.yml) uses for a host of this backend when the host sets no
     # port of its own — the API port for `api`, where the SSH port the probe defaults to says nothing. A top-level
@@ -463,6 +584,15 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             if extra is not None:
                 extra["domain"] = secrets
                 auth["fields"].append(extra)
+    # The backend's TEMPLATED `maps_to` entries are the default, by field name, for a field that brings none (S27): a
+    # TIER-B field read from a module's argument spec never sets one, and an `api_token` among them got its host var
+    # from the branch on the field's name this replaces. The same rule, stated as the registry's data.
+    templated = {e["field"]: e["maps_to"] for e in (bdef.get("auth") if isinstance(bdef.get("auth"), list) else [])
+                 if isinstance(e, dict) and isinstance(e.get("field"), str)
+                 and isinstance(e.get("maps_to"), str) and "{" in e["maps_to"]}
+    for cf in auth["fields"]:
+        if cf.get("maps_to") is None and cf["field"] in templated:
+            cf["maps_to"] = templated[cf["field"]]
 
     # MF-S2 domain confinement (the one NEW security guard) — a PRE-PASS before any creds_to_set write: every SECRET
     # field that has a value must target the onboard's own SOPS domain. Refuse (loud, catchable) BEFORE the mapping
@@ -511,7 +641,9 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         # EXPRESSION below, so it is an identifier or the onboard is refused (SECURITY.md C22); the name is not
         # echoed.
         # `maps_to` is the NAME of the host var the field is written under. It is a key of the inventory drop-in,
-        # so it is an identifier too: no brace, no space, no line break, no value that is not a string. WHICH
+        # so it is an identifier too: no brace, no space, no line break, no value that is not a string — or a
+        # template the backend registry or the generic union declares for that field, whose rendering with this
+        # host's credential key stays in catalog.MAPS_TO_RE (below). WHICH
         # variable a SOPS-stored field names is the declaring file's to choose — a module's own `auth:` entry may
         # name `ansible_connection` as the registry names `ansible_user`; what lands there is a lookup, never the
         # request's text — and is not restricted here (SECURITY.md C22, limits). An inline field's variable is
@@ -525,8 +657,28 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
         if not isinstance(stem, str) or not _STEM_RE.fullmatch(stem):
             raise paths.RepositoryDataError(
                 "credential field", "a credential field %s has a name that is not an identifier" % _where)
+        # A `maps_to` holding a placeholder is a TEMPLATE (S27 — the api backend's `{cred_key}_api_token`): rendered
+        # with this host's credential key and held to catalog.MAPS_TO_RE, the charset of every host name the request
+        # boundary accepts, so an upper-case, dotted or IP-literal host keeps the var it had. The host name cannot
+        # make the render fail; the template's own text can, so a failure is the declaring file's. Only the backend
+        # registry and the generic union declare one: a template lets the request's host name choose WHICH var the
+        # lookup lands in, so a module file's `auth:` entry — curated, but not the registry — names its var as
+        # written. It may repeat, for the same field, the template its backend's registry entry or the generic union
+        # declares (today only `api_token`'s `{cred_key}_api_token`); any other template is refused once a value is
+        # given (T18's read, F1; its fold read, N2).
         maps_to = cf.get("maps_to")
-        if maps_to is not None and not (isinstance(maps_to, str) and _STEM_RE.fullmatch(maps_to)):
+        if isinstance(maps_to, str) and "{" in maps_to:
+            if maps_to not in (templated.get(cf["field"]), (authspec.union_field(cf["field"]) or {}).get("maps_to")):
+                raise paths.RepositoryDataError(
+                    "credential field", "a credential field %s maps to a template its backend does not declare "
+                    "for that field — name the variable" % _where)
+            try:
+                maps_to = catalog.render_template(maps_to, {"cred_key": cred_key}, catalog.MAPS_TO_RE)
+            except ValueError:
+                raise paths.RepositoryDataError(
+                    "credential field", "a credential field %s maps to a template that does not render to a "
+                    "variable name" % _where) from None
+        elif maps_to is not None and not (isinstance(maps_to, str) and _STEM_RE.fullmatch(maps_to)):
             raise paths.RepositoryDataError(
                 "credential field", "a credential field %s maps to something that is not a variable name" % _where)
         sops_key = stem if cf.get("shared") else "%s_%s" % (cred_key, stem)
@@ -544,19 +696,9 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             # TIER-B-DERIVED ssh_key param (e.g. a module's `client_key`) has NO maps_to → SOPS-store it, but skip
             # the hostvar wiring (a None-keyed hostvar would be bogus — review-30 F-3). Its consumer reads the SOPS
             # value by name; only a maps_to field materializes the 0600 key file + declares the decrypt domain.
-            if cf.get("maps_to"):
-                hostvars[cf["maps_to"]] = "{{ kontroll_device_key_dir }}/%s.key" % cred_key
+            if maps_to:
+                hostvars[maps_to] = "{{ kontroll_device_key_dir }}/%s.key" % cred_key
                 hostvars["kontroll_ssh_key_domain"] = secrets
-        elif cf["field"] == "api_token":
-            # The token's hostvar. `params` only ever carries `network_os` (see the params block above), so
-            # `token_var` is NOT populated here and this resolves to the per-host convention in practice —
-            # roles/backend_api accepts that name as well as the recipe's declared `token_var`, and refuses
-            # naming both if neither is in scope. The `params` branch is kept for a backend that does declare
-            # one. Do NOT restore the old claim that the planner resolves it from the recipe: nothing reads
-            # paths.RECIPES_DIR, and believing otherwise cost a silently-broken edge-firewall check.
-            tok_var = (params.get("token_var") or "%s_api_token" % cred_key)
-            hostvars[tok_var] = _sops_ref(_sops, sops_key)
-            creds_to_set[sops_key] = val
         elif cf.get("inline"):
             # A non-secret literal host var (a port, a flag) — not SOPS, so the VALUE itself lands in the inventory,
             # where Ansible templates it (S28, SECURITY.md C22). authspec types it first, so what is written is an int
@@ -572,9 +714,11 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
             # SOPS-store the value, and wire a hostvar inline-lookup ONLY if the field maps to one. A shared
             # domain cred (proxmox exporter token) has NO maps_to — it is read from the SOPS domain by its consumer
             # (deploy-stack renders it into the exporter .env via the class's secret_env_map), not via a hostvar.
+            # An API token is one of these since S27: its var is the api backend's `{cred_key}_api_token` template,
+            # rendered above. roles/backend_api reads that name, or the recipe's own `token_var` when one is in scope.
             creds_to_set[sops_key] = val
-            if cf.get("maps_to"):
-                hostvars[cf["maps_to"]] = _sops_ref(_sops, sops_key)
+            if maps_to:
+                hostvars[maps_to] = _sops_ref(_sops, sops_key)
     host_block = {group: {"hosts": {host_name: {"ansible_host": host, **hostvars}}}}
     host_text = yaml.safe_dump(host_block, sort_keys=False, allow_unicode=True, width=4096)
 
@@ -621,9 +765,10 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets="ne
 
 
 def apply_onboard_plan(plan, overwrite=False):
-    """Perform the onboard repo mutations for a computed plan: write the device-class module (UNLESS the class
-    already exists for this collection — then REUSE it, adding only the host, so its curated metrics:/backup:/
-    logs: blocks survive, #124), MERGE the drop-in inventory host alongside any siblings (a 2nd device of a class
+    """Perform the onboard repo mutations for a computed plan: write the device-class module (UNLESS this is a
+    reuse — the class under the key already declares the collection, or is `collections: []` and the collection is
+    one ansible-core ships — then REUSE it, adding only the host, so its curated metrics:/backup:/logs: blocks
+    survive, #124), MERGE the drop-in inventory host alongside any siblings (a 2nd device of a class
     never drops the 1st), enable the class in instance/fleet.yml, and encrypt any creds into the SOPS domain.
     Prints progress and returns {"changed": bool, "paths": [repo-rel paths to git-add]}. A divergent existing
     module / a foreign inventory file raises gitio.WriteConflict unless `overwrite=True` (the GUI 'Overwrite'

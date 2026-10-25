@@ -165,9 +165,31 @@ classify:
   any_of:
     - {plugin: cliconf}
 confers: {actuate: true, backup: true}
-requires: [network_os]           # supplied per-device in module.yml
+requires: [network_os]           # a NEW class gets it from derive_params, below
+derive_params:                   # what a NEW class is written with, from its collection
+  network_os: "{collection}.{name}"
+default_secrets_domain: network  # where an onboard stores credentials when it names no domain
 role: backend_netcommon_cli      # the execution role: what a class's device_role names
 ```
+
+**The registry owns an onboard's defaults (S27).** Three fields of `backend.yml` hold what
+code used to: `default_secrets_domain` (the SOPS domain a new class's credentials go to
+when the request names none — a request's domain wins over it, a reused class's own
+`secrets_domain` wins over both, and a backend without one makes a domain required),
+`derive_params` (each entry a template for one of the backend's `requires:` params,
+rendered from the class's collection; a param the backend requires but does not derive
+is the operator's to set at run time, and one its `connection:` block reads refuses the
+plan as `repository_data`) and a **templated** `maps_to` on an `auth:` field (the api
+backend's `{cred_key}_api_token`: the host var a token is written under, rendered per
+host). A template is a closed grammar — `{name}` placeholders from a fixed set
+(`collection`, `namespace`, `name` for a param; `cred_key` for a `maps_to`), no
+attribute access, no Jinja — and its result is held to a charset
+(`catalog.render_template`); a default or a template that fails is the registry's
+fault, answered `repository_data`, never written. None of the planner, the scaffold,
+the routes, the form or the CLI names a domain or a param any more
+(`tests/unit/test_backend_defaults.py`, which also proves a new class's drop-in, its
+stored credentials, its domain and its module file's `backend_params` are what the former
+code wrote).
 
 **Adding a backend = drop the dir + role.** The classifier auto-discovers it. The
 entry's `role:` names the role; an entry without one may still classify (a search
@@ -176,7 +198,7 @@ is never planned with it (the onboard planner and the scaffold choose only a bac
 that declares a role, and refuse a request that names any other); only a reused class
 that brings its own role can be (S26). A new
 Arista/Juniper device then needs **zero new task code** — `modules/<key>/module.yml`
-declares `role: backend_netcommon_cli` + `network_os`. `cisco_ios` is already
+declares `role: backend_netcommon_cli` + `network_os` (derived from its collection). `cisco_ios` is already
 migrated to this shape (live e2e: byte-identical capture), so it's generalization,
 not a rewrite.
 

@@ -14,10 +14,21 @@ classify:
 # them as a metrics:/logs: floor). A network_cli device universally supports agent-less snmp + blackbox + RFC5424
 # syslog — so a blind-onboarded switch is monitored + log-shippable on day one, no hand-typed module.
 confers: {actuate: true, backup: true, telemetry: [snmp, blackbox], logs: [syslog_push]}
-requires: [network_os]            # e.g. cisco.ios.ios — set per device class
+requires: [network_os]            # e.g. cisco.ios.ios — derived for a new class (below)
+# How the planner fills a `requires:` param for a new class (S27): a template in a closed grammar — `{collection}`,
+# `{namespace}`, `{name}` and nothing else; not Jinja — rendered into the class's `backend_params`. cisco.ios ->
+# cisco.ios.ios. A required param with no entry here is the operator's to set at run time (a group var); if the
+# `connection:` block below reads it, the plan is refused (S27).
+derive_params:
+  network_os: "{collection}.{name}"
+# The SOPS domain a class of this backend stores its credentials in when the onboard request names none and the
+# class is new (a reused class keeps its own `secrets_domain`). Read by service/onboard.py and the scaffold, and
+# shown as the onboard form's default; no code names a domain (S27). A new name needs a rule in .sops.yaml.
+default_secrets_domain: network
 role: backend_netcommon_cli       # the execution role (device class's device_role)
 # Connection vars the onboard planner renders into the host/group (network_os is
-# the per-device param supplied at onboard time).
+# the param derive_params fills; a required param named anywhere in a templated value here must be derived and
+# read bare, as `{{ network_os }}`, or the plan is refused; a name built at render time is not seen).
 connection:
   ansible_connection: network_cli
   ansible_network_os: "{{ network_os }}"
@@ -32,6 +43,7 @@ auth:
   - {field: enable_password, kind: password, label: "enable secret (optional)", maps_to: ansible_become_password}
   # S28: inline — written into the drop-in as an int (authspec.inline_value), not stored in SOPS; blank writes nothing.
   - {field: port, kind: port, inline: true, maps_to: ansible_port, label: "SSH port (blank = 22)"}
+# Read by nothing yet (wiring it is the parameter channel, S22).
 defaults:
   backend_liveness_command: show version
   backend_backup_command: show running-config

@@ -14,6 +14,10 @@ classify:
 # F2 confers: a vendor *_config device is network_cli gear — the same agent-less floor (snmp + blackbox + syslog).
 confers: {actuate: true, backup: true, telemetry: [snmp, blackbox], logs: [syslog_push]}
 requires: [config_module]         # e.g. cisco.ios.ios_config
+# The SOPS domain a class of this backend stores its credentials in when the onboard request names none and the
+# class is new (a reused class keeps its own `secrets_domain`). Read by service/onboard.py and the scaffold, and
+# shown as the onboard form's default; no code names a domain (S27). A new name needs a rule in .sops.yaml.
+default_secrets_domain: network
 # Self-describing credential SHAPE (F1 TIER-A): a vendor *_config device is reached over network_cli — SSH login
 # (+ optional enable), same as netcommon_cli. Read by scripts/kontroll/authspec.py.
 auth:

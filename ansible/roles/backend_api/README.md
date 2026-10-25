@@ -33,9 +33,11 @@ per-host convention `<inventory_hostname with - replaced by _>_api_token`.
 
 That is not belt-and-braces — it is a correction. `backends/api/backend.yml` used to claim
 the planner resolved the recipe's `token_var` into the drop-in, and nothing ever did:
-`service/onboard.py` puts only `network_os` into `backend_params`, so its
-`params.get("token_var")` is always `None` and every onboarded api host gets the
-convention name instead. `paths.py` even defines `RECIPES_DIR` that no Python reads. The
+`service/onboard.py` put only `network_os` into `backend_params`, so its
+`params.get("token_var")` was always `None` and every onboarded api host got the
+convention name instead. (Since S27 the convention is data: the `api_token` entry of
+`backends/api/backend.yml` says `maps_to: "{cred_key}_api_token"`, and the planner renders
+it per host; the dead `token_var` half is gone.) `paths.py` even defines `RECIPES_DIR` that no Python reads. The
 result was a role looking up `fortios_api_token` while the drop-in defined
 `fortigate_100e_api_token` — **so the edge-firewall check could never authenticate**, and
 because the resolve task is `no_log`, the undefined-variable fatal arrived *censored* and

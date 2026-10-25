@@ -209,6 +209,30 @@ def test_classify_found(client):
     assert "cisco_ios" in decl and "snmp" in decl["cisco_ios"]
 
 
+@pytest.mark.parametrize("requires", ["network_os", ["network_os", 5], [True], [None], ["a" * 65]],
+                         ids=["string", "non-string-entry", "bool-entry", "null-entry", "len65"])
+def test_classify_answers_repository_data_for_a_requires_that_is_not_a_list_of_names(monkeypatch, make_facts,
+                                                                                     requires):
+    """GET /classify for a collection whose best backend's registry `requires:` is not a list of param names (a YAML
+    `true` or `~` entry, and one longer than a `derive_params` key may be, too) answers 409 `repository_data` naming
+    `requires`, as the onboard planner and the scaffold refuse the same file.
+
+    Guards the classifier reading the field raw (T18's fold-3 read, N3): the response model refused a string with a
+    500, the CLI joined it letter by letter, and a non-string entry raised a TypeError. The bool and null entries
+    answered 500 again under a name rule applied to the entry's text (fold-4 read, N5: its mutant Z7)."""
+    real = catalog.load_backends
+
+    def load(*a, **k):
+        return [dict(b, requires=requires) if b.get("name") == "netcommon_cli" else b for b in real(*a, **k)]
+    monkeypatch.setattr(catalog, "load_backends", load)
+    monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(
+        collection=coll, version="5.0.0", plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
+    with TestClient(create_app(), raise_server_exceptions=False) as c:
+        r = c.get("/classify/cisco.ios")
+    assert r.status_code == 409, r.text
+    assert r.json()["code"] == "repository_data" and "requires" in r.json()["detail"]
+
+
 def test_classify_not_installed_404(client):
     """GET /classify/<absent> returns 404 when nothing is installed to classify."""
     assert client.get("/classify/ns.absent").status_code == 404

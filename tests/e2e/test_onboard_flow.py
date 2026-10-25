@@ -10,6 +10,8 @@ import re
 import pytest
 from playwright.sync_api import expect
 
+from kontroll import catalog
+
 pytestmark = pytest.mark.e2e
 
 
@@ -98,6 +100,24 @@ def test_onboard_form_derives_ssh_login_for_a_switch_no_token_box(page):
     expect(card.get_by_test_id("field-cred-username")).to_be_visible()
     expect(card.get_by_test_id("field-cred-enable_password")).to_be_visible()
     expect(card.get_by_test_id("field-cred-api_token")).to_have_count(0)   # no dead REST token box on a switch
+
+
+def test_the_domain_box_ships_empty_and_shows_the_backend_default(page):
+    """S27 live: a switch's onboard form opens with its secrets-domain box EMPTY, and once the credential fields are
+    derived the box's placeholder names the backend's `default_secrets_domain`, read from the registry here (a new
+    class stores there). Guards the form's former `value="network"` literal coming back, and a placeholder
+    never set: an operator could not see where an empty box stores the credentials."""
+    want = next(b for b in catalog.load_backends() if b["name"] == "netcommon_cli")["default_secrets_domain"]
+    page.goto("/")
+    page.get_by_test_id("search-input").fill("cisco")
+    page.get_by_test_id("search-btn").click()
+    card = page.get_by_test_id("card").first
+    expect(card).to_be_visible()
+    card.get_by_test_id("onboard-toggle").click()
+    expect(card.get_by_test_id("field-cred-username")).to_be_visible()   # the derive has answered
+    box = card.get_by_test_id("field-secrets")
+    expect(box).to_have_value("")
+    expect(box).to_have_attribute("placeholder", want)
 
 
 def test_an_ssh_backend_form_offers_a_plain_port_box_that_reaches_the_request(page):

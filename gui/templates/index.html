@@ -201,7 +201,7 @@ function card(rec) {
   btn.onclick = () => { form.classList.toggle('open');
     if (form.classList.contains('open') && !form.dataset.credsLoaded) {   // lazy: derive the per-backend cred fields on first open
       form.dataset.credsLoaded = '1';
-      loadCredFields(form, rec.suggested_backend, (form.querySelector('[name=secrets]') || {}).value || 'network',
+      loadCredFields(form, rec.suggested_backend, (form.querySelector('[name=secrets]') || {}).value || '',
                      rec.collection);
     }
     refresh(); };   // disabled when open+dirty ⇒ only opens, or collapses a pristine form
@@ -213,8 +213,9 @@ function card(rec) {
 function onbPristine(f) {
   // "just looking": no user-entered field holds text and no box is ticked. group/host plus EVERY derived
   // credential widget ([data-field], whatever this backend declared — F1) are scanned STRUCTURALLY, so a newly
-  // derived per-backend field can never silently escape the collapse gate. key/secrets carry defaults → excluded.
-  const named = ['group','host','host_name'].map(n => f.querySelector('[name='+n+']'));
+  // derived per-backend field can never silently escape the collapse gate. key carries a default → excluded; the
+  // secrets domain ships empty (the backend's default is its placeholder, S27), so a typed one is input.
+  const named = ['group','host','host_name','secrets'].map(n => f.querySelector('[name='+n+']'));
   const cred = [...f.querySelectorAll('[data-field]')];
   const txt = [...named, ...cred].some(el => el && (el.value || '').trim() !== '');
   const box = [...f.querySelectorAll('input[type=checkbox]')].some(b => b.checked);
@@ -232,7 +233,7 @@ function onboardForm(rec) {
     <div><label>inventory group</label><input name="group" data-testid="field-group" placeholder="e.g. core_switch"></div>
     <div><label>host (mgmt IP/name)</label><input name="host" data-testid="field-host" placeholder="192.0.2.x"></div>
     <div><label>hostname (inventory name)</label><input name="host_name" data-testid="field-host-name" placeholder="optional — auto-named from the class if blank"></div>
-    <div><label>secrets domain</label><input name="secrets" data-testid="field-secrets" value="network"></div>
+    <div><label>secrets domain</label><input name="secrets" data-testid="field-secrets" placeholder="the backend's default"></div>
     <div class="full"><label>credentials (derived for this device’s backend)</label>
       <div class="cred-grid" data-testid="cred-fields"></div></div>
     <div class="full row" data-testid="onboard-flags">
@@ -319,10 +320,18 @@ async function loadCredFields(f, backend, secrets, collection) {
     // deep=true asks the server to SHARPEN to the EXACT argument_spec fields (F1 TIER-B); it is install-confined
     // server-side (a not-installed collection stays on the coarse shape at no cost), so we always request it.
     const credFieldsUrl = '/api/onboard/cred-fields?backend=' + encodeURIComponent(backend || '')
-            + '&secrets=' + encodeURIComponent(secrets || 'network')
+            + (secrets ? '&secrets=' + encodeURIComponent(secrets) : '')
             + (collection ? '&collection=' + encodeURIComponent(collection) + '&deep=true' : '');
     const r = await (await fetch(credFieldsUrl)).json();
     renderCredFields(box, r.cred_fields, r.cred_source);
+    // an empty domain box counts as omitted, and a new class stores into the backend's default (S27; a reuse —
+    // an onboard of a collection the class under that key already declares, shipped or onboarded before; under a
+    // class with `collections: []`, a collection ansible-core ships — into the class's own): say which, as the box's
+    // placeholder — a property, never markup. A backend that declares none needs a typed domain,
+    // or the submit is refused.
+    const sd = f.querySelector('[name=secrets]');
+    if (sd) sd.placeholder = r.secrets || (backend ? 'required — this backend names no default domain'
+                                                   : "the backend's default");
   } catch (e) { box.textContent = 'could not derive credential fields (enter them after onboarding)'; }
 }
 
@@ -354,10 +363,12 @@ async function submit(f, collection, backend, overwrite=false) {
       ob.title = 'replace the divergent drop-in with this onboard (your deliberate choice)';
       ob.onclick = () => {
         // Loud warning (#124): Overwrite REPLACES a curated class — it can strip its metrics:/backup:/logs:
-        // blocks. Onboarding a device of an EXISTING class normally REUSES it (no conflict); a conflict here
-        // means a DIFFERENT class collides on this key, so confirm the destructive replace.
+        // blocks. Onboarding a collection the class under this key takes (it declares it, or it is
+        // `collections: []` and ansible-core ships it) REUSES it (its module is no conflict); a conflict here means
+        // another collection collides on this key, or the key's inventory drop-in does not open with the onboard
+        // banner (written, or its first line edited, by hand), so confirm the destructive replace.
         if (window.confirm('Overwrite REPLACES the existing module/host file. If this key matches a curated '
-          + 'device-class, its metrics/backup/logs capabilities will be lost. Prefer a new key unless you mean '
+          + 'device-class, its metrics/backup/logs capabilities may be lost. Prefer a new key unless you mean '
           + 'to replace it. Continue?')) submit(f, collection, backend, true);
       };
       out.parentNode.insertBefore(ob, out);      // sits just above the output pane
