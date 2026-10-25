@@ -37,7 +37,8 @@ pytestmark = pytest.mark.unit
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMPLATE = os.path.join(_ROOT, "instance.example", ".sops.yaml")
 _SECURITY = os.path.join(_ROOT, "SECURITY.md")
-_CHOICES = {"recipient": ["--break-glass-recipient", "age1honestybreakglasspub0000000000000000000000000000000"],
+# The recipient is bech32 with a valid checksum (kontroll-init checks it), one byte short of a real key (leak guard).
+_CHOICES = {"recipient": ["--break-glass-recipient", "age1dphkuetnw3uj6cnjv4skkemvv9ehxqqqqqqqqqqqqqqqqqqqqqahs79q"],
             "mint": ["--mint-break-glass"],
             "none": ["--no-break-glass"]}
 # A sentence that claims the control key's loss is survivable must carry the condition that makes it true.

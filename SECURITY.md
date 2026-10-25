@@ -110,7 +110,8 @@ no log), or `--no-break-glass` (ONE recipient per domain, for a scratch instance
 - In either case kontroll counts recipients and **cannot know whether anyone kept the
   private half**: a recipient whose private half was discarded is a count of two and a
   recovery of zero. Only the operator's own check proves it — decrypting every domain with
-  the break-glass key, off the box (docs/break-glass.md, "Verify").
+  the break-glass key alone, off the box, where sops can find no other key
+  (docs/break-glass.md, "Verify").
 
 This row once said every secret had two recipients, which was false for every instance —
 worse than documenting no control at all, because it invited the reasoning a reclaim
@@ -118,7 +119,9 @@ decision would rest on.
 An off-box *copy of the private key* is a backup, **not a break-glass recipient**: it
 shares the single point of failure rather than removing it.
 Tracked as **R-KEY-1** under [Accepted risks](#accepted-risks--known-limitations). The
-bootstrap play warns, per creation rule, when a domain has fewer than two recipients
+bootstrap play warns, per creation rule, when a rule in `instance/.sops.yaml` names fewer
+than two distinct age recipients in a key group (it reads the rules, not the encrypted
+files — a recipient added but not yet re-wrapped is counted)
 (`tests/unit/test_bootstrap_break_glass_warning.py`); `tests/unit/test_break_glass_claim_is_honest.py`
 runs `--fresh` for each choice and holds this paragraph to what it writes.
 
@@ -132,7 +135,8 @@ vars plugin. One file per domain (network / proxmox / dashboards / semaphore / a
 **Key management:** the age private key lives only at
 `~/.config/sops/age/keys.txt` (mode 600) on the control VM, is **never
 committed**. It stops being the single point of total loss only where a break-glass
-recipient was added and its private half kept (above). This is the analog of NetConfig's
+recipient was added, every domain file re-wrapped to it, and its private half kept and
+proven (above). This is the analog of NetConfig's
 OS-keyring Fernet key, with a different mechanism (documented choice, PLAN.md §7).
 
 ### C2 — Secrets never logged  ⬚ planned
@@ -1111,7 +1115,9 @@ distinct control.
   pipe or a file; the installer container has no log driver (`logging: none`), and no launcher routes
   `fresh-init` through a run log or a `tee`. A terminal the operator records (`script`, a multiplexer's log) is
   beyond kontroll's reach.
-  `--break-glass-recipient` takes a public key made elsewhere and refuses a private one without echoing it.
+  `--break-glass-recipient` takes a public key made elsewhere and refuses a private one, or one whose checksum fails,
+  without echoing it; on an existing instance it also refuses a key file that is not the control recipient of every
+  rule, and stops after adding the recipient, before the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing
@@ -1128,8 +1134,9 @@ distinct control.
 anchor-scoped; the parse-verify gate rejects a dropped/smuggled recipient and writes nothing; `age_keygen`
 prints nothing) + `tests/integration/test_gui_api.py` keygen cases (show-once response, audit/commit carry only
 the public key, staged not `main`); `tests/unit/test_kontroll_init.py` break-glass cases (the minted private half
-printed exactly once and in no file, shown even when a later step fails, refused on a non-terminal; a private or
-malformed recipient refused unechoed) + `tests/unit/test_installer_phase1.py`
+printed exactly once and in no file, shown even when a later step fails, refused on a non-terminal; a private,
+malformed or mis-checksummed recipient refused unechoed; a key file that is not the control recipient refused; the
+existing-instance run stopping before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
 (`test_fresh_init_output_is_never_teed_to_a_log`); `gitleaks` (CI) scans every commit for an `AGE-SECRET-KEY` (C6).
 
 **Residual (tracked):** a minted **private key** and submitted **secret values** traverse the mgmt-side hop in

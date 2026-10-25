@@ -67,7 +67,8 @@ def test_the_warning_counts_recipients_per_rule():
 
 @pytest.mark.parametrize("rules,names", [
     ([_rule("compute", (CTL, CTL))], ["compute"]),                                  # one key, listed twice
-    ([{"path_regex": "x", "key_groups": [{"age": CTL + "," + BG}]}], []),           # sops's comma-separated string
+    ([{"path_regex": "x", "key_groups": [{"age": CTL + "," + BG}]}], []),           # a string (sops refuses it)
+    ([{"path_regex": "x", "key_groups": [{"age": [CTL + "," + BG]}]}], []),         # a list item sops splits
     ([{"path_regex": "x", "key_groups": [{"age": CTL + ", " + CTL}]}], ["x"]),      # … naming one key twice
     ([{"path_regex": "x", "age": CTL + "," + BG}], []),                             # recipients on the rule itself
     ([_rule("compute", (CTL,), (BG,))], ["compute"]),                                # a key group of one: needed too
@@ -75,14 +76,26 @@ def test_the_warning_counts_recipients_per_rule():
     ([{"path_regex": "x", "key_groups": [{"pgp": ["F00"]}]}], ["x"]),               # no age recipient at all
     ([{"key_groups": [{"age": [CTL]}]}], ["(a rule with no path_regex)"]),
     ([], []),
-], ids=["duplicate", "comma-string", "comma-duplicate", "rule-level-age", "two-groups", "thin-second-group", "no-age",
-        "no-path-regex", "no-rules"])
-def test_the_count_reads_each_recipient_form_sops_accepts(rules, names):
-    """The count de-duplicates a key listed twice, reads sops's comma-separated `age:` string and an `age:` on the
-    rule itself, needs two in EACH key group (with several groups sops needs a key from every one, so a group of one
-    is a single point of loss, wherever in the rule that group stands), and names a rule with no age recipient or no
-    path_regex. Guards a recipient form the count misreads either silencing the warning on a one-key domain or
-    naming a domain that has two."""
+], ids=["duplicate", "comma-string-tolerated", "comma-in-a-list-item", "comma-duplicate", "rule-level-age",
+        "two-groups", "thin-second-group", "no-age", "no-path-regex", "no-rules"])
+def test_the_count_reads_each_recipient_form(rules, names):
+    """The count de-duplicates a key listed twice; splits a comma-separated `age:` string and a list item holding a
+    comma, as sops splits them (inside a key group sops refuses the string form, which the count tolerates); reads an
+    `age:` on the rule itself; needs two in EACH key group (with several groups sops needs a key from every one, so a
+    group of one is a single point of loss, wherever in the rule that group stands); and names a rule with no age
+    recipient or no path_regex. Guards a recipient form the count misreads either silencing the warning on a one-key
+    domain or naming a domain that has two."""
     got = thin(rules)
     assert [n for n in got.split(", ") if n] == [
         n if n.startswith("(a rule") or n == "x" else "(^|/)%s\\.sops\\.ya?ml$" % n for n in names]
+
+
+def test_a_null_creation_rules_renders_as_no_rules():
+    """`_sops_rules` renders an instance file whose `creation_rules:` is empty (null) as `[]`, so `_sops_thin`
+    loops over nothing and the play goes on. Guards `default([])` without its `true`: that replaces only an
+    UNDEFINED key, so a null one reached the loop as None, which ansible-core 2.19 fails on (`'NoneType' object
+    is not iterable`)."""
+    env = jinja2.Environment()
+    env.filters["from_yaml"] = yaml.safe_load
+    env.globals["lookup"] = lambda kind, path: "creation_rules:\n"
+    assert env.from_string(_task()["vars"]["_sops_rules"]).render(repo_root="/r") == "[]"

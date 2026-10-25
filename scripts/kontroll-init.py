@@ -10,7 +10,9 @@ that are chicken-and-egg for the GUI (it needs them to run) or that were manual 
   2b. with `--break-glass-recipient <age1…>` (or, with --fresh, `--mint-break-glass`), adds a break-glass recovery
      recipient to every domain BEFORE step 3, so a fresh node's first secrets are written to two recipients and
      never need a re-wrap. `--fresh` requires the choice (or `--no-break-glass`, which says what it costs) — the
-     same never-guess rule as --trust-mode. A minted key's private half is shown once and written to no file;
+     same never-guess rule as --trust-mode. A minted key's private half is shown once and written to no file.
+     Without --fresh, a `--break-glass-recipient` run ends after this step: it mints, prints and re-encrypts no
+     secret (step 3 is a new node's bootstrap, not part of adding a recipient);
   3. mints the `dashboards` BOOTSTRAP secrets if absent — the onboard-GUI password (rendered to GUI_PASSWORD;
      the genuine chicken-and-egg — the GUI can't set the password it needs to start), the Grafana admin
      password, and the C10 API token — encrypted into the dashboards SOPS domain (the recipients from step 2).
@@ -40,6 +42,8 @@ import shutil
 import subprocess
 import sys
 
+import yaml
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # so `from kontroll import …` resolves
 from kontroll import catalog, paths  # noqa: E402
 from kontroll.service import keygen  # noqa: E402
@@ -51,6 +55,7 @@ BOOTSTRAP_DOMAINS = ["dashboards", "semaphore"]            # auto-mintable boots
 #   dashboards: GUI/Grafana passwords + the C10 API token; semaphore: DB pw + admin login + access-key key.
 #   Device-cred domains (proxmox, network, …) stay operator-provided (real creds) — minted via onboarding.
 _AGE_RECIPIENT_RE = re.compile(r"age1[0-9a-z]{20,}")         # an age PUBLIC key, the shape _parse_age_public reads
+_BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"                  # the bech32 data alphabet (BIP-173) age encodes keys in
 _BREAK_GLASS_CHOICES = (
     "--break-glass-recipient <age1…> (preferred: the PUBLIC half of a key you made on another machine; its private "
     "half never touches this node), --mint-break-glass (mint it here and show its private half once), or "
@@ -76,6 +81,50 @@ def _read_public(key_file):
         return None
 
 
+def _is_age_recipient(s):
+    """Whether `s` is a recipient age itself parses: lower-case bech32 whose human part is `age` (or `age1<plugin>`),
+    the bech32 alphabet, and a valid BIP-173 checksum — so a character mistyped or lost in a hand copy is caught before
+    anything is written, where sops would refuse it ("invalid checksum") only at the first encrypt (S2). No length
+    cap: age's parser has none (plugin and post-quantum recipients are long). Pure (testable)."""
+    if s != s.lower() or "1" not in s:
+        return False
+    hrp, data = s.rsplit("1", 1)
+    if not (hrp == "age" or hrp.startswith("age1")) or len(data) < 6 or any(c not in _BECH32 for c in data):
+        return False
+    gen, chk = (0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3), 1
+    for v in [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + [_BECH32.index(c) for c in data]:
+        b, chk = chk >> 25, ((chk & 0x1ffffff) << 5) ^ v
+        for i in range(5):
+            chk ^= gen[i] if (b >> i) & 1 else 0
+    return chk == 1
+
+
+def _rule_recipients(rule):
+    """The age recipients a .sops.yaml creation rule names — on the rule itself and in each key group, as a list or a
+    comma-separated string, every item split at its commas as sops splits it. Pure (testable)."""
+    found = set()
+    if not isinstance(rule, dict):
+        return found
+    for holder in [rule] + list(rule.get("key_groups") or []):
+        age = holder.get("age") if isinstance(holder, dict) else None
+        for item in ([age] if isinstance(age, str) else age or []):
+            found.update(k.strip() for k in str(item).split(",") if k.strip())
+    return found
+
+
+def _control_everywhere(public):
+    """Whether `public` is a recipient of every rule in instance/.sops.yaml that names an age recipient — the test that
+    the key kontroll-init read is this instance's control key before step 2 adds it beside the break-glass key (S3).
+    True when the file is absent or unreadable: the write step then refuses on its own."""
+    try:
+        with open(paths.resolve(".sops.yaml", write=True), encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return True
+    rules = (doc.get("creation_rules") or []) if isinstance(doc, dict) else []
+    return all(public in keys for keys in map(_rule_recipients, rules) if keys)
+
+
 def _stdout_is_terminal():
     """Whether standard output is a terminal: the one place a minted break-glass private key may be shown. A pipe,
     a file or a captured run would put it in a log nobody chose to keep (MF-05). The seam the tests patch."""
@@ -85,17 +134,20 @@ def _stdout_is_terminal():
         return False
 
 
-def _break_glass_refusal(args, tty, control_public):
+def _break_glass_refusal(args, tty, control_public, control_everywhere=True):
     """Why the break-glass flags as given are refused, or None. Runs before anything is written, so every
     refusal leaves the tree and the key directory as they were. `tty` is whether stdout is a terminal;
-    `control_public` the control key's public half if its file exists, else None. Pure (testable).
+    `control_public` the control key's public half if its file exists, else None; `control_everywhere` whether that
+    key is a recipient of every rule in instance/.sops.yaml (`_control_everywhere`). Pure (testable).
 
     Refused: `--fresh` without a choice (kontroll never silently creates an instance whose secrets one key opens);
     `--mint-break-glass` / `--no-break-glass` without `--fresh` (an existing instance adds a recipient it made
-    elsewhere); a recipient that is a PRIVATE key, or not an age public key (the value is never echoed back); a
-    recipient without `--fresh` where no control key file exists (the non-fresh path would otherwise MINT a control
-    key and add it to every domain before reaching the break-glass step — MF-04); a recipient equal to the control
-    key (a copy is not a second recipient); and a mint whose output is not a terminal (MF-05)."""
+    elsewhere); a recipient that is a PRIVATE key, not an age public key, or one whose bech32 checksum fails (the
+    value is never echoed back); a recipient without `--fresh` where no control key file exists (the non-fresh path
+    would otherwise MINT a control key and add it to every domain before reaching the break-glass step — MF-04), or
+    where the key file holds a key that is not a recipient of every rule (step 2 would add THAT key to every domain
+    beside the break-glass one — S3); a recipient equal to the control key (a copy is not a second recipient); and a
+    mint whose output is not a terminal (MF-05)."""
     recipient = args.break_glass_recipient
     if args.fresh and recipient is None and not args.mint_break_glass and not args.no_break_glass:
         return ("ERROR: --fresh requires a break-glass choice — kontroll never silently creates an instance whose "
@@ -113,10 +165,18 @@ def _break_glass_refusal(args, tty, control_public):
         if not _AGE_RECIPIENT_RE.fullmatch(recipient):
             return ("ERROR: --break-glass-recipient is not an age public key (age1 then lower-case letters and "
                     "digits, as age-keygen prints it). Nothing was written.")
+        if not _is_age_recipient(recipient):
+            return ("ERROR: --break-glass-recipient is not a valid age public key (its checksum does not match — a "
+                    "character was mistyped or lost in the copy). Nothing was written.")
         if not args.fresh and control_public is None:
             return ("ERROR: no control key at %s, and without --fresh kontroll-init never mints one — run this where "
                     "the control key is (the installer shell, `scripts/kontroll-installer.sh shell`: "
                     "docs/break-glass.md), or name it with --key-file. Nothing was written." % args.key_file)
+        if not args.fresh and not control_everywhere:
+            return ("ERROR: the key in %s is not a recipient of every rule in instance/.sops.yaml, so it is not this "
+                    "instance's control key (where a keys.txt holds several keys, kontroll-init reads the first "
+                    "`# public key:` line). Run this where the control key is, or name it with --key-file. Nothing "
+                    "was written." % args.key_file)
         if recipient == control_public:
             return ("ERROR: the break-glass recipient is this node's control key — a copy of the control key is not "
                     "a second recipient. Nothing was written.")
@@ -286,7 +346,8 @@ def main(argv):
     bg.add_argument("--break-glass-recipient", metavar="AGE1…",
                     help="the PUBLIC half of a recovery key you generated on another machine; added as a recipient "
                          "of every domain. The private half never touches this node (preferred). Without --fresh: "
-                         "the existing-instance procedure, docs/break-glass.md")
+                         "adds the recipient and stops (no secret is minted) — the existing-instance procedure, "
+                         "docs/break-glass.md")
     bg.add_argument("--mint-break-glass", action="store_true",
                     help="(with --fresh) mint the recovery key here and show its private half ONCE; kontroll "
                          "writes it to no file. Store it offline before you continue. Needs a terminal")
@@ -308,12 +369,30 @@ def main(argv):
     args = ap.parse_args(argv)
 
     # The break-glass choice is judged — and a minted key minted — before anything is written, so every refusal and
-    # every failure to mint leaves the tree and the key directory exactly as they were.
-    refusal = _break_glass_refusal(args, _stdout_is_terminal(),
-                                   _read_public(args.key_file) if args.break_glass_recipient else None)
+    # every failure to mint leaves the tree and the key directory exactly as they were. The --fresh checks come before
+    # the mint too, so a run they refuse has minted nothing (N5).
+    control_public = _read_public(args.key_file) if args.break_glass_recipient else None
+    everywhere = _control_everywhere(control_public) if control_public and not args.fresh else True
+    refusal = _break_glass_refusal(args, _stdout_is_terminal(), control_public, everywhere)
     if refusal:
         print(refusal, file=sys.stderr)
         return 1
+    if args.fresh:
+        # F3 — the "never a silent default" rule enforced at BIRTH (the only place a fresh overlay is created):
+        # --fresh MUST name a trust posture. kontroll fail-LOUDS here (deploy-stack asserts again, belt-and-braces)
+        # rather than guess whether you want human-reviewed (separated) or auto (solo) promotion. (tls_mode fail-SAFEs
+        # to self_signed; trust posture is the opposite — guessing it is never safe.)
+        if not args.trust_mode:
+            print("ERROR: --fresh requires --trust-mode {separated|solo} — kontroll never silently picks your trust "
+                  "posture (how staged proposals are promoted). 'separated' = a human reviews+promotes each (prod); "
+                  "'solo' = declares intent to auto-promote (this edition has no auto-promoter, so it behaves like "
+                  "'separated'). See docs/trust-mode.md.",
+                  file=sys.stderr)
+            return 1
+        guard = _fresh_guard()
+        if guard:
+            print(guard, file=sys.stderr)
+            return 1
     bg_role = bg_public = bg_private = None
     if args.break_glass_recipient or args.mint_break_glass:
         bg_role = catalog.key_role("break-glass")        # the groups it joins + the warning, as the GUI dialog's
@@ -333,21 +412,6 @@ def main(argv):
 
     # 0. --fresh: scaffold a BRAND-NEW overlay (YOUR key only) before the keygen steps -------------------
     if args.fresh:
-        # F3 — the "never a silent default" rule enforced at BIRTH (the only place a fresh overlay is created):
-        # --fresh MUST name a trust posture. kontroll fail-LOUDS here (deploy-stack asserts again, belt-and-braces)
-        # rather than guess whether you want human-reviewed (separated) or auto (solo) promotion. (tls_mode fail-SAFEs
-        # to self_signed; trust posture is the opposite — guessing it is never safe.)
-        if not args.trust_mode:
-            print("ERROR: --fresh requires --trust-mode {separated|solo} — kontroll never silently picks your trust "
-                  "posture (how staged proposals are promoted). 'separated' = a human reviews+promotes each (prod); "
-                  "'solo' = declares intent to auto-promote (this edition has no auto-promoter, so it behaves like "
-                  "'separated'). See docs/trust-mode.md.",
-                  file=sys.stderr)
-            return 1
-        guard = _fresh_guard()
-        if guard:
-            print(guard, file=sys.stderr)
-            return 1
         sc = scaffold_overlay()
         if sc is None:
             print("ERROR: --fresh needs the shipped instance.example/ skeleton, which is absent.", file=sys.stderr)
@@ -414,6 +478,12 @@ def main(argv):
         print("==> NO break-glass recipient (--no-break-glass): every domain has ONE recipient, the control key. "
               "Losing %s destroys every secret in this instance (SECURITY.md R-KEY-1). Add one before real "
               "secrets: docs/break-glass.md." % args.key_file)
+    if bg_public and not args.fresh:
+        # An existing instance's break-glass run adds a recipient and nothing else: step 3 would mint, print and
+        # re-encrypt an absent bootstrap secret the runbook says this procedure does not touch (S5).
+        print("\n==> kontroll-init done: the break-glass recipient only (no secret was minted or changed). Next: the "
+              "re-wrap's dry run, the apply, the checks and the landing — docs/break-glass.md, steps 3 to 6.")
+        return 0
 
     # 3. bootstrap secrets for the auto-mintable domains — deploy-stack's docker/.env render REQUIRES the
     #    dashboards (GUI/Grafana pw + C10 token) AND semaphore (DB pw + admin login + access-key) domains BEFORE

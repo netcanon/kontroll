@@ -28,23 +28,28 @@ losing that key destroyed every device credential, API token and service passwor
   first secret is written, so a fresh instance never needs a re-wrap. A scaffold command copied from an older
   document stops at that refusal.
 - **Refusals, before anything is written:**
-  - a private key passed as the recipient (not echoed back), or a value that is not an age public key;
+  - a private key passed as the recipient (not echoed back), a value that is not an age public key, or one whose
+    bech32 checksum fails (a character lost in a hand copy, which sops would refuse only at the first encrypt);
   - the control key's own public half;
   - `--mint-break-glass` when standard output is not a terminal, so the key cannot land in a pipe or a file;
   - `--mint-break-glass` or `--no-break-glass` on an existing instance;
   - `--break-glass-recipient` without `--fresh` where no control key file exists. The non-fresh path would
-    otherwise mint a control key and add it to every domain first.
+    otherwise mint a control key and add it to every domain first;
+  - the same on an existing instance whose key file holds a key that is not a recipient of every rule, which step 2
+    would otherwise add to every domain.
+  `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
-- **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors.
-  docs/break-glass.md is the runbook. It runs in the installer shell and has:
-  - a quiet window and a proven off-box control-key copy first;
+- **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
+  prints and re-encrypts no secret. docs/break-glass.md is the runbook. It runs in the installer shell and has:
+  - a quiet window, a proven off-box control-key copy, and a checkout level with the canonical first;
   - the re-wrap's dry run, then the apply;
   - the check with the control key, the hand-back of root-owned files, and a scoped commit;
   - the landing with `--check --diff` first, a rollback, and the operator's own proof that the key opens every
-    domain.
+    domain, run where sops can find no other key (a plain `SOPS_AGE_KEY_FILE=… sops -d` passes on a control key
+    in `~/.config`), with a control line that says when the check cannot be trusted.
 - **Security.**
-  - The bootstrap play's warning counts recipients per creation rule. It used to count across rules, so a second
-    recipient on one rule hid a rule with one.
+  - The bootstrap play's warning counts recipients per creation rule of `instance/.sops.yaml` (the rules, not the
+    encrypted files). It used to count across rules, so a second recipient on one rule hid a rule with one.
   - SECURITY.md C1 and R-KEY-1 state three cases: an instance with a second recipient from its first secret; one
     with a single recipient until the runbook is run; and in either case, that kontroll cannot know whether
     anyone kept the private half. C8 conditions the offline half on a recipient having been added; C11 describes
@@ -54,8 +59,8 @@ losing that key destroyed every device credential, API token and service passwor
     launcher, what `fresh-init` printed once — the bootstrap passwords, and now a minted break-glass key — reached
     the Docker log driver: json-file until `--rm` removed the container, journald or a remote driver beyond it,
     and Loki through Vector's docker_logs source on a box whose stack runs. The terminal still shows every line.
-  - No launcher routes `fresh-init` through a run log, a `tee` or an `exec` redirect
-    (`tests/unit/test_installer_phase1.py`).
+  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect or a
+    logger, and none forces the container a terminal (`tests/unit/test_installer_phase1.py`).
   - A refusal after the scaffold (`could not add the break-glass recipient`) left `instance/` root-owned: the
     dispatcher read the exit code with a bare `rc=$?` under `set -e`, so the hand-back never ran. It runs now.
   - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).

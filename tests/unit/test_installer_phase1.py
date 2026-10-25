@@ -233,15 +233,22 @@ _LOG_ROUTE = re.compile(r"\btee\b|^\s*exec\s*[0-9]*>|\bscript\s+-|\blogger\b")
 
 
 def test_fresh_init_output_is_never_teed_to_a_log():
-    """None of the three places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch
-    kit's (scripts/kontroll.sh) and the image's dispatcher (docker/installer/entrypoint.sh) — routes output through
-    `run_log_init` or a `tee`. Guards the show-once break-glass private key `kontroll-init --mint-break-glass` prints
-    landing in a persistent run log — a `tee`, an `exec` redirect of the shell's output, `script` or `logger`. It
-    is the guard for the three scripts; the container's own log is held by
+    """None of the places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch kit's
+    (scripts/kontroll.sh), the libraries they source or run (scripts/lib/canonical-group.sh, plaintext-guard.sh) and
+    the image's dispatcher (docker/installer/entrypoint.sh) — routes output through `run_log_init`, a `tee`, an `exec`
+    redirect of the shell's output, `script` or `logger`; the `init` service has no `tty: true`, and no launcher's
+    `compose … run` passes `-t` or `--tty`. compose run gives the container a terminal only when the launcher's
+    stdout is one, so a pipe around fresh-init is refused by kontroll-init itself; this guards the forms that keep a
+    terminal while copying it — a forced tty, a run log, a logger — which would put the show-once break-glass private
+    key `--mint-break-glass` prints in a log nobody chose to keep. The container's own log is held by
     `test_the_installer_container_keeps_no_log`."""
-    for rel in ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "docker/installer/entrypoint.sh"):
+    for rel in ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "scripts/lib/canonical-group.sh",
+                "scripts/lib/plaintext-guard.sh", "docker/installer/entrypoint.sh"):
         for line in _active_lines(rel):
             assert "run_log_init" not in line and not _LOG_ROUTE.search(line), "%s: %s" % (rel, line)
+            if re.search(r"\bcompose\b.*\brun\b", line):
+                assert not re.search(r"\s(--tty|-[A-Za-z]*t[A-Za-z]*)(?=\s|$)", line), "%s: %s" % (rel, line)
+    assert not _installer_service().get("tty"), "the init service forces no terminal"
 
 
 @pytest.mark.skipif(os.name == "nt" or not shutil.which("bash"),

@@ -105,7 +105,10 @@ def test_main_idempotent_node_makes_no_change_and_never_prints_private(monkeypat
 # --- --fresh: the brand-new-node path (scaffold instance/ + YOUR-key-only .sops.yaml) --------------------
 
 MINTED = "age1freshtestpubkey00000000000000000000000000000000000000"   # the control key a fresh node mints
-BG = "age1breakglasstestpubkey000000000000000000000000000000000"       # a break-glass PUBLIC key made elsewhere
+# A break-glass PUBLIC key made elsewhere: bech32 with a valid checksum, as kontroll-init requires, and one byte short
+# of a real key, so the leak guard's real-length age rule never matches it.
+BG = "age1vfex2cttvakxzumn946x2um594c82csqqqqqqqqqqqqqqqqqqqzjuph0"
+OTHER = "age1othertestpubkey00000000000000000000000000000000000000"    # a key that is not this instance's control key
 BG_PRIVATE = "AGE-SECRET-KEY-1FAKEBREAKGLASSPRIVATE"                     # a minted one's private half (a fake)
 _FRESH = ["--fresh", "--trust-mode", "separated", "--mgmt-ip", "198.51.100.7", "--domain", "lab.test"]
 
@@ -400,15 +403,21 @@ def test_no_break_glass_is_explicit_and_says_what_it_costs(fresh_repo, monkeypat
     ("age1short", "is not an age public key"),
     ("age1BREAKGLASSUPPERCASEPUB000000000000000000000000000000", "is not an age public key"),
     (BG + "," + MINTED, "is not an age public key"),
-], ids=["private-key", "private-key-lower-padded", "too-short", "upper-case", "two-joined"])
+    (BG[:-1] + "q", "is not a valid age public key"),
+    (BG[:20] + "b" + BG[21:], "is not a valid age public key"),
+], ids=["private-key", "private-key-lower-padded", "too-short", "upper-case", "two-joined", "checksum-typo",
+        "outside-the-alphabet"])
 def test_a_malformed_or_private_recipient_is_refused_before_any_write(fresh_repo, monkeypatch, capsys,
                                                                      recipient, expect):
     """A `--break-glass-recipient` that is a PRIVATE key, or is not an age public key as age-keygen prints one, exits
     1 before anything is written, and the value is not echoed back; a private key in lower case or with a space
-    before it is still named as one; a valid key with more after it (two keys joined by a comma) is refused whole.
-    Guards a typo creating a recipient nobody can decrypt with (every later secret written to it), a check that reads
-    only a valid prefix, a private key pasted by mistake being printed to the terminal or its log a second time, and
-    a lower-cased or padded one losing the advice that names it a private key."""
+    before it is still named as one; a valid key with more after it (two keys joined by a comma) is refused whole; a
+    value of the right shape whose bech32 checksum fails — one character changed, or one outside the bech32 alphabet
+    — is refused as one (S2). Guards a typo creating a recipient nobody can decrypt with (sops refuses it only at the
+    first encrypt, after the instance and its .sops.yaml are written, so the run fails half-way with an error that
+    blames the age key and no re-run repairs it), a check that reads only a valid prefix, a private key pasted by
+    mistake being printed to the terminal or its log a second time, and a lower-cased or padded one losing the advice
+    that names it a private key."""
     _mock_fresh_seams(monkeypatch)
     monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
     assert ki.main(_FRESH + ["--break-glass-recipient", recipient]) == 1
@@ -485,10 +494,75 @@ def test_a_recipient_without_fresh_and_no_control_key_is_refused_and_mints_nothi
     assert open(sops_path, encoding="utf-8").read() == before and not os.path.exists(ki.AGE_KEY_FILE)
 
 
+@pytest.mark.parametrize("text,want", [
+    ("creation_rules:\n  - path_regex: a\n    key_groups:\n      - age: [%(c)s, %(b)s]\n", True),
+    ("creation_rules:\n  - path_regex: a\n    age: %(b)s,%(c)s\n", True),
+    ("creation_rules:\n  - path_regex: a\n    key_groups:\n      - age: ['%(b)s,%(c)s']\n", True),
+    ("creation_rules:\n  - path_regex: a\n    key_groups:\n      - age: [%(b)s]\n      - age: [%(c)s]\n", True),
+    ("creation_rules:\n  - path_regex: a\n    key_groups:\n      - age: [%(c)s]\n  - path_regex: b\n    key_groups:\n"
+     "      - pgp: [F00]\n", True),
+    ("creation_rules:\n  - path_regex: a\n    key_groups:\n      - age: [%(c)s]\n  - path_regex: b\n    key_groups:\n"
+     "      - age: [%(b)s]\n", False),
+    ("creation_rules:\n  - path_regex: a\n    age: %(b)s\n", False),
+    (None, True),
+], ids=["key-group-list", "rule-level-string", "comma-in-a-list-item", "second-group", "no-age-rule-skipped",
+        "one-rule-without-it", "rule-level-without-it", "no-file"])
+def test_the_control_key_check_reads_every_recipient_form(fresh_repo, text, want):
+    """`_control_everywhere` finds the control key in a rule whichever form names it — a key-group list, a
+    comma-separated string on the rule itself, a list item holding a comma, any of several groups — skips a rule
+    with no age recipient, and is False when one rule that names age recipients lacks it, in a key group or on the
+    rule itself; with no .sops.yaml it defers to the write step, which refuses on its own. Guards the S3 refusal
+    turning away a real control key written in a form the reader misses, or passing a key that one rule does not
+    name — a reader blind to the rule's own `age:` saw no recipients there and passed any key (mutant F3-E3)."""
+    path = os.path.join(fresh_repo, "instance", ".sops.yaml")
+    if text is not None:
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text % {"c": MINTED, "b": BG})
+    assert ki._control_everywhere(MINTED) is want
+
+
+def test_a_key_file_that_is_not_the_control_recipient_is_refused(fresh_repo, monkeypatch, capsys):
+    """Without --fresh, `--break-glass-recipient` where the key file kontroll-init reads holds a key that is not a
+    recipient of every rule in instance/.sops.yaml exits 1, names the key file, and leaves .sops.yaml byte-identical.
+    Guards a `--key-file` naming the wrong file, or a keys.txt whose first `# public key:` line is not the control
+    key, adding THAT key to every domain in step 2 beside the break-glass one — after the re-wrap its holder, whoever
+    it is, opens every secret, and the runbook's checks (a removed recipient) do not stop it (S3)."""
+    sops_path = _existing_instance(fresh_repo, monkeypatch)
+    before = open(sops_path, encoding="utf-8").read()
+    _write_key(ki.AGE_KEY_FILE, OTHER)
+    capsys.readouterr()
+    assert ki.main(["--break-glass-recipient", BG]) == 1
+    err = capsys.readouterr().err
+    assert "is not a recipient of every rule" in err and ki.AGE_KEY_FILE in err and "Nothing was written" in err
+    assert OTHER not in err
+    assert open(sops_path, encoding="utf-8").read() == before
+
+
+def test_an_existing_instance_break_glass_run_mints_and_changes_no_secret(fresh_repo, monkeypatch, capsys):
+    """Without --fresh, a `--break-glass-recipient` run on an instance whose bootstrap domains lack fields exits 0
+    after adding the recipient and never reaches the bootstrap-secrets step: no plan is built, nothing is written,
+    nothing secret is printed, and it names the runbook's next steps. Guards the existing-instance path minting,
+    printing and re-encrypting an absent bootstrap secret — an older instance's Grafana admin password, a value the
+    running service does not have — that docs/break-glass.md says this procedure does not touch (S5)."""
+    _existing_instance(fresh_repo, monkeypatch)
+    monkeypatch.setattr(secrets_service, "_existing_keys", lambda d: set())       # every bootstrap field absent
+    monkeypatch.setattr(secrets_service, "build_secret_plan", _never("the bootstrap secrets"))
+    monkeypatch.setattr(secrets_service, "apply_secret_plan", _never("a secret write"))
+    capsys.readouterr()
+    assert ki.main(["--break-glass-recipient", BG]) == 0
+    out = capsys.readouterr().out
+    assert "no secret was minted or changed" in out and "docs/break-glass.md" in out
+    assert "SAVE" not in out and "bootstrap secrets" not in out
+    assert all(s == {MINTED, BG} for s in _rules().values())
+
+
 def test_the_terminal_check_reads_standard_output(monkeypatch):
     """`_stdout_is_terminal` follows standard output alone: True when only standard output is a terminal, False
-    when only standard input and standard error are. Guards the MF-05 seam reading the wrong stream — with it,
-    `--mint-break-glass > file` run with standard error on a terminal would print the private key into the file."""
+    when only standard input and standard error are, and False when there is no standard output or it is closed.
+    Guards the MF-05 seam reading the wrong stream — with it, `--mint-break-glass > file` run with standard error on
+    a terminal would print the private key into the file — and a missing or closed standard output counted as a
+    terminal (N2)."""
     class _Stream:
         def __init__(self, tty):
             self._tty = tty
@@ -500,6 +574,14 @@ def test_the_terminal_check_reads_standard_output(monkeypatch):
         monkeypatch.setattr(sys, "stderr", _Stream(other))
         monkeypatch.setattr(sys, "stdin", _Stream(other))
         assert ki._stdout_is_terminal() is want
+    monkeypatch.setattr(sys, "stdout", None)
+    assert ki._stdout_is_terminal() is False
+
+    class _Closed:
+        def isatty(self):
+            raise ValueError("I/O operation on closed file")
+    monkeypatch.setattr(sys, "stdout", _Closed())
+    assert ki._stdout_is_terminal() is False
 
 
 def test_mint_refuses_when_standard_output_is_not_a_terminal(fresh_repo, monkeypatch, capsys):
@@ -545,6 +627,23 @@ def test_a_failed_mint_writes_nothing(fresh_repo, monkeypatch, capsys):
     assert ki.main(_FRESH + ["--mint-break-glass"]) == 1
     assert "could not mint the break-glass key" in capsys.readouterr().err
     assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
+def test_a_fresh_run_refused_for_its_trust_mode_or_a_configured_overlay_mints_no_key(fresh_repo, monkeypatch, capsys):
+    """`--fresh --mint-break-glass` without `--trust-mode`, or on an overlay that already names real recipients, exits
+    1 before the break-glass key is minted. Guards the mint running ahead of the --fresh checks, so that "refuses
+    before minting anything" held for the break-glass refusals only, and a key was minted and discarded for a run
+    that could never use it (N5)."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    monkeypatch.setattr(keygen, "generate_keypair", _never("the mint"))
+    no_trust = [a for a in _FRESH if a not in ("--trust-mode", "separated")]
+    assert ki.main(no_trust + ["--mint-break-glass"]) == 1
+    assert "--fresh requires --trust-mode" in capsys.readouterr().err
+    _existing_instance(fresh_repo, monkeypatch)
+    capsys.readouterr()
+    assert ki.main(_FRESH + ["--mint-break-glass"]) == 1
+    assert "already names real recipients" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("choice", [["--break-glass-recipient", BG], ["--mint-break-glass"]], ids=["supplied", "minted"])
