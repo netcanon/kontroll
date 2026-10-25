@@ -196,13 +196,14 @@ def test_onboard_different_collection_on_same_key_still_conflicts(tmp_repo, mock
 
 
 def test_apply_refuses_to_clobber_divergent_file(tmp_repo, mock_probe, capsys):
-    """If the operator hand-edited a drop-in, a re-apply HARD-STOPS rather than overwriting their change — the
-    no-clobber guarantee that protects local edits. The hard stop is a catchable `gitio.WriteConflict` (NOT a
-    `sys.exit`/SystemExit): in-process the GUI/API turn it into a clean 409 instead of a worker-killing crash; the
-    CLI's dispatch catches it and exits cleanly. (Same guard that fires when a key collides with a shipped module.)"""
+    """If the operator rewrote a drop-in so it no longer opens with the onboard banner, a re-apply HARD-STOPS rather
+    than overwriting it — the no-clobber guarantee for a drop-in onboard no longer owns. The hard stop is a
+    catchable `gitio.WriteConflict` (NOT a `sys.exit`/SystemExit): in-process the GUI/API turn it into a clean 409
+    instead of a worker-killing crash; the CLI's dispatch catches it and exits cleanly. (Same guard that fires when a
+    key collides with a shipped module.)"""
     galaxy.cmd_onboard(_args(apply=True))
     capsys.readouterr()
-    # operator hand-edits the drop-in; a re-apply must hard-stop, never overwrite
+    # the operator rewrites the drop-in without the banner; a re-apply must hard-stop, never overwrite
     inv = tmp_repo / "ansible" / "inventory" / "onboarded-edgeos.yml"
     inv.write_text("# hand-edited\nall: {}\n", encoding="utf-8")
     with pytest.raises(gitio.WriteConflict):

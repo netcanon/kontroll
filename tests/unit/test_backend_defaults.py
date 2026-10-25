@@ -314,9 +314,10 @@ def test_the_scaffold_takes_the_backend_default_domain(probed):
     {"auth": [{"field": "password", "kind": "password", "maps_to": "{host}_pw"}]},          # a placeholder it lacks
     {"requires": [], "derive_params": {"a" * 65: "{name}"}},                                # one past `requires:`
     {"requires": [], "derive_params": {"r\u00e9seau": "{name}"}},                           # not ASCII
+    {"requires": [], "derive_params": {"1abc": "{name}"}},                                  # opens with a digit
 ], ids=["domain-path", "domain-bool", "domain-null", "param-typo", "param-jinja", "param-list", "param-name",
         "param-name-unrequired", "maps-to-dash", "maps-to-unknown", "param-name-len65",
-        "param-name-non-ascii"])
+        "param-name-non-ascii", "param-name-leading-digit"])
 def test_a_registry_default_that_does_not_render_is_repository_data(probed, change):
     """A default domain that is not a valid name, a `derive_params` template that does not render or names a param
     that is not an ASCII identifier or is longer than the 64 characters a `requires:` entry may hold (one the backend
@@ -328,7 +329,9 @@ def test_a_registry_default_that_does_not_render_is_repository_data(probed, chan
     65-character row is a row because a key rule one longer than the `requires:` rule passed every suite, and the
     key, which could then never be required, was skipped where it is refused (T18's fold-6 read, N2: its mutant
     S2). The non-ASCII row is a row because a key rule that took any Python identifier let such a key by the same
-    way (its fold-7 read, N2: mutants S4 and S5)."""
+    way (its fold-7 read, N2: mutants S4 and S5). The leading-digit row is a row because a key rule that took an
+    ASCII word character first let such a key by the same way (its fold-8 read, N1: mutants S8 and S9) — a name
+    ansible-core refuses as a variable."""
     probed(**CLICONF)
     bdef = _lab(**dict({"default_secrets_domain": "lab"}, **change))
     with pytest.raises(paths.RepositoryDataError):
@@ -480,9 +483,9 @@ def test_a_bare_required_connection_param_is_filled_in_any_spacing(probed, value
 
 
 @pytest.mark.parametrize("requires", ["network_os", ["network_os", 5], {"network_os": 1}, ["r\u00e9seau"], False, "",
-                                      [True], [None], ["a" * 65]],
+                                      [True], [None], ["a" * 65], ["1abc"]],
                          ids=["string", "non-string-entry", "map", "non-identifier-entry", "false", "empty-string",
-                              "bool-entry", "null-entry", "len65"])
+                              "bool-entry", "null-entry", "len65", "leading-digit-entry"])
 def test_a_requires_that_is_not_a_list_of_names_is_repository_data(probed, requires):
     """A backend whose `requires:` is not a list of param names — a string (empty too), `false`, a map, an entry that
     is not a string (a YAML `true` or `~` too) or not an identifier, or one longer than the 64 characters a
@@ -494,7 +497,8 @@ def test_a_requires_that_is_not_a_list_of_names_is_repository_data(probed, requi
     whose name is a piece of the string. An entry that is not an identifier was accepted and could never be derived
     or read bare (fold-3 read, S1), and a falsy `requires:` read as none would hide the same fault (its mutant Y7).
     The bool, null and long entries are rows because the name rule applied to the entry's text, or with no length
-    bound, let each by unseen (fold-4 read, N5: its mutants Z7 and Z6)."""
+    bound, let each by unseen (fold-4 read, N5: its mutants Z7 and Z6), and the leading-digit entry because a name
+    rule that took a digit first let it by at both sites (T18's fold-8 read, N1: mutants R5 and R6)."""
     probed(**CLICONF)
     bdef = _lab(default_secrets_domain="lab", requires=requires, derive_params={"network_os": "{collection}.{name}"},
                 connection={"ansible_connection": "network_cli", "ansible_network_os": "{{ os }}"})

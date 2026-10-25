@@ -8,7 +8,7 @@ Split into the API-ready shape the workstream calls for:
   * apply_onboard_plan — performs the repo mutations for a plan (idempotent no-clobber
     writes + fleet-enable + SOPS encrypt), prints progress (the exemplar's pattern), and
     returns {"changed","paths"}.
-Onboarding a collection the class under its key already declares (under a class with
+Onboarding a collection that the class under the device-class key already declares (under a class with
 `collections: []`, a collection ansible-core ships) REUSES the curated module (adds only the host
 + fleet-enable) rather than regenerating a minimal one that would strip its metrics:/backup:/
 logs: blocks (#124); the inventory drop-in MERGES so a 2nd device of a class never drops the
