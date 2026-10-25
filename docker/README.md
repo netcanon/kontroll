@@ -95,22 +95,28 @@ one is old):
 
 A check that is switched off counts as missing. A `pip install`, `pip check`, `apk add`, download or `sha256sum -c`
 fails the build only if every operator after it to the end of the `RUN` is `&&` (a pipe after a later `&&` too): a
-`|| true` or `; rm …` anywhere later, a pipe right after it, an `if`, `elif`, `while` or `until` condition around it
-or a `!` before it switches it off. Under `set -e` (or `set -o errexit`), written as a whole command at the top of the
-`RUN`, a `;` right after the check is enough when the check is the whole of its `&&` list — not after a later
+`|| true` or `; rm …` anywhere later, a pipe right after it, a lone `&` (it sends the list to the background), an
+`if`, `elif`, `while` or `until` condition around it or a `!` before it switches it off. Under `set -e` (or `set -o
+errexit`), written as a whole command at the top of the `RUN`, a `;` right after the check is enough when the check
+starts its AND-OR list and is the whole of it — not after a later
 `&& …` (errexit spares every command of a list but the last), not after a guard (`[ "$TARGETARCH" = amd64 ] && check;`
 skips the check when the guard fails), and not inside a brace group, a subshell, an `if` body or a loop (a `|| true`
 after the compound switches errexit off inside it). A `set +e` anywhere, a `set` of a variable or a `shopt` naming
-errexit switches errexit off. A check inside a `$(…)`, backquotes or a quoted string (`sh -c '…'`, `eval '…'`) is
-refused, as is a `trap`, an `exec`, a `return` or an `exit` other than `exit 1` to `exit 255` in the same `RUN`: each
+errexit switches errexit off. A check inside a `$(…)`, backquotes or a quoted string (`sh -c '…'`, `eval '…'`), after
+an ANSI-C `$'…'`, in a compound behind `||`, `|`, `&` or `!`, or in a function body is refused, as is a function or an
+alias defined anywhere in the `RUN` (it can stand in for the checked program), a `set -n` (the shell then runs
+nothing), and a `trap`, an `exec`, a `return` or an `exit` other than `exit 1` to `exit 255` in the same `RUN`: each
 can end it with a status that is not the check's. A download names one URL and one output. A checksum fetched beside
 the file is no pin either — whoever swaps the file swaps it too — so the digest must be one the tree holds: an `ARG`
 or `ENV` whose every value is the 64 hex, on one `echo "$<ARG>  <file>" | sha256sum -c -` line, and no build passes
 that `ARG` in. The rules are in [`tests/unit/_build_read.py`](../tests/unit/_build_read.py), and the pip-audit step is
-held to them too (and must name its shell unless its runner is a named Linux or macOS one). The test also refuses
-what it cannot read (a `SHELL` other than Docker's default, an exec-form `RUN`, a heredoc, a comment inside a `RUN` —
-Docker joins the lines first, so the shell drops the rest — an `# escape=` directive, a Dockerfile outside this
-directory) and a `# syntax=` frontend not pinned by digest. What it still cannot see is listed in the test's
+held to them too (and must name its shell unless its runner is a named Linux or macOS one). The test reads a
+Dockerfile's lines as BuildKit splits and joins them (on LF only, a byte-order mark dropped, a continuation joined with
+no space, a line ending in two backslashes continuing nothing), and refuses a character the two read differently (a
+carriage return inside a line, VT, FF, U+001C to U+001F, NEL, LS, PS). It also refuses what it cannot read (a `SHELL`
+other than Docker's default, an exec-form `RUN`, a heredoc, a comment inside a `RUN` — Docker joins the lines first,
+so the shell drops the rest — an `# escape=` directive, a Dockerfile outside this directory) and a `# syntax=`
+frontend not pinned by digest. What it still cannot see is listed in the test's
 docstring. The installer's and Vector's **apt** packages still float inside their pinned base; the
 published image's digest in [`images.lock.yml`](images.lock.yml) is the full pin ([SECURITY.md](../SECURITY.md) §
 Accepted risks, R-IMG-2).

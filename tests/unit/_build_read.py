@@ -2,29 +2,39 @@
 (tests/unit/test_ci_workflows.py). Both hold that a check the build runs (a `pip check`, a `sha256sum -c`, a
 `pip-audit`) can fail it, so both read the same way when a failing command fails the text it is in.
 
-The text is split into commands on `&&`, `||`, `;` and `|`, with the operator on each side kept ('' at either end).
-Quotes are not parsed, so a separator inside a quoted string only adds a boundary. Newlines are not read: a RUN's
-continuation lines are already joined, and a step's reader joins its lines with `;`.
+The text is split into commands on `&&`, `||`, `;`, `|` and a lone `&` (one outside quotes that is not part of
+`&&`, `>&`, `<&` or `|&`), with the operator on each side kept ('' at either end). Quotes are not parsed for the
+other operators, so one inside a quoted string only adds a boundary. Newlines are not read: a RUN's continuation
+lines are already joined (as BuildKit joins them, with no space), and a step's reader joins its lines with `;`, or
+with a space after a line that ends in `&&`, `||` or `|`.
 
 Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the whole text only if all of these hold:
 - nothing is piped after it: a pipeline's status is its last command's (no pipefail is assumed);
 - no `||` follows it in its AND-OR list: a later `||` runs on its failure, and the list takes that command's status;
-- its AND-OR list is the last of the text, or errexit is on and its pipeline is the whole of its AND-OR list
-  (errexit is ignored for every command of a list but the last, so `set -e; a && b; c` runs `c` after `a` fails,
-  and a guard before it, `set -e; [ "$X" = y ] && it; c`, skips it and goes on);
+- its AND-OR list is the last of the text and not sent to the background by a lone `&` (the shell goes on at once,
+  with status 0), or errexit is on and it starts its AND-OR list and is the whole of it (errexit is ignored for every
+  command of a list but the last, so `set -e; a && b; c` runs `c` after `a` fails, and a guard before it,
+  `set -e; [ "$X" = y ] && it; c`, skips it and goes on);
 - it is not part of an `if`, `elif`, `while` or `until` condition, or of a pipeline that opens with `!` (errexit is
   ignored there, and a failure picks a branch);
 - its pipeline does not run only when the command before it fails (`a || it`);
 - it does not run inside a `$(…)`, backquotes or a quoted string (an `sh -c '…'`, an `eval '…'`): its status is
-  then not this shell's;
+  then not this shell's. An ANSI-C `$'…'` (dash and bash read it differently) leaves the rest of the text open;
+- it does not run in a compound that is behind `||`, `|`, `&` or `!`, or that is a function body: the shell skips
+  it, runs it apart, or drops its status;
+- no function or alias is defined in the text: one can stand in for the checked program, or for `set`;
 - no `trap`, `exec`, `return` or `exit` shares the text, but `exit 1` to `exit 255` (`exit 256` is 0): each of the
   others can end the text with a status that is not the failure's. One is read as a word anywhere in a command, as
-  written or with its quotes and backslashes removed (`\\exit 0`, `"exit" 0`, `command exit 0`, `eval 'exit 0'`).
+  written or with its quotes and backslashes removed (`\\exit 0`, `"exit" 0`, `command exit 0`, `eval 'exit 0'`),
+  after an `&`, `|` or redirect and before a redirect too (`true&exit 0`, `exit>/dev/null`);
+- no `set -n` or `set -o noexec` shares the text (a flag cluster holding `n`): the shell reads the rest of the text
+  and runs none of it.
 Inside a compound command (a brace group, a subshell, a function body, an `if`, `case`, `for`, `while` or `until`
 body) only `&&` to the end of the text counts: errexit is ignored inside a compound that is not the last of its
 AND-OR list (`{ a; b; } || true` runs `b` after `a` fails), so the `;` rule is not trusted there. A compound closed
 before the command leaves nothing open; a `}`, `fi`, `done` or `esac` closes one only as a command of its own (after
-a `;`, `&` or `|`, so `echo done` closes nothing), and a `${…}` is removed first.
+a `;`, `&` or `|`, so `echo done` closes nothing) and before a delimiter (so `done=1` and `}x` close nothing), and a
+`${…}` is removed first.
 
 Errexit is switched on by a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command at the top
 of the text and runs whenever the text reaches it (not behind `&&` or `||`, not piped, not sent to the background,
@@ -32,17 +42,19 @@ nothing open). It is switched off by a `set +e` or `set +o errexit` anywhere in 
 `eval` or `command`, written through quotes or backslashes), by a `set` given a variable (`set $o`) and by a `shopt`
 naming errexit. A `set -e` the reader cannot place switches nothing on, and a `set` it cannot rule out switches
 errexit off, so each misreading of these that it knows of refuses. The reader refuses what it knows it cannot read;
-what it still cannot see (a quoted `)` inside a `$(…)`, a command built at run time) is listed in
-tests/unit/test_image_pins.py's docstring.
+what it still cannot see is listed in tests/unit/test_image_pins.py's docstring ("What the checks still cannot
+see").
 """
 import re
 
-_OPERATORS = re.compile(r"(&&|\|\||;|\|)")
+_OPERATORS = re.compile(r"(&&|\|\||;|\||\x02)")
+_LONE_AMP = re.compile(r"(?<![<>|&])&(?!&)")
 _CONDITION = re.compile(r"(?:if|elif|while|until)(?:\s|$)")
 _BODY = re.compile(r"(?:then|do)(?:\s|$)")
 _SET_OFF = re.compile(r"""\bset\s+(?:\S+\s+)*?(?:["'\\]*\+["'\\]*[a-zA-Z]*e|\+o\s+["']?errexit|\S*\$)"""
                       r"|\bshopt\b.*\berrexit\b")
-_ENDER = re.compile(r"""(?:^|[\s;'"\\(){}!=])(trap|exec|exit|return)(?:["']?(?:\s+(.*))?$|["'\s;)])""")
+_ENDER = re.compile(r"""(?:^|[\s;&|<>'"\\(){}!=])(trap|exec|exit|return)(?:["']?(?:\s+(.*))?$|["'\s;)<>&|])""")
+_NOEXEC = re.compile(r"\bset\s+(?:\S+\s+)*?(?:-[a-zA-Z]*n[a-zA-Z]*|-o\s+noexec)")
 
 
 def _plain(command):
@@ -63,7 +75,12 @@ def image_reference(value):
 
 def commands(text):
     """[(command, the operator before it, the operator after it)] of shell text; the operator is '' at either end."""
-    parts = _OPERATORS.split(text)
+    mask, prev = text, None
+    while prev != mask:
+        prev, mask = mask, _QUOTED.sub(lambda m: "\x01" * len(m.group(0)), mask)
+    amps = {m.start() for m in _LONE_AMP.finditer(mask)}
+    text = "".join("\x02" if k in amps else ch for k, ch in enumerate(text))
+    parts = ["&" if p == "\x02" else p for p in _OPERATORS.split(text)]
     return [(parts[i].strip(), parts[i - 1] if i else "", parts[i + 1] if i + 1 < len(parts) else "")
             for i in range(0, len(parts), 2) if parts[i].strip()]
 
@@ -73,21 +90,23 @@ _PREFIX = re.compile(r"(?:\s*(?:[({]|(?:if|then|else|elif|do|while|until|!)(?=\s
 # The constructs a command may close, each matched only when nothing inside it is a quote: the closed quoted strings
 # are removed first, so a quote still there is an open one, which swallows the closer (`( echo " ); X` closes nothing).
 _CLOSED = (re.compile(r"\$\{[^{}\"'`]*\}"),
-           re.compile(r"\bcase\b(?:(?!\bcase\b|\besac\b)[^\"'`])*[;&|]\s*esac\b"),
+           re.compile(r"\bcase\b(?:(?!\bcase\b|\besac\b)[^\"'`])*[;&|]\s*esac(?=[\s;&|()<>]|$)"),
            re.compile(r"\((?:(?!\bcase\b)[^()\"'`])*\)"),
-           re.compile(r"\{[^{}\"'`]*[;&|]\s*\}"),
-           re.compile(r"\bif\b(?:(?!\bif\b|\bfi\b)[^\"'`])*[;&|]\s*fi\b"),
-           re.compile(r"\b(?:for|while|until)\b(?:(?!\b(?:for|while|until|done)\b)[^\"'`])*[;&|]\s*done\b"))
+           re.compile(r"\{[^{}\"'`]*[;&|]\s*\}(?=[\s;&|()<>]|$)"),
+           re.compile(r"\bif\b(?:(?!\bif\b|\bfi\b)[^\"'`])*[;&|]\s*fi(?=[\s;&|()<>]|$)"),
+           re.compile(r"\b(?:for|while|until)\b"
+                      r"(?:(?!\b(?:for|while|until|done)\b)[^\"'`])*[;&|]\s*done(?=[\s;&|()<>]|$)"))
 
 
-_QUOTED = re.compile(r"""'[^']*'|"(?:[^"\\`]|\\.)*"|`(?:[^`\\]|\\.)*`|\\.""")
+_QUOTED = re.compile(r"""'[^']*'|"(?:[^"\\`]|\\.|`(?:[^`\\]|\\.)*`)*"|`(?:[^`\\]|\\.)*`|\\.""")
 
 
 def _without_quotes(text):
     """`text` with each closed quoted string, backquoted command and backslash-escaped character removed, read as sh
     reads them: nothing is special inside `'…'`, elsewhere a backslash escapes the next character (`\\"` opens no
     quote), and a `'` inside `"…"` is a character. A quote left open stays. A `$(…)` is not tracked: a quote inside
-    one reads as closing the quote around it."""
+    one reads as closing the quote around it. Removal repeats until nothing changes, so a quoted string that a quote
+    inside a `"$(…)"` hides from one pass goes in the next (`"$(echo '`')"`: the `'`'`, then the rest)."""
     prev = None
     while prev != text:
         prev, text = text, _QUOTED.sub(" ", text)
@@ -97,6 +116,8 @@ def _without_quotes(text):
 def _left_open(text):
     """What `text` leaves open once each quoted string, then each construct closed in it, is removed: 'text',
     'compound' or ''."""
+    if "$'" in text:
+        return "text"
     text, prev = _without_quotes(text), None
     while prev != text:
         prev = text
@@ -107,6 +128,21 @@ def _left_open(text):
     if re.search(r"[({]|\b(?:if|then|else|elif|do|case|for|while|until)\b", text):
         return "compound"
     return ""
+
+
+_FUNCTION = re.compile(r"\bfunction\s+[^\s;&|()<>]+(?:\s*\(\s*\))?|[^\s;&|()<>$]+\s*\(\s*\)")
+
+
+def _skipped(text):
+    """True if `text` leaves open a compound whose status it does not take: one after `||`, `|`, `&` or `!`, or a
+    function body."""
+    text, prev = _FUNCTION.sub(" \x00 ", _without_quotes(text)), None
+    while prev != text:
+        prev = text
+        for pattern in _CLOSED:
+            text = pattern.sub(" ", text)
+    return any(re.search(r"(?:\|\|?|(?<!&)&|(?:^|\s)!|\x00)\s*$", text[:m.start()])
+               for m in re.finditer(r"[({]|\b(?:if|case|for|while|until)\b", text))
 
 
 def opened(cmds, i):
@@ -131,7 +167,7 @@ def errexit(cmds, on=False):
             on = False
             continue
         words = command.split()
-        if not words or words[0] != "set" or "&" in words or before not in ("", ";") or after == "|" \
+        if not words or words[0] != "set" or before not in ("", ";", "&") or after in ("|", "&") \
                 or opened(cmds, k):
             continue
         for n, word in enumerate(words[1:], 1):
@@ -166,11 +202,14 @@ def conditions(cmds):
 def ender(cmds):
     """The first command of the text holding a `trap`, `exec`, `return` or `exit` that can end it with a status other
     than a failure's (each but `exit 1` to `exit 255`), as a word of its own anywhere in the command (after a keyword,
-    an opening `(`, `{` or `!`, a case pattern, `command`, `eval`, an assignment), as written or with its quotes and
-    backslashes removed; or None."""
+    an opening `(`, `{` or `!`, a case pattern, `command`, `eval`, an assignment, an `&`, `|` or redirect; or before
+    a redirect, `exit>/dev/null`), as written or with its quotes and backslashes removed; or a `set -n` or `set -o
+    noexec` (a flag cluster holding `n`: the shell reads the rest of the text and runs none of it); or None."""
     for command, _, _ in cmds:
         for text in (command, _plain(command)):
             m = _ENDER.search(text)
+            if _NOEXEC.search(text):
+                return command
             if m and not (m.group(1) == "exit" and re.fullmatch(r"[1-9]\d?|1\d\d|2[0-4]\d|25[0-5]",
                                                                 (m.group(2) or "").strip())):
                 return command
@@ -181,22 +220,30 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
     """["<what> …: <command>"] if a failure of cmds[i] would not fail the text (the module docstring's rules), else [].
     `on`: whether errexit is on at the start of the text."""
     command = cmds[i][0]
+    if any(_FUNCTION.search(_without_quotes(c)) or re.search(r"(?:^|\s)alias\s", _without_quotes(c))
+           for c, _, _ in cmds):
+        return ["%s shares the %s with a function or an alias, which can stand in for it: %s"
+                % (what, unit, command)]
     if conditions(cmds)[i]:
         return ["%s is a condition or negated (its failure would not fail the %s): %s" % (what, unit, command)]
     faults, open_ = [], opened(cmds, i)
     if open_ == "text":
-        faults.append("%s runs inside a `$(…)`, backquotes or a quoted string (its failure would not fail the %s): %s"
-                      % (what, unit, command))
+        faults.append("%s runs inside a `$(…)`, backquotes or a quoted string, or after an ANSI-C `$'…'` (its failure "
+                      "would not fail the %s): %s" % (what, unit, command))
     if ender(cmds):
-        faults.append("%s shares the %s with `%s`, which can end it with another status: %s"
+        faults.append("%s shares the %s with `%s`, which can end it with another status or run none of it: %s"
                       % (what, unit, ender(cmds), command))
     if cmds[_pipeline_start(cmds, i)][1] == "||":
         faults.append("%s runs only when the command before it fails: %s" % (what, command))
+    if open_ == "compound" and _skipped(" ".join([c + " " + a for c, _, a in cmds[:i]]
+                                                 + [_PREFIX.match(command).group(0)])):
+        faults.append("%s runs in a compound behind `||`, `|`, `&` or `!`, or a function body (its failure would "
+                      "not fail the %s): %s" % (what, unit, command))
     j = i
-    while j + 1 < len(cmds) and (cmds[j][2] == "&&" or (cmds[j][2] == "|" and j > i)):
+    while j + 1 < len(cmds) and (cmds[j][2] == "&&" or (cmds[j][2] == "|" and j > i and open_ != "compound")):
         j += 1
     after = cmds[j][2]
     if not (after == "" or (after == ";" and j == i and errexit(cmds, on)[i] and not open_
-                            and cmds[_pipeline_start(cmds, i)][1] in ("", ";"))):
+                            and cmds[_pipeline_start(cmds, i)][1] in ("", ";", "&"))):
         faults.append("%s not followed by && (its failure would not fail the %s): %s" % (what, unit, command))
     return faults
