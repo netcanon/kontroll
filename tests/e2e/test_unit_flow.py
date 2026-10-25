@@ -13,6 +13,8 @@ import json
 import pytest
 from playwright.sync_api import expect
 
+import _canned
+
 pytestmark = pytest.mark.e2e
 
 
@@ -72,7 +74,7 @@ def test_the_review_pane_defaults_the_blast_radius_to_lan(page):
     operator touches nothing is still `LAN`, not the first option."""
     page.route("**/api/units/*", lambda route: route.fulfill(
         status=200, content_type="application/json",
-        body=json.dumps({"units": [{"name": "swarm", "kind": "role"}]})))
+        body=json.dumps(_canned.service_units("cisco.ios"))))
     page.goto("/")
     page.get_by_test_id("search-input").fill("cisco ios")
     page.get_by_test_id("search-btn").click()

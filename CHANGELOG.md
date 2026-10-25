@@ -64,6 +64,75 @@ backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s o
   typed domain now counts as input to the form's collapse check. The CLI's `--secrets` has no default of its own, and a
   blank one means omitted, as in the API.
 
+### test: bind sources and check-mode resolvers are found by rule, not listed (T24 / S34 (a), (b), 2026-10-23)
+
+Two guards held hand lists. The bind-source check named the Loki and Vector configs; a third service was then
+found to ship the same fault: the snmp_exporter config was rendered only when SNMP credentials existed, Docker
+created the missing source as a root-owned directory, and the exporter died on a fresh box. The check-mode
+guard named seven registers and claimed to catch a new resolver added without `check_mode: false`; `_img_env`
+was added without the mark and without a row, and `kontroll check` stopped at the fail-closed "no recorded
+digest" assert. Both faults are fixed; the guards now read the tree.
+
+- `tests/unit/test_bind_sources.py`: every bind source written relative to its fragment (a bare long-form
+  `type: bind` source included), and every `env_file`, in every `docker/services/` fragment, generated ones
+  included, is in the tree; or it is an `instance/` path `kontroll-init --fresh` scaffolds (its exceptions
+  mirrored, and checked against the scaffold); or a `deploy-stack.yml` task before the stack's one bring-up
+  writes it whenever the service runs. The writer's `when:`, and its blocks', may only test `stack_services`
+  membership, and must name the service and every service that starts it through `depends_on`; a writer under
+  `rescue:`, tagged `never`, run with `check_mode: true` or delegated off the control node does not count.
+  Planted cases show a secrets-present condition, another service's, a credentials test ANDed with a membership
+  group, a block's condition, and a writer after the bring-up are flagged, the bring-up written in any of these
+  shapes: `command` (`cmd`, free form, `argv`, `args: {cmd: …}`), `shell`, `raw`, the compose module (v2 or v1),
+  or a `run` or `create`. A compose call's subcommand is the first word after `compose` that is not a global
+  option, an option's value or a `{{ … }}` (which may print options), so an `exec … create` is not a bring-up and an
+  `up;` is; after a `{% … %}` (which may choose any word after it), or a `{{ … }}` where the subcommand would be, a
+  later `up`, `run` or `create` counts too. Where the tree is a git checkout, a rendered file git does not track is
+  not in it. It replaces `test_loki_and_vector_config_bind_sources_exist`.
+- `tests/unit/test_check_mode_resolvers.py`: in every control-node play (`hosts:` of `localhost` or
+  `127.0.0.1` — a list, a string joined by `,` or `:`, or a templated value whose `default('…')` or `d('…')`
+  literals name only those — or the `ansible_connection: local` play var), less a task delegated anywhere else,
+  and every task delegated to `localhost`, in the task files those import at any depth, and in the roles they
+  apply, a read-only `command` / `shell` / `raw` task whose register is read anywhere under `ansible/` or in a Jinja
+  template carries `check_mode: false` (on itself or its block), or has an exemption row that says why an empty
+  value is right in a dry-run. The `connection: local` keyword does not count: a host's own `ansible_connection`
+  overrides it. YAML is read through its parsed values, so a comment is not a read; nor is a `register:` value,
+  or a `name:` string that holds no Jinja. Three rows today: the two bootstrap key reads (the key is not minted in a
+  dry-run on a fresh node) and the post-deploy `ps`. A row whose read is forced, or whose register is gone from
+  everywhere under `ansible/` and every template, fails as stale; any other mention of that name keeps it. No
+  `command` / `shell` / `raw` task of any other role, `.role-template` included, may carry `check_mode: false`,
+  since that role runs against a device. It replaces the `_RESOLVERS` list; `test_deploy_stack_check_mode.py`
+  keeps the keystone resolver and the boundary that keeps writers skipped.
+- No play changed. The canonical's reads that the plan expected the sweep to flag were rewritten into
+  `_land_check`, which runs in a dry-run. Promote's were folded into the promote script, a writer, so
+  `promote.yml`'s dry-run still previews nothing — out of this sweep's class.
+- docs/testing-standards.md states the planted-violation norm these follow.
+
+### test: a canned shape lives once and is held to the real function's (T21 / S33, 2026-10-22)
+
+No runtime change. The dicts the browser suite and the route tests are served in place of a service call were
+written by hand, some of them twice, and nothing compared one with what the function returns. Compared, several had
+drifted: the Pending panel's payload lacked `changes_read`, `note_kind`, `main_note` and `skipped_note`, the discard
+answer lacked `run_id_audit` and its refusal `run_id`, both homepage mocks lacked keys the board and the plan carry,
+a route test's copy of the discovery inbox lacked `vendor`, the keygen e2e's answer lacked `placement`,
+`private_key_path`, `recipient_domains`, `high_blast` and `sops_updatekeys` (and named `main` where nothing changed,
+where the route names no ref), and the unit-pick e2e's list lacked `collection` and each unit's `id`.
+
+- `tests/_canned.py` holds each canned dict once; the e2e conftest, the Discard, Re-propose, keygen and unit-pick e2e
+  tests and the route tests read it, and each seam hands out a copy. A few bodies are still written by hand in
+  their tests; `tests/README.md` lists them.
+- `tests/unit/test_mock_conformance.py` builds the smallest real fixture for each, calls the real function (the
+  keygen answer through the real route) and compares key sets and value types. A seam the e2e server replaces with
+  no row fails it, and so does one it does not hand back to be restored, or one replaced in a form the file's parse
+  refuses (a nested target, a `setattr` by a variable name or handed on, a monkeypatch object's `.setattr`, an
+  assignment through an imported name outside the seam function, `unittest.mock`, or a write through `__dict__`,
+  `vars` or `exec`), or a conftest without its one restore loop. The forms the parse does not read (among them a
+  replacement outside the seam function through a name that is not an import, a patching fixture, one made in
+  another file; `_seams`' docstring names more) are held by review.
+- Round-trip tests feed a generator's real output to its real reader: gen-backup's schedules file to
+  configure-semaphore (driven against a fake Semaphore; the retention and destination it describes the template
+  with), gen-requirements' trust sidecar to the provenance view (its pins, policies, default policy and keyring),
+  and a ref the real stager pushed to the Pending list.
+
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 
 `ping.yml` decides a host is reachable with a TCP connect from the control node, on `mgmt_port` or 22 — and nothing

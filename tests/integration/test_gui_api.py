@@ -8,6 +8,7 @@ or touches the repo/lab. The conftest sets GUI_PASSWORD before import (the GUI i
 import a usable app without it).
 """
 import base64
+import copy
 import os
 import subprocess
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+import _canned             # tests/_canned.py: each canned shape has a conformance row, bar E2E_UNIT
 import app as gui          # gui/ is on sys.path (conftest); app.py is the GUI
 from kontroll import catalog, gitio, paths, probe
 
@@ -986,17 +988,9 @@ def test_capability_promote_stale_token_is_409(client, cap_class):
 from kontroll.service import keygen as keygen_service  # noqa: E402  (the keygen backend under test)
 from kontroll.service.pending import promote_hint  # noqa: E402  (the one promote instruction — T19)
 
-# A canned apply result (a FAKE keypair) so the route tests are deterministic and independent of the real
-# /.sops.yaml structure (that edit is the unit test's job). The private key is shaped, never real.
-_FAKE_KEYGEN = {"error": None, "changed": True, "role": "break-glass",
-                "public_key": "age1pubdummyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxq",
-                "private_key": "AGE-SECRET-KEY-1FAKETESTPRIVATEKEYZZZ",
-                "placement": "offline", "private_key_path": None,
-                "recipient_domains": ["network", "proxmox", "dashboards"], "high_blast": True,
-                "sops_updatekeys": "sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml",
-                "next_steps": ["Store the shown private key OFFLINE on trusted media — it is not saved here.",
-                               "So the new recipient lands on main, promote proposed/<run_id>: …"],
-                "paths": [".sops.yaml"]}
+# A canned apply result (a FAKE keypair — tests/_canned.py, with its conformance row) so the route tests are
+# deterministic and independent of the real /.sops.yaml structure (that edit is the unit test's job).
+_FAKE_KEYGEN = _canned.KEYGEN_RESULT
 
 
 @pytest.fixture
@@ -1009,7 +1003,7 @@ def keygen_env(monkeypatch):
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
     given = []
     monkeypatch.setattr(keygen_service, "apply_keygen_plan",
-                        lambda role, run_id=None: given.append(run_id) or dict(_FAKE_KEYGEN, role=role))
+                        lambda role, run_id=None: given.append(run_id) or dict(copy.deepcopy(_FAKE_KEYGEN), role=role))
     return SimpleNamespace(calls=calls, given=given)
 
 
@@ -1098,8 +1092,7 @@ def test_homepage_get_returns_the_board(client, monkeypatch):
     """GET /api/homepage returns the normalized board (read-only) and is auth-gated. Guards the Homepage editor's
     read round-trip + the auth boundary on the new surface (#136)."""
     from kontroll.service import homepage
-    monkeypatch.setattr(homepage, "read_board",
-                        lambda: {"title": "t", "sections": [{"name": "A", "items": [], "generated": False}]})
+    monkeypatch.setattr(homepage, "read_board", lambda: copy.deepcopy(_canned.HOMEPAGE_BOARD))
     assert client.get("/api/homepage").status_code == 401               # auth gate (no creds)
     r = client.get("/api/homepage", headers=_auth())
     assert r.status_code == 200 and r.get_json()["sections"][0]["name"] == "A"
@@ -1110,10 +1103,7 @@ def test_homepage_propose_writes_nothing_and_returns_diff_token(client, monkeypa
     nothing) — the propose-purity boundary the operator reviews before staging. Guards a propose that secretly
     writes/stages (#136, C10: the GUI stages only on an explicit apply)."""
     from kontroll.service import homepage
-    monkeypatch.setattr(homepage, "build_homepage_plan",
-                        lambda board: {"error": None, "paths": ["p"],
-                                       "diff": [{"file": "services.yaml", "unified": "@@ reorder @@"}],
-                                       "summary": {"changed": True, "removed_tiles": []}, "plan_token": "tok"})
+    monkeypatch.setattr(homepage, "build_homepage_plan", lambda board: copy.deepcopy(_canned.HOMEPAGE_PLAN))
     called = []
     monkeypatch.setattr(homepage, "promote_board",
                         lambda b, t: called.append(1) or {"error": None, "changed": True, "paths": ["p"]})
@@ -1252,8 +1242,7 @@ def test_units_list_requires_auth(client):
 def test_units_list_returns_runnable_units(client, monkeypatch, tmp_path):
     """GET /api/units/<collection> returns the collection's runnable units (in-process over service_units) and
     writes a NAMES/counts `unit-list` audit line. Guards the Pick-stage read round-trip + the audit posture."""
-    monkeypatch.setattr(units_service, "service_units", lambda c: {
-        "collection": c, "units": [{"kind": "role", "name": "swarm", "id": c + "/role/swarm"}]})
+    monkeypatch.setattr(units_service, "service_units", _canned.service_units)
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log")); monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.get("/api/units/community.docker", headers=_auth())
     assert r.status_code == 200
@@ -1483,11 +1472,7 @@ def test_provenance_lists_classes_and_audits(client, monkeypatch, tmp_path):
     """GET /api/provenance returns the per-collection provenance + summary and audits `provenance-index` (counts by
     class — names only). The MF-5 surface: an unsigned-pinned collection is reported AMBER with the honest
     pin+checksum note, so a green 'installed' never implies a signature was checked."""
-    monkeypatch.setattr(provenance_service, "fleet_provenance", lambda: {
-        "available": True, "default_policy": "adaptive", "keyring_present": False,
-        "collections": [{"name": "community.docker", "pin": "==4.0.0", "pin_kind": "exact", "policy": "adaptive",
-                         "class": "unsigned-pinned", "digest_recorded": True, "note": "verified by pin + checksum"}],
-        "summary": {"total": 1, "unsigned_pinned": 1, "signed": 0, "digests_recorded": 1}})
+    monkeypatch.setattr(provenance_service, "fleet_provenance", lambda: copy.deepcopy(_canned.FLEET_PROVENANCE))
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log")); monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.get("/api/provenance", headers=_auth())
     assert r.status_code == 200
@@ -1498,9 +1483,8 @@ def test_provenance_lists_classes_and_audits(client, monkeypatch, tmp_path):
 
 def test_provenance_unavailable_is_200_not_500(client, monkeypatch):
     """A not-yet-generated sidecar → available:false at HTTP 200 (never a 500/stack trace) — the GUI degrades."""
-    monkeypatch.setattr(provenance_service, "fleet_provenance", lambda: {
-        "available": False, "default_policy": None, "keyring_present": False, "collections": [],
-        "summary": {"total": 0, "unsigned_pinned": 0, "signed": 0, "digests_recorded": 0}})
+    monkeypatch.setattr(provenance_service, "fleet_provenance",
+                        lambda: copy.deepcopy(_canned.FLEET_PROVENANCE_UNAVAILABLE))
     r = client.get("/api/provenance", headers=_auth())
     assert r.status_code == 200 and r.get_json()["available"] is False
 
@@ -1514,12 +1498,7 @@ def test_image_provenance_lists_classes_and_audits(client, monkeypatch, tmp_path
     """GET /api/image-provenance returns the per-image class + summary and audits `image-provenance-index` (counts by
     class — names only). The §7.3 surface: a `digest-pinned` image is AMBER with the honest 'not a signature' note, so
     a digest-pin is never mistaken for a verified signature (cosign deferred)."""
-    monkeypatch.setattr(provenance_service, "image_provenance", lambda: {
-        "available": True, "signing_configured": False,
-        "images": [{"name": "kontroll-control", "ref": "ghcr.io/example/kontroll-control", "tag": "v1",
-                    "digest": "sha256:" + "a" * 64, "digest_short": "a" * 12, "class": "digest-pinned",
-                    "note": "Docker verifies this @sha256: on every pull — not a signature"}],
-        "summary": {"total": 1, "digest_pinned": 1, "local_build": 0, "signed": 0}})
+    monkeypatch.setattr(provenance_service, "image_provenance", lambda: copy.deepcopy(_canned.IMAGE_PROVENANCE))
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log")); monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.get("/api/image-provenance", headers=_auth())
     assert r.status_code == 200
@@ -1539,12 +1518,8 @@ def test_discovery_returns_inbox(client, monkeypatch):
     """GET /api/discovery returns read_inbox()'s payload verbatim — the route is a thin pure passthrough (mirroring
     /api/pending), and the GUI panel depends on the {generated_at, sources, candidates} shape. The local import in
     the route resolves the patched module attribute, so this pins the wiring without a real sweep artifact."""
-    inbox = {"generated_at": "2026-07-03T00:00:00+00:00",
-             "sources": [{"key": "opnsense", "method": "dhcp_leases_opnsense", "host": "192.0.2.1",
-                          "status": "ok", "count": 1}],
-             "candidates": [{"ip": "192.0.2.50", "mac": "00:00:5e:00:53:01", "hostname": "printer",
-                             "source_key": "opnsense", "source_host": "192.0.2.1"}]}
-    monkeypatch.setattr("kontroll.service.discovery.read_inbox", lambda: inbox)
+    inbox = _canned.DISCOVERY_INBOX
+    monkeypatch.setattr("kontroll.service.discovery.read_inbox", lambda: copy.deepcopy(inbox))
     r = client.get("/api/discovery", headers=_auth())
     assert r.status_code == 200 and r.get_json() == inbox
 

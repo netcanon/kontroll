@@ -9,11 +9,11 @@ register is never set: `_secrets_dir` collapses to '' and the "Render docker/.en
 CLAUDE.md-mandated `--check --diff` dry-run UNUSABLE for the stack's most important playbook.
 
 The fix tags each read-only resolver `check_mode: false` so it executes even in check mode — they only
-RESOLVE a path/flag/GID (no mutation), so running them under --check is safe. This test pins that tag on
-every resolver (matched by its `register:` name, recursing into blocks), pins the keystone _secrets_dir
-resolver explicitly, and pins the resolver-vs-mutator boundary (the `up`/`gen-*` tasks must STAY
-check-skipped so a dry-run never actuates). A resolver that loses the tag — or a new SOPS-feeding resolver
-added without it — re-breaks `--check`; this fails loud first.
+RESOLVE a path/flag/GID (no mutation), so running them under --check is safe. Which tasks are resolvers is found by
+rule, not listed here: tests/unit/test_check_mode_resolvers.py holds every read-only command a control-node play
+registers and reads again to the tag (a hand list of register names missed `_img_env`). This file pins the keystone
+_secrets_dir resolver explicitly, and the resolver-vs-mutator boundary (the `up`/`gen-*` tasks must STAY
+check-skipped so a dry-run never actuates).
 """
 import os
 
@@ -24,22 +24,6 @@ pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEPLOY = os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml")
-
-# Read-only resolvers whose registered stdout feeds the .env render / early play vars -> MUST run in --check.
-# The paths.py and frontend.py resolvers feed the render directly (the exact bug); the gated ones (the journal GID
-# for vector, the Caddyfile for acme, the image digests for published images) are flipped for full --check
-# fidelity. The fleet check is not in this list: it registers nothing, and tests/unit/test_fleet_line.py holds
-# its `check_mode: false`.
-_RESOLVERS = {
-    "_secrets_dir_resolved",   # paths.py resolve  -> _secrets_dir -> every SOPS lookup (the keystone)
-    "_uvicorn_extra",          # frontend.py uvicorn-extra -> KONTROLL_API_UVICORN_EXTRA
-    "_needs_cert",             # frontend.py needs-cert    -> GUI_TLS_CERT/KEY + cert tasks
-    "_runs_caddy",             # frontend.py runs-caddy    -> caddy gating + _up_services
-    "_journal_grp",            # getent group systemd-journal -> KONTROLL_JOURNAL_GID (gated on vector)
-    "_caddyfile",              # frontend.py caddyfile     -> the rendered Caddyfile (gated on acme)
-    "_img_env",                # gen-image-digests.py --env -> the published @sha256 pins (gated on use_published_images)
-}
-
 
 # A generator's read-only mode WITH the generator that implements it: `--env` means nothing to gen-observability.py,
 # which would ignore the word and write. (`--check` is every generator's own dry mode.)
@@ -101,20 +85,6 @@ def _cmd_str(t):
         if v is not None:
             return str(v)
     return ""
-
-
-@pytest.mark.parametrize("reg", sorted(_RESOLVERS))
-def test_resolver_runs_in_check_mode(reg):
-    """Each read-only resolver (by `register:` name) carries `check_mode: false` so `--check` executes it —
-    else its register is empty under --check and the downstream .env render / gated branch fails. Guards the
-    live 2026-06-21 `_secrets_dir`-empty-on-check regression."""
-    tasks = _by_register()
-    assert reg in tasks, "no task registers %s in deploy-stack.yml (resolver renamed/removed?)" % reg
-    cm = tasks[reg].get("check_mode")
-    assert cm is False, (
-        "resolver %s must set `check_mode: false` (got %r) so it runs under --check; without it the "
-        "--check dry-run breaks at the .env render" % (reg, cm)
-    )
 
 
 def test_secrets_dir_resolver_keystone():

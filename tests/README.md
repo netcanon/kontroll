@@ -118,6 +118,46 @@ off `galaxy` for call-style tests) is **pure dict→dict** and tested directly a
 repoints `kontroll.paths.ROOT`), so they never touch the real tree, and credentials are
 omitted so the SOPS shell-out is never invoked.
 
+### A canned shape lives once, in `tests/_canned.py`
+
+A dict a test is served in place of a real service call — a seam the e2e server replaces, a route test's
+`monkeypatch` return, a `page.route` body — belongs once in [_canned.py](_canned.py), and
+[unit/test_mock_conformance.py](unit/test_mock_conformance.py) holds a row for it that builds the smallest real
+fixture, calls the real function and compares the two SHAPES: the key set and each value's type, never the values.
+Only the seams are enforced (below). A `page.route` body or a route test's fake is held by its row once it is in
+`_canned.py`, but nothing scans the tests for one written by hand, so a new one is caught only in review. Still
+written by hand: `e2e/test_pending_changes.py`'s `_payload` / `_proposal` builders (conformant to `list_pending`
+when T21's read measured them), the onboard flow's error stub, and route-test fakes —
+`integration/test_gui_api.py`'s `promote_board`, `discard_proposal`, `module_for_collection` (`_MODULE_LOW` /
+`_MODULE_HIGH`) and `local_installed`; `integration/test_api.py`'s `actuation_unit` (it lacks `schema` and
+`install`, so the registry's validator would refuse it), `units_in_collection` and `local_installed`;
+`integration/test_api_create_unit.py`'s `module_for_collection`; `integration/test_api_capability.py`'s
+`_fake_probe` (a deep_probe answer written as a literal, not with `probe._facts`); and the `local_installed` returns
+in the other `integration/test_api_*.py` files and `test_onboard_dryrun.py`. The answers some e2e tests hand a
+renderer through `page.evaluate` are written by hand too. Move one into `_canned.py`, with a row, when you next touch
+it. A fake whose answer has no shape to drift (an empty dict or list, `None`, a bool, a list or set of names:
+`_enabled_modules`, `_existing_keys`, `sops_decrypt_domain`, `sops_write_domain`, `service_units`) and a stand-in
+for an external tool's output (`catalog._installed_json`) are not listed.
+A key whose value is by design one type or another is produced in both types by the row's fixture (the inbox's
+`vendor`), or, where the row's fixture does not, named in the row's `optional` set (the Pending rows'
+`repropose_hint`, whose canned value has a row of its own). A mock written from belief keeps a UI test green while
+the server emits something else, and a second hand copy drifts from the first (S33). A seam the e2e conftest
+replaces with no row fails `test_every_replaced_seam_has_a_conformance_row`, and so does one it replaces without
+handing it back to be restored, or one replaced in a form the parse refuses (a nested target, a `setattr` by a
+variable name or handed on, a monkeypatch object's `.setattr`, an assignment through an imported name outside
+`_mock_service_seams`, a `unittest.mock` import, a write through `__dict__`, `__setattr__`, `vars`, `exec` or
+`eval`), and so does a conftest without its one restore loop or without a `return originals` in
+`_mock_service_seams`. Anything else is not read, so review holds it: for example a replacement outside
+`_mock_service_seams` through a name that is not an import, a fixture that patches (`mocker`), one made in another
+file, and whether the restore loop puts back what it was handed. The `_seams` docstring names more. A seam
+whose fake needs none (a record built by the real constructor, an empty list) is listed in `NO_ROW` with the
+reason. A seam hands out a copy of its canned dict, never the module object. Where a generator writes a file
+another part reads, a round-trip test feeds the real output to the real reader:
+`test_configure_semaphore.py::test_reads_what_gen_backup_renders`,
+`test_provenance.py::test_reads_the_sidecar_gen_requirements_writes` and
+`test_pending.py::test_lists_a_proposal_the_real_stager_produced`. The C19 paint suite (`e2e/test_paint_rule.py`)
+is outside the rule: it serves payloads made to carry markup in every field, not a producer's answer.
+
 ```
 tests/unit/          # pure functions, no I/O
   test_predicate_engine.py   # three-valued eval_pred/eval_vector truth tables
@@ -129,6 +169,7 @@ tests/unit/          # pure functions, no I/O
   test_fleet_edit.py         # enable_in_fleet idempotent, comment-preserving
   test_openapi.py            # derive_auth/derive_server/classify_endpoints heuristics
   test_service_layer.py      # service_* return structured data directly (no stdout-parsing)
+  test_mock_conformance.py   # S33: every canned shape in tests/_canned.py (bar `E2E_UNIT`, held by the registry's validator) has the key set + value types of the real function's answer; every e2e-replaced seam the parse reads has a row or a `NO_ROW` reason
   test_units.py              # runnable-unit prober + service_units resolver + SEC-3 traversal guard + validate_unit_config (R3 configure gate)
   test_actuation_registry.py # actuation/ registry: resolve_pins (exact-wins/fail-closed) + gen-actuation validation (incl. R3 curated knobs) + overlay loader
   test_actuation_service.py  # R4 preview + R5 write verb: build_actuation_plan render/staging-metadata (read-only) + apply_actuation_plan (idempotent write) + stage_plan drift gate
@@ -147,6 +188,8 @@ tests/unit/          # pure functions, no I/O
   test_canonical_normalise.py # C10 / F-CANON: the play's ownership pass (`--normalise`) — `--check` names and changes nothing; applied, the bits are set and a second run has nothing to do; a link to a file and to a directory outside the tree named and what they point at left as it was; a pipe named and not waited on; hooks/ passed over; a directory exchanged for a link after it was looked at not gone into; the refusal where no owner or mode can be changed through a descriptor; one walker for the audit and the pass
   test_content_clone_tasks.py # C10: the deploy's git in a content clone — one task file for both clones; root's git only unarmed, the service uid's (setsid/setpriv/env -i) armed; a clone held by the wrong uid removed, never chowned; refs by full name
   test_fleet_line.py         # C22: a fleet line that is not a class key at every deploy-time reader — skipped and named by what renders, refused by what installs and by the promote gate, checked first by the plays
+  test_bind_sources.py       # every relative bind source and env_file of a stack service: in the tree, an `instance/` path the scaffold ships, or written by deploy-stack before its one bring-up whenever the service (or a service that starts it) runs — planted conditions (a secrets-present test, another service, a conjunction, the block's) and late writers flagged
+  test_check_mode_resolvers.py # every read-only command the control node runs (its plays, delegated tasks, imported files, applied roles) registers and reads again runs under `--check`, or has a reasoned exemption that is not stale; planted resolvers flagged, a device play's not; no device role's read forced to run in a dry-run
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
   test_local_canonical_as_root.py # C10, AS ROOT: local-canonical.yml run by ansible-playbook on a scratch node (the installer's mode: root, KONTROLL_IN_CONTAINER=1) — a fresh node's dry-run does not fail, the first apply lands HEAD as a first seed and leaves the canonical the operator's, the second and third applies and a closing dry-run report 0 changed (the ownership pass runs again after the landing), a hand push of main is refused
   test_canonical_normalise_as_root.py # C10 / F-CANON, AS ROOT: the ownership pass chowns a root-made canonical to `<operator>:1001` outside hooks/ — every regular file and directory, through its descriptor; a link's own owner, what a link points at outside the tree, and hooks/ stay root's; the second run has nothing to do

@@ -13,18 +13,9 @@ import json
 import pytest
 from playwright.sync_api import expect
 
-pytestmark = pytest.mark.e2e
+import _canned
 
-_STALE = {
-    "proposals": [{
-        "run_id": "abc123def456", "ref": "refs/heads/proposed/abc123def456", "sha": "de" * 20,
-        "staged_at": "2026-07-05T00:00:00+00:00", "author": "kontroll",
-        "subject": "feat(onboard): stage cisco_ios",
-        "paths": ["instance/inventory/onboarded-cisco_ios.yml"],
-        "changes": [{"status": "A", "path": "instance/inventory/onboarded-cisco_ios.yml", "exact": True}],
-        "promotable": False, "repropose_hint": {"kind": "onboard", "key": "cisco_ios"}}],
-    "unrecognised": [],
-    "canonical": "/srv/kontroll.git", "promote_task": "promote-proposal", "note": None}
+pytestmark = pytest.mark.e2e
 
 
 def _mock_pending(page, payload):
@@ -37,13 +28,12 @@ def test_stale_proposal_discard_needs_confirm_then_removes_the_row(page):
     only `pending-discard-confirm` POSTs to the discard route, and on success the row is removed. Proves the
     availability-only griefing bound (confirm-gated) + the C10-safe un-stage end to end (the POST hits …/discard, no
     promote control exists)."""
-    _mock_pending(page, _STALE)
+    _mock_pending(page, _canned.PENDING_STALE)
     posted = {"n": 0}
     def _fulfill_discard(route):
         posted["n"] += 1
         route.fulfill(status=200, content_type="application/json",
-                      body=json.dumps({"discarded": True, "run_id": "abc123def456",
-                                       "ref": "proposed/abc123def456", "sha": "deadbeef"}))
+                      body=json.dumps(_canned.DISCARD_ANSWER))
     page.route("**/api/pending/*/discard", _fulfill_discard)
     page.goto("/")
     page.get_by_test_id("pending-open").click()
@@ -61,10 +51,9 @@ def test_discard_error_renders_inline_and_keeps_the_row(page):
     """A discard that the server refuses (e.g. 409 — the ref moved) renders `pending-discard-error` inline and LEAVES
     the row (nothing was deleted). Guards the compare-and-delete refusal surfacing — the operator sees why, and the
     proposal is still listed."""
-    _mock_pending(page, _STALE)
+    _mock_pending(page, _canned.PENDING_STALE)
     page.route("**/api/pending/*/discard", lambda route: route.fulfill(
-        status=409, content_type="application/json",
-        body=json.dumps({"error": "the proposal moved or vanished since it was listed — refresh and retry"})))
+        status=409, content_type="application/json", body=json.dumps(_canned.DISCARD_REFUSED)))
     page.goto("/")
     page.get_by_test_id("pending-open").click()
     row = page.get_by_test_id("pending-row").first
@@ -79,10 +68,10 @@ def test_discard_cancel_restores_the_button_without_posting(page):
     the un-confirmed Discard button and POSTs nothing. Guards the cancel path (a broken restore handler would trap
     the operator in the confirm or silently drop the affordance) — the availability-preserving half of the confirm
     gate."""
-    _mock_pending(page, _STALE)
+    _mock_pending(page, _canned.PENDING_STALE)
     posted = {"n": 0}
     page.route("**/api/pending/*/discard", lambda route: (posted.__setitem__("n", posted["n"] + 1),
-               route.fulfill(status=200, content_type="application/json", body=json.dumps({"discarded": True}))))
+               route.fulfill(status=200, content_type="application/json", body=json.dumps(_canned.DISCARD_ANSWER))))
     page.goto("/")
     page.get_by_test_id("pending-open").click()
     row = page.get_by_test_id("pending-row").first
@@ -98,7 +87,7 @@ def test_discard_cancel_restores_the_button_without_posting(page):
 def test_promotable_proposal_has_no_discard(page):
     """A PROMOTABLE proposal shows no `pending-discard` (nor the stale badge) — discard is a stale-only reaper; a
     healthy fast-forwardable proposal must never be offered for deletion."""
-    ok = json.loads(json.dumps(_STALE))
+    ok = json.loads(json.dumps(_canned.PENDING_STALE))
     ok["proposals"][0]["promotable"] = True
     _mock_pending(page, ok)
     page.goto("/")
