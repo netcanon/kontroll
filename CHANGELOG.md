@@ -52,6 +52,9 @@ backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s o
 - Two differences, pinned by tests: a class's own `api_token` with a literal `maps_to` is now written under that var
   (it was `<cred key>_api_token` whatever the file said), and a class's own `api_token` with no `maps_to`, on a
   backend without the template, is stored in SOPS with no host var. No shipped module declares either.
+  Two more, not pinned and unreachable with shipped data: a class's own `api_token` of kind `ssh_key` on the `api`
+  backend now gets the template's var (the key file's path) and `kontroll_ssh_key_domain` where it got none, and
+  one marked `inline: true` is refused as repository data where it was written as a SOPS lookup (T18's read, F6).
 - API and GUI: `secrets` is optional on `POST /onboard` and `GET /onboard/cred-fields` — a blank value now means
   omitted (it was a 422) — and `cred-fields` answers the backend's default as its `secrets`, and shows the api
   token's descriptor with its template `maps_to` (`{cred_key}_api_token`), where it showed none. The onboard form's

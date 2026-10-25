@@ -330,7 +330,7 @@ def test_a_registry_default_that_does_not_render_is_repository_data(probed, chan
     key, which could then never be required, was skipped where it is refused (T18's fold-6 read, N2: its mutant
     S2). The non-ASCII row is a row because a key rule that took any Python identifier let such a key by the same
     way (its fold-7 read, N2: mutants S4 and S5). The leading-digit row is a row because a key rule that took an
-    ASCII word character first let such a key by the same way (its fold-8 read, N1: mutants S8 and S9) — a name
+    ASCII word character first let such a key by the same way (its fold-8 read, N1: mutants S7, S8 and S9) — a name
     ansible-core refuses as a variable."""
     probed(**CLICONF)
     bdef = _lab(**dict({"default_secrets_domain": "lab"}, **change))

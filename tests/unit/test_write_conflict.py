@@ -65,13 +65,18 @@ _BODY = "edge_router:\n  hosts:\n    h1:\n      ansible_host: 192.0.2.40\n"
     ("# a note\n" + onboard._INV_BANNER + _BODY, False),                              # a line put above the banner
     ("\n" + onboard._INV_BANNER + _BODY, False),                                      # a leading blank line
     (onboard._INV_BANNER.replace("remove the host", "drop the host") + _BODY, False),  # the banner line edited
-], ids=["opens-with-banner", "line-above", "blank-line-above", "banner-edited"])
+    (onboard._INV_BANNER.replace("\n", " # a note\n", 1) + _BODY, False),           # text after the banner
+    ("  " + onboard._INV_BANNER + _BODY, False),                                     # spaces before the banner
+], ids=["opens-with-banner", "line-above", "blank-line-above", "banner-edited", "text-after-banner",
+        "space-before-banner"])
 def test_the_inventory_drop_in_merges_only_when_it_opens_with_the_banner(tmp_path, monkeypatch, text, merges):
     """A drop-in that opens with the onboard banner takes a second host beside the first, whoever wrote it; one that
-    does not open with it (a line put above the banner, a leading blank line, the banner line edited) is a
-    WriteConflict, however much of the banner it still holds. Guards the rule testid_reference.md and the GUI's
-    Overwrite comment state (T18's fold-8 read, N2): a banner test read as presence, after whitespace, or on a
-    prefix of the banner passed every suite — and under presence a merge silently dropped the line put above."""
+    does not open with it (a line put above the banner, a leading blank line or spaces, the banner line edited or
+    text put after it) is a WriteConflict, however much of the banner it still holds. Guards the rule
+    testid_reference.md and the GUI's Overwrite comment state (T18's fold-8 read, N2): a banner test read as
+    presence, after whitespace, or on a prefix of the banner passed every suite — and under presence a merge
+    silently dropped the line put above; a test on the banner less its newline dropped the text put after it on
+    its line, and one after spaces read a tab-led file as YAML and raised (its fold-9 read, N1: G9, G10, G5)."""
     monkeypatch.setattr(gitio.paths, "ROOT", str(tmp_path))
     rel = "ansible/inventory/onboarded-edgeos.yml"
     os.makedirs(os.path.join(str(tmp_path), "ansible", "inventory"))
