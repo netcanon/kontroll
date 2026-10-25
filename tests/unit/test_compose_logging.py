@@ -93,25 +93,6 @@ def test_loki_retention_is_enabled_and_bounded():
     assert "720h" in str(env["LOKI_RETENTION_PERIOD"]), "loki.yaml must default LOKI_RETENTION_PERIOD"
 
 
-def test_loki_and_vector_config_bind_sources_exist():
-    """The loki/vector CONFIG bind-mount sources resolve (relative to docker/services/) to files/dirs that
-    actually exist on disk. Guards the `../../` vs `../` path bug: a non-existent bind source is silently
-    created by Docker as an empty DIRECTORY at runtime (Loki: 'is a directory'; Vector: 'config not found') —
-    `docker compose config` validates structure but NOT that the source exists, so only a live run reveals it.
-    Caught on the dogfood; this is its CI guard."""
-    svc_dir = os.path.join(_ROOT, "docker", "services")
-    for frag, svc in (("loki.yaml", "loki"), ("vector.yaml", "vector")):
-        vols = _load(os.path.join("docker", "services", frag))["services"][svc]["volumes"]
-        # the config mount is the one whose container target is /etc/<svc>... and whose source is relative (../)
-        cfg = [v for v in vols if v.startswith("../")]
-        assert cfg, "%s must mount its config via a ../ relative path" % frag
-        for v in cfg:
-            src = v.split(":")[0]
-            resolved = os.path.normpath(os.path.join(svc_dir, src))
-            assert os.path.exists(resolved), "%s bind source %r resolves to %r which does NOT exist" % (
-                frag, src, resolved)
-
-
 def test_vector_internal_source_transform_ids_disjoint_and_sink_resolves():
     """In the config.d/ implicit-namespacing tree, the source and transform component ids (= filename stems)
     are DISJOINT, and every loki-sink input names an existing transform. Guards two live-caught Vector errors:

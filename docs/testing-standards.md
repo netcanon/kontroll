@@ -73,6 +73,13 @@ Per-module docstrings that **enumerate** a surface (endpoints, markers, seams) a
 same commit when that surface changes (Documentation Sync Checklist) — a docstring that says
 "covers /api/search, /api/onboard" becomes a lie the instant a third endpoint lands.
 
+**A sweep is proven against a planted violation.** A test that reads the whole tree for a class
+of fault passes on a clean tree whether or not it can see the fault, so a test beside it plants
+the fault in a scratch tree and asserts the sweep names it, and plants the near-misses the sweep
+must pass. Prefer a rule that reads the tree to a hand-kept list of names: a list is silent about
+the entry nobody added. `tests/unit/test_bind_sources.py` and
+`tests/unit/test_check_mode_resolvers.py` are the pattern.
+
 ---
 
 ## 3. The `data-testid` SOP
