@@ -32,18 +32,21 @@ from kontroll import paths
 from kontroll.service import keygen
 from kontroll.service import secrets as secrets_service
 
+from _age_recipient import x25519_recipient
+
 pytestmark = pytest.mark.unit
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMPLATE = os.path.join(_ROOT, "instance.example", ".sops.yaml")
 _SECURITY = os.path.join(_ROOT, "SECURITY.md")
-# The recipient is bech32 with a valid checksum (kontroll-init checks it), one byte short of a real key (leak guard).
-_CHOICES = {"recipient": ["--break-glass-recipient", "age1dphkuetnw3uj6cnjv4skkemvv9ehxqqqqqqqqqqqqqqqqqqqqqahs79q"],
+# The recipient is one age would accept (kontroll-init checks it), built so no real-length key sits in the source.
+_CHOICES = {"recipient": ["--break-glass-recipient", x25519_recipient(start=7)],
             "mint": ["--mint-break-glass"],
             "none": ["--no-break-glass"]}
 # A sentence that claims the control key's loss is survivable must carry the condition that makes it true.
 _CLAIM = re.compile(r"\brecoverable\b|\bsurvivable\b|\b(encrypted|wrapped) to (both|two)\b|every secret ha[sd] two "
-                    r"recipients|no longer (catastrophic|a single point)|\+\s*(an\s+)?offline break-glass", re.I)
+                    r"recipients|no longer (catastrophic|fatal|a single point)|\+\s*(an\s+)?offline break-glass"
+                    r"|\b(can|could|will) be recovered\b", re.I)
 # The condition must govern the recipient's existence ("where a break-glass recipient was added"), not merely
 # co-occur with it ("if the control key is lost … with the break-glass key").
 _GUARD = re.compile(r"\b(where|if|unless|only where|once)\b[^.]*?\b(break-glass|second) recipient\b[^.]*?"
@@ -152,10 +155,11 @@ def test_the_doc_claim_matches_what_fresh_actually_produces(tmp_path, monkeypatc
 def test_no_unconditional_recoverable_claim_survives():
     """No sentence of C1, C8, C11 or docs/break-glass.md makes the claim `unconditional_claims` reads for, unless a
     condition governs the second recipient's existence. The rule is shown to catch the two sentences that stood in
-    C1 and C8 until T11, and three rewordings the first rule passed (the T11 review: no keyword, a condition on
-    the loss rather than the recipient, "+ an offline"), and to pass a conditional one. Guards an unconditional
-    claim — true only of an instance someone gave a second recipient — being read as true of every instance, the
-    reasoning a reclaim decision would rest on (the sentence C1 carried, which the test before T11 did not see)."""
+    C1 and C8 until T11, five rewordings an earlier rule passed (no keyword, a condition on the loss rather than the
+    recipient, "+ an offline", "can be recovered", "no longer fatal"), and to pass a conditional one. Guards an
+    unconditional claim — true only of an instance someone gave a second recipient — being read as true of every
+    instance, the reasoning a reclaim decision would rest on (the sentence C1 carried, which the test before T11 did
+    not see)."""
     text = _security_text()
     for heading in ("C1", "C8", "C11"):
         assert unconditional_claims(_section(text, heading)) == [], heading
@@ -167,7 +171,9 @@ def test_no_unconditional_recoverable_claim_survives():
         "any of those artifacts.")) == 2
     for reworded in ("Losing the control key is no longer catastrophic: every secret is encrypted to two recipients.",
                      "If the control key is lost, every secret stays recoverable with the offline break-glass key.",
-                     "The age key is kept on the VM + an offline break-glass copy, so its loss is survivable."):
+                     "The age key is kept on the VM + an offline break-glass copy, so its loss is survivable.",
+                     "Every secret can be recovered with the offline break-glass key.",
+                     "Losing the control key is no longer fatal: the break-glass key opens every domain."):
         assert len(unconditional_claims(reworded)) == 1, reworded
     assert unconditional_claims("Losing it is recoverable only where a break-glass recipient was added.") == []
 

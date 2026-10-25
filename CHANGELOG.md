@@ -22,21 +22,23 @@ losing that key destroyed every device credential, API token and service passwor
   without a break-glass choice:
   - `--break-glass-recipient <age1…>`: the public half of a key made on another machine (preferred);
   - `--mint-break-glass`: minted on the node, with its private half printed once in a delimited block; kontroll
-    writes it to no file, and the installer container keeps no log;
+    writes it to no file, and the installer keeps no container log of `fresh-init`;
   - `--no-break-glass`: one recipient per domain; the run says what that costs.
   The choice is applied under both recipient anchors (the groups `key-roles/break-glass.yml` names) before the
   first secret is written, so a fresh instance never needs a re-wrap. A scaffold command copied from an older
   document stops at that refusal.
 - **Refusals, before anything is written:**
   - a private key passed as the recipient (not echoed back), a value that is not an age public key, or one whose
-    bech32 checksum fails (a character lost in a hand copy, which sops would refuse only at the first encrypt);
+    bech32 checksum or X25519 length fails (a character mistyped, added or lost in a hand copy, which sops would
+    refuse only at the first encrypt);
   - the control key's own public half;
   - `--mint-break-glass` when standard output is not a terminal, so the key cannot land in a pipe or a file;
   - `--mint-break-glass` or `--no-break-glass` on an existing instance;
   - `--break-glass-recipient` without `--fresh` where no control key file exists. The non-fresh path would
     otherwise mint a control key and add it to every domain first;
-  - the same on an existing instance whose key file holds a key that is not a recipient of every rule, which step 2
-    would otherwise add to every domain.
+  - the same on an existing instance whose key file holds a key that is not a recipient of every rule (a rule's
+    key groups when it has any, as sops reads it), which step 2 would otherwise add to every domain, or no
+    `# public key:` line to check (named as such, with the `age-keygen -y` that prints it).
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
@@ -45,8 +47,10 @@ losing that key destroyed every device credential, API token and service passwor
   - the re-wrap's dry run, then the apply;
   - the check with the control key, the hand-back of root-owned files, and a scoped commit;
   - the landing with `--check --diff` first, a rollback, and the operator's own proof that the key opens every
-    domain, run where sops can find no other key (a plain `SOPS_AGE_KEY_FILE=… sops -d` passes on a control key
-    in `~/.config`), with a control line that says when the check cannot be trusted.
+    domain. It checks that the key file holds one key, the break-glass recipient's private half; then, for each
+    file, that it is wrapped to that key, and that a key which is no recipient fails on it, with sops given no
+    environment and an empty home (a plain `SOPS_AGE_KEY_FILE=… sops -d` passes on a control key in
+    `~/.config`). A BROKEN line says when the check cannot be trusted.
 - **Security.**
   - The bootstrap play's warning counts recipients per creation rule of `instance/.sops.yaml` (the rules, not the
     encrypted files). It used to count across rules, so a second recipient on one rule hid a rule with one.
@@ -55,12 +59,17 @@ losing that key destroyed every device credential, API token and service passwor
     anyone kept the private half. C8 conditions the offline half on a recipient having been added; C11 describes
     the CLI's show-once path.
   - `tests/unit/test_break_glass_claim_is_honest.py` runs `--fresh` for each choice and holds C1 to what it writes.
-  - The installer container keeps no log (`logging: none` in `docker/services/installer.yaml`). Through either
-    launcher, what `fresh-init` printed once — the bootstrap passwords, and now a minted break-glass key — reached
-    the Docker log driver: json-file until `--rm` removed the container, journald or a remote driver beyond it,
-    and Loki through Vector's docker_logs source on a box whose stack runs. The terminal still shows every line.
-  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect or a
-    logger, and none forces the container a terminal (`tests/unit/test_installer_phase1.py`).
+  - The installer keeps no container log for any verb but a deploy. Through either launcher, what `fresh-init`
+    printed once — the bootstrap passwords, and now a minted break-glass key — reached the Docker log driver:
+    json-file until `--rm` removed the container, journald or a remote driver beyond it, and Loki through Vector's
+    docker_logs source on a box whose stack runs. The driver is now `${KONTROLL_INSTALLER_LOG_DRIVER:-none}`
+    (`docker/services/installer.yaml`), and both launchers set it for every verb, whatever the operator's shell
+    exported: `json-file` for `init` and `check`, which run no kontroll-init and print no secret value and whose
+    log (`services-init` in Loki) is the deploy's record; `none` for the rest, `shell` included, where kontroll-init
+    runs by hand. The terminal still shows every line (`tests/unit/test_installer_log_driver.py`).
+  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect,
+    `script` or a logger (`logger`, `systemd-cat`), and none forces the container a terminal, a continued line
+    read as one command (`tests/unit/test_installer_phase1.py`).
   - A refusal after the scaffold (`could not add the break-glass recipient`) left `instance/` root-owned: the
     dispatcher read the exit code with a bare `rc=$?` under `set -e`, so the hand-back never ran. It runs now.
   - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).

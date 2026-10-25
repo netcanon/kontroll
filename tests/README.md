@@ -266,6 +266,13 @@ what it would ask of a clean repository. `seam_without()` gives the seam's envir
 named entries, for showing that one entry is the one that answers a planted thing. These
 tests run real git and take the suite's `isolated_git` fixture.
 
+### Age recipients (`tests/unit/_age_recipient.py`)
+
+kontroll-init refuses a break-glass recipient that age would refuse (bech32 checksum; 32 bytes
+for an X25519 one), so a test that passes one needs a real-length key, and a real-length key
+written into the source is what the leak guard flags. `bech32()` encodes bytes under any human
+part; `x25519_recipient()` builds one as age-keygen prints it, at import, from fixed bytes.
+
 ## Playbook and role hygiene sweeps
 
 Two faults that pass `--syntax-check` and `ansible-lint` and fail only on a real run are swept

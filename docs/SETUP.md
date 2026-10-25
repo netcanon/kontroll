@@ -51,10 +51,13 @@ recommended posture). What `solo` does, and what the scaffold does when the flag
 edition you are installing — read [trust-mode.md](trust-mode.md) before choosing anything else.
 `kontroll-init --fresh` — what `fresh-init` runs — scaffolds your private `instance/` overlay from the shipped
 `instance.example/` skeleton (your keys only — it never inherits the bundle author's
-recipients), mints your control age key, seeds `instance/.sops.yaml` with that key, fills
+recipients), mints your control age key, seeds `instance/.sops.yaml` with that key and the
+break-glass recipient you choose (`--break-glass-recipient`, `--mint-break-glass` or
+`--no-break-glass`; [break-glass.md](break-glass.md)), fills
 `instance/instance.yml`'s `mgmt_ip`/`domain` **and the Homepage portal tiles** (a fresh
 `:3000` shows your real control-plane services, not the shipped TEST-NET stubs), and mints
-the `dashboards` bootstrap login secrets (shown once — save them). The instance is the source of truth
+the `dashboards` and `semaphore` bootstrap secrets, encrypted to every recipient (the
+passwords shown once — save them). The instance is the source of truth
 ([docs/local-source-of-truth.md](local-source-of-truth.md)); git is used only locally.
 Continue at §3. The rest of this section is the **developer** path (a git-connected instance).
 
@@ -123,7 +126,8 @@ python3 scripts/kontroll-init.py     # existing overlay: ADD your control recipi
 ```
 
 (A brand-new node should instead have run `kontroll-init --fresh …` in §2, which SEEDS
-`instance/.sops.yaml` with your key only rather than appending to an existing overlay.)
+`instance/.sops.yaml` with your key and the break-glass recipient you chose, never another
+instance's, rather than appending to an existing overlay.)
 It ensures the control age key, adds its public half to `instance/.sops.yaml` (additive +
 parse-verified), and mints
 the onboard-GUI password (`GUI_PASSWORD`), the Grafana admin password, and the C10 API token into the

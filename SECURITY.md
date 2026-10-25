@@ -110,8 +110,8 @@ no log), or `--no-break-glass` (ONE recipient per domain, for a scratch instance
 - In either case kontroll counts recipients and **cannot know whether anyone kept the
   private half**: a recipient whose private half was discarded is a count of two and a
   recovery of zero. Only the operator's own check proves it — decrypting every domain with
-  the break-glass key alone, off the box, where sops can find no other key
-  (docs/break-glass.md, "Verify").
+  the break-glass key alone (the one key in the file, its public half the break-glass
+  recipient), off the box, where sops can find no other key (docs/break-glass.md, "Verify").
 
 This row once said every secret had two recipients, which was false for every instance —
 worse than documenting no control at all, because it invited the reasoning a reclaim
@@ -1112,12 +1112,14 @@ distinct control.
   under the groups `key-roles/break-glass.yml` names (the dialog's), and prints the private half **once**, in a
   delimited block, straight after the recipient is written — before any later step can fail, so no recipient is
   left that nobody was shown. It refuses before minting anything when standard output is not a terminal, so the key cannot land in a
-  pipe or a file; the installer container has no log driver (`logging: none`), and no launcher routes
-  `fresh-init` through a run log or a `tee`. A terminal the operator records (`script`, a multiplexer's log) is
+  pipe or a file; the installer container's log driver is `none` for every verb but a deploy (`init`, `check`:
+  both launchers choose it per verb, `docker/services/installer.yaml`), and no launcher routes `fresh-init`
+  through a run log or a `tee`. A terminal the operator records (`script`, a multiplexer's log) is
   beyond kontroll's reach.
-  `--break-glass-recipient` takes a public key made elsewhere and refuses a private one, or one whose checksum fails,
-  without echoing it; on an existing instance it also refuses a key file that is not the control recipient of every
-  rule, and stops after adding the recipient, before the bootstrap secrets.
+  `--break-glass-recipient` takes a public key made elsewhere and refuses a private one, or one whose checksum or
+  X25519 length fails, without echoing it; on an existing instance it also refuses a key file that is not the
+  control recipient of every rule (read as sops reads it: a rule's key groups when it has any), and stops after
+  adding the recipient, before the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing
@@ -1137,7 +1139,9 @@ the public key, staged not `main`); `tests/unit/test_kontroll_init.py` break-gla
 printed exactly once and in no file, shown even when a later step fails, refused on a non-terminal; a private,
 malformed or mis-checksummed recipient refused unechoed; a key file that is not the control recipient refused; the
 existing-instance run stopping before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
-(`test_fresh_init_output_is_never_teed_to_a_log`); `gitleaks` (CI) scans every commit for an `AGE-SECRET-KEY` (C6).
+(`test_fresh_init_output_is_never_teed_to_a_log`, `test_the_installer_container_keeps_no_log`) +
+`tests/unit/test_installer_log_driver.py` (both launchers, run, choose the driver per verb); `gitleaks` (CI) scans
+every commit for an `AGE-SECRET-KEY` (C6).
 
 **Residual (tracked):** a minted **private key** and submitted **secret values** traverse the mgmt-side hop in
 the response/request body — protected by the surface's TLS (GUI) or the operator's reverse proxy
@@ -1156,7 +1160,8 @@ control private key to disk is the legitimate exception to the never-persist rul
 ### C12 — The logging pipeline is a secret surface (collector privilege, label hygiene, mgmt-only)  ◐ partial (internal stack built; deploy opt-in)
 
 The dual-purpose logging pipeline (**Vector → Loki → Grafana**; [docs/logging-architecture.md](docs/logging-architecture.md))
-adds a **privileged reader** (Vector tails every container's stdout, host journald, and the GUI/API audit logs)
+adds a **privileged reader** (Vector tails every container's stdout — the installer's for an `init` or `check`
+run only: its other verbs keep no log, C11 — host journald, and the GUI/API audit logs)
 and a **new operator-readable index** (Loki stream labels). Both are secret-adjacent: a log *line* can carry a
 credential an upstream emitter failed to redact, and a *label* is queryable plaintext that must never embed a
 secret. Logs are therefore treated as a secret surface, not telemetry. (This control lands with the **internal**

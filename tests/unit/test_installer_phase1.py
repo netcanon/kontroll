@@ -71,12 +71,14 @@ def test_installer_is_ephemeral_and_portless():
 
 
 def test_the_installer_container_keeps_no_log():
-    """The installer service's log driver is `none`: what `fresh-init` prints once — the bootstrap passwords and a
-    `--mint-break-glass` private key — reaches the operator's terminal and no Docker log. Guards the show-once
-    values landing in the daemon's json-file (until `--rm`), journald or a remote driver (beyond it) and, on a box
-    whose stack runs, in Loki through Vector's docker_logs source — measured with the real kontroll-init on a TTY
-    (T11 review). kontroll-init's own terminal check cannot see it: the container has a TTY."""
-    assert (_installer_service().get("logging") or {}).get("driver") == "none"
+    """The installer service's log driver is KONTROLL_INSTALLER_LOG_DRIVER, `none` when it is unset — the value both
+    launchers choose per verb (tests/unit/test_installer_log_driver.py): what `fresh-init` prints once — the
+    bootstrap passwords and a `--mint-break-glass` private key — reaches the operator's terminal and no Docker log,
+    also when the fragment is run without a launcher. Guards the show-once values landing in the daemon's json-file
+    (until `--rm`), journald or a remote driver (beyond it) and, on a box whose stack runs, in Loki through Vector's
+    docker_logs source — measured with the real kontroll-init on a terminal. kontroll-init's own terminal check
+    cannot see it: the container has a TTY."""
+    assert (_installer_service().get("logging") or {}).get("driver") == "${KONTROLL_INSTALLER_LOG_DRIVER:-none}"
 
 
 def test_installer_uses_sops_age_key_file_not_literal_value():
@@ -227,27 +229,39 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
     assert "exit $rc" in block, "the scaffold's own exit code must survive the chown"
 
 
-# A route by which a script's output reaches a file or a log: a tee, the shell's own output redirected by `exec`,
-# `script` recording a terminal, `logger`.
-_LOG_ROUTE = re.compile(r"\btee\b|^\s*exec\s*[0-9]*>|\bscript\s+-|\blogger\b")
+# A route by which a script's output reaches a file or a log: a tee, the shell's own output redirected by `exec`
+# (`exec >f`, `exec 2>f`, `exec &>>f`), `script` recording a terminal, `logger` or `systemd-cat`.
+_LOG_ROUTE = re.compile(r"\btee\b|^\s*exec\s*[0-9&]*>|\bscript\b|\blogger\b|\bsystemd-cat\b")
+
+
+def _joined_lines(rel):
+    """`_active_lines`, with a backslash-continued command joined into one line."""
+    out, held = [], ""
+    for line in _active_lines(rel):
+        if line.endswith("\\"):
+            held += line[:-1] + " "
+            continue
+        out.append(held + line)
+        held = ""
+    return out + ([held] if held else [])
 
 
 def test_fresh_init_output_is_never_teed_to_a_log():
     """None of the places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch kit's
     (scripts/kontroll.sh), the libraries they source or run (scripts/lib/canonical-group.sh, plaintext-guard.sh) and
     the image's dispatcher (docker/installer/entrypoint.sh) — routes output through `run_log_init`, a `tee`, an `exec`
-    redirect of the shell's output, `script` or `logger`; the `init` service has no `tty: true`, and no launcher's
-    `compose … run` passes `-t` or `--tty`. compose run gives the container a terminal only when the launcher's
-    stdout is one, so a pipe around fresh-init is refused by kontroll-init itself; this guards the forms that keep a
-    terminal while copying it — a forced tty, a run log, a logger — which would put the show-once break-glass private
-    key `--mint-break-glass` prints in a log nobody chose to keep. The container's own log is held by
-    `test_the_installer_container_keeps_no_log`."""
+    redirect of the shell's output, `script`, `logger` or `systemd-cat`; the `init` service has no `tty: true`, and no
+    launcher's `compose … run` passes `-t`, `--tty` or `--tty=…`, a continued line read as one command. compose run
+    gives the container a terminal only when the launcher's stdout is one, so a pipe around fresh-init is refused by
+    kontroll-init itself; this guards the forms that keep a terminal while copying it — a forced tty, a run log, a
+    logger — which would put the show-once break-glass private key `--mint-break-glass` prints in a log nobody chose
+    to keep. The container's own log is held by `test_the_installer_container_keeps_no_log`."""
     for rel in ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "scripts/lib/canonical-group.sh",
                 "scripts/lib/plaintext-guard.sh", "docker/installer/entrypoint.sh"):
-        for line in _active_lines(rel):
+        for line in _joined_lines(rel):
             assert "run_log_init" not in line and not _LOG_ROUTE.search(line), "%s: %s" % (rel, line)
             if re.search(r"\bcompose\b.*\brun\b", line):
-                assert not re.search(r"\s(--tty|-[A-Za-z]*t[A-Za-z]*)(?=\s|$)", line), "%s: %s" % (rel, line)
+                assert not re.search(r"\s(--tty(=\S*)?|-[A-Za-z]*t[A-Za-z]*)(?=\s|$)", line), "%s: %s" % (rel, line)
     assert not _installer_service().get("tty"), "the init service forces no terminal"
 
 

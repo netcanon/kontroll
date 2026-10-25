@@ -55,8 +55,14 @@ installer carries only the fleet-independent control-plane base (sops/general/do
   runtime `:rw` bind, never an image layer (which every puller would share).
 - The age + ssh binds are `:rw` because this container is the privileged key-**minter**; the long-running network
   services keep their key binds `:ro`. `:rw` here does not widen blast radius — the socket already dominates.
+- **No container log for a verb that can show a secret.** The log driver is
+  `${KONTROLL_INSTALLER_LOG_DRIVER:-none}`, and both launchers set it per verb: `json-file` for `init` and `check`
+  (no kontroll-init, no secret value printed; their log is the deploy's record), `none` for every other verb,
+  whatever the operator's shell exported. So what `fresh-init` shows once (the bootstrap passwords, a minted
+  break-glass key), and kontroll-init run by hand in `shell`, reach the terminal only — never `docker logs` or Loki.
 
-These are pinned in CI by [tests/unit/test_installer_phase1.py](../../tests/unit/test_installer_phase1.py).
+These are pinned in CI by [tests/unit/test_installer_phase1.py](../../tests/unit/test_installer_phase1.py) and
+[tests/unit/test_installer_log_driver.py](../../tests/unit/test_installer_log_driver.py).
 
 ## Why a standalone fragment (not in `docker/compose.yaml`'s include)
 

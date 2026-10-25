@@ -81,6 +81,15 @@ fi
 # The verb, read here because the capture below is not for every one of them.
 verb="${1:-init}"
 
+# The installer's log driver (docker/services/installer.yaml), chosen here for every verb so a value exported in the
+# operator's shell never chooses it: a deploy (`init`, `check`) keeps its record; every other verb, fresh-init's
+# show-once values and kontroll-init by hand in `shell` among them, reaches the terminal only.
+case "$verb" in
+  init|check) KONTROLL_INSTALLER_LOG_DRIVER=json-file ;;
+  *)          KONTROLL_INSTALLER_LOG_DRIVER=none ;;
+esac
+export KONTROLL_INSTALLER_LOG_DRIVER
+
 # The C10 canonical is seeded from THIS working tree's git (local-canonical adds a `local` remote to it + lands HEAD). A
 # launch kit is a tarball extract with NO .git, so git-init it (the step scripts/install.sh does for the bundle path)
 # and capture the current tree — including a freshly-scaffolded instance/ — so the canonical seed has a HEAD to land.

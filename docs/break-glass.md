@@ -137,27 +137,45 @@ only needed if a file was damaged: the re-wrap only adds, and the old recipient 
 ## Verify the key opens every domain
 
 Until this passes for every domain you have a second recipient, not a break-glass key. On the trusted machine that
-holds the private half, copy the `instance/secrets/*.sops.yml` files over (they are ciphertext) and run the block
-below in their directory, with a stock sops build.
+holds the private half — in a Linux or macOS shell, with a stock sops build and `age-keygen` (it comes with age) —
+copy the `instance/secrets/*.sops.yml` files over (they are ciphertext) and run the block below in their directory.
+Set `BG` to the file that holds the private half (on the mint or GUI path, paste the key it showed into that file
+first) and `BGPUB` to the break-glass recipient: the `age1…` kontroll-init printed as `==> break-glass recipient:`,
+which instance/.sops.yaml names beside the control key.
 
 sops uses every key it can find — `SOPS_AGE_KEY_FILE`, `~/.config/sops/age/keys.txt` (where a proven copy of the
-control key may live), `SOPS_AGE_KEY`, `SOPS_AGE_KEY_CMD`, an SSH key — so a plain `SOPS_AGE_KEY_FILE=… sops -d`
-passes on the control key alone. The block gives sops an empty home and only the key it names, and first proves that
-a key which is not a recipient fails:
+control key may live), `SOPS_AGE_KEY`, `SOPS_AGE_KEY_CMD`, an SSH key, a key service — so a plain
+`SOPS_AGE_KEY_FILE=… sops -d` passes on the control key alone. The block first checks that `BG` holds one key and
+that it is the break-glass key. Then, for each file, it checks that the file is wrapped to that key, runs sops with an
+empty home and no environment but the key it names, and proves that a key which is not a recipient fails on that
+file before it tries the break-glass key:
 
 ```bash
-BG="$HOME/kontroll-breakglass.key"; ISO="$(mktemp -d)"   # an empty home: sops sees ONLY the key named below
-v() { env -u SOPS_AGE_KEY -u SOPS_AGE_KEY_CMD -u SOPS_AGE_SSH_PRIVATE_KEY_FILE HOME="$ISO" XDG_CONFIG_HOME="$ISO" \
-        SOPS_AGE_KEY_FILE="$1" sops -d "$2" >/dev/null 2>&1; }
-age-keygen -o "$ISO/not-a-recipient.key" 2>/dev/null     # the control: a key that is not a recipient must FAIL
-f1=$(ls *.sops.yml | head -1)
-v "$ISO/not-a-recipient.key" "$f1" && echo "THIS CHECK IS BROKEN HERE: another key opened $f1"
-for f in *.sops.yml; do v "$BG" "$f" && echo "ok   $f" || echo "FAIL $f"; done
+BG="$HOME/kontroll-breakglass.key"   # the private half of the break-glass key
+BGPUB="age1…"                        # its public half: the break-glass recipient kontroll-init printed
+ISO="$(mktemp -d)"                   # an empty home: sops sees ONLY the key named below
+v() { env -i PATH="$PATH" HOME="$ISO" XDG_CONFIG_HOME="$ISO" SOPS_AGE_KEY_FILE="$1" sops -d "$2" >/dev/null 2>&1; }
+if ! PUB="$(age-keygen -y "$BG" 2>/dev/null)"; then
+  echo "BROKEN: age-keygen could not read a key from $BG (install age beside sops, or check the file)"
+elif [ "$PUB" != "$BGPUB" ]; then                  # one key, and the break-glass one: age-keygen -y prints each
+  echo "BROKEN: $BG is not the one key whose public half is $BGPUB"
+else
+  age-keygen -o "$ISO/not-a-recipient.key" 2>/dev/null   # the control: a key that is not a recipient must FAIL
+  for f in *.sops.yml; do
+    if ! grep -q "recipient: $BGPUB" "$f"; then echo "FAIL $f (not wrapped to $BGPUB)"
+    elif v "$ISO/not-a-recipient.key" "$f"; then echo "BROKEN $f: a key other than the one named opened it"
+    elif v "$BG" "$f"; then echo "ok   $f"
+    else echo "FAIL $f"; fi
+  done
+fi
 rm -rf "$ISO"
 ```
 
-Expect `ok` for every file and no `BROKEN` line. A `BROKEN` line means sops found a key the block did not empty out (a
-newer sops may read another place), and the `ok` lines prove nothing until it is gone.
+Expect `ok` for every file and no `BROKEN` line. A `FAIL` line means the break-glass key does not open that file:
+run the re-wrap again (steps 3 and 4). A `BROKEN` line about `$BG` means the file is not the break-glass key alone
+(a copy of the control key, or a keys.txt holding both), so the check would prove the wrong key. A `BROKEN` line
+about a domain file means sops found a key the block did not empty out (a newer sops may read another place), and
+that file's result proves nothing until it is gone.
 
 Repeat it whenever you rebuild or move the instance, and after any domain is added: kontroll has no way to run this
 check for you.
@@ -170,4 +188,5 @@ check for you.
 - [key-roles/README.md](../key-roles/README.md) — the GUI's Keys dialog and the break-glass role it shares with
   kontroll-init.
 - [instance.example/secrets/README.md](../instance.example/secrets/README.md) — the domain files and their re-wrap.
-- [troubleshooting.md](troubleshooting.md) §11 — what each kontroll-init break-glass refusal means.
+- [troubleshooting.md](troubleshooting.md) §10 — a refused fast-forward or landing; §11 — what each
+  kontroll-init break-glass refusal means.

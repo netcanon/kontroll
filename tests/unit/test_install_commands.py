@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # cell or the line. An elided form (`fresh-init …`) and a mention in prose (`kontroll-init --fresh` copies the
 # example overlay) are not commands a reader can paste, and are not matched.
 SCAFFOLD = re.compile(r"\bfresh-init\s+--[A-Za-z]|[\"']fresh-init[\"']\s*,\s*[\"']--[A-Za-z]"
-                      r"|\bkontroll-init(?:\.py)?(?=[^`|\n]*\s--fresh\b)(?=[^`|\n]*\s--(?!fresh\b)[A-Za-z])")
+                      r"|\bkontroll-init(?:\.py)?(?=[^`|\n]*[\s\"']--fresh\b)(?=[^`|\n]*[\s\"']--(?!fresh\b)[A-Za-z])")
 # A line that ends in the verb or the flag: a code span hard-wrapped there, whose arguments are on the next line.
 _WRAPPED = re.compile(r"(\bfresh-init|\s--fresh)\s*$")
 # Not instructions: the tests themselves, the changelog (history), and the review dossiers (records).
@@ -124,7 +124,8 @@ def test_every_written_scaffold_command_names_a_break_glass_choice(tmp_path):
     `--break-glass-recipient`, `--mint-break-glass` or `--no-break-glass` on the same logical line. Guards a copied
     command that `kontroll-init --fresh` refuses at step one since T11 — on every edition — so a stranger following
     any copy but the quickstart stops there. The scan is shown to find a planted line in both spellings, over a
-    continuation, with a flag before `--fresh`, as an argv list and in a code span wrapped after the verb; to accept
+    continuation, with a flag before `--fresh`, as an argv list (the verb's, and the script's in either quote) and in
+    a code span wrapped after the verb; to accept
     each of the three choices; and to pass a prose mention whose code span ends before the next flag."""
     assert scaffold_commands_without_a_break_glass_choice() == [], \
         "add a break-glass choice to the command (`--break-glass-recipient <age1…>`, docs/break-glass.md)"
@@ -138,13 +139,15 @@ def test_every_written_scaffold_command_names_a_break_glass_choice(tmp_path):
         "docs/g.json": '["./kontroll", "fresh-init", "--mgmt-ip", "192.0.2.10", "--trust-mode", "separated"]\n',
         "docs/h.md": "Run `./kontroll fresh-init\n--mgmt-ip <ip> --trust-mode separated` first.\n",
         "docs/i.md": "`kontroll-init --fresh` copies the example overlay; the --trust-mode flag is below.\n",
+        "docs/j.yml": 'cmd: ["python3", "scripts/kontroll-init.py", "--fresh", "--trust-mode", "separated"]\n',
+        "docs/k.yml": "argv: ['scripts/kontroll-init.py', '--fresh', '--mgmt-ip', '192.0.2.10']\n",
     }
     for rel, text in planted.items():
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
     assert scaffold_commands_without_a_break_glass_choice(files=list(planted), root=str(tmp_path)) == [
-        "docs/a.md:1", "docs/f.md:1", "docs/g.json:1", "docs/h.md:1", "scripts/b.sh:1"]
+        "docs/a.md:1", "docs/f.md:1", "docs/g.json:1", "docs/h.md:1", "docs/j.yml:1", "docs/k.yml:1", "scripts/b.sh:1"]
 
 
 EPILOGUES = ["scripts/install-prereqs.sh", "scripts/install.sh", "scripts/make-launch-kit.sh",
