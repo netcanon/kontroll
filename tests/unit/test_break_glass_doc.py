@@ -71,7 +71,8 @@ def test_the_runbook_levels_the_checkout_first_and_its_dry_run_answers_no():
 
 
 _FAKE_SOPS = """#!/usr/bin/env python3
-# A stand-in sops for `sops -d FILE`: exit 0 when a key it can find is one of FILE's `recipient:` lines. A key is an
+# A stand-in sops for `sops -d FILE` (and `sops --help`, exit 0): exit 0 when a key it can find is one of FILE's
+# `recipient:` lines. A key is an
 # `AGE-SECRET-KEY-<NAME>` line, whose recipient is `age1<name>`. It reads each place the Verify block must empty:
 # SOPS_AGE_KEY, SOPS_AGE_KEY_CMD, SOPS_AGE_KEY_FILE, SOPS_AGE_SSH_PRIVATE_KEY_FILE, SOPS_AGE_SSH_PRIVATE_KEY_CMD,
 # SOPS_KEYSERVICE (here, a file holding the service's keys), the keys.txt under $XDG_CONFIG_HOME, ~/.config and
@@ -81,6 +82,8 @@ import os
 import subprocess
 import sys
 
+if sys.argv[1:] == ["--help"]:
+    sys.exit(0)
 NEW_PLACE = %(new_place)r
 env, home = os.environ, os.environ.get("HOME", "")
 held = [env.get("SOPS_AGE_KEY", "")]
@@ -253,12 +256,21 @@ def test_the_verify_check_refuses_a_key_file_that_is_not_the_break_glass_key(tmp
     assert "ok   " not in run.stdout and run.stdout.count("\n") == 1
 
 
+_NO_SOPS = ("BROKEN: no sops runs here as the check runs it (a stock sops build on PATH; a shell function, an alias "
+            "or a version-manager shim does not count)\n")
+
+
 @_BASH
-def test_the_verify_check_says_so_when_sops_is_missing(tmp_path):
-    """On a machine with age-keygen but no sops at all (a PATH that holds the shell's own tools and the stand-in
-    age-keygen only), the Verify block prints one line, `BROKEN: no sops on this machine`, and no FAIL or ok line.
-    Guards a missing sops reading as a bare `FAIL` for every file — the line the runbook gives for a damaged
-    break-glass stanza, whose remedy (a data-key rotation on the node) cannot help (T11 fold 4's read B, N3)."""
+@pytest.mark.parametrize("sops", ["none", "a-shim-that-needs-home", "a-shell-function"])
+def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
+    """On a machine with age-keygen whose sops cannot run as the block runs it — none at all (a PATH that holds the
+    shell's own tools and the stand-in age-keygen only), a version-manager shim first on PATH that runs sops only
+    where the operator's own home is set, or a shell function named `sops` with no sops on PATH — the Verify block
+    prints one line, `BROKEN: no sops runs here as the check runs it`, and no FAIL or ok line. Guards a sops the
+    block cannot run reading as a bare `FAIL` for every file — the line the runbook gives for a damaged break-glass
+    stanza, whose remedy (a data-key rotation on the node) cannot help (T11 fold 4's read B, N3) — and a check that
+    asks only whether the shell finds a sops (`command -v`), which a function, an alias or a shim passes while the
+    block's `env -i` runs none (fold 5's reads, 70 S1 and 80 N5)."""
     env, files, _ = _hostile_machine(tmp_path)
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -266,8 +278,18 @@ def test_the_verify_check_says_so_when_sops_is_missing(tmp_path):
         os.symlink(shutil.which(name), str(tools / name))
     shutil.copy(str(tmp_path / "bin" / "age-keygen"), str(tools / "age-keygen"))
     env["PATH"] = str(tools)
-    run = _bash(_verify_block(), env, files)
-    assert run.stdout == "BROKEN: no sops on this machine (install a stock sops build)\n", run.stdout + run.stderr
+    block = _verify_block()
+    if sops == "a-shim-that-needs-home":
+        (tmp_path / "home" / ".shim-ok").write_text("", encoding="utf-8")
+        shim = tools / "sops"
+        shim.write_text('#!/usr/bin/env bash\n[ -f "$HOME/.shim-ok" ] || exit 126\nexec python3 "%s" "$@"\n'
+                        % (tmp_path / "bin" / "sops"), encoding="utf-8")
+        shim.chmod(0o755)
+        assert _bash("sops --help", env, files).returncode == 0, "the shim runs in the operator's own shell"
+    elif sops == "a-shell-function":
+        block = 'sops() { python3 "%s" "$@"; }\n' % (tmp_path / "bin" / "sops") + block
+    run = _bash(block, env, files)
+    assert run.stdout == _NO_SOPS, run.stdout + run.stderr
 
 
 def test_the_verify_block_holds_no_comment():

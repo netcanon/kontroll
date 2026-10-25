@@ -230,10 +230,16 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
 
 
 # A route by which a script's output reaches a file or a log: a tee, the shell's own output redirected by `exec`
-# (`exec >f`, `exec 2>f`, `exec &>>f`), `script` recording a terminal, `logger` or `systemd-cat`.
-_LOG_ROUTE = re.compile(r"\btee\b|^\s*exec\s*[0-9&]*>|\bscript\b|\blogger\b|\bsystemd-cat\b")
-# A redirect of a command's output to a file; `>&2` and `>/dev/null` pass.
-_TO_A_FILE = re.compile(r"[0-9&]?>>?\s*(?!&|/dev/null\b)[\w$\"'/.~]")
+# (`exec >f`, `exec 2>f`, `exec &>>f`, `exec {fd}>f`, at a line's start or after `;`, `&&` or `||`), `script`
+# recording a terminal, `logger` or `systemd-cat`.
+_LOG_ROUTE = re.compile(r"\btee\b|(?:^|[;&|]\s*)exec\s*(?:\{\w+\}|[0-9&]*)>|\bscript\b|\blogger\b|\bsystemd-cat\b")
+# A redirect of a command's output to a file: `>`, `>>`, `>|`, `&>`, `>&file`, `>& file` and `>&"$fd_var"`;
+# `>&2`, `2>&1`, `>&-` and `>/dev/null` pass.
+_TO_A_FILE = re.compile(r"[0-9&]?>[>|]?\s*(?!&[0-9-]|/dev/null\b)[&\w$\"'/.~]")
+# The launchers and the dispatcher, where no line sends output to a file at all; plaintext-guard.sh's awk compares
+# with `>`, so there only a line that runs compose `run` or kontroll-init is held to it.
+_NO_FILE_REDIRECT = ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "scripts/lib/canonical-group.sh",
+                     "docker/installer/entrypoint.sh")
 
 
 def _joined_lines(rel):
@@ -253,21 +259,25 @@ def test_fresh_init_output_is_never_teed_to_a_log():
     (scripts/kontroll.sh), the libraries they source or run (scripts/lib/canonical-group.sh, plaintext-guard.sh) and
     the image's dispatcher (docker/installer/entrypoint.sh) — routes output through `run_log_init`, a `tee`, an `exec`
     redirect of the shell's output, `script`, `logger` or `systemd-cat`; the `init` service has no `tty: true`; no
-    launcher's `compose … run` passes `-t`, `--tty` or `--tty=…`; and no line that runs compose `run` or kontroll-init
-    sends its output to a file (`>/dev/null` and `>&2` pass). The scan reads a backslash-continued command as one
-    line. compose run gives the container a terminal only when the launcher's stdout is one, so a pipe around
-    `fresh-init --mint-break-glass` is refused by kontroll-init itself (the bootstrap passwords would still reach a
-    pipe or a file the operator adds); this guards the forms that keep a terminal while copying it — a forced tty, a
-    run log, a logger — which would put the show-once break-glass private key `--mint-break-glass` prints in a log
-    nobody chose to keep, and a redirect on the run line itself, which files the bootstrap passwords (T11 fold 4's
-    read B, N5). The container's own log is held by `test_the_installer_container_keeps_no_log`."""
-    for rel in ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "scripts/lib/canonical-group.sh",
-                "scripts/lib/plaintext-guard.sh", "docker/installer/entrypoint.sh"):
+    launcher's `compose … run` passes `-t`, `--tty` or `--tty=…`; no line of the launchers or the dispatcher sends
+    output to a file (`>`, `>>`, `>|`, `&>`, `>&file` or `>&"$fd"`; `>/dev/null`, `>&2` and `2>&1` pass), so neither
+    the run line nor a `case`, `{ … }` or `exec` around it does; and in plaintext-guard.sh, whose awk compares with
+    `>`, no line that runs compose `run` or kontroll-init does. The scan reads a backslash-continued command as one
+    line. It does not see a here-doc run by a redirected shell, a sourced helper outside these five files, or a pipe
+    into a writer other than `tee` (`dd of=…`). compose run gives the container a terminal only when the launcher's
+    stdout is one, so a pipe around `fresh-init --mint-break-glass` is refused by kontroll-init itself (the bootstrap
+    passwords would still reach a pipe or a file the operator adds); this guards the forms that keep a terminal while
+    copying it — a forced tty, a run log, a logger — which would put the show-once break-glass private key
+    `--mint-break-glass` prints in a log nobody chose to keep, and a redirect on the run line or around it, which
+    files the bootstrap passwords (T11 fold 4's read B, N5; fold 5's reads, 70 N6 and 80 N4: `>&file`, `>|`, a
+    named fd and a redirected `case` or group passed). The container's own log is held by
+    `test_the_installer_container_keeps_no_log`."""
+    for rel in _NO_FILE_REDIRECT + ("scripts/lib/plaintext-guard.sh",):
         for line in _joined_lines(rel):
             assert "run_log_init" not in line and not _LOG_ROUTE.search(line), "%s: %s" % (rel, line)
             if re.search(r"\bcompose\b.*\brun\b", line):
                 assert not re.search(r"\s(--tty(=\S*)?|-[A-Za-z]*t[A-Za-z]*)(?=\s|$)", line), "%s: %s" % (rel, line)
-            if re.search(r"\bcompose\b.*\brun\b|kontroll-init", line):
+            if rel in _NO_FILE_REDIRECT or re.search(r"\bcompose\b.*\brun\b|kontroll-init", line):
                 assert not _TO_A_FILE.search(line), "%s: %s" % (rel, line)
     assert not _installer_service().get("tty"), "the init service forces no terminal"
 

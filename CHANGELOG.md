@@ -29,11 +29,12 @@ losing that key destroyed every device credential, API token and service passwor
   document stops at that refusal.
 - **Refusals, before anything is written:**
   - a private key passed as the recipient (not echoed back), a value that is not an age public key, or one whose
-    bech32 checksum or X25519 length fails (a character mistyped, added or lost in a hand copy, which sops would
-    refuse only at the first encrypt);
-  - a plugin or post-quantum recipient (`age1<name>1…`, a hardware token's say), which sops encrypts to only where
-    `age-plugin-<name>` is installed — kontroll's images ship none — and a low-order X25519 point, which age
-    refuses at encrypt;
+    bech32 checksum, X25519 length or padding bits fail (a character mistyped, added or lost in a hand copy, an `l`
+    read as `1` among them, which sops would refuse only at the first encrypt);
+  - a plugin recipient (`age1<name>1…`, such as a hardware token's), which sops encrypts to only where
+    `age-plugin-<name>` is installed — kontroll's images ship none; a post-quantum one (`age1pq1…`), which needs a
+    sops whose age knows it on every machine that encrypts or decrypts, the trusted machine's included; and a
+    low-order X25519 point, which age refuses at encrypt;
   - the control key's own public half;
   - `--mint-break-glass` when standard output is not a terminal, so the key cannot land in a pipe or a file;
   - `--mint-break-glass` or `--no-break-glass` on an existing instance;
@@ -41,10 +42,14 @@ losing that key destroyed every device credential, API token and service passwor
     otherwise mint a control key and add it to every domain first;
   - the same on an existing instance whose key file holds a key that is not a recipient of every rule (a rule's
     key groups when it has any, as sops reads it), which step 2 would otherwise add to every domain;
-  - a key file kontroll-init cannot read a `# public key:` line from (the line missing, or the file empty, a
-    directory, unreadable or not UTF-8), for `--break-glass-recipient` or a `--fresh` run where something is at its
-    path, named as such with the `age-keygen -y` that prints it. `--fresh` scaffolded `instance/` before failing on
-    such a file.
+  - a key file kontroll-init cannot read a `# public key:` line from (the line missing, or the file empty, not a
+    regular file — a directory, a FIFO, a link to nothing — unreadable or not UTF-8), for `--break-glass-recipient`,
+    and for a `--fresh` run where something is at the key file's path; the refusal says the line could not be read
+    and gives the `age-keygen -y` command that prints it. Before this, `--fresh` scaffolded `instance/` and then
+    failed on such a file, a link to nothing ended in a traceback, and a FIFO hung the run;
+  - where `age-keygen` is installed (the installer has it), a key file whose `# public key:` line is not the public
+    half of the key age reads there (a byte-order mark before the key, a public line alone, another key's line),
+    which would have written the instance to a key that cannot open it.
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
@@ -53,12 +58,12 @@ losing that key destroyed every device credential, API token and service passwor
   - the re-wrap's dry run, then the apply;
   - the check with the control key, the hand-back of root-owned files, and a scoped commit;
   - the landing with `--check --diff` first, a rollback, and the operator's own proof that the key opens every
-    domain. It checks that sops runs and that the key file holds one key, the break-glass recipient's private
-    half (taken from the control node, its one anchor); then, for each
-    file, that it is wrapped to that key, and that a key which is no recipient fails on it, with sops given no
-    environment and an empty home (a plain `SOPS_AGE_KEY_FILE=… sops -d` passes on a control key in
-    `~/.config`). A BROKEN line says when the check cannot be trusted, and the block holds no comment, so an
-    interactive zsh runs it too.
+    domain. It checks that sops runs as it will run it (no environment, an empty home: a shell function or a
+    version-manager shim does not count) and that the key file holds one key, whose public half is the break-glass
+    recipient as the control node showed it (the check's one anchor); then, for each file, that it is wrapped to
+    that key, and that a key which is no recipient fails on it, with sops given no environment and an empty home (a
+    plain `SOPS_AGE_KEY_FILE=… sops -d` passes on a control key in `~/.config`). A BROKEN line says when the check
+    cannot be trusted, and the block holds no comment, so an interactive zsh runs it too.
 - **Security.**
   - The bootstrap play's warning counts recipients per creation rule of `instance/.sops.yaml` (the rules, not the
     encrypted files). It used to count across rules, so a second recipient on one rule hid a rule with one.
@@ -75,10 +80,12 @@ losing that key destroyed every device credential, API token and service passwor
     exported: `json-file` for `init` and `check`, which run no kontroll-init and print no secret value and whose
     log (`services-init` in Loki) is the deploy's record; `none` for the rest, `shell` included, where kontroll-init
     runs by hand. The terminal still shows every line (`tests/unit/test_installer_log_driver.py`).
-  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect,
-    `script` or a logger (`logger`, `systemd-cat`), none forces the container a terminal, and no line that runs
-    compose `run` or kontroll-init sends its output to a file (the scan reads a backslash-continued command as one
-    line; `tests/unit/test_installer_phase1.py`).
+  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect
+    (a named fd's included), `script` or a logger (`logger`, `systemd-cat`), and none forces the container a
+    terminal. No line of the launchers or the installer's dispatcher sends output to a file (`>`, `>>`, `>|`, `&>`,
+    `>&file`), so neither the run line nor a `case` or `{ … }` around it does; in the plaintext guard, whose awk
+    compares with `>`, no line that runs compose `run` or kontroll-init does (the scan reads a backslash-continued
+    command as one line; `tests/unit/test_installer_phase1.py`).
   - A refusal after the scaffold (`could not add the break-glass recipient`) left `instance/` root-owned: the
     dispatcher read the exit code with a bare `rc=$?` under `set -e`, so the hand-back never ran. It runs now.
   - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).

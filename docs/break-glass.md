@@ -32,7 +32,8 @@ that is not a git repository:
 age-keygen -o ~/kontroll-breakglass.key        # prints "Public key: age1…"
 ```
 
-Store the file's content offline (above). Copy only the `age1…` line to the control node and pass it to `fresh-init`.
+Store the file's content offline (above). Copy only the `age1…` value (after `Public key:`) to the control node
+and pass it to `fresh-init`.
 Then [verify](#verify-the-key-opens-every-domain) once the first secrets exist.
 
 ## On an existing instance
@@ -66,7 +67,8 @@ and without the hand-back.
    promoted proposal re-encrypted.
 
 **Step 1 — make the key, off the box.** As [at install](#at-install-kontroll-init---fresh-asks): `age-keygen` on a
-trusted machine, the private half stored offline, only the `age1…` line copied to the control node. (The GUI's
+trusted machine, the private half stored offline, only the `age1…` value (after `Public key:`) copied to the
+control node. (The GUI's
 **Keys** dialog → "Break-glass recovery key" can mint it on the node instead: copy the private key it shows once,
 promote the proposal it stages, bring it into the checkout with `git fetch local && git merge --ff-only
 local/main`, and continue at step 3.)
@@ -81,11 +83,13 @@ git status --short                               # expect: only instance/.sops.y
 ```
 
 kontroll-init refuses — and writes nothing — when the control key file is not where it looks (it never mints one on
-this path), has no `# public key:` line it can read, or holds a key that is not a recipient of every rule (so not
-this instance's control key); when the value is a private key, is not an age public key, is a plugin or
-post-quantum recipient (`age1<name>1…`: kontroll's images ship no age plugin), fails its checksum or length (a
-character mistyped, added or lost in the copy), or is a low-order point age refuses; or when it is the control key
-itself. It adds the key under both recipient anchors, `base_recipients` and `ops_recipients`, as
+this path), has no `# public key:` line it can read, or holds a key that is not a recipient of every rule (so not this
+instance's control key), or holds a `# public key:` line that is not the public half of the key age reads from the
+file; when the value is a private key, is not an age public key, is a plugin recipient (`age1<name>1…`: kontroll's
+images ship no age plugin) or a post-quantum one (`age1pq1…`: it needs a sops whose age knows it on every machine that
+encrypts or decrypts, the trusted machine's included), fails its checksum, length or padding (a character mistyped,
+added or lost in the copy, an `l` read as `1` among them), or is a low-order point age refuses; or when it is the
+control key itself. It adds the key under both recipient anchors, `base_recipients` and `ops_recipients`, as
 `key-roles/break-glass.yml` names them; a hand edit under one anchor would leave the operational domains with one
 recipient. Then it stops: it mints, prints and changes no secret, and names step 3.
 
@@ -147,23 +151,24 @@ showed into that file first, alone on its line) and `BGPUB` to the break-glass r
 it: the `age1…` on kontroll-init's `==> break-glass recipient:` line or, on the GUI path, the Keys dialog's
 `public recipient:`. `BGPUB` is the check's one anchor: take it from the control node, never from the key file you
 are testing, and check it is not the `==> control age key:` value. `ISO` is an empty home, so sops sees only the key
-the block names. The block holds no comment, so an interactive zsh (macOS's shell) runs it as bash does; or save
-it to a file and run `bash verify.sh`, which you can keep for the next time.
+the block names. The block holds no comment, so an interactive zsh (macOS's shell) runs it too; or save it to a
+file and run `bash verify.sh`, which you can keep for the next time.
 
 sops uses every key it can find — `SOPS_AGE_KEY_FILE`, `~/.config/sops/age/keys.txt` (where a proven copy of the
 control key may live), `SOPS_AGE_KEY`, `SOPS_AGE_KEY_CMD`, an SSH key, a key service — so a plain
-`SOPS_AGE_KEY_FILE=… sops -d` passes on the control key alone. The block first checks that sops runs here, then that
-`BG` holds one key and that it is the break-glass key (`age-keygen -y` prints one line per key). Then, for each file, it
-checks that the file is wrapped to that key, runs sops with an empty home and no environment but the key it names, and
-proves that a key which is not a recipient fails on that file before it tries the break-glass key:
+`SOPS_AGE_KEY_FILE=… sops -d` passes on the control key alone. The block first checks that sops runs as the block
+runs it (no environment, an empty home), then that `BG` holds one key and that it is the break-glass key (`age-keygen
+-y` prints one line per key). Then, for each file, it checks that the file is wrapped to that key, runs sops with an
+empty home and no environment but the key it names, and proves that a key which is not a recipient fails on that file
+before it tries the break-glass key:
 
 ```bash
 BG="$HOME/kontroll-breakglass.key"
 BGPUB="age1…"
 ISO="$(mktemp -d)"
 v() { env -i PATH="$PATH" HOME="$ISO" XDG_CONFIG_HOME="$ISO" SOPS_AGE_KEY_FILE="$1" sops -d "$2" >/dev/null 2>&1; }
-if ! command -v sops >/dev/null 2>&1; then
-  echo "BROKEN: no sops on this machine (install a stock sops build)"
+if ! env -i PATH="$PATH" HOME="$ISO" XDG_CONFIG_HOME="$ISO" sops --help >/dev/null 2>&1; then
+  echo "BROKEN: no sops runs here as the check runs it (a stock sops build on PATH; a shell function, an alias or a version-manager shim does not count)"
 elif ! PUB="$(age-keygen -y "$BG" 2>/dev/null)"; then
   echo "BROKEN: age-keygen could not read a key from $BG (install age, or check the file: one AGE-SECRET-KEY-1… line)"
 elif [ "$PUB" != "$BGPUB" ]; then
@@ -184,13 +189,17 @@ Expect `ok` for every file and no `BROKEN` line.
 
 - `FAIL … (not wrapped to …)`: the re-wrap did not reach that file. Run it again (steps 3 and 4).
 - A bare `FAIL`: the file names the break-glass key and that key does not open it. The file's break-glass stanza is
-  damaged, and a re-wrap leaves it as it is (`already up to date`). Rotate that file's data key on the node, in the
-  installer shell (`sops -r -i instance/secrets/<domain>.sops.yml`), hand it back and land it as steps 5 and 6 do,
-  then verify again.
-- `BROKEN: no sops`: this machine cannot check anything yet.
-- A `BROKEN` line about `$BG`: the file is not the break-glass key alone (a copy of the control key, a keys.txt
-  holding both, or a key line with something before it), so the check would prove the wrong key; or `BGPUB` is not
-  the break-glass recipient (left as `age1…`, with a stray space or carriage return, or set to the control key's).
+  damaged, and a re-wrap leaves it as it is (`already up to date`); or this sops is older than 3.7, which reads no
+  age key (`sops --version`; install a current stock build and run the block again first). Rotate that file's data
+  key on the node, in the installer shell (`sops -r -i instance/secrets/<domain>.sops.yml`), hand it back and land it
+  as steps 5 and 6 do, then verify again.
+- `BROKEN: no sops runs here`: this machine cannot check anything yet. The block runs sops with no environment and an
+  empty home, so a shell function or an alias named `sops`, or a version-manager shim that needs your own home, does
+  not count: put a stock sops build on `PATH` (`command -v sops` should name a file, not a shim).
+- A `BROKEN` line about `$BG`: the file is not the break-glass key alone (a copy of the control key or a keys.txt
+  holding both, so the check would prove the wrong key; or a key line with something before it, which `age-keygen`
+  cannot read); or `BGPUB` is not the break-glass recipient (left as `age1…`, with a stray space or carriage return,
+  or set to the control key's).
 - A `BROKEN` line about a domain file: sops found a key the block did not empty out (a newer sops may read another
   place), and that file's result proves nothing until it is gone.
 

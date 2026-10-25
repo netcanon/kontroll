@@ -1117,10 +1117,15 @@ distinct control.
   both launchers choose it per verb, `docker/services/installer.yaml`), and no launcher routes `fresh-init`
   through a run log or a `tee`. A terminal the operator records (`script`, a multiplexer's log) is
   beyond kontroll's reach.
-  `--break-glass-recipient` takes a public key made elsewhere and refuses a private one, or one whose checksum or
-  X25519 length fails, without echoing it; on an existing instance it also refuses a key file that is not the
-  control recipient of every rule (read as sops reads it: a rule's key groups when it has any), and stops after
-  adding the recipient, before the bootstrap secrets.
+  `--break-glass-recipient` takes the public half of an X25519 key made elsewhere and, without echoing the value,
+  refuses a private key, a plugin recipient (`age1<name>1…`: kontroll's images ship no age plugin) or a
+  post-quantum one (it needs a sops whose age knows it on every machine), one whose checksum, X25519 length or
+  padding fails, and a low-order point age refuses. A run that reads the control key file (`--break-glass-recipient`,
+  or any `--fresh` run where something is at its path) refuses, before anything is written, one it cannot read a
+  `# public key:` line from, and, where `age-keygen` is installed, one whose line is not the public half of the key
+  age reads there. On an existing instance it also refuses a key file that is not the control recipient of every
+  rule (read as sops reads it: a rule's key groups when it has any), and stops after adding the recipient, before
+  the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing
@@ -1138,8 +1143,11 @@ anchor-scoped; the parse-verify gate rejects a dropped/smuggled recipient and wr
 prints nothing) + `tests/integration/test_gui_api.py` keygen cases (show-once response, audit/commit carry only
 the public key, staged not `main`); `tests/unit/test_kontroll_init.py` break-glass cases (the minted private half
 printed exactly once and in no file, shown even when a later step fails, refused on a non-terminal; a private,
-malformed or mis-checksummed recipient refused unechoed; a key file that is not the control recipient refused; the
-existing-instance run stopping before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
+malformed, mis-checksummed, plugin, post-quantum, low-order or non-zero-padding recipient refused unechoed, the
+low-order check held to `cryptography`'s X25519 by `test_the_low_order_check_agrees_with_x25519_itself`; a key file
+kontroll-init cannot read (empty, a directory, a FIFO, a link to nothing, not UTF-8) or one age reads otherwise,
+refused on both paths; a key file that is not the control recipient refused; the existing-instance run stopping
+before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
 (`test_fresh_init_output_is_never_teed_to_a_log`, `test_the_installer_container_keeps_no_log`) +
 `tests/unit/test_installer_log_driver.py` (both launchers, run, choose the driver per verb); `gitleaks` (CI) scans
 every commit for an `AGE-SECRET-KEY` (C6).

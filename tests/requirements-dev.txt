@@ -10,6 +10,9 @@ flask>=3.0
 # tests/integration/test_api.py — the L2b route contract, offline (the service seams are mocked).
 fastapi>=0.110
 httpx>=0.27
+# cryptography: the X25519 oracle for test_the_low_order_check_agrees_with_x25519_itself (kontroll-init's
+# pure-Python low-order check, held to OpenSSL's).
+cryptography>=42
 # GUI e2e (tests/e2e) — Playwright drives a headless browser over the real booted Flask app.
 # Installing this keeps `pytest -m "not e2e"` collectable everywhere; the browser binary is
 # installed only in the CI e2e job (python -m playwright install chromium).
