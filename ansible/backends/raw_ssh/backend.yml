@@ -25,6 +25,10 @@ search_card:
 # methods stay operator-declared (no probe signal). backup stays `maybe` (depends on backend_backup_command).
 confers: {backup: maybe, telemetry: [blackbox, host_node], logs: []}
 requires: [backend_backup_command]   # e.g. "uci export"
+# The SOPS domain a class of this backend stores its credentials in when the onboard request names none and the
+# class is new (a reused class keeps its own `secrets_domain`). Read by service/onboard.py and the scaffold, and
+# shown as the onboard form's default; no code names a domain (S27). A new name needs a rule in .sops.yaml.
+default_secrets_domain: network
 role: backend_raw_ssh
 connection:
   ansible_connection: ssh

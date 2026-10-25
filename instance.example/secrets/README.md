@@ -22,6 +22,14 @@ sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml
 
 Never commit a plaintext secret or an age private key. See `SECURITY.md` (C8 / C11).
 
+**Where an onboard stores a device's credentials.** In the class's own `secrets_domain` when the onboard is a
+reuse — of a collection the class under that key already declares (shipped, or onboarded before; under a class with
+`collections: []`, a collection ansible-core ships) — whatever domain it names; else in the domain the onboard
+names; else in the backend's `default_secrets_domain`
+(`ansible/backends/<name>/backend.yml` — `network` for every backend the tool ships). A domain you name that has no
+rule in `.sops.yaml` falls to the catch-all, which the scoped Semaphore key is not on: add a rule for it before a
+scheduled job reads it.
+
 **This directory holds sops documents and nothing else.** The deploy commits your working tree into the local
 canonical, and refuses to do so — naming the file — while a `*.sops.yml` here has any value that is not ciphertext
 (a file typed in an editor and never encrypted, one key added by hand to an encrypted file), or while any other

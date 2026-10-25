@@ -25,12 +25,13 @@
       # TWO names are tried because the repo has always had two, and they never met.
       #
       # The recipe declares the var it READS (`token_var`, e.g. `fortios_api_token`), and
-      # backends/api/backend.yml says "the token's hostvar is the recipe's token_var (resolved by the
-      # planner)". Nothing ever resolved it: service/onboard.py builds `backend_params` with only
+      # backends/api/backend.yml said "the token's hostvar is the recipe's token_var (resolved by the
+      # planner)". Nothing ever resolved it: service/onboard.py built `backend_params` with only
       # `network_os`, so `params.get("token_var")` was always None and every onboarded api host got
       # `<host>_api_token` instead — a name this role never looked up. paths.py:35 defines RECIPES_DIR and
-      # no Python reads it. So the documented design was never implemented, and the edge-firewall check has
-      # been unable to authenticate for as long as the class has existed.
+      # no Python reads it. So the documented design was never implemented, and the edge-firewall check had
+      # been unable to authenticate for as long as the class had existed. (Since S27 that per-host name is
+      # backend.yml's own `maps_to` template for `api_token`.)
       #
       # `default=''` is load-bearing. ansible/plugins/lookup/vars.py raises AnsibleUndefinedVariable for a
       # missing name, and this task carries `no_log: true`, so that fatal arrived CENSORED — ping.yml's

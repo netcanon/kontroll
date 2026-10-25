@@ -38,6 +38,16 @@ def mock_probe(monkeypatch, make_facts):
     monkeypatch.setattr(catalog, "local_installed", lambda: {})
 
 
+def test_cli_onboard_with_a_blank_domain_plans_into_the_backend_default(tmp_repo, mock_probe, capsys):
+    """`galaxy.py onboard --secrets ""` plans into the backend's `default_secrets_domain`, as an omitted flag does:
+    blank means omitted, as in the API and the GUI. Guards the CLI refusing a blank domain the other two surfaces
+    accept (T18's read, F10 / D12)."""
+    want = next(b for b in catalog.load_backends() if b["name"] == "netcommon_cli")["default_secrets_domain"]
+    for secrets in ("", None):
+        galaxy.cmd_onboard(_args(secrets=secrets, password="p"))
+        assert "encrypted into instance/secrets/%s.sops.yml" % want in capsys.readouterr().out
+
+
 def test_dryrun_writes_nothing(tmp_repo, mock_probe, capsys):
     """A bare onboard prints the full plan (module + drop-in host + fleet-enable) but writes
     NOTHING — the dry-run-by-default safety, asserted by an inert tmp repo."""
@@ -112,8 +122,10 @@ def _seed_class(tmp_repo, key="edgeos", collection="acme.edgeos"):
 
 
 def test_onboard_reuses_existing_class_not_clobbers_it(tmp_repo, mock_probe, capsys):
-    """Onboarding a device whose CLASS already exists REUSES the curated module — it is left byte-for-byte
-    unchanged (its metrics:/backup: blocks survive) and only the inventory host + fleet-enable are written.
+    """Onboarding a collection the class under that key already declares (or, under a class with
+    `collections: []`, a collection ansible-core ships — the S24 test below) REUSES the curated module — it is
+    left byte-for-byte unchanged (its metrics:/backup: blocks survive) and only the inventory host + fleet-enable
+    are written.
 
     WHY (the live defect this guards): the operator's Overwrite replaced the rich shipped cisco_ios module with
     a 13-line minimal stub on .50 main, silently stripping its telemetry/backup capability and breaking the
@@ -171,7 +183,8 @@ def test_second_generic_host_reuses_the_class_even_after_curation(tmp_repo, monk
 
 
 def test_onboard_different_collection_on_same_key_still_conflicts(tmp_repo, mock_probe):
-    """A DIFFERENT collection colliding on an existing key is NOT reuse (reuse keys on the collection matching):
+    """A DIFFERENT collection colliding on an existing key is NOT reuse (reuse keys on the class taking the
+    collection — declaring it, or being `collections: []` with ansible-core shipping it):
     it still hard-stops with WriteConflict so the operator picks a fresh key, and only a deliberate overwrite
     replaces it — the loudly-warned escape hatch. Guards reuse from being mistaken for blanket no-clobber."""
     _seed_class(tmp_repo, key="edgeos", collection="other.os")   # existing module is a DIFFERENT collection
@@ -183,13 +196,14 @@ def test_onboard_different_collection_on_same_key_still_conflicts(tmp_repo, mock
 
 
 def test_apply_refuses_to_clobber_divergent_file(tmp_repo, mock_probe, capsys):
-    """If the operator hand-edited a drop-in, a re-apply HARD-STOPS rather than overwriting their change — the
-    no-clobber guarantee that protects local edits. The hard stop is a catchable `gitio.WriteConflict` (NOT a
-    `sys.exit`/SystemExit): in-process the GUI/API turn it into a clean 409 instead of a worker-killing crash; the
-    CLI's dispatch catches it and exits cleanly. (Same guard that fires when a key collides with a shipped module.)"""
+    """If the operator rewrote a drop-in so it no longer opens with the onboard banner, a re-apply HARD-STOPS rather
+    than overwriting it — the no-clobber guarantee for a drop-in onboard no longer owns. The hard stop is a
+    catchable `gitio.WriteConflict` (NOT a `sys.exit`/SystemExit): in-process the GUI/API turn it into a clean 409
+    instead of a worker-killing crash; the CLI's dispatch catches it and exits cleanly. (Same guard that fires when a
+    key collides with a shipped module.)"""
     galaxy.cmd_onboard(_args(apply=True))
     capsys.readouterr()
-    # operator hand-edits the drop-in; a re-apply must hard-stop, never overwrite
+    # the operator rewrites the drop-in without the banner; a re-apply must hard-stop, never overwrite
     inv = tmp_repo / "ansible" / "inventory" / "onboarded-edgeos.yml"
     inv.write_text("# hand-edited\nall: {}\n", encoding="utf-8")
     with pytest.raises(gitio.WriteConflict):

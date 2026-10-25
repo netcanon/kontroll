@@ -1825,7 +1825,20 @@ and an option of an installed module whose name is not an identifier is not offe
 third party's spelling never refuses an onboard; where such an option is required or marked `no_log`, the module's
 set is not exact and is not used). Its `maps_to` — the NAME of the host var a value is written under — is an
 identifier too, wherever a value is written under it, and an `inline` field must name one (which host var is the
-declaring file's choice; see the limits below). The module-reuse path ADOPTS a class's group, secrets domain,
+declaring file's choice; see the limits below). A `maps_to` holding a `{placeholder}` is a TEMPLATE (S27: the api
+backend's and the generic union's `{cred_key}_api_token`, the var the former branch on the field's name wrote): it is
+rendered with the host's credential key alone — `catalog.render_template`'s closed `{name}` grammar, no attribute
+access, no Jinja — and its result is held to the charset of the host names the request boundary accepts
+(`catalog.MAPS_TO_RE`), not to an identifier, so a dotted or IP-literal host keeps the var it had — names
+ansible-core 2.19 accepts with a warning until 2.23 (any var name that is not an identifier: a `.` or a `:`, or a
+leading digit, as every IPv4 literal has), so they must become identifiers before the stack reaches it; a template
+that does not render is the declaring file's, refused as repository data (`tests/unit/test_backend_defaults.py`).
+Only the backend registry and the generic union declare a template: it lets the request's host name choose the var,
+so a module file's `auth:` entry may only repeat, for the same field, the template its backend's registry entry or
+the generic union declares (today only `api_token`'s `{cred_key}_api_token`); any other template is refused as
+repository data once a value is given. The
+backend registry's `default_secrets_domain`, which stands in for a domain the request omits, is held to the rule of
+a name as repository data before the plan uses it. The module-reuse path ADOPTS a class's group, secrets domain,
 backend and role from the module file already on disk; each one the plan takes is held, where it is taken and before
 anything is written, to the rule of the request field of the same meaning — for the role, which no request carries,
 the rule of a name (`onboard._adopted`): the adopted domain is formatted into that same lookup expression, the role
@@ -1834,15 +1847,15 @@ a mapping at all — is not a request refusal (below). The role a class gets whe
 backend registry entry's own, never one made from a name (S26: the planner and the scaffold made `backend_<name>` up
 for a backend that declared none, and wrote it into the module file and every host's `device_role`, where
 `ping.yml` and `backup-configs.yml` then included a role that does not exist). A `backend` a request names must be
-one this install ships (`onboard._registered`) whose entry declares a `role:` (`onboard._role_of`) — a second
-device of a class whose module file declares its own role keeps that role, so there the entry needs none; any other
-is a refusal of the `backend` field, before the collection is probed. A backend the classifier matches is chosen
-only when its entry declares one (`catalog.runnable`) — for a new class; a reused class with its own role falls back
-to the first match when none declares one — and a search record's `suggested_backend`, which the GUI's onboard form
+one this install ships (`onboard._registered`) whose entry declares a `role:` (`onboard._role_of`) — a reuse
+(an onboard of a collection the class under that key already declares, or, under a class with `collections: []`, a
+collection ansible-core ships) whose module file declares its own role keeps that role, so there the entry needs none;
+any other is a refusal of the `backend` field, before the collection is probed. A backend the classifier matches is
+chosen only when its entry declares one (`catalog.runnable`) — for a new class; a reused class with its own role falls
+back to the first match when none declares one — and a search record's `suggested_backend`, which the GUI's onboard form
 sends, is that same choice. The registry role is held to the name rule where it is taken, by the planner and by the
-scaffold; one that
-fails is repository data, and so is a reused class whose module file names no role and whose backend — from the
-file — declares none, or names the role the planner used to make up for a backend that declares none
+scaffold; one that fails is repository data, and so is a reused class whose module file names no role and whose backend
+— from the file — declares none, or names the role the planner used to make up for a backend that declares none
 (`backend_vendor_config`, `backend_napalm`; `onboard._no_made_up_role`, which the identity knob also refuses to
 store): what one request writes into a module file, the next one adopts. Each of these faults of a reused class's
 file is answered before the collection is probed. A backend the file names that this install does not ship is not
@@ -1938,20 +1951,20 @@ one to correct, or the layout — and never the value, and audited under an acti
 what=<kind> route=<route>` — never as a refused request (on the API an open route has no principal and writes no
 line, as for a field refusal; every GUI route is authenticated and writes one). `apply_onboard_plan` confines the
 drop-in targets it is going to write — the module file and the inventory drop-in of a new class, the inventory
-drop-in alone for a second device of an existing one — before its first write, so a drop-in the confinement refuses
-stops the apply with nothing written; the fixed-path writes that follow (the fleet file, a secret domain) are not
-confined; and nothing an apply has written — drop-in or fixed path — is rolled back when a later step fails. `POST
-/onboard` therefore has more than one 409, told apart by `code`: this one, and a drop-in that exists with different
-content (no `code`; the caller may retry with `overwrite`) — which, on an install whose write root is not its code
-root, includes a class the tool SHIPS under the same key for another collection: the apply asks the reader's view
-before its first write, because a module written there would shadow the shipped class for every reader.
-**Known gaps, each with a theme of its own:** `gen-homepage.py` quotes a host name with its own escaping, which
-knows the newline and the carriage return and not the other line breaks, and `gen-logging.py` formats a host name
-and a class key into a string literal by hand — and nothing compiles the fragments that generator writes before
-Vector loads them: the gate checks them for freshness, and its `vector validate` reads the hand-written
-configuration only; a few other anchored patterns (the capture revision, the discovery tokens, several generators)
-are still applied with `match()`; the Settings view lists the fleet as it is — it shows some malformed lines and
-cannot remove one that is not a string; a
+drop-in alone for a reuse (an onboard of a collection the class under that key already declares, or, under a class with
+`collections: []`, a collection ansible-core ships) — before its first write, so a drop-in the confinement refuses stops
+the apply with nothing written; the fixed-path writes that follow (the fleet file, a secret domain) are not confined;
+and nothing an apply has written — drop-in or fixed path — is rolled back when a later step fails. `POST /onboard`
+therefore has more than one 409, told apart by `code`: this one, and a drop-in that exists with different content (no
+`code`; the caller may retry with `overwrite`) — which, on an install whose write root is not its code root, includes a
+class the tool SHIPS under the same key for another collection: the apply asks the reader's view before its first write,
+because a module written there would shadow the shipped class for every reader. **Known gaps, each with a theme of its
+own:** `gen-homepage.py` quotes a host name with its own escaping, which knows the newline and the carriage return and
+not the other line breaks, and `gen-logging.py` formats a host name and a class key into a string literal by hand — and
+nothing compiles the fragments that generator writes before Vector loads them: the gate checks them for freshness, and
+its `vector validate` reads the hand-written configuration only; a few other anchored patterns (the capture revision,
+the discovery tokens, several generators) are still applied with `match()`; the Settings view lists the fleet as it is —
+it shows some malformed lines and cannot remove one that is not a string; a
 tree that ALREADY gives one board two names is fetched under the first only (a request can no longer create that);
 and a UNIT may still target `all`, `ungrouped` or `localhost` (the class seams above refuse the names; the unit's
 validator does not look), or no group at all, which its play renders as `all`.
@@ -1989,10 +2002,14 @@ where the create route derives it; a directory made by hand with a longer name i
 board's `services.yaml` — at a shell, by the operator, into their own files. (`scripts/kontroll-promote.py`
 holds its `run_id` to the two minted shapes itself, whoever runs it; the promote play checks the same rule before
 it calls the script.) A credential
-field's `maps_to` is held to being a variable name, not to a set of variables: a module file's own `auth:` entry
-stored in SOPS may write its lookup under `ansible_connection`, `ansible_host` or any other host var of that class's
-hosts, and an `inline` flag may write `true` or `false` under any lower-case one (only an inline port is held to a
-`*_port` var) — a file an operator promotes, never a request, and never the request's text. The class seams refuse
+field's `maps_to` is held to being a variable name (or, for a template the backend registry or the generic union
+declares, to `catalog.MAPS_TO_RE`), not to a set of variables: a module file's own `auth:` entry stored in SOPS may
+write its lookup under `ansible_connection`, `ansible_host` or any other host var of that class's hosts, and an `inline`
+flag may write `true` or `false` under any lower-case one (only an inline port is held to a `*_port` var) — a file an
+operator promotes, never a request. The request's text reaches a var's NAME only through a template the backend
+registry or the generic union declares (shipped: `{cred_key}_api_token`, whose rendered name ends in `_api_token`);
+the planner holds an operator's registry template to no suffix — the registry is operator data, trusted as the role
+it names is. The class seams refuse
 the names a NAME can tell; a PARENT group the inventory defines (the example's `network_devices`, `compute`) is a
 group like any other to them, and a class attached to one addresses its children wherever the class's group is a
 pattern. The identity dialog's charset for a
