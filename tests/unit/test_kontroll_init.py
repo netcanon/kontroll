@@ -357,15 +357,17 @@ def test_fresh_with_a_supplied_recipient_has_two_recipients_before_the_first_sec
 
 def test_minted_break_glass_is_shown_once_and_written_nowhere(fresh_repo, monkeypatch, capsys):
     """`--mint-break-glass` on a terminal: the minted private half appears exactly once on standard output, never on
-    standard error, and in no file under the scratch root (the overlay, the key directory); its public half is a
-    recipient of every rule. Guards the private half reaching disk — where a backup, a snapshot or a commit would
-    carry it — and its being printed twice (a log line besides the block) or not at all (a recipient nobody holds)."""
+    standard error, and in no file under the scratch root (the overlay, the key directory), on a line of its own with
+    nothing before it; its public half is a recipient of every rule. Guards the private half reaching disk — where a
+    backup, a snapshot or a commit would carry it — its being printed twice (a log line besides the block) or not at
+    all (a recipient nobody holds), and its being indented: a key stored as the whole displayed line opens nothing
+    (sops, age and age-keygen each refuse a key line that starts with spaces; T11 fold 4's read B, S2)."""
     _mock_fresh_seams(monkeypatch)
     monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
     monkeypatch.setattr(keygen, "generate_keypair", lambda: {"public": BG, "private": BG_PRIVATE})
     assert ki.main(_FRESH + ["--mint-break-glass"]) == 0
     out, err = capsys.readouterr()
-    assert out.count(BG_PRIVATE) == 1 and BG_PRIVATE not in err
+    assert out.count(BG_PRIVATE) == 1 and BG_PRIVATE not in err and BG_PRIVATE in out.splitlines()
     assert all(s == {MINTED, BG} for s in _rules().values())
     for directory, _dirs, names in os.walk(fresh_repo):
         for name in names:
@@ -410,8 +412,13 @@ def test_no_break_glass_is_explicit_and_says_what_it_costs(fresh_repo, monkeypat
     (BG[:-1] + "q", "is not a valid age public key"),
     (BG[:20] + "b" + BG[21:], "is not a valid age public key"),
     (BG[:-1] + "qp", "is not a valid age public key"),
+    (bech32("age1yubikey", bytes(range(33))), "is a plugin or post-quantum age recipient"),
+    (bech32("age1pq", bytes(range(64))), "is a plugin or post-quantum age recipient"),
+    (bech32("age", bytes(32)), "is a low-order X25519 point"),
+    (bech32("age", (1).to_bytes(32, "little")), "is a low-order X25519 point"),
 ], ids=["private-key", "private-key-lower-padded", "too-short", "upper-case", "two-joined", "checksum-typo",
-        "outside-the-alphabet", "q-before-final-p"])
+        "outside-the-alphabet", "q-before-final-p", "a-plugin-recipient", "a-post-quantum-recipient",
+        "the-all-zero-point", "the-point-u-1"])
 def test_a_malformed_or_private_recipient_is_refused_before_any_write(fresh_repo, monkeypatch, capsys,
                                                                      recipient, expect):
     """A `--break-glass-recipient` that is a PRIVATE key, or is not an age public key as age-keygen prints one, exits
@@ -419,11 +426,14 @@ def test_a_malformed_or_private_recipient_is_refused_before_any_write(fresh_repo
     before it is still named as one; a valid key with more after it (two keys joined by a comma) is refused whole; a
     value of the right shape whose bech32 checksum fails — one character changed, or one outside the bech32 alphabet
     — is refused as one, and so is a `q` added before the final `p`, which the checksum cannot see and the length
-    can. Guards a typo creating a recipient nobody can decrypt with (sops refuses it only at the
-    first encrypt, after the instance and its .sops.yaml are written, so the run fails half-way with an error that
-    blames the age key and no re-run repairs it), a check that reads only a valid prefix, a private key pasted by
-    mistake being printed to the terminal or its log a second time, and a lower-cased or padded one losing the advice
-    that names it a private key."""
+    can; a plugin or post-quantum recipient (`age1<name>1…`: a hardware token's, say) is refused as one, and so is a
+    low-order X25519 point (the all-zero key, u = 1). Guards a typo creating a recipient nobody can decrypt with (sops
+    refuses it only at the first encrypt, after the instance and its .sops.yaml are written, so the run fails
+    half-way with an error that blames the age key and no re-run repairs it), and the same for a plugin recipient
+    (sops encrypts to one only where `age-plugin-<name>` is installed, and kontroll's images ship none) and a
+    low-order point (age refuses it: "low order point") — T11 fold 4's read A, S1; a check that reads only a valid
+    prefix, a private key pasted by mistake being printed to the terminal or its log a second time, and a lower-cased
+    or padded one losing the advice that names it a private key."""
     _mock_fresh_seams(monkeypatch)
     monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
     assert ki.main(_FRESH + ["--break-glass-recipient", recipient]) == 1
@@ -433,17 +443,50 @@ def test_a_malformed_or_private_recipient_is_refused_before_any_write(fresh_repo
 
 
 def test_the_recipient_check_holds_the_human_part_and_the_x25519_length():
-    """`_is_age_recipient` accepts an X25519 recipient (32 bytes: 58 data characters) and a plugin recipient of another
-    length (human part `age1<name>`), and refuses BIP-173's own valid vector `a12uel5l` (its checksum is right, its
-    human part is not `age`), an X25519 recipient with a `q` added before its final `p` (which the checksum cannot
-    see) and a 31-byte one. Guards a recipient sops refuses ("invalid X25519 public key") passing the check, so the
-    run fails at the first encrypt after .sops.yaml is written; the length rule reaching plugin recipients; and the
-    human-part clause, which no caller reaches today, being dropped unnoticed."""
+    """`_is_age_recipient` accepts an X25519 recipient (32 bytes: 58 data characters), and refuses a plugin recipient
+    even at that length (human part `age1<name>`, which `_is_plugin_recipient` names), BIP-173's own valid vector
+    `a12uel5l` (its checksum is right, its human part is not `age`), an X25519 recipient with a `q` added before its
+    final `p` (which the checksum cannot see) and a 31-byte one. Guards a recipient sops refuses ("invalid X25519 public
+    key", or a plugin it cannot start) passing the check, so the run fails at the first encrypt after .sops.yaml is
+    written (T11 fold 4's read A, S1: fold 4 accepted a plugin recipient here); and the human-part clause, which no
+    caller reaches today (the plugin refusal comes first), being dropped unnoticed."""
     assert BG.endswith("p") and len(BG) == 62 and ki._is_age_recipient(BG)
-    assert ki._is_age_recipient(bech32("age1yubikey", bytes(range(40))))
+    plugin = bech32("age1yubikey", bytes(range(1, 33)))
+    assert not ki._is_age_recipient(plugin) and ki._is_plugin_recipient(plugin) and not ki._is_plugin_recipient(BG)
     assert not ki._is_age_recipient("a12uel5l")
     assert not ki._is_age_recipient(BG[:-1] + "qp")
     assert not ki._is_age_recipient(bech32("age", bytes(31)))
+
+
+def test_the_low_order_check_agrees_with_x25519_itself():
+    """`_x25519_low_order` is True exactly where X25519 itself (the `cryptography` package's, OpenSSL's) refuses the
+    point as of small order: over every encoding of the points of order 1, 2, 4 and 8 (0, 1, p - 1, the two of order
+    8, and each plus p, the non-canonical spellings age reduces mod p), each with the top bit set too (RFC 7748 masks
+    it), and over seeded random keys; and `x25519_recipient`'s keys are not low-order. Guards the pure-Python ladder
+    (the check needs no package the installer image lacks) drifting from the curve: a refusal of a key age takes, or
+    a pass of one age refuses at the first encrypt (T11 fold 4's read A, S1)."""
+    x25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.x25519")
+    import random
+    p = 2 ** 255 - 19
+    small = [0, 1, p - 1, 325606250916557431795983626356110631294008115727848805560023387167927233504,
+             39382357235489614581723060781553021112529911719440698176882885853963445705823]
+    encodings = [u.to_bytes(32, "little") for u in small + [u + p for u in small if u + p < 2 ** 255]]
+    encodings += [e[:31] + bytes([e[31] | 0x80]) for e in encodings]
+    spellings = len(encodings)
+    rng = random.Random(7748)
+    encodings += [bytes(rng.getrandbits(8) for _ in range(32)) for _ in range(200)]
+    me = x25519.X25519PrivateKey.from_private_bytes(bytes(range(32)))
+
+    def refused(raw):
+        try:
+            me.exchange(x25519.X25519PublicKey.from_public_bytes(raw))
+        except ValueError:
+            return True
+        return False
+
+    assert [refused(e) for e in encodings] == [True] * spellings + [False] * 200   # the oracle: those, no other
+    assert [ki._x25519_low_order(bech32("age", e)) for e in encodings] == [refused(e) for e in encodings]
+    assert not any(ki._x25519_low_order(x25519_recipient(start=i)) for i in range(4))
 
 
 def test_a_recipient_equal_to_the_control_key_is_refused(fresh_repo, monkeypatch, capsys):
@@ -565,22 +608,51 @@ def test_a_key_file_that_is_not_the_control_recipient_is_refused(fresh_repo, mon
     assert open(sops_path, encoding="utf-8").read() == before
 
 
-def test_a_key_file_without_its_public_line_is_named_as_such(fresh_repo, monkeypatch, capsys):
-    """Without --fresh, `--break-glass-recipient` where the key file holds only the `AGE-SECRET-KEY-` line (no
-    `# public key:` comment) exits 1 before anything is written, says the file has no `# public key:` line and how
-    to add one, does not call the key absent, and never echoes the private line. Guards the refusal sending the
-    operator to look for a control key that is there — sops opens every domain with such a file — as "no control key
-    at …" did."""
-    sops_path = _existing_instance(fresh_repo, monkeypatch)
-    before = open(sops_path, encoding="utf-8").read()
-    with open(ki.AGE_KEY_FILE, "w", encoding="utf-8") as fh:
-        fh.write(BG_PRIVATE + "\n")
-    capsys.readouterr()
-    assert ki.main(["--break-glass-recipient", BG]) == 1
+def _key_file_as(kind):
+    """Put at the key file's path what `kind` names: a bare private line, an empty file, a directory, or a
+    Latin-1 file (a private line after a byte that is not UTF-8)."""
+    kf = ki.AGE_KEY_FILE
+    os.makedirs(os.path.dirname(kf), exist_ok=True)
+    if os.path.isfile(kf):
+        os.remove(kf)
+    if kind == "a-directory":
+        os.makedirs(kf)
+        return
+    body = {"the-private-line-only": BG_PRIVATE.encode() + b"\n", "empty": b"",
+            "not-utf-8": b"# cr\xe9\xe9e\n" + BG_PRIVATE.encode() + b"\n"}[kind]
+    with open(kf, "wb") as fh:
+        fh.write(body)
+
+
+@pytest.mark.parametrize("kind", ["the-private-line-only", "empty", "a-directory", "not-utf-8"])
+@pytest.mark.parametrize("fresh", [False, True], ids=["a-recipient-without-fresh", "fresh"])
+def test_a_key_file_without_its_public_line_is_named_as_such(fresh_repo, monkeypatch, capsys, fresh, kind):
+    """A run that reads the control key file — `--break-glass-recipient` without --fresh, or any `--fresh` run where
+    something is at the key file's path — exits 1 before anything is written when kontroll-init cannot read a
+    `# public key:` line from it (the file holds only the `AGE-SECRET-KEY-` line, is empty, is a directory, or is not
+    UTF-8), says so and how to add one, does not call the key absent, and never echoes the private line: no
+    instance/ on the fresh path, an unchanged .sops.yaml on the other. Guards the refusal sending the operator to
+    look for a control key that is there (sops opens every domain with such a file), as "no control key at …" did;
+    a `--fresh` run scaffolding instance/ before it fails to read the key (T11 fold 4's read A, N7); a file it cannot
+    read named as one missing a line, with a remedy that fails the same way (read B, N7); and a not-UTF-8 file ending
+    the run in a traceback (read A, N5)."""
+    if fresh:
+        _mock_fresh_seams(monkeypatch)
+        monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+        _key_file_as(kind)
+        assert ki.main(_FRESH + ["--no-break-glass"]) == 1
+    else:
+        sops_path = _existing_instance(fresh_repo, monkeypatch)
+        before = open(sops_path, encoding="utf-8").read()
+        _key_file_as(kind)
+        capsys.readouterr()
+        assert ki.main(["--break-glass-recipient", BG]) == 1
+        assert open(sops_path, encoding="utf-8").read() == before
     err = capsys.readouterr().err
-    assert "holds no `# public key:` line" in err and "age-keygen -y" in err and "Nothing was written" in err
-    assert "no control key" not in err and BG_PRIVATE not in err
-    assert open(sops_path, encoding="utf-8").read() == before
+    assert "could not read a `# public key:` line from" in err and "age-keygen -y" in err
+    assert "Nothing was written" in err and "no control key" not in err and BG_PRIVATE not in err
+    if fresh:
+        assert not os.path.exists(os.path.join(fresh_repo, "instance"))
 
 
 def test_an_existing_instance_break_glass_run_mints_and_changes_no_secret(fresh_repo, monkeypatch, capsys):

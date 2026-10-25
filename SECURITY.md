@@ -98,8 +98,9 @@ The shipped `instance.example/.sops.yaml` keeps ONE placeholder per rule by desi
 inherits another's recipients), then requires a choice and applies it before the first
 secret is written — `--break-glass-recipient <age1…>` (the public half of a key made on
 another machine; preferred), `--mint-break-glass` (minted on the node, its private half
-shown once on the terminal; kontroll writes it to no file, and the installer container keeps
-no log), or `--no-break-glass` (ONE recipient per domain, for a scratch instance). The claim therefore has three states:
+shown once on the terminal; kontroll writes it to no file, and the installer keeps no
+container log of `fresh-init`), or `--no-break-glass` (ONE recipient per domain, for a
+scratch instance). The claim therefore has three states:
 - An instance created by `--fresh` with either of the first two has a second recipient on
   every domain from its first secret.
 - An instance created with `--no-break-glass`, or before `--fresh` asked, has ONE recipient
@@ -1160,8 +1161,8 @@ control private key to disk is the legitimate exception to the never-persist rul
 ### C12 — The logging pipeline is a secret surface (collector privilege, label hygiene, mgmt-only)  ◐ partial (internal stack built; deploy opt-in)
 
 The dual-purpose logging pipeline (**Vector → Loki → Grafana**; [docs/logging-architecture.md](docs/logging-architecture.md))
-adds a **privileged reader** (Vector tails every container's stdout — the installer's for an `init` or `check`
-run only: its other verbs keep no log, C11 — host journald, and the GUI/API audit logs)
+adds a **privileged reader** (Vector tails every container's stdout (of the installer's verbs, only `init` and
+`check` keep a log: C11), host journald, and the GUI/API audit logs)
 and a **new operator-readable index** (Loki stream labels). Both are secret-adjacent: a log *line* can carry a
 credential an upstream emitter failed to redact, and a *label* is queryable plaintext that must never embed a
 secret. Logs are therefore treated as a secret surface, not telemetry. (This control lands with the **internal**

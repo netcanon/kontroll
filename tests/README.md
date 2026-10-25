@@ -268,10 +268,11 @@ tests run real git and take the suite's `isolated_git` fixture.
 
 ### Age recipients (`tests/unit/_age_recipient.py`)
 
-kontroll-init refuses a break-glass recipient that age would refuse (bech32 checksum; 32 bytes
-for an X25519 one), so a test that passes one needs a real-length key, and a real-length key
-written into the source is what the leak guard flags. `bech32()` encodes bytes under any human
-part; `x25519_recipient()` builds one as age-keygen prints it, at import, from fixed bytes.
+kontroll-init takes a break-glass recipient only as an X25519 one (bech32 checksum, 32 bytes,
+not a low-order point; a plugin recipient is refused), so a test that passes one needs a
+real-length key, and a real-length key written into the source is what the leak guard flags.
+`bech32()` encodes bytes under any human part; `x25519_recipient()` builds one as age-keygen
+prints it, at import, from fixed bytes.
 
 ## Playbook and role hygiene sweeps
 

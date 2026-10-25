@@ -25,7 +25,7 @@
 > sudo bash scripts/install-prereqs.sh                                  # Docker + compose + git + the C10 gid-1001 group
 > #   If it says it added you to the docker group, log out and back in before the next line.
 > # On ANOTHER machine first: age-keygen -o ~/kontroll-breakglass.key — keep that file offline, bring only the
-> #   age1… line it prints (the break-glass key, §1; docs/break-glass.md).
+> #   age1… value it prints after `Public key:` (the break-glass key, §1; docs/break-glass.md).
 > scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated \
 >     --break-glass-recipient <age1…>                                  # scaffold instance/ + mint control key (§1–§2)
 > $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml

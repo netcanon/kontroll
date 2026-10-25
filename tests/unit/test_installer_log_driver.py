@@ -1,8 +1,9 @@
 """The installer's log driver per verb — both launchers RUN with a stand-in docker that records what they set.
 
 WHY: docker/services/installer.yaml takes its log driver from KONTROLL_INSTALLER_LOG_DRIVER, `none` when unset. A
-deploy (`init`, `check`) keeps a log: it runs no kontroll-init and prints no secret value, and that log is the
-deploy's only record after the fact (`docker logs`, the `services-init` stream in Loki). Every other verb keeps none:
+deploy (`init`, `check`) keeps a log: it runs no kontroll-init and prints no secret value, and its log is what a
+deploy leaves — `docker logs` while the run lasts (`--rm` removes it with the container), and the `services-init`
+stream in Loki where Vector is running. Every other verb keeps none:
 `fresh-init` prints the bootstrap passwords and a minted break-glass key once, and `shell` is where kontroll-init is
 run by hand. A text pin can say each launcher has the line; only running it says which value reaches docker for
 which verb, and that a value the operator's shell exported does not win.

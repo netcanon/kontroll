@@ -232,6 +232,8 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
 # A route by which a script's output reaches a file or a log: a tee, the shell's own output redirected by `exec`
 # (`exec >f`, `exec 2>f`, `exec &>>f`), `script` recording a terminal, `logger` or `systemd-cat`.
 _LOG_ROUTE = re.compile(r"\btee\b|^\s*exec\s*[0-9&]*>|\bscript\b|\blogger\b|\bsystemd-cat\b")
+# A redirect of a command's output to a file; `>&2` and `>/dev/null` pass.
+_TO_A_FILE = re.compile(r"[0-9&]?>>?\s*(?!&|/dev/null\b)[\w$\"'/.~]")
 
 
 def _joined_lines(rel):
@@ -250,18 +252,23 @@ def test_fresh_init_output_is_never_teed_to_a_log():
     """None of the places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch kit's
     (scripts/kontroll.sh), the libraries they source or run (scripts/lib/canonical-group.sh, plaintext-guard.sh) and
     the image's dispatcher (docker/installer/entrypoint.sh) — routes output through `run_log_init`, a `tee`, an `exec`
-    redirect of the shell's output, `script`, `logger` or `systemd-cat`; the `init` service has no `tty: true`, and no
-    launcher's `compose … run` passes `-t`, `--tty` or `--tty=…`, a continued line read as one command. compose run
-    gives the container a terminal only when the launcher's stdout is one, so a pipe around fresh-init is refused by
-    kontroll-init itself; this guards the forms that keep a terminal while copying it — a forced tty, a run log, a
-    logger — which would put the show-once break-glass private key `--mint-break-glass` prints in a log nobody chose
-    to keep. The container's own log is held by `test_the_installer_container_keeps_no_log`."""
+    redirect of the shell's output, `script`, `logger` or `systemd-cat`; the `init` service has no `tty: true`; no
+    launcher's `compose … run` passes `-t`, `--tty` or `--tty=…`; and no line that runs compose `run` or kontroll-init
+    sends its output to a file (`>/dev/null` and `>&2` pass). The scan reads a backslash-continued command as one
+    line. compose run gives the container a terminal only when the launcher's stdout is one, so a pipe around
+    `fresh-init --mint-break-glass` is refused by kontroll-init itself (the bootstrap passwords would still reach a
+    pipe or a file the operator adds); this guards the forms that keep a terminal while copying it — a forced tty, a
+    run log, a logger — which would put the show-once break-glass private key `--mint-break-glass` prints in a log
+    nobody chose to keep, and a redirect on the run line itself, which files the bootstrap passwords (T11 fold 4's
+    read B, N5). The container's own log is held by `test_the_installer_container_keeps_no_log`."""
     for rel in ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "scripts/lib/canonical-group.sh",
                 "scripts/lib/plaintext-guard.sh", "docker/installer/entrypoint.sh"):
         for line in _joined_lines(rel):
             assert "run_log_init" not in line and not _LOG_ROUTE.search(line), "%s: %s" % (rel, line)
             if re.search(r"\bcompose\b.*\brun\b", line):
                 assert not re.search(r"\s(--tty(=\S*)?|-[A-Za-z]*t[A-Za-z]*)(?=\s|$)", line), "%s: %s" % (rel, line)
+            if re.search(r"\bcompose\b.*\brun\b|kontroll-init", line):
+                assert not _TO_A_FILE.search(line), "%s: %s" % (rel, line)
     assert not _installer_service().get("tty"), "the init service forces no terminal"
 
 

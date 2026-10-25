@@ -56,12 +56,16 @@ def test_the_runbook_uses_the_tools_own_commands():
 
 
 def test_the_runbook_levels_the_checkout_first_and_its_dry_run_answers_no():
-    """The "Before you start" list fast-forwards the checkout to the canonical before the rollback tag, and step 3's
-    dry run tells the operator to answer **n** to every file. Guards a re-wrap committed on a stale base — the landing
-    then refuses, and its remedy is a rebase over ciphertext a promoted proposal re-encrypted, which cannot merge
-    — and a dry run that writes."""
+    """The "Before you start" list fast-forwards the checkout to the canonical, then lists what the checkout holds
+    that the canonical lacks (expecting nothing), before the rollback tag; and step 3's dry run tells the operator to
+    answer **n** to every file. Guards a re-wrap committed on a stale base — the landing then refuses, and its remedy
+    is a rebase over ciphertext a promoted proposal re-encrypted, which cannot merge — a checkout only AHEAD of the
+    canonical passing as level (`merge --ff-only` prints "Already up to date." for it: T11 fold 4's read B, N1), and
+    a dry run that writes."""
     doc = open(os.path.join(ROOT, "docs", "break-glass.md"), encoding="utf-8").read()
-    assert doc.index("git fetch local && git merge --ff-only local/main") < doc.index("git tag pre-break-glass")
+    order = [doc.index(c) for c in ("git fetch local && git merge --ff-only local/main",
+                                    "git log --oneline local/main..HEAD", "git tag pre-break-glass")]
+    assert order == sorted(order)
     step3 = doc[doc.index("**Step 3"):doc.index("**Step 4")]
     assert "Answer **n** to every file" in step3 and "**y**" not in step3
 
@@ -229,20 +233,48 @@ def test_the_verify_check_says_so_when_sops_finds_a_key_it_did_not_empty(tmp_pat
 @pytest.mark.parametrize("bg_key,bgpub,expect", [
     (CONTROL, "age1breakglass", "is not the one key whose public half is age1breakglass"),
     (CONTROL + BREAK_GLASS, "age1breakglass", "is not the one key whose public half is age1breakglass"),
+    (BREAK_GLASS + CONTROL, "age1breakglass", "is not the one key whose public half is age1breakglass"),
     (BREAK_GLASS, None, "is not the one key whose public half is age1…"),
     ("# public key: age1breakglass\n", "age1breakglass", "age-keygen could not read a key from"),
     (None, "age1breakglass", "age-keygen could not read a key from"),
-], ids=["the-control-key", "both-keys-in-one-file", "BGPUB-left-as-written", "the-public-half-only", "no-file"])
+], ids=["the-control-key", "both-keys-in-one-file", "both-keys-break-glass-first", "BGPUB-left-as-written",
+        "the-public-half-only", "no-file"])
 def test_the_verify_check_refuses_a_key_file_that_is_not_the_break_glass_key(tmp_path, bg_key, bgpub, expect):
     """When the file at `BG` is not the break-glass key alone — a copy of the control key, a keys.txt holding both,
     the public half without the private one, or no file — or `BGPUB` was left as the runbook writes it, the Verify
-    block prints one BROKEN line and no ok line. Guards the check proving whatever key sits in that file: with the
-    control key there, every file the control key is a recipient of read `ok`, and with both keys in it, sops tried
-    each, so the break-glass key was never shown to open anything."""
+    block prints one BROKEN line and no ok line, whichever of two keys comes first. Guards the check proving whatever
+    key sits in that file: with the control key there, every file the control key is a recipient of read `ok`, and
+    with both keys in it, sops tried each, so the break-glass key was never shown to open anything; and a check of
+    the first key `age-keygen -y` prints alone, which the control-key-first file could not tell apart (T11 fold 4's
+    read B, N4)."""
     env, files, _ = _hostile_machine(tmp_path, bg_key)
     run = _bash(_verify_block(bgpub), env, files)
     assert "BROKEN: " in run.stdout and expect in run.stdout, run.stdout + run.stderr
     assert "ok   " not in run.stdout and run.stdout.count("\n") == 1
+
+
+@_BASH
+def test_the_verify_check_says_so_when_sops_is_missing(tmp_path):
+    """On a machine with age-keygen but no sops at all (a PATH that holds the shell's own tools and the stand-in
+    age-keygen only), the Verify block prints one line, `BROKEN: no sops on this machine`, and no FAIL or ok line.
+    Guards a missing sops reading as a bare `FAIL` for every file — the line the runbook gives for a damaged
+    break-glass stanza, whose remedy (a data-key rotation on the node) cannot help (T11 fold 4's read B, N3)."""
+    env, files, _ = _hostile_machine(tmp_path)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name in ("bash", "env", "mktemp", "rm", "grep", "python3"):
+        os.symlink(shutil.which(name), str(tools / name))
+    shutil.copy(str(tmp_path / "bin" / "age-keygen"), str(tools / "age-keygen"))
+    env["PATH"] = str(tools)
+    run = _bash(_verify_block(), env, files)
+    assert run.stdout == "BROKEN: no sops on this machine (install a stock sops build)\n", run.stdout + run.stderr
+
+
+def test_the_verify_block_holds_no_comment():
+    """The Verify block holds no `#`. Guards the block failing when pasted into an interactive zsh, macOS's default
+    shell: with INTERACTIVE_COMMENTS off there, `BG="…"   # …` runs `#` as a command with BG set for it alone, so BG
+    is never set and the block blames age-keygen for an empty path (T11 fold 4's read A, N1)."""
+    assert "#" not in _verify_block(None)
 
 
 @_BASH

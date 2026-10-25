@@ -1,9 +1,10 @@
 """Age recipients for the tests, built rather than written out.
 
-kontroll-init refuses a break-glass recipient age itself would refuse: it must be lower-case bech32 with a valid
-BIP-173 checksum, and an X25519 recipient (human part `age`) must hold exactly 32 bytes. A test that hands one in
-needs a value that passes; a real-length key written into the source is what the leak guard looks for, so each is
-built here, at import, from fixed bytes.
+kontroll-init takes a break-glass recipient only as an X25519 one: lower-case bech32 under the human part `age` with
+a valid BIP-173 checksum, exactly 32 bytes, and not a low-order point (it refuses a plugin or post-quantum
+recipient, which no kontroll image can encrypt to). A test that hands one in needs a value that passes; a
+real-length key written into the source is what the leak guard looks for, so each is built here, at import, from
+fixed bytes.
 
 Leading-underscore module name ⇒ pytest does not collect it as a test; it is imported by the `test_*` files.
 """
@@ -32,5 +33,7 @@ def bech32(hrp, data):
 
 def x25519_recipient(start=0, ending=""):
     """An X25519 age recipient as age-keygen prints one (`age1` and 58 characters): the first, from byte `start` on,
-    of 32 copies of one byte whose encoding ends in `ending`."""
-    return next(k for k in (bech32("age", bytes([i]) * 32) for i in range(start, 256)) if k.endswith(ending))
+    of 32 copies of one byte whose encoding ends in `ending`. Byte 0 is skipped: 32 zero bytes are the low-order
+    point age refuses at encrypt (no other byte spells a point of small order)."""
+    return next(k for k in (bech32("age", bytes([i]) * 32) for i in range(max(start, 1), 256))
+                if k.endswith(ending))

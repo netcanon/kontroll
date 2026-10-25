@@ -73,27 +73,25 @@ def _parse_age_public(text):
 
 
 def _read_public(key_file):
-    """The age public key in key_file, or None when the file is absent or unreadable. Reads only — never mints."""
+    """The age public key in key_file, or None when the file is absent, unreadable or not UTF-8. Reads only — never
+    mints."""
     try:
         with open(key_file, encoding="utf-8") as fh:
             return _parse_age_public(fh.read())
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
 
 
 def _is_age_recipient(s):
-    """Whether `s` is a recipient age itself parses: lower-case bech32 whose human part is `age` (or `age1<plugin>`),
-    the bech32 alphabet, and a valid BIP-173 checksum — so a character mistyped or lost in a hand copy is caught before
-    anything is written, where sops would refuse it ("invalid checksum") only at the first encrypt. An X25519
-    recipient (human part exactly `age`) is 32 bytes, so 58 data characters: the length catches what the checksum
-    cannot, a `q` gained or lost just before a final `p`. Plugin and post-quantum recipients have a longer human part
-    (`age1<name>`) and no fixed length. Pure (testable)."""
+    """Whether `s` is an X25519 age recipient as age-keygen prints one: lower-case bech32 whose human part is `age`,
+    the bech32 alphabet, a valid BIP-173 checksum and 32 bytes (58 data characters) — so a character mistyped or lost
+    in a hand copy is caught before anything is written, where sops would refuse it ("invalid checksum") only at the
+    first encrypt. The length catches what the checksum cannot, a `q` gained or lost just before a final `p`. A plugin
+    or post-quantum recipient (human part `age1<name>`) is not one (`_is_plugin_recipient`). Pure (testable)."""
     if s != s.lower() or "1" not in s:
         return False
     hrp, data = s.rsplit("1", 1)
-    if not (hrp == "age" or hrp.startswith("age1")) or len(data) < 6 or any(c not in _BECH32 for c in data):
-        return False
-    if hrp == "age" and len(data) != 58:
+    if hrp != "age" or len(data) != 58 or any(c not in _BECH32 for c in data):
         return False
     gen, chk = (0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3), 1
     for v in [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + [_BECH32.index(c) for c in data]:
@@ -101,6 +99,40 @@ def _is_age_recipient(s):
         for i in range(5):
             chk ^= gen[i] if (b >> i) & 1 else 0
     return chk == 1
+
+
+def _is_plugin_recipient(s):
+    """Whether `s` is shaped as a plugin or post-quantum age recipient: `age1<name>1…`, a longer human part than an
+    X25519 recipient's `age`. sops encrypts to a plugin recipient only where `age-plugin-<name>` is installed, and no
+    kontroll image ships one; a post-quantum one only where its sops vendors an age that knows it. Pure (testable)."""
+    return isinstance(s, str) and s.startswith("age1") and s.rsplit("1", 1)[0].startswith("age1")
+
+
+def _x25519_low_order(s):
+    """Whether the X25519 recipient `s` (one `_is_age_recipient` takes) is a point of small order: its shared secret
+    with every key is zero, so age refuses to encrypt to it ("low order point"), and no key pair has it as its public
+    half. Read as age reads it (RFC 7748: the top bit masked, the value taken mod p), then run through the X25519
+    ladder with a fixed clamped scalar, a multiple of 8: the result is zero exactly for such a point. Pure
+    (testable)."""
+    bits = [_BECH32.index(c) for c in s.rsplit("1", 1)[1][:-6]]
+    u = int("".join("{:05b}".format(b) for b in bits)[:256], 2).to_bytes(32, "big")
+    p, x1 = 2 ** 255 - 19, int.from_bytes(u, "little") & ((1 << 255) - 1)
+    k = (int.from_bytes(bytes(range(32)), "little") & ~7 & ((1 << 255) - 1)) | (1 << 254)
+    x1 %= p
+    x2, z2, x3, z3, swap = 1, 0, x1, 1, 0
+    for t in reversed(range(255)):
+        bit = (k >> t) & 1
+        if swap ^ bit:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = bit
+        a, b, c, d = x2 + z2, x2 - z2, x3 + z3, x3 - z3
+        aa, bb, da, cb = a * a % p, b * b % p, d * a % p, c * b % p
+        e = (aa - bb) % p
+        x3, z3 = (da + cb) ** 2 % p, x1 * (da - cb) ** 2 % p
+        x2, z2 = aa * bb % p, e * (aa + 121665 * e) % p
+    if swap:
+        x2, z2 = x3, z3
+    return x2 * pow(z2, p - 2, p) % p == 0
 
 
 def _rule_recipients(rule):
@@ -143,17 +175,21 @@ def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key
     """Why the break-glass flags as given are refused, or None. Runs before anything is written, so every
     refusal leaves the tree and the key directory as they were. `tty` is whether stdout is a terminal;
     `control_public` the control key's public half if its file exists, else None; `control_everywhere` whether that
-    key is a recipient of every rule in instance/.sops.yaml (`_control_everywhere`); `key_file_exists` whether the
-    key file exists, so one with no `# public key:` line is named as such. Pure (testable).
+    key is a recipient of every rule in instance/.sops.yaml (`_control_everywhere`); `key_file_exists` whether
+    anything is at the key file's path, so one kontroll-init cannot read a `# public key:` line from is named as
+    such. Pure (testable).
 
     Refused: `--fresh` without a choice (kontroll never silently creates an instance whose secrets one key opens);
     `--mint-break-glass` / `--no-break-glass` without `--fresh` (an existing instance adds a recipient it made
-    elsewhere); a recipient that is a PRIVATE key, not an age public key, or one whose bech32 checksum fails (the
-    value is never echoed back); a recipient without `--fresh` where no control key file exists (the non-fresh path
-    would otherwise MINT a control key and add it to every domain before reaching the break-glass step), where the
-    key file has no `# public key:` line (its key cannot be checked), or where it holds a key that is not a recipient
-    of every rule (step 2 would add THAT key to every domain beside the break-glass one); a recipient equal to the
-    control key (a copy is not a second recipient); and a mint whose output is not a terminal."""
+    elsewhere); a recipient that is a PRIVATE key, not an age public key, a plugin or post-quantum one (kontroll's
+    images ship no age plugin), one whose bech32 checksum or X25519 length fails, or a low-order X25519 point age
+    refuses (the value is never echoed back); a recipient, or a `--fresh` run, where something is at the key file's
+    path but kontroll-init cannot read a `# public key:` line from it (its key cannot be checked, and `--fresh`
+    would scaffold the overlay before failing to read it); a recipient without `--fresh` where no control key file
+    exists (the non-fresh path would otherwise MINT a control key and add it to every domain before reaching the
+    break-glass step), or where it holds a key that is not a recipient of every rule (step 2 would add THAT key to
+    every domain beside the break-glass one); a recipient equal to the control key (a copy is not a second
+    recipient); and a mint whose output is not a terminal."""
     recipient = args.break_glass_recipient
     if args.fresh and recipient is None and not args.mint_break_glass and not args.no_break_glass:
         return ("ERROR: --fresh requires a break-glass choice — kontroll never silently creates an instance whose "
@@ -171,14 +207,19 @@ def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key
         if not _AGE_RECIPIENT_RE.fullmatch(recipient):
             return ("ERROR: --break-glass-recipient is not an age public key (age1 then lower-case letters and "
                     "digits, as age-keygen prints it). Nothing was written.")
+        if _is_plugin_recipient(recipient):
+            return ("ERROR: --break-glass-recipient is a plugin or post-quantum age recipient (age1<name>1…). kontroll "
+                    "takes an X25519 recipient (age1…, as age-keygen prints it): sops encrypts to a plugin recipient "
+                    "only where age-plugin-<name> is installed, and kontroll's images ship none, so the first encrypt "
+                    "would fail. Nothing was written.")
         if not _is_age_recipient(recipient):
             return ("ERROR: --break-glass-recipient is not a valid age public key (its checksum or length does not "
                     "match — a character was mistyped, added or lost in the copy). Nothing was written.")
-        if not args.fresh and control_public is None and key_file_exists:
-            return ("ERROR: %s holds no `# public key:` line, so kontroll-init cannot check that it is this instance's "
-                    "control key. Print its public half with `age-keygen -y %s` and add it to the file as "
-                    "`# public key: age1…`, or name the right file with --key-file. Nothing was written."
-                    % (args.key_file, args.key_file))
+        if _x25519_low_order(recipient):
+            return ("ERROR: --break-glass-recipient is a low-order X25519 point: no key pair has it as its public "
+                    "half, and age refuses to encrypt to it. Nothing was written.")
+        if control_public is None and key_file_exists:
+            return _unread_key_file(args.key_file)
         if not args.fresh and control_public is None:
             return ("ERROR: no control key at %s, and without --fresh kontroll-init never mints one — run this where "
                     "the control key is (the installer shell, `scripts/kontroll-installer.sh shell`: "
@@ -191,11 +232,22 @@ def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key
         if recipient == control_public:
             return ("ERROR: the break-glass recipient is this node's control key — a copy of the control key is not "
                     "a second recipient. Nothing was written.")
+    if args.fresh and control_public is None and key_file_exists:
+        return _unread_key_file(args.key_file)
     if args.mint_break_glass and not tty:
         return ("ERROR: --mint-break-glass shows a private key once, and standard output is not a terminal — the key "
                 "would land in a pipe or a log nobody chose to keep. For an unattended run, make the key on another "
                 "machine and pass --break-glass-recipient <age1…> (docs/break-glass.md). Nothing was written.")
     return None
+
+
+def _unread_key_file(key_file):
+    """The refusal for a key file kontroll-init cannot read a `# public key:` line from. Pure (testable)."""
+    return ("ERROR: kontroll-init could not read a `# public key:` line from %s (the line is missing, or the file is "
+            "empty, not a file, unreadable or not UTF-8), so it cannot tell which key the file holds. If it is the "
+            "control key, print its public half with `age-keygen -y %s` and add it to the file as "
+            "`# public key: age1…`; otherwise name the right file with --key-file. Nothing was written."
+            % (key_file, key_file))
 
 
 def _show_break_glass_once(private, warning):
@@ -207,7 +259,7 @@ def _show_break_glass_once(private, warning):
     print(bar)
     print("BREAK-GLASS PRIVATE KEY — shown ONCE and NOT saved anywhere. Copy it to offline storage now:")
     print()
-    print("    " + private)
+    print(private)
     print()
     if warning:
         print(" ".join(str(warning).split()))
@@ -382,8 +434,9 @@ def main(argv):
     # The break-glass choice is judged — and a minted key minted — before anything is written, so every refusal and
     # every failure to mint leaves the tree and the key directory exactly as they were. The --fresh checks come before
     # the mint too, so a run they refuse has minted nothing.
-    control_public = _read_public(args.key_file) if args.break_glass_recipient else None
-    everywhere = _control_everywhere(control_public) if control_public and not args.fresh else True
+    control_public = _read_public(args.key_file) if args.break_glass_recipient or args.fresh else None
+    everywhere = (_control_everywhere(control_public) if control_public and args.break_glass_recipient
+                  and not args.fresh else True)
     refusal = _break_glass_refusal(args, _stdout_is_terminal(), control_public, everywhere,
                                    os.path.exists(args.key_file))
     if refusal:
