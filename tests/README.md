@@ -316,11 +316,15 @@ both hold that a check the build runs — a `pip check`, a `sha256sum -c`, a `pi
 fail it. They share one reading of when it can: `commands()` splits the text on `&&`, `||`,
 `;` and `|`, and `gate_faults()` names a check that a later `|| true` or `; cmd`, a pipe, an
 `if`/`elif`/`while`/`until` condition or a `!` keeps from failing it, that runs inside a
-`$(…)` or a quoted string, or that shares its text with a `trap`, `exec` or `exit 0`. It reads
-errexit the way `/bin/sh` does: a `;` after `set -e` counts only for the last command of its
-`&&` list, and never inside a compound (a brace group, a subshell, an `if` body, a loop); a
-`set -e` counts only as a whole top-level command, and any `set +e` switches errexit off. Where
-it is unsure, it refuses. The rules are the module's docstring. A new check on a build's shell
+`$(…)` or a quoted string, or that shares its text with a `trap`, `exec`, `return` or an
+`exit` that can be 0. It reads errexit the way `/bin/sh` does: a `;` after `set -e` counts
+only for a check that is the whole of its `&&` list (a guard before it can skip it), and never
+inside a compound (a brace group, a subshell, an `if` body, a loop); a `set -e` counts only as
+a whole top-level command, and a `set +e`, a `set` of a variable or a `shopt` naming errexit,
+anywhere, switches errexit off. It reads quotes as `sh` does (escapes, a `'` inside `"…"`) when
+it decides what a check runs inside, but it splits commands inside quotes too. It refuses the
+shapes it knows it cannot read; the module's docstring gives the rules, and
+`test_image_pins.py`'s lists what it still cannot see and the sound shapes it refuses. A new check on a build's shell
 text calls `gate_faults()` rather than reading the operators itself, so the two tests cannot
 drift apart.
 

@@ -36,9 +36,10 @@ were built from was not.
   name, so they are bumped by hand, Postgres's included. Promtool and vector in CI are held to the compose tags.
 - `tests/unit/test_image_pins.py` fails when a pin is missing or its check is switched off (a `pip check` or
   `sha256sum -c` that a later `|| true`, a `;` errexit does not cover, a pipe, a condition, a `$(…)` or quoted
-  string, or a `trap`, `exec` or `exit 0` keeps from failing the build; a comment inside a `RUN`; or a checksum not
-  held in the tree), never because one is old; `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same
-  rules, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner.
+  string, or a `trap`, `exec`, `return` or `exit 0` keeps from failing the build; a comment inside a `RUN`; a
+  `SHELL` other than Docker's default; or a checksum not held in the tree), never because one is old;
+  `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same rules, and the pip-audit job now names its
+  shell (`bash`), since a repository variable picks its runner.
   The refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
 The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is

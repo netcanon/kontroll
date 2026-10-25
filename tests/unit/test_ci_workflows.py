@@ -242,14 +242,20 @@ _UNCONDITIONED = {"always()", "success()", "!cancelled()"}
 
 
 def _uncommented(line):
-    """`line` without its trailing comment: cut at the first `#` that opens a word outside quotes."""
-    quote = None
+    """`line` without its trailing comment: cut at the first `#` that opens a word (after a space or an operator
+    character) outside quotes. A backslash outside single quotes escapes the next character, so `\\"` opens no
+    quote."""
+    quote, escaped = None, False
     for k, ch in enumerate(line):
-        if quote:
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quote != "'":
+            escaped = True
+        elif quote:
             quote = None if ch == quote else quote
         elif ch in "'\"":
             quote = ch
-        elif ch == "#" and (k == 0 or line[k - 1].isspace()):
+        elif ch == "#" and (k == 0 or line[k - 1].isspace() or line[k - 1] in ";&|()"):
             return line[:k]
     return line
 
@@ -281,6 +287,18 @@ def _shell(workflow, job, step):
     return None
 
 
+def _named_unix_runner(runs_on):
+    """True if a job's `runs-on` names, without an expression, a GitHub-hosted Linux or macOS image (`ubuntu-…`,
+    `macos-…`) or a label list holding `linux` or `macos` (a self-hosted runner's OS label) and not `windows`: a runner
+    whose unnamed shell is `bash -e {0}`. Anything else (an expression, a Windows image, a list with no OS label, no
+    `runs-on`) may run an unnamed shell as pwsh."""
+    labels = [runs_on] if isinstance(runs_on, str) else runs_on if isinstance(runs_on, list) else []
+    labels = [str(label).lower() for label in labels]
+    if not labels or any("${{" in label or "windows" in label for label in labels):
+        return False
+    return any(re.match(r"(?:ubuntu|macos)-", label) or label in ("linux", "macos") for label in labels)
+
+
 def pip_audit_faults(workflow):
     """({the -r files the workflow's pip-audit runs read}, [faults]) of a parsed workflow. A step runs pip-audit when
     a command of its script (`_script`, split as tests/unit/_build_read.py splits a RUN) starts with it. A fault is
@@ -288,12 +306,14 @@ def pip_audit_faults(workflow):
     with errexit; another one need not), an audit whose failure would not fail the script (a pipe after it, a later
     `||`, a `;` after it that is not the end of its AND-OR list or inside a compound, a condition, a `$(…)` or quoted
     string around it, a `trap`, `exec` or `exit 0` in the step: the _build_read rules, errexit on at the start), a
-    `set +e` or `set +o errexit` anywhere in the step, a heredoc in the step (its body is not read as the shell reads
-    it), `continue-on-error` on the step or the job, a step that names no shell (itself or a `defaults.run.shell`)
-    under a `runs-on` an expression gives (a repository variable may pick a Windows runner, whose default shell is
-    pwsh, which need not stop on a failure); or an audit that runs on a condition (`if:` on the step or the job other
-    than `always()`, `success()` or `!cancelled()`). It refuses one sound shape: a pipe after the audit under
-    `shell: bash` (which runs with pipefail); that refusal fails loudly."""
+    `set +e`, `set +o errexit` or a `shopt` naming errexit anywhere in the step, a heredoc in the step (its body is
+    not read as the shell reads it), `continue-on-error` on the step or the job, a step that names no shell (itself or
+    a `defaults.run.shell`) under a `runs-on` that is no named Linux or macOS runner (`_named_unix_runner`: an
+    expression, which a repository variable may point at a Windows runner, a Windows image, or labels with no OS
+    label; a Windows runner's default shell is pwsh, which need not stop on a failure); or an audit that runs on a
+    condition (`if:` on the step or the job other than `always()`, `success()` or `!cancelled()`). It refuses sound
+    shapes too, each loudly: a pipe after the audit under `shell: bash` (which runs with pipefail), and an `exit 0`
+    after it."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -306,15 +326,16 @@ def pip_audit_faults(workflow):
             if shell not in (None, "bash", "sh"):
                 faults.append("%s: the pip-audit step runs under `shell: %s`, which need not stop on a failure"
                               % (name, shell))
-            if shell is None and "${{" in str(job.get("runs-on", "")):
-                faults.append("%s: the pip-audit step names no shell and an expression picks its runner (a Windows "
-                              "runner's default shell is pwsh, which need not stop on a failure)" % name)
+            if shell is None and not _named_unix_runner(job.get("runs-on")):
+                faults.append("%s: the pip-audit step names no shell and its runner is not a named Linux or macOS "
+                              "one (a Windows runner's default shell is pwsh, which need not stop on a failure)" % name)
             for i in runs:
                 audited |= set(re.findall(r"(?:^|\s)(?:-r|--requirement)(?:\s+|=)(\S+)", script[i][0]))
                 faults += ["%s: %s" % (name, f) for f in gate_faults(
                     "pip-audit", script, i, on=shell in (None, "bash", "sh"), unit="step")]
-            if any(re.search(r"\bset\s+(?:.*\s)?\+(?:[a-zA-Z]*e|o\s+errexit)", c) for c, _, _ in script):
-                faults.append("%s: `set +e` or `set +o errexit` in a pip-audit step" % name)
+            if any(re.search(r"\bset\s+(?:.*\s)?\+(?:[a-zA-Z]*e|o\s+errexit)|\bshopt\b.*\berrexit\b", c)
+                   for c, _, _ in script):
+                faults.append("%s: `set +e`, `set +o errexit` or `shopt … errexit` in a pip-audit step" % name)
             if "<<" in re.sub(r"\$\(\(.*?\)\)", "", _script(step.get("run"))):
                 faults.append("%s: a heredoc in a pip-audit step (its body is not read as the shell reads it)" % name)
             for where, node in (("step", step), ("job", job)):
@@ -383,6 +404,24 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": "# the audit below \\\n" + _AUDIT + " || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
     ({"run": "echo a#b && " + _AUDIT + " || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
     ({"run": "echo $((1 << 2))\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "test -f nope && " + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "shopt -uo errexit\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["not followed", "shopt … errexit"]),
+    ({"run": "eval 'set +e'\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["not followed", "set +e"]),
+    ({"run": _AUDIT + ' --desc "a \\" #" || true'}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": _AUDIT + ";# || true, never set +e"}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": _AUDIT + " --desc 'x' # || true"}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": _AUDIT + ' --desc "see #1" || true'}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": _AUDIT + "\nexit 0"}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit 0`"]),
+    ({"run": _AUDIT + "\npython -c 0"}, {"runs-on": "windows-latest"}, {"docker/a/requirements.txt"},
+     ["names no shell"]),
+    ({"run": _AUDIT}, {"runs-on": ["self-hosted"]}, {"docker/a/requirements.txt"}, ["names no shell"]),
+    ({"run": _AUDIT}, {"runs-on": None}, {"docker/a/requirements.txt"}, ["names no shell"]),
+    ({"run": _AUDIT}, {"runs-on": ["self-hosted", "Linux", "X64"]}, {"docker/a/requirements.txt"}, []),
+    ({"run": _AUDIT}, {"runs-on": ["self-hosted", "Linux", "Windows"]}, {"docker/a/requirements.txt"},
+     ["names no shell"]),
+    ({"run": _AUDIT}, {"runs-on": "macos-14"}, {"docker/a/requirements.txt"}, []),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -390,25 +429,35 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "audit-as-a-condition", "operator-in-a-trailing-comment", "old-audit-in-a-comment-line",
         "brace-group-or-true", "trap-exit-0", "heredoc", "quoted-hash-before-or-true", "set-plus-e-as-a-condition",
         "runner-from-an-expression", "runner-from-an-expression-shell-named", "runner-named",
-        "comment-line-ending-in-a-backslash", "mid-word-hash", "arithmetic-shift"])
+        "comment-line-ending-in-a-backslash", "mid-word-hash", "arithmetic-shift", "behind-a-failing-guard",
+        "shopt-errexit-off", "eval-set-plus-e", "escaped-quote-then-hash", "comment-after-a-semicolon",
+        "comment-after-a-closed-quote", "double-quoted-hash-before-or-true",
+        "exit-0-after-the-audit", "windows-image", "self-hosted-no-os-label", "no-runs-on", "self-hosted-linux",
+        "linux-and-windows-labels", "macos-image"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
     command that only names it, and flags a run that cannot fail its job: `|| true` (on a continuation line too, and
     after a quoted `#`, which is no comment), a pipe after it (the default `bash -e {0}` has no pipefail, so `| tee`
-    hides the audit), a shell other than the default, `bash` or `sh` (named by the step or the job's defaults), a
-    later command after `set +e` or `set +o errexit` (as an `if` condition too), `&& …` before a later line (errexit
-    spares a command that is not the last of its list), a `;` inside a brace group under `|| true`, a `trap`, a
-    heredoc, an `if` condition, `continue-on-error`, an `if:` other than `always()`, `success()` or `!cancelled()`,
-    and no named shell under a `runs-on` an expression gives. It passes a later line under the default errexit, a
-    comment — trailing or a line of its own — that holds an operator or an old audit (the shell never runs it), and an
-    expression runner with a named shell or a named runner; a comment line ending in a backslash continues nothing
-    (the shell does not join it), so the audit on the next line is read; a `#` inside a word opens no comment, so a
-    later `|| true` is still read; and an arithmetic `$((1 << 2))` is no heredoc. Guards a check that counts a dead
-    audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5:
-    PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants:
-    W58, Q2, H2)."""
-    audited, faults = pip_audit_faults({"jobs": {"a": dict(job, steps=[step])}})
+    hides the audit), a shell other than the default, `bash` or `sh` (named by the step or the job's defaults), a later
+    command after `set +e` or `set +o errexit` (as an `if` condition too), `&& …` before a later line (errexit spares a
+    command that is not the last of its list), a `;` inside a brace group under `|| true`, a `trap`, a heredoc, an `if`
+    condition, `continue-on-error`, an `if:` other than `always()`, `success()` or `!cancelled()`, and no named shell
+    under a `runs-on` an expression gives. It passes a later line under the default errexit, a comment — trailing or a
+    line of its own — that holds an operator or an old audit (the shell never runs it), and an expression runner with a
+    named shell or a named runner; a comment line ending in a backslash continues nothing (the shell does not join it),
+    so the audit on the next line is read; a `#` inside a word opens no comment, so a later `|| true` is still read; and
+    an arithmetic `$((1 << 2))` is no heredoc. It also flags an audit behind a guard (`test -f nope && pip-audit …`
+    before a later line: a failing guard skips the audit and errexit spares the guard), a `shopt -uo errexit` or an
+    `eval 'set +e'` before a later line, a `|| true` after an escaped quote and a `#` (`\\"` opens no quote, so that `#`
+    is inside the string, no comment), an `exit 0` after the audit (sound, but refused), and no named shell under a
+    Windows image, labels with no OS label or a Windows label beside a Linux one, or no `runs-on` at all; it passes a
+    comment after a `;` or a closed quote that holds `|| true` or `set +e`, a self-hosted Linux runner and a macOS
+    image; and it flags a `|| true` after a double-quoted `"see #1"`. Each row's job runs on ubuntu-latest unless the
+    row names another. Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5,
+    Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if,
+    PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f)."""
+    audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
 
