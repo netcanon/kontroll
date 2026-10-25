@@ -101,11 +101,12 @@ written as a whole command at the top of the `RUN`, a `;` right after the check 
 AND-OR list and is the whole of it — not after a later `&& …` (errexit spares every command of a list but the last), not
 after a guard (`[ "$TARGETARCH" = amd64 ] && check;` skips the check when the guard fails), and not inside a brace
 group, a subshell, an `if` body or a loop (a `|| true` after the compound switches errexit off inside it). A `set +e`
-anywhere, a `set` given a variable, a backquoted command or a glob, or a `shopt` naming errexit switches errexit off. A
-check inside a `$(…)`, backquotes or a quoted string (`sh -c '…'`, `eval '…'`), after an ANSI-C `$'…'` or in a list
-holding one, or in a compound behind `||` or `!` is refused, as is a function or an alias defined anywhere in the `RUN`,
-or a `hash` or `enable` entry (each can stand in for the checked program), a `set -n` or a `set` that can be one (the
-shell then runs nothing), and a `trap`, an `exec`, a `return` or an `exit` other than `exit 1` to `exit 255` in the same
+anywhere, a `set` or a `shopt` given a variable, a backquoted command, a glob or a brace expansion, or a `shopt` naming
+errexit switches errexit off. A check inside a `$(…)`, backquotes or a quoted string (`sh -c '…'`, `eval '…'`), after an
+ANSI-C `$'…'` or in a list holding one, or in a compound behind `||` or `!` is refused, as is a function or an alias
+defined anywhere in the `RUN`, or a `hash` or `enable` entry (each can stand in for the checked program), a `set -n`, a
+`set -t`, a `shopt` naming noexec or onecmd, or a `set` or `shopt` that can be one (the shell then runs nothing, or
+stops after one command), and a `trap`, an `exec`, a `return` or an `exit` other than `exit 1` to `exit 255` in the same
 `RUN`: each can end it with a status that is not the check's. A download names one URL and one output. A checksum
 fetched beside the file is no pin either — whoever swaps the file swaps it too — so the digest must be one the tree
 holds: an `ARG` or `ENV` whose every value is the 64 hex, on one `echo "$<ARG>  <file>" | sha256sum -c -` line, and no

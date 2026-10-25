@@ -24,14 +24,17 @@ Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the w
 - it does not run in a compound behind `||` or `!`: the shell skips it, or drops its status (one after a `|` or a
   lone `&` runs, and gives its status as any command does);
 - no function or alias is defined in the text, and no entry made in bash's command tables (`hash`, `enable`,
-  `BASH_CMDS`, `BASH_ALIASES`): each can stand in for the checked program, or for `set`;
+  `BASH_CMDS`, `BASH_ALIASES`; a name read after a space or a `(` and before a space or a redirect, so
+  `(hash -p …` and `hash>/dev/null -p …` are read): each can stand in for the checked program, or for `set`;
 - no `trap`, `exec`, `return` or `exit` shares the text, but `exit 1` to `exit 255` (`exit 256` is 0): each of the
   others can end the text with a status that is not the failure's. One is read as a word anywhere in a command, as
   written or with its quotes and backslashes removed (`\\exit 0`, `"exit" 0`, `command exit 0`, `eval 'exit 0'`),
   after an `&`, `|` or redirect and before a redirect too (`true&exit 0`, `exit>/dev/null`);
-- no `set -n` or `set -o noexec` shares the text (a flag cluster holding `n`), nor a `set` given a variable, a
-  backquoted command or a glob (`set -$x`, `` set `cat o` ``, `set +[e]`: each can be one): the shell reads the rest
-  of the text and runs none of it.
+- no `set -n`, `set -t`, `set -o noexec` or `set -o onecmd` shares the text (a flag cluster holding `n` or `t`), nor
+  a `shopt` naming noexec or onecmd (`shopt -so noexec`), nor a `set` or a `shopt` given a variable, a backquoted
+  command, a glob, a brace expansion or an extended glob (`set -$x`, `` set `cat o` ``, `set +[e]`, `set -{n,n}`,
+  `set +@(e)`: each can be one): the shell reads the rest of the text and runs none of it, or stops after one
+  command.
 Inside a compound command (a brace group, a subshell, a function body, an `if`, `case`, `for`, `while` or `until`
 body) only `&&` to the end of the text counts: errexit is ignored inside a compound that is not the last of its
 AND-OR list (`{ a; b; } || true` runs `b` after `a` fails), so the `;` rule is not trusted there. A compound closed
@@ -42,8 +45,9 @@ a `;`, `&` or `|`, so `echo done` closes nothing) and before a delimiter (so `do
 Errexit is switched on by a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command at the top of
 the text and runs whenever the text reaches it (not behind `&&` or `||`, not piped, not sent to the background, nothing
 open). It is switched off by a `set +e` or `set +o errexit` anywhere in the text (inside a compound, behind `eval` or
-`command`, written through quotes or backslashes), by a `set` given a variable, a backquoted command or a glob (`set
-$o`, `` set `cat o` ``, `set +[e]`) and by a `shopt` naming errexit. A `set -e` the reader cannot place switches nothing
+`command`, written through quotes or backslashes), by a `set` given a variable, a backquoted command, a glob, a
+brace expansion or an extended glob (`set $o`, `` set `cat o` ``, `set +[e]`, `set +{e,}`, `set +@(e)`), and by a
+`shopt` naming errexit or given any of those (`shopt -ou $x`). A `set -e` the reader cannot place switches nothing
 on, and a `set` it cannot rule out switches errexit off, so each misreading of these that it knows of refuses. The
 reader refuses what it knows it cannot read; what it still cannot see is listed in tests/unit/test_image_pins.py's
 docstring ("What the checks still cannot see").
@@ -54,10 +58,12 @@ _OPERATORS = re.compile(r"(&&|\|\||;|\||\x02)")
 _LONE_AMP = re.compile(r"(?<![<>|&])&(?!&)")
 _CONDITION = re.compile(r"(?:if|elif|while|until)(?:\s|$)")
 _BODY = re.compile(r"(?:then|do)(?:\s|$)")
-_SET_OFF = re.compile(r"""\bset\s+(?:\S+\s+)*?(?:["'\\]*\+["'\\]*[a-zA-Z]*e|\+o\s+["']?errexit|\S*[$`[*?])"""
-                      r"|\bshopt\b.*\berrexit\b")
+_SET_OFF = re.compile(r"""\bset\s+(?:\S+\s+)*?(?:["'\\]*\+["'\\]*[a-zA-Z]*e|\+o\s+["']?errexit|\S*[$`[*?{(])"""
+                      r"|\bshopt\b.*(?:\berrexit\b|[$`[*?{(])")
 _ENDER = re.compile(r"""(?:^|[\s;&|<>'"\\(){}!=])(trap|exec|exit|return)(?:["']?(?:\s+(.*))?$|["'\s;)<>&|])""")
-_NOEXEC = re.compile(r"\bset\s+(?:\S+\s+)*?(?:-[a-zA-Z]*n[a-zA-Z]*|-o\s+noexec|\S*[$`[*?])")
+_NOEXEC = re.compile(r"\bset\s+(?:\S+\s+)*?(?:-[a-zA-Z]*[nt][a-zA-Z]*|-o\s+(?:noexec|onecmd)|\S*[$`[*?{(])"
+                     r"|\bshopt\b.*(?:\b(?:noexec|onecmd)\b|[$`[*?{(])")
+_STAND_IN = re.compile(r"(?:^|[\s(])(?:alias|hash|enable)(?=[\s<>])|\bBASH_(?:ALIASES|CMDS)\b")
 
 
 def _plain(command):
@@ -207,8 +213,10 @@ def ender(cmds):
     """The first command of the text holding a `trap`, `exec`, `return` or `exit` that can end it with a status other
     than a failure's (each but `exit 1` to `exit 255`), as a word of its own anywhere in the command (after a keyword,
     an opening `(`, `{` or `!`, a case pattern, `command`, `eval`, an assignment, an `&`, `|` or redirect; or before
-    a redirect, `exit>/dev/null`), as written or with its quotes and backslashes removed; or a `set -n` or `set -o
-    noexec` (a flag cluster holding `n`: the shell reads the rest of the text and runs none of it); or None."""
+    a redirect, `exit>/dev/null`), as written or with its quotes and backslashes removed; or a `set -n`, `set -t`,
+    `set -o noexec` or `set -o onecmd` (a flag cluster holding `n` or `t`), a `shopt` naming noexec or onecmd, or a
+    `set` or `shopt` that can be one (the module docstring's last rule: the shell then runs none of the rest of the
+    text, or stops after one command); or None."""
     for command, _, _ in cmds:
         for text in (command, _plain(command)):
             m = _ENDER.search(text)
@@ -224,7 +232,7 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
     """["<what> …: <command>"] if a failure of cmds[i] would not fail the text (the module docstring's rules), else [].
     `on`: whether errexit is on at the start of the text."""
     command = cmds[i][0]
-    if any(_FUNCTION.search(t) or re.search(r"(?:^|\s)(?:alias|hash|enable)\s|\bBASH_(?:ALIASES|CMDS)\b", t)
+    if any(_FUNCTION.search(t) or _STAND_IN.search(t)
            for c, _, _ in cmds for t in (_without_quotes(c), _plain(c))):
         return ["%s shares the %s with a function or an alias, or an entry in bash's command tables (`hash`, "
                 "`enable`, `BASH_CMDS`, `BASH_ALIASES`), which can stand in for it: %s"

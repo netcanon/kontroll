@@ -28,37 +28,37 @@ install`, a `pip check`, an `apk add`, a download, a `sha256sum -c`) must fail t
 after it, no `||` follows it, it is no condition, it does not run inside a `$(…)` or a quoted string (`sh -c '…'`),
 after an ANSI-C `$'…'` or in a list holding one, nor in a compound behind `||` or `!`, no function or alias is defined
 in the RUN (nor a `hash`, `enable`, `BASH_CMDS` or `BASH_ALIASES` entry), no `trap`, `exec`, `return` or `exit` (but
-`exit 1` to `exit 255`) and no `set -n` (or a `set` given a variable, a backquoted command or a glob, which can be one)
-shares the RUN, and every operator after it to the end of the RUN is `&&` (a lone `&` sends the list to the background)
-— or errexit is on (`set -e`, `set -o errexit`), it is inside no compound (a brace group, a subshell, an `if`, a loop),
-it starts its AND-OR list, and `;` ends that list right after it. A download is checked by `echo "<digest>  <file>" |
-sha256sum -c -` in the same RUN (`sha256sum`, `/bin/sha256sum` or `/usr/bin/sha256sum` the first word of its command),
-its file written by name (one URL, one output), the digest an ARG or ENV whose every value in the file is 64 hex, or a
-shell variable the RUN sets only from one; a checksum file next to the download is not a check, since whoever swaps the
-file swaps it too. A SHELL other than Docker's default, an exec-form RUN (`RUN [...]` that parses as JSON), a heredoc (a
-`<<` that opens a word inside a `$((…))` is one to BuildKit: `$((1 << 2))` alone fails the build, unterminated heredoc),
-a comment inside a RUN (Docker joins its lines first, so the shell drops the rest), and an `# escape=` directive are
-refused, since these checks cannot read them; so is a build arg that names a digest ARG. What the checks still cannot
-see: a command built at run time (`$TOOL install`, `eval "$cmd"`), a package manager or downloader they do not name
-(`npm`, `gem`, `go install`, `git clone`, `python3 -c 'urllib…'`), the URLs and outputs a curl config file adds (`curl
--K`, or with no option at all a `~/.curlrc` or one under `$CURL_HOME`) or a wget input file (`wget -i`), a second URL
-written without its scheme and sent to standard output, a later command that writes the checked file again, a file the
-RUN sources (`. /tmp/env`, which can set a digest name), a checked program that an earlier PATH entry shadows (a
-`sha256sum` an earlier step put in /usr/local/bin), a quote inside a `$(…)` that is itself inside double quotes (the
-reader pairs it with the outer one), a digest ARG one stage declares and another reads, and the apt packages, which
-float inside the pinned base (SECURITY.md R-IMG-2). Refused although sound (each fails loudly): a `pip check` in a later
-RUN than its install, a `pip install` option that takes a value and is not named here (its value reads as a package), a
-check written to a file and read by `sha256sum -c <file>`, a check line written with `printf`, a `;` inside a compound
-(under `set -e`, or the one before a brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`(
-install && check )`, behind `&&` or not: the `)` joins the check's command, which then reads as no `pip check`), a `;`
-inside a quoted string after a check (`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere
-in the RUN, the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), a function or an
-alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too), an ANSI-C
-`$'…'` before the check or later in its own list, a `sha256sum` that is not the first word of its command (`| env
-sha256sum -c -`), a `#` right after a `$(…)` (`echo $(true)#x`: one word to sh, a comment inside a RUN to these checks),
-a `#` after a space inside quotes (`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`,
-a curl or wget naming two URLs or two outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared
-without its value in a later stage.
+`exit 1` to `exit 255`) and no `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt` given a
+variable, a backquoted command, a glob or a brace expansion, which can be one) shares the RUN, and every operator after
+it to the end of the RUN is `&&` (a lone `&` sends the list to the background) — or errexit is on (`set -e`, `set -o
+errexit`), it is inside no compound (a brace group, a subshell, an `if`, a loop), it starts its AND-OR list, and `;`
+ends that list right after it. A download is checked by `echo "<digest>  <file>" | sha256sum -c -` in the same
+RUN (`sha256sum`, `/bin/sha256sum` or `/usr/bin/sha256sum` the first word of its command), its file written by name (one
+URL, one output), the digest an ARG or ENV whose every value in the file is 64 hex, or a shell variable the RUN sets
+only from one; a checksum file next to the download is not a check, since whoever swaps the file swaps it too. A SHELL
+other than Docker's default, an exec-form RUN (`RUN [...]` that parses as JSON), a heredoc (a `<<` that opens a word
+inside a `$((…))` is one to BuildKit: `$((1 << 2))` alone fails the build, unterminated heredoc), a comment inside a RUN
+(Docker joins its lines first, so the shell drops the rest), and an `# escape=` directive are refused, since these
+checks cannot read them; so is a build arg that names a digest ARG. What the checks still cannot see: a command built at
+run time (`$TOOL install`, `eval "$cmd"`), a package manager or downloader they do not name (`npm`, `gem`, `go install`,
+`git clone`, `python3 -c 'urllib…'`), the URLs and outputs a curl config file adds (`curl -K`, or with no option at all
+a `~/.curlrc` or one under `$CURL_HOME`) or a wget input file (`wget -i`), a second URL written without its scheme and
+sent to standard output, a later command that writes the checked file again, a file the RUN sources (`. /tmp/env`, which
+can set a digest name), a checked program that an earlier PATH entry shadows (a `sha256sum` an earlier step put in
+/usr/local/bin), a quote inside a `$(…)` that is itself inside double quotes (the reader pairs it with the outer one), a
+digest ARG one stage declares and another reads, and the apt packages, which float inside the pinned base (SECURITY.md
+R-IMG-2). Refused although sound (each fails loudly): a `pip check` in a later RUN than its install, a `pip install`
+option that takes a value and is not named here (its value reads as a package), a check written to a file and read by
+`sha256sum -c <file>`, a check line written with `printf`, a `;` inside a compound (under `set -e`, or the one before a
+brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`( install && check )`, behind `&&` or
+not: the `)` joins the check's command, which then reads as no `pip check`), a `;` inside a quoted string after a check
+(`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN, the word `exit`,
+`return`, `trap` or `exec` in a message (`echo "will exit on error"`), a function or an alias anywhere in the RUN (the
+word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too), an ANSI-C `$'…'` before the check or later in
+its own list, a `sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#` right after a
+`$(…)` (`echo $(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space inside quotes
+(`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or
+two outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared without its value in a later stage.
 """
 import json
 import os
@@ -1479,6 +1479,9 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
     ('RUN ' + _GET + ' && echo "$TOOL_SHA256  /usr/local/bin/tool" | ./sha256sum -c -', ["no later sha256sum"]),
     ('RUN ' + _GET + ' && echo "$TOOL_SHA256  /usr/local/bin/tool" | /tmp/sha256sum -c -', ["no later sha256sum"]),
     ('RUN ' + _GET + ' && echo "$TOOL_SHA256  /usr/local/bin/tool" | /usr/bin/sha256sum -c -', []),
+    ("RUN set -e; set +[e]; " + _GET + " && " + _SUM,
+     ["a download shares the RUN with `set", "sha256sum -c shares the RUN with `set"]),
+    ('RUN ' + _GET + ' && echo "$TOOL_SHA256  /usr/local/bin/tool" | /bin/sha256sum -c -', []),
 ], ids=["curl-checked", "wget-checked", "apt-package", "add-checksum", "add-url", "path-prefix-unchecked",
         "piped-to-sh", "check-or-true", "wget-in-an-if", "checks-another-file", "remote-name", "in-a-substitution",
         "checked-before", "summed-not-checked", "or-true-at-the-end", "semicolon-later", "check-as-a-condition",
@@ -1502,7 +1505,7 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
         "sha256sum-an-echo-argument", "sha256sum-a-colon-argument", "sha256sum-function-spaced",
         "ampersand-in-a-quoted-url", "add-after-a-tab", "ansi-c-quote-later-in-the-list",
         "set-of-a-variable-flag-before-a-download", "sha256sum-from-the-working-directory", "sha256sum-from-tmp",
-        "sha256sum-by-its-path"])
+        "sha256sum-by-its-path", "set-of-a-glob-before-a-download", "sha256sum-by-its-bin-path"])
 def test_the_download_check_tells_a_checked_download_from_a_near_miss(text, expected):
     """The download check flags an ADD from a URL with no checksum, a download behind a path prefix or inside an `if`
     that nothing checks, a download piped to a shell, one to curl's remote name or captured by `$(…)`, a check of
@@ -1535,12 +1538,14 @@ def test_the_download_check_tells_a_checked_download_from_a_near_miss(text, expe
     (`| echo sha256sum -c -` checks nothing), a function `sha256sum ()` written with a space, an ADD whose keyword a tab
     ends, and an ANSI-C `$'…'` later in the check's own list; it passes a quoted URL holding a `&`. Fold 7's read A
     added: a `set` given a variable before the download (it can be a `set -n`), and a `sha256sum` run from the working
-    directory or /tmp (any program can be put there); it passes `/usr/bin/sha256sum`. Guards a check that finds "some
-    checksum later" for a download it does not check, and a checksum fetched from where the file came from — whoever
-    swaps the file swaps it too (T29's read, S2 and S3: D1, D2, D3, D5, D6; its fold-2 read, S1 and S2; the rules fold
-    3's mutants found no row for; its fold-3 read, S2, N2, N3, N4: Z2, Z8, Z9, Z11, D1, D2, D4, D5, D6, G8; fold 4's
-    mutants: O5, D1, D2, D3, T2; its read, S1, S4, S5, N3: G-b, G-c, O-j, D-a, D-c, D-e, D-f, Z22, Z26, Z30, R3, R4, D6;
-    fold 5's read A, S1 to S4, N1, N4, N5: A2, B2, B5, B9, C5, D3, D7, E2, K5, N1; its read B, N2, N8: NM1, NM3, NM5;
-    fold 6's read A, S1, S4, S6; its read B, S1, S3, N4: FA1, MA2; fold 7's read A, S2, N1)."""
+    directory or /tmp (any program can be put there); it passes `/usr/bin/sha256sum`. Fold 8's read B added: a `set`
+    given a glob before the download; it passes `/bin/sha256sum`. Guards a check that finds "some checksum later"
+    for a download it does not check, and a checksum fetched from where the file came from — whoever swaps the file
+    swaps it too (T29's read, S2 and S3: D1, D2, D3, D5, D6; its fold-2 read, S1 and S2; the rules fold 3's mutants
+    found no row for; its fold-3 read, S2, N2, N3, N4: Z2, Z8, Z9, Z11, D1, D2, D4, D5, D6, G8; fold 4's mutants:
+    O5, D1, D2, D3, T2; its read, S1, S4, S5, N3: G-b, G-c, O-j, D-a, D-c, D-e, D-f, Z22, Z26, Z30, R3, R4, D6; fold
+    5's read A, S1 to S4, N1, N4, N5: A2, B2, B5, B9, C5, D3, D7, E2, K5, N1; its read B, N2, N8: NM1, NM3, NM5;
+    fold 6's read A, S1, S4, S6; its read B, S1, S3, N4: FA1, MA2; fold 7's read A, S2, N1; fold 8's read B, N1, N4:
+    SH1)."""
     faults = download_faults(_TREE + text + "\n")
     assert _found(faults, expected), faults
