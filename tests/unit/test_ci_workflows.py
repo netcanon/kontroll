@@ -244,7 +244,8 @@ _UNCONDITIONED = {"always()", "success()", "!cancelled()"}
 def _script(run):
     """A `run:` script as one line of shell text, read whole as bash reads it: a quote stays open across a newline
     (the newline is then a character of the string), a backslash and newline outside single quotes are removed, a
-    backslash inside single quotes is literal, a `#` that opens a word outside quotes cuts the rest of its line, and
+    backslash inside single quotes is literal, a backquoted command is read as a quote, a `#` that opens a word
+    outside quotes cuts the rest of its line (not one after a `)`: `$(…)#` is one word, so `(…)#` is refused too), and
     the lines are joined with `;` (a newline ends a command list as `;` does), but a line ending in `&&`, `||` or `|`
     with a space (the list goes on to the next line)."""
     lines, buf, quote, k, text = [], "", None, 0, str(run or "")
@@ -258,9 +259,9 @@ def _script(run):
         if quote:
             quote = None if ch == quote else quote
             buf += " " if ch == "\n" else ch
-        elif ch in "'\"":
+        elif ch in "'\"`":
             quote, buf = ch, buf + ch
-        elif ch == "#" and (not buf or buf[-1].isspace() or buf[-1] in ";&|()"):
+        elif ch == "#" and (not buf or buf[-1].isspace() or buf[-1] in ";&|("):
             while k < len(text) and text[k] != "\n":
                 k += 1
             continue
@@ -312,9 +313,15 @@ def pip_audit_faults(workflow):
     `defaults.run.shell`) under a `runs-on` that is no named Linux or macOS runner (`_named_unix_runner`: an expression,
     which a repository variable may point at a Windows runner, a Windows image, or labels with no OS label or holding
     an expression; a Windows runner's default shell is pwsh, which need not stop on a failure); or an audit that runs
-    on a condition (`if:` on the step or the job other than `always()`, `success()` or `!cancelled()`). It refuses sound
+    on a condition (`if:` on the step or the job other than `always()`, `success()` or `!cancelled()`); a whitespace
+    character other than a space, a tab or a line feed, or a `${{` expression, in the step's script; or a `BASH_ENV`,
+    or an env that is not a mapping, on the step, the job or the workflow. It refuses sound
     shapes too, each loudly: a pipe after the audit under `shell: bash` (which runs with pipefail), an `exit 0` after
-    it, and the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`)."""
+    it, and the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), an `&>` redirect
+    after the audit, an audit sent to the background and waited for (`& wait $!`), a `(…)#` (bash opens a comment there;
+    the check reads on), an ANSI-C `$'…'` in the audit's list, and the word `alias` in a message. It cannot see an
+    earlier step that writes `BASH_ENV`, or a PATH entry, through `$GITHUB_ENV` or `$GITHUB_PATH`: a later step's bash
+    runs that file, or a `pip-audit` that entry shadows."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -339,6 +346,17 @@ def pip_audit_faults(workflow):
                 faults.append("%s: `set +e`, `set +o errexit` or `shopt … errexit` in a pip-audit step" % name)
             if "<<" in re.sub(r"\$\(\(.*?\)\)", "", _script(step.get("run"))):
                 faults.append("%s: a heredoc in a pip-audit step (its body is not read as the shell reads it)" % name)
+            if re.search(r"[^\S \t\n]", str(step.get("run"))):
+                faults.append("%s: a whitespace character other than a space, a tab or a line feed in a pip-audit "
+                              "step (this check splits words on it and bash does not)" % name)
+            if "${{" in str(step.get("run")):
+                faults.append("%s: an expression in a pip-audit step's script (GitHub writes its value into the "
+                              "script before bash reads it)" % name)
+            for where, node in (("step", step), ("job", job), ("workflow", workflow)):
+                env = node.get("env")
+                if env is not None and (not isinstance(env, dict) or "BASH_ENV" in env):
+                    faults.append("%s: `BASH_ENV`, or an env that is not a mapping, on the pip-audit %s (bash runs "
+                                  "the file it names before the script)" % (name, where))
             for where, node in (("step", step), ("job", job)):
                 if node.get("continue-on-error"):
                     faults.append("%s: continue-on-error on the pip-audit %s" % (name, where))
@@ -354,7 +372,10 @@ def test_pip_audit_covers_the_image_requirement_files():
     a known vulnerability in a pinned image package (one was found when this landed: certifi) would pass unseen; and
     a step that is still there but cannot fail (T29's read, S2: W1, W2; its fold-2 read, S1), among them one that a
     Windows runner picked by the repository variable would run under pwsh (its fold-3 read, N5)."""
-    audited, faults = pip_audit_faults(yaml.safe_load(_read(".github/workflows/security.yml")))
+    text = _read(".github/workflows/security.yml")
+    assert not re.search("[\x85\u2028\u2029]", text), \
+        "NEL, LS or PS in security.yml: the YAML reader breaks a line there and bash does not"
+    audited, faults = pip_audit_faults(yaml.safe_load(text))
     images = {d.lstrip("/") + "/requirements.txt" for d in _image_requirement_dirs()}
     assert images and images <= audited, sorted(images - audited)
     assert {"gui/requirements.txt", "api/requirements.txt", "tests/requirements-dev.txt"} <= audited, audited
@@ -442,6 +463,25 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
      ["names no shell"]),
     ({"run": "ex\\\nit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit 0`"]),
     ({"run": "set +\\\ne\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["set +e"]),
+    ({"run": "set `cat o`\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "shopt -s expand_aliases\n'alias' pip-audit=true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "\"pip-audit\"() { :; }\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a function or an alias"]),
+    ({"run": "function pip-audit { :; }\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a function or an alias"]),
+    ({"run": _AUDIT + " && echo $'\\' # ' || true"}, {}, {"docker/a/requirements.txt"}, ["runs inside"]),
+    ({"run": _AUDIT + " &&\necho $'\\''\necho 'done'"}, {}, {"docker/a/requirements.txt"}, ["runs inside"]),
+    ({"run": _AUDIT + " && echo $'\\'' & echo 'x'"}, {}, {"docker/a/requirements.txt"}, ["runs inside"]),
+    ({"run": _AUDIT + " && echo `echo # ` || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": _AUDIT + " && echo $(true)# || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": _AUDIT + " && (true)# || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "shopt -s lastpipe\ntrue |&exit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `&exit 0`"]),
+    ({"run": "pip-audit --no-deps -r\xa0docker/a/requirements.txt"}, {}, {"docker/a/requirements.txt"},
+     ["a whitespace character"]),
+    ({"run": "echo \"${{ github.ref }}\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["an expression"]),
+    ({"run": _AUDIT, "env": {"BASH_ENV": "/tmp/e"}}, {}, {"docker/a/requirements.txt"}, ["`BASH_ENV`"]),
+    ({"run": _AUDIT}, {"env": {"BASH_ENV": "/tmp/e"}}, {"docker/a/requirements.txt"}, ["`BASH_ENV`"]),
+    ({"run": _AUDIT, "env": "${{ fromJSON(vars.E) }}"}, {}, {"docker/a/requirements.txt"}, ["`BASH_ENV`"]),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -457,7 +497,13 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "ansi-c-quote-then-sh-c", "ansi-c-quote-then-hash", "in-a-comment-after-a-multiline-quote",
         "set-plus-e-on-a-hash-line-inside-a-quote", "guard-and-and-at-a-line-end", "or-at-a-line-end",
         "and-and-at-a-line-end", "audit-function", "audit-alias", "backslash-in-single-quotes-then-hash",
-        "expression-label-in-a-list", "exit-split-by-a-continuation", "set-plus-e-split-by-a-continuation"])
+        "expression-label-in-a-list", "exit-split-by-a-continuation", "set-plus-e-split-by-a-continuation",
+        "set-of-a-backquoted-command", "alias-through-quotes", "function-named-through-quotes", "function-keyword",
+        "ansi-c-quote-hides-a-hash", "ansi-c-quote-across-lines", "ansi-c-quote-before-a-background",
+        "hash-inside-backquotes", "hash-after-a-substitution", "hash-after-a-subshell",
+        "exit-after-a-pipe-amp-under-lastpipe",
+        "no-break-space-in-the-audit", "expression-in-the-script", "bash-env-on-the-step", "bash-env-on-the-job",
+        "env-not-a-mapping"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -485,11 +531,18 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     from a comment after a quote that spans two lines, passes `cd . &&` before the audit on the next line, and
     passes a `#` after a single-quoted `'x\\'` (a backslash is literal there, so the `|| true` after it is comment).
     Fold 6's mutants added: an `exit 0` and a `set +e` that a backslash-newline splits inside a word (the shell removes
-    it, so the word is whole). Each row's job runs on ubuntu-latest unless the row names another. Guards a check that
+    it, so the word is whole). Fold 6's reads added: a `set` given a backquoted command; an alias or a function named
+    through quotes, and one defined with `function`; an ANSI-C `$'…'` in the audit's list (it hides a `#`, a quote's
+    end, a lone `&`: dash and bash read it differently); a `#` inside backquotes or after a `$(…)` (no comment: the `||
+    true` after it is read; a `(true)#`, where bash does open a comment, is refused too, sound); an `exit 0` after a
+    `|&`; a no-break space in the audit (the check splits the word there, bash does not); a `${{` expression in the
+    script (GitHub writes its value in first); and a `BASH_ENV`, or an env that is not a mapping, on the step or the job
+    (bash runs that file first). Each row's job runs on ubuntu-latest unless the row names another. Guards a check that
     counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2
     and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's
     mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4:
-    A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56)."""
+    A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3; its
+    read B, S2 to S4, N4: H1 to H5, FA2)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
@@ -507,6 +560,18 @@ def test_the_pip_audit_check_reads_the_workflows_default_shell(shell, runs_on, e
     audited, faults = pip_audit_faults(workflow)
     assert audited == {"docker/a/requirements.txt"}
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
+
+
+@pytest.mark.parametrize("env", [{"BASH_ENV": "/tmp/e"}, "${{ fromJSON(vars.E) }}"], ids=["bash-env", "not-a-mapping"])
+def test_the_pip_audit_check_reads_the_workflows_env(env):
+    """A `BASH_ENV` in the workflow's `env:`, or a workflow env that is not a mapping (an expression can hold one), is
+    refused for a pip-audit step: bash runs the file it names before every step's script, where it can define a
+    `pip-audit` function or switch errexit off unread. Guards a check that reads the step's and the job's env but not
+    the workflow's (T29's fold-6 read A, N3)."""
+    workflow = {"env": env, "jobs": {"a": {"runs-on": "ubuntu-latest", "steps": [{"run": _AUDIT}]}}}
+    audited, faults = pip_audit_faults(workflow)
+    assert audited == {"docker/a/requirements.txt"}
+    assert len(faults) == 1 and "`BASH_ENV`" in faults[0] and "workflow" in faults[0], faults
 
 
 def test_third_party_actions_are_sha_pinned():

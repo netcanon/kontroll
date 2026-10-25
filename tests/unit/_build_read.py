@@ -19,9 +19,10 @@ Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the w
   ignored there, and a failure picks a branch);
 - its pipeline does not run only when the command before it fails (`a || it`);
 - it does not run inside a `$(…)`, backquotes or a quoted string (an `sh -c '…'`, an `eval '…'`): its status is
-  then not this shell's. An ANSI-C `$'…'` (dash and bash read it differently) leaves the rest of the text open;
-- it does not run in a compound that is behind `||`, `|`, `&` or `!`, or that is a function body: the shell skips
-  it, runs it apart, or drops its status;
+  then not this shell's. An ANSI-C `$'…'` (dash and bash read it differently) leaves the rest of the text open, and
+  one later in the check's own AND-OR list or pipeline hides where that list ends;
+- it does not run in a compound behind `||` or `!`: the shell skips it, or drops its status (one after a `|` or a
+  lone `&` runs, and gives its status as any command does);
 - no function or alias is defined in the text: one can stand in for the checked program, or for `set`;
 - no `trap`, `exec`, `return` or `exit` shares the text, but `exit 1` to `exit 255` (`exit 256` is 0): each of the
   others can end the text with a status that is not the failure's. One is read as a word anywhere in a command, as
@@ -51,7 +52,7 @@ _OPERATORS = re.compile(r"(&&|\|\||;|\||\x02)")
 _LONE_AMP = re.compile(r"(?<![<>|&])&(?!&)")
 _CONDITION = re.compile(r"(?:if|elif|while|until)(?:\s|$)")
 _BODY = re.compile(r"(?:then|do)(?:\s|$)")
-_SET_OFF = re.compile(r"""\bset\s+(?:\S+\s+)*?(?:["'\\]*\+["'\\]*[a-zA-Z]*e|\+o\s+["']?errexit|\S*\$)"""
+_SET_OFF = re.compile(r"""\bset\s+(?:\S+\s+)*?(?:["'\\]*\+["'\\]*[a-zA-Z]*e|\+o\s+["']?errexit|\S*[$`])"""
                       r"|\bshopt\b.*\berrexit\b")
 _ENDER = re.compile(r"""(?:^|[\s;&|<>'"\\(){}!=])(trap|exec|exit|return)(?:["']?(?:\s+(.*))?$|["'\s;)<>&|])""")
 _NOEXEC = re.compile(r"\bset\s+(?:\S+\s+)*?(?:-[a-zA-Z]*n[a-zA-Z]*|-o\s+noexec)")
@@ -102,14 +103,15 @@ _QUOTED = re.compile(r"""'[^']*'|"(?:[^"\\`]|\\.|`(?:[^`\\]|\\.)*`)*"|`(?:[^`\\]
 
 
 def _without_quotes(text):
-    """`text` with each closed quoted string, backquoted command and backslash-escaped character removed, read as sh
-    reads them: nothing is special inside `'…'`, elsewhere a backslash escapes the next character (`\\"` opens no
-    quote), and a `'` inside `"…"` is a character. A quote left open stays. A `$(…)` is not tracked: a quote inside
-    one reads as closing the quote around it. Removal repeats until nothing changes, so a quoted string that a quote
-    inside a `"$(…)"` hides from one pass goes in the next (`"$(echo '`')"`: the `'`'`, then the rest)."""
+    """`text` with each closed quoted string, backquoted command and backslash-escaped character replaced by a mark that
+    is neither a space nor a delimiter (so `}''` and `done""` close nothing: sh reads no quoted word as a reserved
+    word), each read as sh reads it: nothing is special inside `'…'`, elsewhere a backslash escapes the next character
+    (`\\"` opens no quote), and a `'` inside `"…"` is a character. A quote left open stays. A `$(…)` is not tracked: a
+    quote inside one reads as closing the quote around it. Removal repeats until nothing changes, so a quoted string
+    that a quote inside a `"$(…)"` hides from one pass goes in the next (`"$(echo '`')"`: the `'`'`, then the rest)."""
     prev = None
     while prev != text:
-        prev, text = text, _QUOTED.sub(" ", text)
+        prev, text = text, _QUOTED.sub("\x01", text)
     return text
 
 
@@ -134,14 +136,14 @@ _FUNCTION = re.compile(r"\bfunction\s+[^\s;&|()<>]+(?:\s*\(\s*\))?|[^\s;&|()<>$]
 
 
 def _skipped(text):
-    """True if `text` leaves open a compound whose status it does not take: one after `||`, `|`, `&` or `!`, or a
-    function body."""
-    text, prev = _FUNCTION.sub(" \x00 ", _without_quotes(text)), None
+    """True if `text` leaves open a compound whose status it does not take: one after `||` or `!` (a function body
+    never gets here: gate_faults refuses a function first)."""
+    text, prev = _without_quotes(text), None
     while prev != text:
         prev = text
         for pattern in _CLOSED:
             text = pattern.sub(" ", text)
-    return any(re.search(r"(?:\|\|?|(?<!&)&|(?:^|\s)!|\x00)\s*$", text[:m.start()])
+    return any(re.search(r"(?:\|\||(?:^|\s)!)\s*$", text[:m.start()])
                for m in re.finditer(r"[({]|\b(?:if|case|for|while|until)\b", text))
 
 
@@ -220,16 +222,19 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
     """["<what> …: <command>"] if a failure of cmds[i] would not fail the text (the module docstring's rules), else [].
     `on`: whether errexit is on at the start of the text."""
     command = cmds[i][0]
-    if any(_FUNCTION.search(_without_quotes(c)) or re.search(r"(?:^|\s)alias\s", _without_quotes(c))
-           for c, _, _ in cmds):
+    if any(_FUNCTION.search(t) or re.search(r"(?:^|\s)alias\s", t)
+           for c, _, _ in cmds for t in (_without_quotes(c), _plain(c))):
         return ["%s shares the %s with a function or an alias, which can stand in for it: %s"
                 % (what, unit, command)]
     if conditions(cmds)[i]:
         return ["%s is a condition or negated (its failure would not fail the %s): %s" % (what, unit, command)]
-    faults, open_ = [], opened(cmds, i)
+    end = i
+    while end + 1 < len(cmds) and cmds[end][2] in ("&&", "|"):
+        end += 1
+    faults, open_ = [], "text" if any("$'" in c for c, _, _ in cmds[i:end + 1]) else opened(cmds, i)
     if open_ == "text":
-        faults.append("%s runs inside a `$(…)`, backquotes or a quoted string, or after an ANSI-C `$'…'` (its failure "
-                      "would not fail the %s): %s" % (what, unit, command))
+        faults.append("%s runs inside a `$(…)`, backquotes or a quoted string, or after an ANSI-C `$'…'` or in a "
+                      "list holding one (its failure would not fail the %s): %s" % (what, unit, command))
     if ender(cmds):
         faults.append("%s shares the %s with `%s`, which can end it with another status or run none of it: %s"
                       % (what, unit, ender(cmds), command))
@@ -237,8 +242,8 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
         faults.append("%s runs only when the command before it fails: %s" % (what, command))
     if open_ == "compound" and _skipped(" ".join([c + " " + a for c, _, a in cmds[:i]]
                                                  + [_PREFIX.match(command).group(0)])):
-        faults.append("%s runs in a compound behind `||`, `|`, `&` or `!`, or a function body (its failure would "
-                      "not fail the %s): %s" % (what, unit, command))
+        faults.append("%s runs in a compound behind `||` or `!` (its failure would not fail the %s): %s"
+                      % (what, unit, command))
     j = i
     while j + 1 < len(cmds) and (cmds[j][2] == "&&" or (cmds[j][2] == "|" and j > i and open_ != "compound")):
         j += 1

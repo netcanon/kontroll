@@ -316,24 +316,24 @@ both hold that a check the build runs — a `pip check`, a `sha256sum -c`, a `pi
 fail it. They share one reading of when it can: `commands()` splits the text on `&&`, `||`,
 `;`, `|` and a lone `&`, and `gate_faults()` names a check that a later `|| true` or `; cmd`,
 a pipe, a `&` (the background), an `if`/`elif`/`while`/`until` condition or a `!` keeps from
-failing it; that runs inside a `$(…)`, backquotes or a quoted string, or after an ANSI-C
-`$'…'`; that runs in a compound behind `||`, `|`, `&` or `!`, or in a function body; or that
+failing it; that runs inside a `$(…)`, backquotes or a quoted string, after an ANSI-C `$'…'`
+or in a list holding one; that runs in a compound behind `||` or `!`; or that
 shares its text with a function or alias definition, a `trap`, `exec`, `return`, an `exit`
 that can be 0, or a `set -n`. It reads errexit the way `/bin/sh` does: a `;` after `set -e`
 counts only for a check that starts its AND-OR list and is the whole of it (a guard before it
 can skip it), and never inside a compound (a brace group, a subshell, an `if` body, a loop); a
 `set -e` counts only as a whole top-level command, and a `set +e`, a `set` of a variable or a
 `shopt` naming errexit, anywhere, switches errexit off. It removes quoted strings (escapes, a
-`'` or backquotes inside `"…"`) when it decides what a check runs inside, but it splits
-commands inside quotes too. A Dockerfile's lines reach it joined as BuildKit joins them (no
-space at a continuation, a double backslash continuing nothing, a byte-order mark dropped, a
-character the two split lines on differently refused); a step's `run:` is read whole (a quote
-spans a newline, a `#` cuts to the line end) and its lines joined with `;`, or with a space
-after one that ends in `&&`, `||` or `|`. It refuses the shapes it knows it cannot read; the
-module's docstring gives the rules, and `test_image_pins.py`'s ("What the checks still cannot
-see") lists the shapes it cannot see and the sound shapes it refuses. A new check on a build's
-shell text calls `gate_faults()` rather than reading the operators itself, so the two tests
-cannot drift apart.
+`'` or backquotes inside `"…"`) when it decides what a check runs inside, but it splits on
+`&&`, `||`, `;` and `|` inside quotes too (a lone `&` only outside them). A Dockerfile's lines
+reach it joined as BuildKit joins them (no space at a continuation, a double backslash
+continuing nothing, a byte-order mark dropped, a whitespace character other than a space, a tab
+or a line feed refused); a step's `run:` is read whole (a quote or a backquote spans a newline,
+a `#` cuts to the line end) and its lines joined with `;`, or with a space after one that ends
+in `&&`, `||` or `|`. It refuses the shapes it knows it cannot read; the module's docstring
+gives the rules, and `test_image_pins.py`'s ("What the checks still cannot see") lists the
+shapes it cannot see and the sound shapes it refuses. A new check on a build's shell text calls
+`gate_faults()` rather than reading the operators itself, so the two tests cannot drift apart.
 
 ## Playbook and role hygiene sweeps
 

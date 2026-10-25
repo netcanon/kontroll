@@ -36,13 +36,15 @@ were built from was not.
   name, so they are bumped by hand, Postgres's included. Promtool and vector in CI are held to the compose tags.
 - `tests/unit/test_image_pins.py` fails when a pin is missing or its check is switched off (a `pip check` or
   `sha256sum -c` that a later `|| true`, a `;` errexit does not cover, a pipe, a background `&`, a condition, a
-  `$(…)` or quoted string, an ANSI-C `$'…'` before it, a compound behind `||`, `|`, `&` or `!`, a function or alias
+  `$(…)` or quoted string, an ANSI-C `$'…'` before it or in its list, a compound behind `||` or `!`, a function or alias
   in the `RUN`, a `set -n`, or a `trap`, `exec`, `return` or `exit 0` keeps from failing the build; a download
-  naming more than one URL or output; a comment inside a `RUN`; a `SHELL` other than Docker's default; a line
-  character BuildKit and the test read differently; or a checksum not held in the tree), never because one is old.
+  naming more than one URL or output; a comment inside a `RUN`; a `SHELL` other than Docker's default; a
+  whitespace character other than a space, a tab or a line feed; or a checksum not held in the tree), never because
+  one is old.
   It reads a Dockerfile's lines as BuildKit joins them. `tests/unit/test_ci_workflows.py` holds the pip-audit step
   to the same rules, reading its `run:` whole; the step must name its shell under any runner that is not a named
-  Linux or macOS one (a Windows image, a list with no OS label or an expression in it, no `runs-on`), and the
+  Linux or macOS one (a Windows image, a list with no OS label or an expression in it, no `runs-on`), may hold no
+  `${{` expression and no odd whitespace and run under no `BASH_ENV`, and the
   pip-audit job now names its shell (`bash`), since a repository variable picks its runner.
   The refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
