@@ -241,9 +241,23 @@ def test_ci_tool_versions_match_the_compose_pins():
 _UNCONDITIONED = {"always()", "success()", "!cancelled()"}
 
 
+def _uncommented(line):
+    """`line` without its trailing comment: cut at the first `#` that opens a word outside quotes."""
+    quote = None
+    for k, ch in enumerate(line):
+        if quote:
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (k == 0 or line[k - 1].isspace()):
+            return line[:k]
+    return line
+
+
 def _script(run):
     """A `run:` script as one line of shell text: comment lines dropped, backslash continuations joined, a trailing
-    ` # comment` cut, and the lines joined with `;` (a newline ends a command list as `;` does)."""
+    ` # comment` cut (a `#` inside quotes is no comment), and the lines joined with `;` (a newline ends a command list
+    as `;` does)."""
     lines, buf = [], ""
     for line in str(run or "").splitlines():
         if not buf and line.lstrip().startswith("#"):
@@ -252,7 +266,7 @@ def _script(run):
         if buf.endswith("\\"):
             buf = buf[:-1] + " "
             continue
-        lines.append(re.sub(r"\s+#.*$", "", buf).strip())
+        lines.append(_uncommented(buf).strip())
         buf = ""
     return "; ".join(ln for ln in lines + [buf.strip()] if ln)
 
@@ -272,9 +286,14 @@ def pip_audit_faults(workflow):
     a command of its script (`_script`, split as tests/unit/_build_read.py splits a RUN) starts with it. A fault is
     such a step whose audit cannot fail its job: a `shell:` other than the default, `bash` or `sh` (each of those runs
     with errexit; another one need not), an audit whose failure would not fail the script (a pipe after it, a later
-    `||`, a `;` after it that is not the end of its AND-OR list, a condition: the _build_read rules, errexit on at the
-    start), a `set +e` or `set +o errexit` in the step, `continue-on-error` on the step or the job; or an audit that
-    runs on a condition (`if:` on the step or the job other than `always()`, `success()` or `!cancelled()`)."""
+    `||`, a `;` after it that is not the end of its AND-OR list or inside a compound, a condition, a `$(…)` or quoted
+    string around it, a `trap`, `exec` or `exit 0` in the step: the _build_read rules, errexit on at the start), a
+    `set +e` or `set +o errexit` anywhere in the step, a heredoc in the step (its body is not read as the shell reads
+    it), `continue-on-error` on the step or the job, a step that names no shell (itself or a `defaults.run.shell`)
+    under a `runs-on` an expression gives (a repository variable may pick a Windows runner, whose default shell is
+    pwsh, which need not stop on a failure); or an audit that runs on a condition (`if:` on the step or the job other
+    than `always()`, `success()` or `!cancelled()`). It refuses one sound shape: a pipe after the audit under
+    `shell: bash` (which runs with pipefail); that refusal fails loudly."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -287,12 +306,17 @@ def pip_audit_faults(workflow):
             if shell not in (None, "bash", "sh"):
                 faults.append("%s: the pip-audit step runs under `shell: %s`, which need not stop on a failure"
                               % (name, shell))
+            if shell is None and "${{" in str(job.get("runs-on", "")):
+                faults.append("%s: the pip-audit step names no shell and an expression picks its runner (a Windows "
+                              "runner's default shell is pwsh, which need not stop on a failure)" % name)
             for i in runs:
                 audited |= set(re.findall(r"(?:^|\s)(?:-r|--requirement)(?:\s+|=)(\S+)", script[i][0]))
                 faults += ["%s: %s" % (name, f) for f in gate_faults(
                     "pip-audit", script, i, on=shell in (None, "bash", "sh"), unit="step")]
-            if any(re.match(r"set\s+(?:.*\s)?\+(?:[a-zA-Z]*e|o\s+errexit)", c) for c, _, _ in script):
+            if any(re.search(r"\bset\s+(?:.*\s)?\+(?:[a-zA-Z]*e|o\s+errexit)", c) for c, _, _ in script):
                 faults.append("%s: `set +e` or `set +o errexit` in a pip-audit step" % name)
+            if "<<" in re.sub(r"\$\(\(.*?\)\)", "", _script(step.get("run"))):
+                faults.append("%s: a heredoc in a pip-audit step (its body is not read as the shell reads it)" % name)
             for where, node in (("step", step), ("job", job)):
                 if node.get("continue-on-error"):
                     faults.append("%s: continue-on-error on the pip-audit %s" % (name, where))
@@ -306,7 +330,8 @@ def test_pip_audit_covers_the_image_requirement_files():
     fail its job (pip_audit_faults' rules). The workflow is read through its parsed steps, so a commented-out step
     reads nothing. Guards the audit going back to reading only the floors — which name no version an image runs — so
     a known vulnerability in a pinned image package (one was found when this landed: certifi) would pass unseen; and
-    a step that is still there but cannot fail (T29's read, S2: W1, W2; its fold-2 read, S1)."""
+    a step that is still there but cannot fail (T29's read, S2: W1, W2; its fold-2 read, S1), among them one that a
+    Windows runner picked by the repository variable would run under pwsh (its fold-3 read, N5)."""
     audited, faults = pip_audit_faults(yaml.safe_load(_read(".github/workflows/security.yml")))
     images = {d.lstrip("/") + "/requirements.txt" for d in _image_requirement_dirs()}
     assert images and images <= audited, sorted(images - audited)
@@ -315,6 +340,7 @@ def test_pip_audit_covers_the_image_requirement_files():
 
 
 _AUDIT = "pip-audit --no-deps -r docker/a/requirements.txt"
+_RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
 
 
 @pytest.mark.parametrize("step,job,read,expected", [
@@ -345,24 +371,59 @@ _AUDIT = "pip-audit --no-deps -r docker/a/requirements.txt"
     ({"run": "if " + _AUDIT + "; then echo ok; fi"}, {}, {"docker/a/requirements.txt"}, ["is a condition"]),
     ({"run": _AUDIT + "  # never add || true here"}, {}, {"docker/a/requirements.txt"}, []),
     ({"run": "# was: cd x; pip-audit -r old.txt | tee log\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "{ cd .; " + _AUDIT + "; } || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "trap 'exit 0' EXIT\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `trap"]),
+    ({"run": "cat <<'EOF'\n" + _AUDIT + "\nEOF"}, {}, {"docker/a/requirements.txt"}, ["a heredoc"]),
+    ({"run": _AUDIT + " --desc 'see #1' || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "if set +e; then :; fi\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["not followed", "set +e"]),
+    ({"run": _AUDIT}, {"runs-on": _RUNNER}, {"docker/a/requirements.txt"}, ["names no shell"]),
+    ({"run": _AUDIT}, {"runs-on": _RUNNER, "defaults": {"run": {"shell": "bash"}}}, {"docker/a/requirements.txt"}, []),
+    ({"run": _AUDIT}, {"runs-on": "ubuntu-latest"}, {"docker/a/requirements.txt"}, []),
+    ({"run": "# the audit below \\\n" + _AUDIT + " || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "echo a#b && " + _AUDIT + " || true"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "echo $((1 << 2))\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
         "not-last-of-its-list", "semicolon-under-errexit", "explicit-bash-and-a-comment", "always-and-not-cancelled",
-        "audit-as-a-condition", "operator-in-a-trailing-comment", "old-audit-in-a-comment-line"])
+        "audit-as-a-condition", "operator-in-a-trailing-comment", "old-audit-in-a-comment-line",
+        "brace-group-or-true", "trap-exit-0", "heredoc", "quoted-hash-before-or-true", "set-plus-e-as-a-condition",
+        "runner-from-an-expression", "runner-from-an-expression-shell-named", "runner-named",
+        "comment-line-ending-in-a-backslash", "mid-word-hash", "arithmetic-shift"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
-    command that only names it, and flags a run that cannot fail its job: `|| true` (on a continuation line too), a
-    pipe after it (the default `bash -e {0}` has no pipefail, so `| tee` hides the audit), a shell other than the
-    default, `bash` or `sh` (named by the step or the job's defaults), a later command after `set +e` or
-    `set +o errexit`, `&& …` before a later line (errexit spares a command that is not the last of its list), an
-    `if` condition, `continue-on-error`, or an `if:` other than `always()`, `success()` or `!cancelled()`. It passes
-    a later line under the default errexit, and a comment — trailing or a line of its own — that holds an operator or
-    an old audit (the shell never runs it). Guards a check that counts a dead audit as
-    coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3)."""
+    command that only names it, and flags a run that cannot fail its job: `|| true` (on a continuation line too, and
+    after a quoted `#`, which is no comment), a pipe after it (the default `bash -e {0}` has no pipefail, so `| tee`
+    hides the audit), a shell other than the default, `bash` or `sh` (named by the step or the job's defaults), a
+    later command after `set +e` or `set +o errexit` (as an `if` condition too), `&& …` before a later line (errexit
+    spares a command that is not the last of its list), a `;` inside a brace group under `|| true`, a `trap`, a
+    heredoc, an `if` condition, `continue-on-error`, an `if:` other than `always()`, `success()` or `!cancelled()`,
+    and no named shell under a `runs-on` an expression gives. It passes a later line under the default errexit, a
+    comment — trailing or a line of its own — that holds an operator or an old audit (the shell never runs it), and an
+    expression runner with a named shell or a named runner; a comment line ending in a backslash continues nothing
+    (the shell does not join it), so the audit on the next line is read; a `#` inside a word opens no comment, so a
+    later `|| true` is still read; and an arithmetic `$((1 << 2))` is no heredoc. Guards a check that counts a dead
+    audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5:
+    PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants:
+    W58, Q2, H2)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict(job, steps=[step])}})
     assert audited == read
+    assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
+
+
+@pytest.mark.parametrize("shell,runs_on,expected", [
+    ("pwsh", "ubuntu-latest", ["shell: pwsh"]),
+    ("bash", _RUNNER, []),
+], ids=["workflow-default-pwsh", "workflow-default-bash-under-an-expression-runner"])
+def test_the_pip_audit_check_reads_the_workflows_default_shell(shell, runs_on, expected):
+    """A workflow-level `defaults.run.shell` is the shell of a step that names none and whose job names none: the
+    check flags a workflow default of pwsh, and takes a workflow default of bash as a named shell under a runner an
+    expression picks. Guards a reader that looks only at the step and the job (T29's fold-3 read, N6: V1)."""
+    workflow = {"defaults": {"run": {"shell": shell}}, "jobs": {"a": {"runs-on": runs_on, "steps": [{"run": _AUDIT}]}}}
+    audited, faults = pip_audit_faults(workflow)
+    assert audited == {"docker/a/requirements.txt"}
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
 
 

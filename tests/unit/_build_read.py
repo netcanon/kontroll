@@ -13,15 +13,27 @@ Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the w
   ignored for every command of an AND-OR list but the last, so `set -e; a && b; c` runs `c` after `a` fails);
 - it is not part of an `if`, `elif`, `while` or `until` condition, or of a pipeline that opens with `!` (errexit is
   ignored there, and a failure picks a branch);
-- its pipeline does not run only when the command before it fails (`a || it`).
-Errexit is on from a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command, until a `set +e`
-or `set +o errexit`. A `set` inside a subshell or after a keyword is not read as one, which only refuses more.
+- its pipeline does not run only when the command before it fails (`a || it`);
+- it does not run inside a `$(…)`, backquotes or a quoted string (an `sh -c '…'`, an `eval '…'`): its status is
+  then not this shell's;
+- no `trap`, `exec` or `exit` shares the text, but `exit <a nonzero number>`: each of the others can end the text
+  with a status that is not the failure's.
+Inside a compound command (a brace group, a subshell, a function body, an `if`, `case`, `for`, `while` or `until`
+body) only `&&` to the end of the text counts: errexit is ignored inside a compound that is not the last of its
+AND-OR list (`{ a; b; } || true` runs `b` after `a` fails), so the `;` rule is not trusted there. A compound closed
+before the command leaves nothing open.
+
+Errexit is switched on by a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command at the top
+of the text and runs whenever the text reaches it (not behind `&&` or `||`, not piped, nothing open), and off by any
+`set +e` or `set +o errexit` anywhere in the text, however it is written. A `set -e` the reader cannot place
+switches nothing on, and a `set +e` it cannot place switches errexit off, so a reading it is unsure of refuses.
 """
 import re
 
 _OPERATORS = re.compile(r"(&&|\|\||;|\|)")
 _CONDITION = re.compile(r"(?:if|elif|while|until)(?:\s|$)")
 _BODY = re.compile(r"(?:then|do)(?:\s|$)")
+_SET_OFF = re.compile(r"\bset\s+(?:\S+\s+)*?(?:\+[a-zA-Z]*e[a-zA-Z]*|\+o\s+errexit)(?:\s|$)")
 
 
 def unquote(token):
@@ -42,23 +54,56 @@ def commands(text):
             for i in range(0, len(parts), 2) if parts[i].strip()]
 
 
+# What a command may open a compound with before its program: `(`, `{`, a keyword, `!`.
+_PREFIX = re.compile(r"(?:\s*(?:[({]|(?:if|then|else|elif|do|while|until|!)(?=\s|$)))*")
+_CLOSED = (re.compile(r"\bcase\b(?:(?!\bcase\b|\besac\b).)*\besac\b"), re.compile(r"\([^()]*\)"),
+           re.compile(r"\{[^{}]*\}"), re.compile(r"\bif\b(?:(?!\bif\b|\bfi\b).)*\bfi\b"),
+           re.compile(r"\b(?:for|while|until)\b(?:(?!\b(?:for|while|until|done)\b).)*\bdone\b"))
+
+
+def _left_open(text):
+    """What `text` leaves open once each construct closed in it is removed: 'text', 'compound' or ''."""
+    prev = None
+    while prev != text:
+        prev = text
+        for pattern in _CLOSED:
+            text = pattern.sub(" ", text)
+    if "$(" in text or any(text.count(q) % 2 for q in "`'\""):
+        return "text"
+    if re.search(r"[({]|\b(?:if|then|else|elif|do|case|for|while|until)\b", text):
+        return "compound"
+    return ""
+
+
+def opened(cmds, i):
+    """What cmds[i] runs inside: 'text' for a `$(…)`, backquotes or a quoted string (an `sh -c '…'`, an `eval '…'`:
+    its failure is not this shell's) that the text before it leaves open, or that the command itself opens or closes
+    unpaired (`echo "$(curl …`, `sha256sum -c -)"`); else 'compound' for a brace group, a subshell, a function body
+    or an if/case/for/while/until that the text before it, or the command's own opening `(`, `{` or keyword, leaves
+    open; else ''. A construct closed before the command is removed first, so it leaves nothing open."""
+    before = _left_open(" ".join([c for c, _, _ in cmds[:i]] + [_PREFIX.match(cmds[i][0]).group(0)]))
+    return "text" if _left_open(cmds[i][0]) == "text" else before
+
+
 def errexit(cmds, on=False):
-    """[whether errexit is on when cmds[k] runs]: `on` at the start, then switched by each `set` that is a whole
-    command (`set -eu`, `set -o errexit`, `set +e`, `set +o errexit`)."""
+    """[whether errexit is on when cmds[k] runs]: `on` at the start, then switched off by any `set +e`/`set +o
+    errexit` anywhere (after a keyword, in a brace group, behind an assignment or `command`), and on by a `set -e`/
+    `set -o errexit` that is a whole command at the top of the text and runs whenever the text gets there (not
+    behind `&&` or `||`, not piped, nothing open)."""
     out = []
-    for command, _, _ in cmds:
+    for k, (command, before, after) in enumerate(cmds):
         out.append(on)
-        words = command.split()
-        if not words or words[0] != "set":
+        if _SET_OFF.search(command):
+            on = False
             continue
-        for k, word in enumerate(words[1:], 1):
+        words = command.split()
+        if not words or words[0] != "set" or before not in ("", ";") or after == "|" or opened(cmds, k):
+            continue
+        for n, word in enumerate(words[1:], 1):
             if word == "--":
                 break
-            if word in ("-o", "+o"):
-                if k + 1 < len(words) and words[k + 1] == "errexit":
-                    on = word == "-o"
-            elif re.fullmatch(r"[-+][a-zA-Z]+", word) and "e" in word[1:]:
-                on = word[0] == "-"
+            if (word == "-o" and words[n + 1:n + 2] == ["errexit"]) or re.fullmatch(r"-[a-zA-Z]*e[a-zA-Z]*", word):
+                on = True
     return out
 
 
@@ -78,8 +123,20 @@ def conditions(cmds):
             inside = False
         if _CONDITION.match(re.sub(r"^(?:(?:then|do|else)\s+|[({]\s*)*", "", command)):
             inside = True
-        out.append(inside or bool(re.match(r"!(?:\s|$)", cmds[_pipeline_start(cmds, k)][0])))
+        start = re.sub(r"^(?:(?:then|do|else)\s+|[({]\s*)*", "", cmds[_pipeline_start(cmds, k)][0])
+        out.append(inside or bool(re.match(r"!(?:\s|$)", start)))
     return out
+
+
+def ender(cmds):
+    """The first `trap`, `exec` or `exit` of the text that can end it with a status other than a failure's (every
+    `exit` but `exit <a nonzero number>`), read after a keyword, an opening `(`, `{` or `!`, or a case pattern; or
+    None."""
+    for command, _, _ in cmds:
+        m = re.match(r"(?:(?:then|do|else)\s+|[({!]\s*|[^\s()]*\)\s*)*(trap|exec|exit)(?:\s+(.*))?$", command)
+        if m and not (m.group(1) == "exit" and re.fullmatch(r"[1-9]\d*", (m.group(2) or "").strip())):
+            return command
+    return None
 
 
 def gate_faults(what, cmds, i, on=False, unit="RUN"):
@@ -88,13 +145,19 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
     command = cmds[i][0]
     if conditions(cmds)[i]:
         return ["%s is a condition or negated (its failure would not fail the %s): %s" % (what, unit, command)]
-    faults = []
+    faults, open_ = [], opened(cmds, i)
+    if open_ == "text":
+        faults.append("%s runs inside a `$(…)`, backquotes or a quoted string (its failure would not fail the %s): %s"
+                      % (what, unit, command))
+    if ender(cmds):
+        faults.append("%s shares the %s with `%s`, which can end it with another status: %s"
+                      % (what, unit, ender(cmds), command))
     if cmds[_pipeline_start(cmds, i)][1] == "||":
         faults.append("%s runs only when the command before it fails: %s" % (what, command))
     j = i
     while j + 1 < len(cmds) and (cmds[j][2] == "&&" or (cmds[j][2] == "|" and j > i)):
         j += 1
     after = cmds[j][2]
-    if not (after == "" or (after == ";" and j == i and errexit(cmds, on)[i])):
+    if not (after == "" or (after == ";" and j == i and errexit(cmds, on)[i] and not open_)):
         faults.append("%s not followed by && (its failure would not fail the %s): %s" % (what, unit, command))
     return faults

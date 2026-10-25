@@ -30,6 +30,9 @@ jobs:
   pip-audit:
     name: pip-audit (gui · api · tests floors, image pins)
     runs-on: ${{ fromJSON(vars.KONTROLL_RUNS_ON || '"ubuntu-latest"') }}   # see ci.yml "RUNNERS"
+    defaults:
+      run:
+        shell: bash   # the runner comes from a variable: on Windows an unnamed shell is pwsh, which need not stop
     steps:
       - uses: actions/checkout@v7
         with:

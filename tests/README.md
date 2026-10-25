@@ -315,10 +315,14 @@ tests run real git and take the suite's `isolated_git` fixture.
 both hold that a check the build runs — a `pip check`, a `sha256sum -c`, a `pip-audit` — can
 fail it. They share one reading of when it can: `commands()` splits the text on `&&`, `||`,
 `;` and `|`, and `gate_faults()` names a check that a later `|| true` or `; cmd`, a pipe, an
-`if`/`while` condition or a `!` keeps from failing it, reading errexit the way `/bin/sh` does
-(a `;` after `set -e` counts only for the last command of its `&&` list). The rules are the
-module's docstring. A new check on a build's shell text calls `gate_faults()` rather than
-reading the operators itself, so the two tests cannot drift apart.
+`if`/`elif`/`while`/`until` condition or a `!` keeps from failing it, that runs inside a
+`$(…)` or a quoted string, or that shares its text with a `trap`, `exec` or `exit 0`. It reads
+errexit the way `/bin/sh` does: a `;` after `set -e` counts only for the last command of its
+`&&` list, and never inside a compound (a brace group, a subshell, an `if` body, a loop); a
+`set -e` counts only as a whole top-level command, and any `set +e` switches errexit off. Where
+it is unsure, it refuses. The rules are the module's docstring. A new check on a build's shell
+text calls `gate_faults()` rather than reading the operators itself, so the two tests cannot
+drift apart.
 
 ## Playbook and role hygiene sweeps
 
