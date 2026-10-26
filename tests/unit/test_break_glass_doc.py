@@ -260,20 +260,29 @@ _NO_SOPS = ("BROKEN: no sops runs here as the check runs it (a stock sops build 
             "or a version-manager shim does not count)\n")
 
 
+def _self_check():
+    """The one-line check docs/break-glass.md gives, under "Verify", for whether a sops runs as the block runs it."""
+    doc = open(os.path.join(ROOT, "docs", "break-glass.md"), encoding="utf-8").read()
+    return re.search(r"`(env -i [^`]*&& echo runs)` should then print `runs`", doc).group(1)
+
+
 @_BASH
 @pytest.mark.parametrize("sops", ["none", "a-shim-that-needs-home", "a-shim-that-needs-its-own-variable",
-                                  "a-shell-function"])
+                                  "a-shim-that-finds-its-own-place-without-a-home", "a-shell-function"])
 def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
     """On a machine with age-keygen whose sops cannot run as the block runs it — none at all (a PATH that holds the
     shell's own tools and the stand-in age-keygen only), a version-manager shim first on PATH that runs sops only where
     the operator's own home is set, one that runs it only where a variable of its own is set (a version manager under a
-    custom root), or a shell function named `sops` with no sops on PATH — the Verify block prints one line, `BROKEN: no
-    sops runs here as the check runs it`, and no FAIL or ok line. Guards a sops the block cannot run reading as a bare
-    `FAIL` for every file — the line the runbook gives for a damaged break-glass stanza, whose remedy (a data-key
-    rotation on the node) cannot help (T11 fold 4's read B, N3) — and a check that asks only whether the shell finds a
-    sops (`command -v`), which a function, an alias or a shim passes while the block's `env -i` runs none (fold 5's
-    reads, 70 S1 and 80 N5), or a probe that keeps the environment, which the shim keyed on its own variable passes
-    (fold 6's read 100, S2)."""
+    custom root), one that falls back to a place of its own when HOME is unset (as bash's `~`, Python's `expanduser`
+    and an asdf-like shim do), or a shell function named `sops` with no sops on PATH — the Verify block prints one
+    line, `BROKEN: no sops runs here as the check runs it`, and no FAIL or ok line, and the runbook's own self-check
+    for that line prints nothing. Guards a sops the block cannot run reading as a bare `FAIL` for every file — the
+    line the runbook gives for a damaged break-glass stanza, whose remedy (a data-key rotation on the node) cannot
+    help (T11 fold 4's read B, N3) — and a check that asks only whether the shell finds a sops (`command -v`), which a
+    function, an alias or a shim passes while the block's `env -i` runs none (fold 5's reads, 70 S1 and 80 N5), or a
+    probe that keeps the environment, which the shim keyed on its own variable passes (fold 6's read 100, S2); and a
+    self-check run with HOME unset rather than set to nowhere, which prints `runs` for the shim that falls back and so
+    sends the operator round in a circle (fold 7's read 110, N3)."""
     env, files, _ = _hostile_machine(tmp_path)
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -296,10 +305,30 @@ def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
                         % (tmp_path / "bin" / "sops"), encoding="utf-8")
         shim.chmod(0o755)
         assert _bash("sops --help", env, files).returncode == 0, "the shim runs in the operator's own shell"
-    elif sops == "a-shell-function":
-        block = 'sops() { python3 "%s" "$@"; }\n' % (tmp_path / "bin" / "sops") + block
-    run = _bash(block, env, files)
+    elif sops == "a-shim-that-finds-its-own-place-without-a-home":
+        shim = tools / "sops"
+        shim.write_text('#!/usr/bin/env bash\n[ -z "${HOME+set}" ] || [ -f "$HOME/.shim-ok" ] || exit 126\n'
+                        'exec python3 "%s" "$@"\n' % (tmp_path / "bin" / "sops"), encoding="utf-8")
+        shim.chmod(0o755)
+        assert _bash("env -u HOME sops --help", env, files).returncode == 0, "the shim runs where HOME is unset"
+    prefix = ""
+    if sops == "a-shell-function":
+        prefix = 'sops() { python3 "%s" "$@"; }\n' % (tmp_path / "bin" / "sops")
+    run = _bash(prefix + block, env, files)
     assert run.stdout == _NO_SOPS, run.stdout + run.stderr
+    check = _bash(prefix + _self_check(), env, files)
+    assert check.stdout == "", check.stdout + check.stderr
+
+
+@_BASH
+def test_the_runbooks_sops_self_check_prints_runs_where_the_block_runs_the_check(tmp_path):
+    """With a stock sops on PATH (the stand-in), the Verify block runs the check (an ok line, no BROKEN) and the
+    runbook's self-check prints `runs`. Guards the self-check being made so strict that it fails everywhere: the
+    operator would then chase a fault their machine does not have (T11 fold 7's read 110, N3)."""
+    env, files, _ = _hostile_machine(tmp_path)
+    assert "ok   a-both.sops.yml" in _bash(_verify_block(), env, files).stdout
+    check = _bash(_self_check(), env, files)
+    assert check.stdout == "runs\n", check.stdout + check.stderr
 
 
 def test_the_verify_block_holds_no_comment():

@@ -84,12 +84,13 @@ git status --short                               # expect: only instance/.sops.y
 
 kontroll-init refuses — and writes nothing — when the control key file is not where it looks (it never mints one on
 this path), has no `# public key:` line it can read, or holds a key that is not a recipient of every rule (so not this
-instance's control key), or holds a `# public key:` line that is not the public half of the key age reads from the
-file; when the value is a private key, is not an age public key, is a plugin recipient (`age1<name>1…`: kontroll's
-images ship no age plugin) or a post-quantum one (`age1pq1…`: it needs a sops whose age knows it on every machine that
-encrypts or decrypts, the trusted machine's included), fails its checksum, length or padding (a character mistyped,
-added or lost in the copy, an `l` read as `1` among them), or is a low-order point age refuses; or when it is the
-control key itself. It adds the key under both recipient anchors, `base_recipients` and `ops_recipients`, as
+instance's control key), or holds a `# public key:` line that is not the public half of the key age reads from the file,
+or from which age reads no key (or where `age-keygen` gives no answer); when the value is a private key, is not an age
+public key, is a plugin recipient (`age1<name>1…`: kontroll's images ship no age plugin) or a post-quantum one
+(`age1pq1…`: it needs a sops whose age knows it on every machine that encrypts or decrypts, the trusted machine's
+included), fails its checksum or length (a character mistyped, added or lost in the copy, an `l` read as `1` among them)
+or has padding bits set (a value no age-keygen prints), or is a low-order point age refuses; or when it is the control
+key itself. It adds the key under both recipient anchors, `base_recipients` and `ops_recipients`, as
 `key-roles/break-glass.yml` names them; a hand edit under one anchor would leave the operational domains with one
 recipient. Then it stops: it mints, prints and changes no secret, and names step 3.
 
@@ -196,8 +197,8 @@ Expect `ok` for every file and no `BROKEN` line.
 - `BROKEN: no sops runs here`: this machine cannot check anything yet. The block runs sops with no environment and an
   empty home, so a shell function or an alias named `sops`, or a version-manager shim that needs your own home or a
   variable of its own, does not count: put a stock sops build on `PATH`.
-  `env -i PATH="$PATH" sops --help >/dev/null && echo runs` should then print `runs`. A `PATH` entry written `~/bin`
-  counts for your shell but not for this check: write it `$HOME/bin`.
+  `env -i PATH="$PATH" HOME=/nonexistent sops --help >/dev/null && echo runs` should then print `runs`. A `PATH`
+  entry written `~/bin` counts for bash but not for this check: write it `$HOME/bin`.
 - A `BROKEN` line about `$BG`: the file is not the break-glass key alone (a copy of the control key or a keys.txt
   holding both, so the check would prove the wrong key; or a key line with something before it, which `age-keygen`
   cannot read); or `BGPUB` is not the break-glass recipient (left as `age1…`, with a stray space or carriage return,

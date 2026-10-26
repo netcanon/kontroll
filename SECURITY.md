@@ -1115,18 +1115,20 @@ distinct control.
   left that nobody was shown. It refuses before minting anything when standard output is not a terminal, so the key cannot land in a
   pipe or a file; the installer container's log driver is `none` for every verb but a deploy (`init`, `check`:
   both launchers choose it per verb, `docker/services/installer.yaml`), and no launcher routes `fresh-init`
-  through a run log, a `tee`, a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `screen -L`,
-  `tmux pipe-pane`) or a command that files its output away from the terminal (`nohup`, `systemd-run`). A terminal
-  the operator records themselves is beyond kontroll's reach.
+  through a run log, a `tee`, a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen -L`,
+  `tmux pipe-pane`, in the spellings `tests/unit/test_installer_phase1.py` lists), a runner that gives it a terminal
+  of its own (`expect`, `unbuffer`, `rlwrap`, `socat`) or a command that files its output away from the terminal
+  (`nohup`, `systemd-run`, `start-stop-daemon`). A terminal the operator records themselves is beyond kontroll's
+  reach.
   `--break-glass-recipient` takes the public half of an X25519 key made elsewhere and, without echoing the value,
   refuses a private key, a plugin recipient (`age1<name>1…`: kontroll's images ship no age plugin) or a
   post-quantum one (it needs a sops whose age knows it on every machine), one whose checksum, X25519 length or
   padding fails, and a low-order point age refuses. A run that reads the control key file (`--break-glass-recipient`,
   or any `--fresh` run where something is at its path) refuses, before anything is written, one it cannot read a
   `# public key:` line from, and, where `age-keygen` is installed, one whose line is not the public half of the key
-  age reads there. On an existing instance it also refuses a key file that is not the control recipient of every
-  rule (read as sops reads it: a rule's key groups when it has any), and stops after adding the recipient, before
-  the bootstrap secrets.
+  age reads there, or from which age reads no key (or where `age-keygen` gives no answer). On an existing instance it
+  also refuses a key file that is not the control recipient of every rule (read as sops reads it: a rule's key groups
+  when it has any), and stops after adding the recipient, before the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing

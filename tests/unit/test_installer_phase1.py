@@ -231,14 +231,19 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
 
 # A route by which a script's output reaches a file or a log: a tee, the shell's own output redirected by `exec`
 # (`exec >f`, `exec 2>f`, `exec &>>f`, `exec {fd}>f`, at a line's start or after `;`, `&&` or `||`), a recorder of
-# the terminal (`script`, `asciinema`, `ttyrec`, `screen -L`, `tmux pipe-pane`), `logger` or `systemd-cat`, or a
-# command that files its output away from the terminal (`nohup`, `systemd-run`).
+# the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen` with a `-L` among its flags or `-X log` or
+# `-X hardcopy`, `tmux pipe-pane` or `save-buffer` and their short forms), a runner that gives the command a terminal
+# of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), `logger` or `systemd-cat`, or a command that files its output
+# away from the terminal (`nohup`, `systemd-run`, `start-stop-daemon`).
 _LOG_ROUTE = re.compile(r"\btee\b|(?:^|[;&|]\s*)exec\s*(?:\{\w+\}|[0-9&]*)>|\bscript\b|\blogger\b|\bsystemd-cat\b"
-                        r"|\bnohup\b|\bsystemd-run\b|\basciinema\b|\bttyrec\b|\bscreen\b[^#\n]*\s-L\b"
-                        r"|\btmux\b[^#\n]*\bpipe-pane\b")
-# A redirect of a command's output to a file: `>`, `>>`, `>|`, `&>`, `>&file`, `>& file` and `>&"$fd_var"`;
-# `>&2`, `2>&1`, `>&-` and `>/dev/null` pass (`>/dev/null.log` does not).
-_TO_A_FILE = re.compile(r"[0-9&]?>[>|]?\s*(?!&[0-9-]|/dev/null(?![^\s;&|)]))[&\w$\"'/.~]")
+                        r"|\bnohup\b|\bsystemd-run\b|\bstart-stop-daemon\b|\basciinema\b|\bttyrec\b|\blogsave\b"
+                        r"|\bscreen\b[^\n]*(?:\s-\w*L|\s-X\s+(?:log|hardcopy)\b)"
+                        r"|\btmux\b[^\n]*\b(?:pipe(?:-\w*|p)?|save(?:-\w*|b)?)\b"
+                        r"|\bexpect\b|\bunbuffer\b|\brlwrap\b|\bsocat\b")
+# A redirect of a command's output to a file: `>`, `>>`, `>|`, `&>`, `>&file`, `>& file`, `>&"$fd_var"` and a
+# target that begins with any other character (`>+k.log`, `> >(dd …)`); `>&2`, `2>&1`, `>&-` and `>/dev/null`
+# pass, quoted or closing a quote (`sh -c 'cmd >/dev/null'`), or before `<` (`>/dev/null.log` does not).
+_TO_A_FILE = re.compile(r"[0-9&]?>[>|]?\s*(?!&[0-9-]|[\"']?/dev/null[\"']?(?![^\s;&|)<]))\S")
 # The launchers and the dispatcher, where no line sends output to a file at all; plaintext-guard.sh's awk compares
 # with `>`, so there only a line that runs compose `run` or kontroll-init is held to it.
 _NO_FILE_REDIRECT = ("scripts/kontroll-installer.sh", "scripts/kontroll.sh", "scripts/lib/canonical-group.sh",
@@ -261,22 +266,31 @@ def test_fresh_init_output_is_never_teed_to_a_log():
     """None of the places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch kit's
     (scripts/kontroll.sh), the libraries they source or run (scripts/lib/canonical-group.sh, plaintext-guard.sh) and the
     image's dispatcher (docker/installer/entrypoint.sh) — routes output through `run_log_init`, a `tee`, an `exec`
-    redirect of the shell's output, a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `screen -L`, `tmux
-    pipe-pane`), `logger` or `systemd-cat`, or a command that files its output away from the terminal (`nohup`,
-    `systemd-run`); the `init` service has no `tty: true`; no launcher's `compose … run` passes `-t`, `--tty` or
-    `--tty=…`; no line of the launchers or the dispatcher sends output to a file (`>`, `>>`, `>|`, `&>`, `>&file` or
-    `>&"$fd"`; `>/dev/null`, `>&2` and `2>&1` pass, `>/dev/null.log` does not), so neither the run line nor a `case`, `{
-    … }` or `exec` around it does; and in plaintext-guard.sh, whose awk compares with `>`, no line that runs compose
-    `run` or kontroll-init does. The scan reads every line but a comment, a backslash-continued command as one line. It
-    does not see a sourced helper outside these five files, or output sent through a pipe or a process substitution into
-    a writer other than `tee` (`| dd of=…`, `> >(dd of=…)`). compose run gives the container a terminal only when the
-    launcher's stdout is one, so a pipe around `fresh-init --mint-break-glass` is refused by kontroll-init itself (the
-    bootstrap passwords would still reach a pipe or a file the operator adds); this guards the forms that keep a
-    terminal while copying it — a forced tty, a run log, a recorder, a logger — which would put the show-once
-    break-glass private key `--mint-break-glass` prints in a log nobody chose to keep, and a redirect on the run line or
-    around it, or a `nohup` or `systemd-run`, which files the bootstrap passwords (T11 fold 4's read B, N5; fold 5's
-    reads, 70 N6 and 80 N4: `>&file`, `>|`, a named fd and a redirected `case` or group passed; fold 6's reads, 90 N2
-    and 100 N3: `nohup`, the recorders and `>/dev/null.log` passed). The container's own log is held by
+    redirect of the shell's output, a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen`
+    with a `-L` among its flags or `-X log` or `-X hardcopy`, `tmux pipe-pane` or `save-buffer` and their short
+    forms), a runner that gives the command a terminal of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), `logger`
+    or `systemd-cat`, or a command that files its output away from the terminal (`nohup`, `systemd-run`,
+    `start-stop-daemon`); the `init` service has no `tty: true`; no launcher's `compose … run` passes `-t`, `--tty` or
+    `--tty=…`; no line of the launchers or the dispatcher sends output to a file (`>`, `>>`, `>|`, `&>`, `>&file`,
+    `>&"$fd"`, or a target beginning with any other character, `> >(dd of=…)` included; `>/dev/null`, quoted or
+    closing a quote, `>&2` and `2>&1` pass, `>/dev/null.log` does not), so neither the run line nor a `case`, `{ … }`
+    or `exec` around it does; and in plaintext-guard.sh, whose awk compares with `>`, no line that runs compose `run`
+    or kontroll-init does. The scan reads every line but a comment, a backslash-continued command as one line. It
+    does not see a sourced helper outside these five files, output piped into a writer other than `tee` (`| dd
+    of=…`), or a recorder, runner or flag spelled otherwise than these (the list is of spellings, not of what a
+    program can do). Refused although sound, each in the safe direction: "screen" and any `-…L` on one line (`echo
+    "clear the screen"; curl -L …`), a `nohup` or `systemd-run` that files nothing, a bare `tmux pipe-pane` (which
+    closes a pipe), the word "expect" anywhere, and a `>` in a message (`echo "a -> b"`).
+    `test_the_capture_scan_reads_each_route_it_names` holds each spelling. compose run gives the container a terminal
+    only when the launcher's stdout is one, so a pipe around `fresh-init --mint-break-glass` is refused by kontroll-init
+    itself, unless a runner such as `expect` gives compose a terminal (the bootstrap passwords would still reach a pipe
+    or a file the operator adds); this guards the forms that keep a terminal while copying it — a forced tty, a run
+    log, a recorder, a runner, a logger — which would put the show-once break-glass private key `--mint-break-glass`
+    prints in a log nobody chose to keep, and a redirect on the run line or around it, or a `nohup` or `systemd-run`,
+    which files the bootstrap passwords (T11 fold 4's read B, N5; fold 5's reads, 70 N6 and 80 N4: `>&file`, `>|`, a
+    named fd and a redirected `case` or group passed; fold 6's reads, 90 N2 and 100 N3: `nohup`, the recorders and
+    `>/dev/null.log` passed; fold 7's reads, 110 N2 and 111 N3: the recorders' other spellings, the runners and a
+    target beginning with a symbol passed). The container's own log is held by
     `test_the_installer_container_keeps_no_log`."""
     for rel in _NO_FILE_REDIRECT + ("scripts/lib/plaintext-guard.sh",):
         for line in _joined_lines(rel):
@@ -286,6 +300,86 @@ def test_fresh_init_output_is_never_teed_to_a_log():
             if rel in _NO_FILE_REDIRECT or re.search(r"\bcompose\b.*\brun\b|kontroll-init", line):
                 assert not _TO_A_FILE.search(line), "%s: %s" % (rel, line)
     assert not _installer_service().get("tty"), "the init service forces no terminal"
+
+
+_RUN = 'docker compose run --rm init "$@"'
+
+
+@pytest.mark.parametrize("line,refused_by", [
+    ("%s | tee k.log" % _RUN, "route"),
+    ("exec {fd}>k.log", "route"),
+    ('script -q -c "%s" k.log' % _RUN, "route"),
+    ('asciinema rec -c "%s" k.cast' % _RUN, "route"),
+    ('ttyrec -e "%s" k.rec' % _RUN, "route"),
+    ("logsave k.log %s" % _RUN, "route"),
+    ("screen -L %s" % _RUN, "route"),
+    ("screen -dmL -Logfile k.log %s" % _RUN, "route"),
+    ('screen -S "k#1" -L %s' % _RUN, "route"),
+    ("screen -X log on", "route"),
+    ("screen -S k -X hardcopy -h k.log", "route"),
+    ("tmux pipe-pane -o 'dd of=k.log'", "route"),
+    ("tmux pipep -o 'dd of=k.log'", "route"),
+    ("tmux pipe -o 'dd of=k.log'", "route"),
+    ("tmux save-buffer k.log", "route"),
+    ("tmux saveb k.log", "route"),
+    ('expect -c "log_file k.log; spawn %s; interact"' % _RUN, "route"),
+    ("unbuffer -p %s | dd of=k.log" % _RUN, "route"),
+    ("rlwrap -l k.log %s" % _RUN, "route"),
+    ("socat EXEC:'%s',pty OPEN:k.log,creat" % _RUN, "route"),
+    ("%s | logger -t kontroll" % _RUN, "route"),
+    ("systemd-cat %s" % _RUN, "route"),
+    ("nohup %s &" % _RUN, "route"),
+    ("systemd-run --pty %s" % _RUN, "route"),
+    ("start-stop-daemon --start --output k.log --exec /usr/bin/docker -- compose run --rm init", "route"),
+    ("%s >k.log" % _RUN, "file"),
+    ("%s >>k.log" % _RUN, "file"),
+    ("%s >|k.log" % _RUN, "file"),
+    ("%s &>k.log" % _RUN, "file"),
+    ("%s >& k.log" % _RUN, "file"),
+    ('%s >&"$fd"' % _RUN, "file"),
+    ("%s >/dev/null.log" % _RUN, "file"),
+    ("%s >+k.log" % _RUN, "file"),
+    ("%s >-k.log" % _RUN, "file"),
+    ("%s >@k.log" % _RUN, "file"),
+    ("%s >%%k.log" % _RUN, "file"),
+    ("%s >{k}.log" % _RUN, "file"),
+    (r"%s >\k.log" % _RUN, "file"),
+    ("%s >:k.log" % _RUN, "file"),
+    ("%s > >(dd of=k.log)" % _RUN, "file"),
+    ("%s >/dev/null 2>&1" % _RUN, None),
+    ("%s 2>/dev/null" % _RUN, None),
+    ("%s &>/dev/null" % _RUN, None),
+    ('out="$(%s >/dev/null)"' % _RUN, None),
+    ("%s >&2" % _RUN, None),
+    ("%s >&-" % _RUN, None),
+    ('%s >"/dev/null"' % _RUN, None),
+    ("sh -c 'docker info >/dev/null'", None),
+    ('su -c "docker info >/dev/null"', None),
+    ("docker info >/dev/null<&-", None),
+    ("screen -ls", None),
+    ("tmux list-sessions", None),
+    ('echo "clear the screen"', None),
+    ('echo "clear the screen"; curl -fsS -L "$URL"', "route"),
+    ("nohup %s >/dev/null 2>&1 &" % _RUN, "route"),
+    ("systemd-run --scope %s" % _RUN, "route"),
+    ("tmux pipe-pane", "route"),
+    ('echo "we expect a terminal"', "route"),
+    ('echo "a -> b"', "file"),
+], ids=lambda v: v if isinstance(v, str) and len(v) < 40 else None)
+def test_the_capture_scan_reads_each_route_it_names(line, refused_by):
+    """Each spelling `test_fresh_init_output_is_never_teed_to_a_log` names is refused by the pattern that names it, as
+    a line of a launcher (both patterns apply): every recorder with each flag or short form it takes, each runner
+    that gives the command a terminal of its own, each redirect target; a `/dev/null` quoted, closing a quote or
+    before `<`, `screen` and `tmux` with no logging, and a message holding "screen" pass. The last rows are refused
+    although sound, as that test's docstring says: "screen" and any `-…L` on one line, a `nohup` or `systemd-run`
+    that files nothing, a bare `tmux pipe-pane` (which closes a pipe), the word "expect", and a `>` in a message.
+    Guards a scan that names a recorder but misses its common spellings (`screen -dmL`, `tmux pipep`, expect's
+    `log_file`, `unbuffer` into a writer), and a redirect target outside the characters the old pattern listed
+    (`>+k.log`): the tree holds none, and the planted mutants were killed only because the image lacks `screen`,
+    `tmux` and `expect`, so the scan alone passed them (T11 fold 7's reads, 110 N2 and 111 N3); and a `/dev/null`
+    closing a quoted command, refused by fold 7's rule (read 110, N2)."""
+    got = "route" if _LOG_ROUTE.search(line) else "file" if _TO_A_FILE.search(line) else None
+    assert got == refused_by, line
 
 
 @pytest.mark.skipif(os.name == "nt" or not shutil.which("bash"),

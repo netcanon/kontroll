@@ -163,9 +163,10 @@ tests/e2e/           # GUI in a headless browser over the REAL booted Flask app 
 ```
 
 ```bash
-pip install -r tests/requirements-dev.txt          # pytest, PyYAML, flask, FastAPI + httpx, cryptography, Playwright
+# tests/requirements-dev.txt: pytest + pytest-cov, PyYAML, flask, FastAPI + httpx, cryptography, pytest-playwright
+pip install -r tests/requirements-dev.txt
 pytest -m "not e2e and not slow"                   # the hermetic default (CI runs this)
-pytest --cov=scripts --cov=gui --cov-report=term-missing
+pytest --cov=scripts --cov=gui --cov=api --cov-report=term-missing
 ```
 
 `validate` runs this as its L2 step automatically when `pytest` is installed (it
