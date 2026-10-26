@@ -197,7 +197,8 @@ Expect `ok` for every file and no `BROKEN` line.
 - `BROKEN: no sops runs here`: this machine cannot check anything yet. The block runs sops with no environment and an
   empty home, so a shell function or an alias named `sops`, or a version-manager shim that needs your own home or a
   variable of its own, does not count: put a stock sops build on `PATH`.
-  `env -i PATH="$PATH" HOME=/nonexistent sops --help >/dev/null && echo runs` should then print `runs`. A `PATH`
+  `I=$(mktemp -d); env -i PATH="$PATH" HOME="$I" XDG_CONFIG_HOME="$I" sops --help >/dev/null && echo runs; rm -rf "$I"`
+  should then print `runs` (it runs sops as the block does: no environment, an empty home of its own). A `PATH`
   entry written `~/bin` counts for bash but not for this check: write it `$HOME/bin`.
 - A `BROKEN` line about `$BG`: the file is not the break-glass key alone (a copy of the control key or a keys.txt
   holding both, so the check would prove the wrong key; or a key line with something before it, which `age-keygen`

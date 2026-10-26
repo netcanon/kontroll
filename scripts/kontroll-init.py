@@ -129,18 +129,19 @@ def _is_plugin_recipient(s):
 
 
 def _age_reads_public(key_file):
-    """The public half `age-keygen -y` derives from the first key in key_file, which it is given as the working
-    directory joined to the path, never normalised (a file named `-k.txt` is not read as a flag, and a `..` after a
-    symlinked directory is resolved by the kernel, as kontroll-init's own read and sops resolve it): "" when age-keygen
-    cannot read a key there (a byte-order mark, a file holding only a public line), or cannot be run, runs past 60 s
-    or prints what is not UTF-8; None when no age-keygen is on PATH (the check is then skipped; the installer image
+    """The public half `age-keygen -y` derives from the first key in key_file, which it is given as kontroll-init
+    reads the path (a relative one led by `./`), never normalised: a file named `-k.txt` is not read as a flag, a `..`
+    after a symlinked directory is resolved by the kernel, as kontroll-init's own read and sops resolve it, and no
+    working directory is looked up, so a removed one does not refuse an absolute path. "" when age-keygen cannot read
+    a key there (a byte-order mark, a file holding only a public line), or cannot be run, fails, runs past 60 s or
+    prints what is not UTF-8; None when no age-keygen is on PATH (the check is then skipped; the installer image
     has one). The seam the tests patch. Prints nothing: age-keygen's output is captured, and holds only public
     halves."""
     exe = shutil.which("age-keygen")
     if not exe:
         return None
     try:
-        run = subprocess.run([exe, "-y", os.path.join(os.getcwd(), key_file)], capture_output=True, encoding="utf-8",
+        run = subprocess.run([exe, "-y", os.path.join(os.curdir, key_file)], capture_output=True, encoding="utf-8",
                              timeout=60)
     except (OSError, subprocess.SubprocessError, ValueError):
         return ""
@@ -223,18 +224,17 @@ def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key
 
     Refused: `--fresh` without a choice (kontroll never silently creates an instance whose secrets one key opens);
     `--mint-break-glass` / `--no-break-glass` without `--fresh` (an existing instance adds a recipient it made
-    elsewhere); a recipient that is a PRIVATE key, a plugin or post-quantum one (kontroll's images ship no age
-    plugin, and a post-quantum key needs a sops that knows it on every machine), not an age public key, one whose
-    bech32 checksum, X25519 length or padding fails, or a low-order X25519 point age refuses (the value is never
-    echoed back); a recipient, or a `--fresh` run, where something is at the key file's path but kontroll-init cannot
-    read a `# public key:` line from it (its key cannot be checked, and `--fresh` would scaffold the overlay before
-    failing to read it), or where age derives another public half from the file, or none, or age-keygen gives no
-    answer (kontroll-init cannot tell which key the file holds: a `--fresh` run would write the instance to the
-    line's key, and on an existing instance the control-key check would rest on the line alone); a recipient without
-    `--fresh` where no control key file
-    exists (the non-fresh path would otherwise MINT a control key and add it to every domain before reaching the
-    break-glass step), or where it holds a key that is not a recipient of every rule (step 2 would add THAT key to
-    every domain beside the break-glass one); a recipient equal to the control key (a copy is not a second
+    elsewhere); a recipient that is a PRIVATE key, a plugin or post-quantum one (kontroll's images ship no age plugin,
+    and a post-quantum key needs a sops that knows it on every machine), not an age public key, one whose bech32
+    checksum, X25519 length or padding fails, or a low-order X25519 point age refuses (the value is never echoed back);
+    a recipient, or a `--fresh` run, where something is at the key file's path but kontroll-init cannot read a `# public
+    key:` line from it (its key cannot be checked, and `--fresh` would scaffold the overlay before failing to read it),
+    or where age derives another public half from the file, or none, or age-keygen gives no answer (kontroll-init cannot
+    confirm that the line names the file's key: a `--fresh` run would write the instance to the line's key, and on an
+    existing instance the control-key check would rest on the line alone); a recipient without `--fresh` where no
+    control key file exists (the non-fresh path would otherwise MINT a control key and add it to every domain before
+    reaching the break-glass step), or where it holds a key that is not a recipient of every rule (step 2 would add THAT
+    key to every domain beside the break-glass one); a recipient equal to the control key (a copy is not a second
     recipient); and a mint whose output is not a terminal."""
     recipient = args.break_glass_recipient
     key_file_refusal = (_unread_key_file(args.key_file) if control_public is None and key_file_exists else
@@ -305,11 +305,14 @@ def _misread_key_file(key_file):
     """The refusal for a key file whose `# public key:` line is not what age reads from it. Pure (testable)."""
     return ("ERROR: the `# public key:` line in %s is not the public half of the key age reads from that file, or age "
             "cannot read a key there (a byte-order mark, a public line with no private key, another key's line), or "
-            "age-keygen gave no answer (it cannot run here, ran past 60 s, or printed what is not text): "
-            "kontroll-init cannot tell which key the file holds, so a --fresh run would write the instance to the "
-            "line's key, and on an existing instance the control-key check would rest on the line alone. "
+            "age-keygen gave no answer (it cannot run here, ran past 60 s, failed, or printed what is not UTF-8): "
+            "kontroll-init cannot confirm that the line names the file's key, so a --fresh run would write the "
+            "instance to the line's key, and on an existing instance the control-key check would rest on the line "
+            "alone. "
             "`age-keygen -y %s` prints the public half age reads; correct the file, or name the right one with "
-            "--key-file (if age-keygen itself does not run, fix or remove it first). Nothing was written."
+            "--key-file (if age-keygen itself does not run, fix it, or run this in the installer shell, whose "
+            "age-keygen runs; removing it does not fix this: with no age-keygen on PATH kontroll-init cannot check "
+            "the file and takes its line as written). Nothing was written."
             % (key_file, key_file))
 
 

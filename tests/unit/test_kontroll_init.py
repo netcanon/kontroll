@@ -696,13 +696,13 @@ def test_a_key_file_without_its_public_line_is_named_as_such(fresh_repo, monkeyp
             raise AssertionError("kontroll-init opened the FIFO and blocked")
         # None: a handler set in C, which Python cannot put back; the default is the nearest it can restore
         handler = signal.signal(signal.SIGALRM, _hung) or signal.SIG_DFL
-        left, armed = signal.alarm(30), time.monotonic()
+        (left, every), armed = signal.setitimer(signal.ITIMER_REAL, 30), time.monotonic()
 
         def _restore():
-            signal.alarm(0)
+            signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, handler)
-            if left:   # a runner's own alarm, given back less the time these rows took
-                signal.alarm(max(1, left - int(time.monotonic() - armed)))
+            if left:   # a runner's own timer, given back less the time these rows took, its interval kept
+                signal.setitimer(signal.ITIMER_REAL, max(0.01, left - (time.monotonic() - armed)), every)
         request.addfinalizer(_restore)
     if run in _FRESH_CHOICES:
         _mock_fresh_seams(monkeypatch)
@@ -729,16 +729,20 @@ def test_a_key_file_without_its_public_line_is_named_as_such(fresh_repo, monkeyp
                          ids=["another-keys-line", "age-reads-no-key", "age-agrees"])
 @pytest.mark.parametrize("run", ["a-recipient-without-fresh", "fresh"])
 def test_a_key_file_age_reads_otherwise_is_refused(fresh_repo, monkeypatch, capsys, run, age_reads, refused):
-    """When the `# public key:` line kontroll-init reads from the key file is not what age itself derives from that
-    file (`age-keygen -y` names another key, or reads no key there: a byte-order mark before the key, a file that
-    holds only a public line), a `--fresh --no-break-glass` run and a `--break-glass-recipient` run on an existing
-    instance each exit 1 before anything is written, name the file and give the `age-keygen -y` that prints what age
-    reads, with the reason that holds in every such case (kontroll-init cannot tell which key the file holds, and the
-    control-key check would rest on the line alone); where age agrees, each run goes on. Guards an instance written
-    to a key that cannot open it: kontroll-init took the file's public text on trust, so such a file gave rc 0 and
-    secrets its control key could not decrypt (T11 fold 5's read 70, N5); and a reason false in a case it is given
-    (an existing instance's re-wrap "would fail" with a file whose key is another recipient's; fold 7's reads 110
-    and 111, N1)."""
+    """When the `# public key:` line kontroll-init reads from the key file is not what age itself derives from that file
+    (`age-keygen -y` names another key, or reads no key there: a byte-order mark before the key, a file that holds only
+    a public line), a `--fresh --no-break-glass` run and a `--break-glass-recipient` run on an existing instance each
+    exit 1 before anything is written, name the file and give the `age-keygen -y` that prints what age reads, with the
+    reason that holds in every such case (kontroll-init cannot confirm that the line names the file's key, and the
+    control-key check would rest on the line alone), and name a broken age-keygen as a cause whose remedy keeps the
+    check (fix it, or run in the installer shell), never one that removes it; where age agrees, each run goes on. Guards
+    an instance written to a key that cannot open it: kontroll-init took the file's public text on trust, so such a file
+    gave rc 0 and secrets its control key could not decrypt (T11 fold 5's read 70, N5); and a reason false in a case it
+    is given (an existing instance's re-wrap "would fail" with a file whose key is another recipient's; fold 7's reads
+    110 and 111, N1); a reason untrue where age names another key, which kontroll-init then knows (fold 8's read 121,
+    N1); the tool-fault cause and remedy held by no row (its N2), and a fault the cause leaves out (an age-keygen that
+    runs and fails: read 120, N5); and a remedy, "fix or remove it", whose second half skips the check, so a misread
+    file was then taken on its line (read 120, S1)."""
     if run == "fresh":
         _mock_fresh_seams(monkeypatch)
         _write_key(ki.AGE_KEY_FILE, MINTED)
@@ -756,7 +760,10 @@ def test_a_key_file_age_reads_otherwise_is_refused(fresh_repo, monkeypatch, caps
     if refused:
         assert rc == 1 and not wrote, err
         assert "is not the public half of the key age reads" in err and "age-keygen -y %s" % ki.AGE_KEY_FILE in err
-        assert "cannot tell which key the file holds" in err and "rest on the line alone" in err
+        assert "cannot confirm that the line names the file's key" in err and "rest on the line alone" in err
+        assert "age-keygen gave no answer" in err and "fix it, or run this in the installer shell" in err
+        assert "(it cannot run here, ran past 60 s, failed, or printed what is not UTF-8)" in err
+        assert "removing it does not fix this" in err and "takes its line as written" in err
         assert "Nothing was written" in err
     else:
         assert rc == 0 and wrote, err
@@ -770,8 +777,8 @@ def test_the_key_file_flag_names_the_file_every_check_reads(fresh_repo, monkeypa
     wired to the default path, which passed every other test (none passed --key-file): it refuses every good
     `--key-file` run, or lets a link to nothing at the named path scaffold instance/ and die in a traceback (T11 fold
     6's read 100, S1); a refusal telling the operator to fix the default path's file, not the one they named (fold 7's
-    read 111, N2); and step 1 minting a key at the default path and writing the instance to it, while the run prints
-    the named path as the key to keep (read 111, S1)."""
+    read 111, N2; its first naming held by fold 8's read 121, N2); and step 1 minting a key at the default path and
+    writing the instance to it, while the run prints the named path as the key to keep (read 111, S1)."""
     _mock_fresh_seams(monkeypatch)
     elsewhere = str(tmp_path / "elsewhere" / "keys.txt")
     _write_key(elsewhere, MINTED)
@@ -780,6 +787,7 @@ def test_the_key_file_flag_names_the_file_every_check_reads(fresh_repo, monkeypa
     assert ki.main(_FRESH + ["--no-break-glass", "--key-file", elsewhere]) == 1
     err = capsys.readouterr().err
     assert seen == [elsewhere] and "is not the public half" in err and "age-keygen -y %s" % elsewhere in err
+    assert "line in %s is not" % elsewhere in err          # the refusal names the file, not the default path
     link = tmp_path / "linked" / "keys.txt"
     link.parent.mkdir()
     os.symlink(str(link.parent / "gone"), str(link))
@@ -798,15 +806,19 @@ def test_the_key_file_flag_names_the_file_every_check_reads(fresh_repo, monkeypa
 
 @pytest.mark.skipif(os.name == "nt", reason="runs a stand-in age-keygen from PATH")
 def test_the_age_read_runs_age_keygen_on_the_key_file(tmp_path, monkeypatch, capfd):
-    """`_age_reads_public` runs `age-keygen -y <key file>` from PATH, the file named by the working directory joined to
-    its path, and answers the first public half it prints; "" when age-keygen fails (it cannot read a key there)
-    whatever it printed, prints nothing, prints what is not UTF-8, cannot be run (a file that is no program) or runs
-    past its bound; and None when no age-keygen is on PATH. What age-keygen writes to stderr is captured, not shown.
-    Guards the seam the other tests patch: an argv that asks age-keygen something else, or hands it a file named
-    `-k.txt` as a flag; a failure read as agreement, or a missing tool read as a key age cannot read, which would refuse
-    every run on a machine without age; an age-keygen that cannot be run read as no age-keygen, which would skip the
-    check (T11 fold 6's read 100, N1); and a run with no bound, an output that is not UTF-8 ending the run in a
-    traceback, and age-keygen's stderr reaching the terminal (read 90, N4)."""
+    """`_age_reads_public` runs `age-keygen -y <key file>` from PATH, the file named as kontroll-init reads it (a
+    relative path led by `./`, an absolute one as given, with no working directory looked up, so a removed one does not
+    matter), decodes its output as UTF-8 whatever the locale, bounds it at the 60 s the refusal names, and answers the
+    first public half it prints; "" when age-keygen fails (it cannot read a key there) whatever it printed, prints
+    nothing, prints what is not UTF-8, cannot be run (a file that is no program) or runs past its bound; and None when
+    no age-keygen is on PATH. What age-keygen writes to stderr is captured, not shown. Guards the seam the other tests
+    patch: an argv that asks age-keygen something else, or hands it a file named `-k.txt` as a flag; a failure read as
+    agreement, or a missing tool read as a key age cannot read, which would refuse every run on a machine without age;
+    an age-keygen that cannot be run read as no age-keygen, which would skip the check (T11 fold 6's read 100, N1); and
+    a run with no bound, an output that is not UTF-8 ending the run in a traceback, and age-keygen's stderr reaching the
+    terminal (read 90, N4); the working directory joined to the path, which refused a good absolute file when that
+    directory had been removed (fold 8's read 120, N1); and the locale's decoding, under which a non-UTF-8 runner reads
+    the row printing byte 0xFF otherwise (read 121, N6)."""
     bin_dir, key_file, argv_log = tmp_path / "bin", tmp_path / "keys.txt", tmp_path / "argv"
     bin_dir.mkdir()
     key_file.write_text("# public key: age1first\nAGE-SECRET-KEY-1FAKE\n", encoding="utf-8")
@@ -825,12 +837,18 @@ def test_the_age_read_runs_age_keygen_on_the_key_file(tmp_path, monkeypatch, cap
     monkeypatch.chdir(tmp_path)
     shutil.copy(str(key_file), "-k.txt")
     assert ki._age_reads_public("-k.txt") == "age1first"
-    assert argv_log.read_text(encoding="utf-8").split() == ["-y", os.path.join(os.getcwd(), "-k.txt")]
+    assert argv_log.read_text(encoding="utf-8").split() == ["-y", os.path.join(os.curdir, "-k.txt")]
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()                                   # the working directory removed under the run
+    assert ki._age_reads_public(str(key_file)) == "age1first", "an absolute path needs no working directory"
+    monkeypatch.chdir(tmp_path)
     stub.write_bytes(b"\x00not a program\n")
     assert ki._age_reads_public(str(key_file)) == ""
 
     def _past_its_bound(argv, **kw):
-        assert 0 < kw.get("timeout", 0) <= 60, kw
+        assert kw.get("timeout") == 60 and kw.get("encoding") == "utf-8", kw
         raise subprocess.TimeoutExpired(argv, kw["timeout"])
     monkeypatch.setattr(ki.subprocess, "run", _past_its_bound)
     assert ki._age_reads_public(str(key_file)) == ""
@@ -839,10 +857,10 @@ def test_the_age_read_runs_age_keygen_on_the_key_file(tmp_path, monkeypatch, cap
 @pytest.mark.skipif(os.name == "nt", reason="runs a stand-in age-keygen from PATH")
 def test_the_age_read_names_the_file_the_kernel_opens(tmp_path, monkeypatch):
     """`_age_reads_public` hands age-keygen a path that opens the file kontroll-init itself reads: a `..` after a
-    symlinked directory is resolved by the kernel, not dropped lexically, and a file named `-k.txt` is still not a
-    flag. Guards os.path.abspath, which turns `l/../keys.txt` into the directory beside the link, so age is asked
-    about another file: a good key file refused, or a misread one passed where that other file holds the line's key
-    (T11 fold 7's read 110, S1)."""
+    symlinked directory is resolved by the kernel, not dropped lexically, and a file named `-k.txt` is still not a flag.
+    Guards os.path.abspath, which turns `l/../keys.txt` into `keys.txt` in the directory that holds the link (fold 8's
+    read 121, N8), so age is asked about another file: a good key file refused, or a misread one passed where that other
+    file holds the line's key (T11 fold 7's read 110, S1)."""
     real = tmp_path / "a" / "b"
     (real / "sub").mkdir(parents=True)
     (real / "keys.txt").write_text("# public key: age1first\nAGE-SECRET-KEY-1FAKE\n", encoding="utf-8")

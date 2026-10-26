@@ -52,9 +52,11 @@ losing that key destroyed every device credential, API token and service passwor
     half of the key age reads there, or from which age reads no key (a byte-order mark before the key, a public line
     alone, another key's line): the line names a key the file cannot open, so a `--fresh` run would have written the
     instance to it, and on an existing instance the control-key check rested on the line alone. age-keygen is
-    given the working directory joined to the file's path, never normalised, so a file named `-k.txt` is not read
-    as a flag and a `..` after a symlinked directory names the file sops reads; an age-keygen that cannot run, runs
-    past 60 s or prints what is not UTF-8 gets the same refusal.
+    given the file's path as kontroll-init reads it (a relative one led by `./`), never normalised, so a file named
+    `-k.txt` is not read as a flag, a `..` after a symlinked directory names the file sops reads, and no working
+    directory is looked up; an age-keygen that cannot run, fails, runs past 60 s or prints what is not UTF-8 gets
+    the same refusal, which says kontroll-init cannot confirm the line, and that removing age-keygen does not fix
+    it (with none on PATH the line is taken as written).
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
@@ -69,7 +71,8 @@ losing that key destroyed every device credential, API token and service passwor
     then, for each file, that it is wrapped to that key, and that a key which is no recipient fails on it, with sops
     given no environment and an empty home (a plain `SOPS_AGE_KEY_FILE=… sops -d` passes on a control key in
     `~/.config`). A BROKEN line says when the check cannot be trusted, and the block holds no comment, so an
-    interactive zsh runs it too.
+    interactive zsh runs it too. The runbook's one-line self-check for the no-sops BROKEN line runs sops as the
+    block does, in an empty home of its own that it then removes.
 - **Security.**
   - The bootstrap play's warning counts recipients per creation rule of `instance/.sops.yaml` (the rules, not the
     encrypted files). It used to count across rules, so a second recipient on one rule hid a rule with one.
@@ -86,11 +89,11 @@ losing that key destroyed every device credential, API token and service passwor
     exported: `json-file` for `init` and `check`, which run no kontroll-init and print no secret value and whose
     log (`services-init` in Loki) is the deploy's record; `none` for the rest, `shell` included, where kontroll-init
     runs by hand. The terminal still shows every line (`tests/unit/test_installer_log_driver.py`).
-  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect
-    (a named fd's included), a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen -L`
-    or `-X log`, `tmux pipe-pane` or `save-buffer`, in the short forms each takes), a runner that gives it a terminal
-    of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), a logger (`logger`, `systemd-cat`) or a command that files
-    its output away from the terminal (`nohup`, `systemd-run`, `start-stop-daemon`), and none forces the container a
+  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect (a named
+    fd's included), a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen -L` or `-X log`,
+    `tmux pipe-pane` or `save-buffer` by any prefix tmux takes or by their aliases), a runner that gives it a terminal
+    of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), a logger (`logger`, `systemd-cat`) or a command that files its
+    output away from the terminal (`nohup`, `systemd-run`, `start-stop-daemon`), and none forces the container a
     terminal. No line of the launchers or the installer's dispatcher sends output to a file (`>`, `>>`, `>|`, `&>`,
     `>&file`, a target beginning with any other character; `>/dev/null` passes, quoted or closing a quote,
     `>/dev/null.log` does not), so neither the run line nor a `case` or `{ … }` around it does; in the plaintext guard,

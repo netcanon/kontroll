@@ -94,13 +94,13 @@ holds offline. kontroll never writes that private half to the VM or the repo, an
 on another machine (`--break-glass-recipient`, the preferred choice) never reaches the VM at
 all ([docs/break-glass.md](docs/break-glass.md)).
 The shipped `instance.example/.sops.yaml` keeps ONE placeholder per rule by design:
-`kontroll-init --fresh` replaces it with the newly minted control key (an instance never
-inherits another's recipients), then requires a choice and applies it before the first
-secret is written — `--break-glass-recipient <age1…>` (the public half of a key made on
-another machine; preferred), `--mint-break-glass` (minted on the node, its private half
-shown once on the terminal; kontroll writes it to no file, and the installer keeps no
-container log of `fresh-init`), or `--no-break-glass` (ONE recipient per domain, for a
-scratch instance). The claim therefore has three states:
+`kontroll-init --fresh` replaces it with this instance's control key (minted unless one is
+at the key file's path; an instance never inherits another's recipients), then requires a
+choice and applies it before the first secret is written — `--break-glass-recipient <age1…>`
+(the public half of a key made on another machine; preferred), `--mint-break-glass` (minted
+on the node, its private half shown once on the terminal; kontroll writes it to no file, and
+the installer keeps no container log of `fresh-init`), or `--no-break-glass` (ONE recipient
+per domain, for a scratch instance). The claim therefore has three states:
 - An instance created by `--fresh` with either of the first two has a second recipient on
   every domain from its first secret.
 - An instance created with `--no-break-glass`, or before `--fresh` asked, has ONE recipient

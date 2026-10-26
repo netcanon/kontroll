@@ -263,26 +263,29 @@ _NO_SOPS = ("BROKEN: no sops runs here as the check runs it (a stock sops build 
 def _self_check():
     """The one-line check docs/break-glass.md gives, under "Verify", for whether a sops runs as the block runs it."""
     doc = open(os.path.join(ROOT, "docs", "break-glass.md"), encoding="utf-8").read()
-    return re.search(r"`(env -i [^`]*&& echo runs)` should then print `runs`", doc).group(1)
+    return re.search(r"`([^`]*env -i [^`]*&& echo runs[^`]*)`\s+should then print `runs`", doc).group(1)
 
 
 @_BASH
 @pytest.mark.parametrize("sops", ["none", "a-shim-that-needs-home", "a-shim-that-needs-its-own-variable",
-                                  "a-shim-that-finds-its-own-place-without-a-home", "a-shell-function"])
+                                  "a-shim-that-finds-its-own-place-without-a-home", "a-shim-that-reads-its-config-home",
+                                  "a-shell-function"])
 def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
     """On a machine with age-keygen whose sops cannot run as the block runs it — none at all (a PATH that holds the
     shell's own tools and the stand-in age-keygen only), a version-manager shim first on PATH that runs sops only where
     the operator's own home is set, one that runs it only where a variable of its own is set (a version manager under a
-    custom root), one that falls back to a place of its own when HOME is unset (as bash's `~`, Python's `expanduser`
-    and an asdf-like shim do), or a shell function named `sops` with no sops on PATH — the Verify block prints one
-    line, `BROKEN: no sops runs here as the check runs it`, and no FAIL or ok line, and the runbook's own self-check
-    for that line prints nothing. Guards a sops the block cannot run reading as a bare `FAIL` for every file — the
-    line the runbook gives for a damaged break-glass stanza, whose remedy (a data-key rotation on the node) cannot
-    help (T11 fold 4's read B, N3) — and a check that asks only whether the shell finds a sops (`command -v`), which a
-    function, an alias or a shim passes while the block's `env -i` runs none (fold 5's reads, 70 S1 and 80 N5), or a
-    probe that keeps the environment, which the shim keyed on its own variable passes (fold 6's read 100, S2); and a
-    self-check run with HOME unset rather than set to nowhere, which prints `runs` for the shim that falls back and so
-    sends the operator round in a circle (fold 7's read 110, N3)."""
+    custom root), one that falls back to a place of its own when HOME is unset (as bash's `~`, Python's `expanduser` and
+    an asdf-like shim do), one that does the same with XDG_CONFIG_HOME, which the block also sets, or a shell function
+    named `sops` with no sops on PATH — the Verify block prints one line,
+    `BROKEN: no sops runs here as the check runs it`, and no FAIL or ok line, and the runbook's own self-check for that
+    line prints nothing. Guards a sops the block cannot run reading as a bare `FAIL` for every file — the line the
+    runbook gives for a damaged break-glass stanza, whose remedy (a data-key rotation on the node) cannot help (T11 fold
+    4's read B, N3) — and a check that asks only whether the shell finds a sops (`command -v`), which a function, an
+    alias or a shim passes while the block's `env -i` runs none (fold 5's reads, 70 S1 and 80 N5), or a probe that keeps
+    the environment, which the shim keyed on its own variable passes (fold 6's read 100, S2); and a self-check run with
+    HOME unset rather than set, which prints `runs` for the shim that falls back and so sends the operator round in a
+    circle (fold 7's read 110, N3), or with XDG_CONFIG_HOME left unset, which the block sets, and which the shim keyed
+    on it falls back from (fold 8's read 121, N4)."""
     env, files, _ = _hostile_machine(tmp_path)
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -311,6 +314,13 @@ def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
                         'exec python3 "%s" "$@"\n' % (tmp_path / "bin" / "sops"), encoding="utf-8")
         shim.chmod(0o755)
         assert _bash("env -u HOME sops --help", env, files).returncode == 0, "the shim runs where HOME is unset"
+    elif sops == "a-shim-that-reads-its-config-home":
+        env.pop("XDG_CONFIG_HOME", None)
+        shim = tools / "sops"
+        shim.write_text('#!/usr/bin/env bash\n[ -z "${XDG_CONFIG_HOME+set}" ] || [ -f "$XDG_CONFIG_HOME/.shim-ok" ] '
+                        '|| exit 126\nexec python3 "%s" "$@"\n' % (tmp_path / "bin" / "sops"), encoding="utf-8")
+        shim.chmod(0o755)
+        assert _bash("sops --help", env, files).returncode == 0, "the shim runs where XDG_CONFIG_HOME is unset"
     prefix = ""
     if sops == "a-shell-function":
         prefix = 'sops() { python3 "%s" "$@"; }\n' % (tmp_path / "bin" / "sops")
@@ -321,14 +331,30 @@ def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
 
 
 @_BASH
-def test_the_runbooks_sops_self_check_prints_runs_where_the_block_runs_the_check(tmp_path):
-    """With a stock sops on PATH (the stand-in), the Verify block runs the check (an ok line, no BROKEN) and the
-    runbook's self-check prints `runs`. Guards the self-check being made so strict that it fails everywhere: the
-    operator would then chase a fault their machine does not have (T11 fold 7's read 110, N3)."""
+@pytest.mark.parametrize("sops", ["stock", "a-shim-that-needs-its-home-to-exist"])
+def test_the_runbooks_sops_self_check_prints_runs_where_the_block_runs_the_check(tmp_path, sops):
+    """With a stock sops on PATH (the stand-in), or a shim that runs it only where HOME names a directory that exists,
+    the Verify block runs the check (an ok line, no BROKEN) and the runbook's self-check prints `runs`, and leaves no
+    directory behind. Guards the self-check being made so strict that it fails everywhere: the operator would then chase
+    a fault their machine does not have (T11 fold 7's read 110, N3); and a self-check that sets HOME to a path that does
+    not exist, which printed nothing for a shim the block runs (and, run as root, could create that path: fold 8's read
+    120, N4)."""
     env, files, _ = _hostile_machine(tmp_path)
-    assert "ok   a-both.sops.yml" in _bash(_verify_block(), env, files).stdout
+    if sops == "a-shim-that-needs-its-home-to-exist":
+        shim = tmp_path / "shim" / "sops"
+        shim.parent.mkdir()
+        shim.write_text('#!/usr/bin/env bash\n[ -d "${HOME:-}" ] || exit 126\nexec python3 "%s" "$@"\n'
+                        % (tmp_path / "bin" / "sops"), encoding="utf-8")
+        shim.chmod(0o755)
+        env["PATH"] = "%s:%s" % (shim.parent, env["PATH"])
+    block = _bash(_verify_block(), env, files).stdout
+    assert "ok   a-both.sops.yml" in block and "BROKEN" not in block, block
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    env["TMPDIR"] = str(tmp)
     check = _bash(_self_check(), env, files)
     assert check.stdout == "runs\n", check.stdout + check.stderr
+    assert not list(tmp.iterdir()), "the self-check removes the home it made"
 
 
 def test_the_verify_block_holds_no_comment():
