@@ -1125,11 +1125,14 @@ distinct control.
   (it needs a sops whose age knows it on every machine), one whose checksum, X25519 length or padding fails, and a
   low-order point age refuses. A run that reads the control key file (`--break-glass-recipient`, or any `--fresh` run
   where something is at its path) refuses, before anything is written, one it cannot read a `# public key:` line from,
-  and, where an `age-keygen` program is on its `PATH` (an alias or a shell function does not count; the installer has
-  one), one whose line is not the public half of the key age reads there, or from which age reads no key (or where
-  `age-keygen` gives no answer, one on `PATH` that cannot be executed included). On an existing instance it also refuses
-  a key file that is not the control recipient of every rule (read as sops reads it: a rule's key groups when it has
-  any), and stops after adding the recipient, before the bootstrap secrets.
+  and, where an `age-keygen` program is on its `PATH` (an alias, a shell function or a `PATH` entry written `~/bin` does
+  not count; the installer has one), one whose line is not the public half of the key age reads there, or from which
+  age reads no key (or where `age-keygen` gives no answer, one on `PATH` that cannot be executed included). In the
+  installer container any run first refuses a key file that does not exist and would be made outside the directory of
+  keys the installer mounts (`/root/.config/sops/age`): a key made there is lost when the container exits, with the
+  instance written to it. On an existing instance it also refuses a key file that is not the control recipient of
+  every rule (read as sops reads it: a rule's key groups when it has any), and stops after adding the recipient, before
+  the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing

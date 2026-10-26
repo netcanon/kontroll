@@ -59,8 +59,13 @@ losing that key destroyed every device credential, API token and service passwor
     cannot run (one on PATH without an execute bit included: an executable one later on PATH is preferred), fails, runs
     past 60 s or prints what is not UTF-8 gets the same refusal. It says kontroll-init cannot confirm the line; that the
     step can run through the installer, whose age-keygen runs (`fresh-init` for a `--fresh` run, `shell` otherwise, with
-    the key file in the directory it mounts); and that removing age-keygen fixes it only where another on PATH runs
-    (with none, the line is taken as written).
+    the key at `~/.config/sops/age/keys.txt` and no `--key-file`, or another file there named
+    `/root/.config/sops/age/<name>`); and that removing age-keygen fixes it only where another on PATH runs (with none,
+    the line is taken as written);
+  - in the installer container, a run whose key file does not exist and would be made outside the directory of keys
+    the installer mounts (`/root/.config/sops/age`): a `--key-file` as the host spells it names a directory the
+    container lacks, so the key was made in the container's own layer, the instance written to it, and the key lost
+    when the container exited.
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,

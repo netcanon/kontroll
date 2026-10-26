@@ -91,7 +91,10 @@ def test_ensure_control_key_generates_when_absent_and_reads_public(tmp_path, mon
 def test_main_idempotent_node_makes_no_change_and_never_prints_private(monkeypatch, capsys):
     """On a CONFIGURED node — key present, recipient present, dashboards already set — main returns 0, reports
     'no change', and NEVER prints an AGE-SECRET-KEY. The control private key lives only in the 0600 file; the
-    CLI must not echo it."""
+    CLI must not echo it. The run is one on the operator's machine (KONTROLL_IN_CONTAINER unset): in the installer
+    container a key file missing outside the mounted key directory is refused first, and the runner's default key
+    path need not exist."""
+    monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)
     monkeypatch.setattr(ki, "ensure_control_key", lambda kf: ("age1ctlpub00000000000000000000000000", False))
     monkeypatch.setattr(keygen, "add_recipient",
                         lambda pub, anchors: {"error": None, "changed": False, "paths": [".sops.yaml"],
@@ -132,11 +135,14 @@ def fresh_repo(tmp_path, monkeypatch):
     the real tree, and the default control-key path is repointed under it so a run never reads the operator's
     own key file. age's own read of the key file (`_age_reads_public`) answers None, as on a machine without
     age-keygen, so a test's fake key file is not refused where age is installed; the tests of that check set it
-    themselves. Mirrors conftest.tmp_repo but for the fresh-install path."""
+    themselves. The run is one on the operator's machine (KONTROLL_IN_CONTAINER unset, which a runner's image could
+    set); the test of the installer container's refusal sets it. Mirrors conftest.tmp_repo but for the fresh-install
+    path."""
     shutil.copytree(os.path.join(paths.ROOT, "instance.example"), tmp_path / "instance.example")
     monkeypatch.setattr(paths, "ROOT", str(tmp_path))
     monkeypatch.setattr(ki, "AGE_KEY_FILE", str(tmp_path / "age" / "keys.txt"))
     monkeypatch.setattr(ki, "_age_reads_public", lambda key_file: None)   # as where no age-keygen is installed
+    monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)            # a run on the operator's machine
     return tmp_path
 
 
@@ -735,8 +741,9 @@ def test_a_key_file_age_reads_otherwise_is_refused(fresh_repo, monkeypatch, caps
     exit 1 before anything is written, name the file and give the `age-keygen -y` that prints what age reads, with the
     reason that holds in every such case (kontroll-init cannot confirm that the line names the file's key, and the
     control-key check would rest on the line alone), and name a broken age-keygen as a cause whose remedy keeps the
-    check (fix it, or run it through the installer: `fresh-init` for a --fresh run, `shell` otherwise, with the key file
-    in the directory the installer mounts), never one that removes it; where age agrees, each run goes on. Guards an
+    check (fix it, or run it through the installer: `fresh-init` for a --fresh run, `shell` otherwise, with the key at
+    ~/.config/sops/age/keys.txt and no --key-file, or another file of that directory named as the container names
+    it), never one that removes it; where age agrees, each run goes on. Guards an
     instance written to a key that cannot open it: kontroll-init took the file's public text on trust, so such a file
     gave rc 0 and secrets its control key could not decrypt (T11 fold 5's read 70, N5); and a reason false in a case it
     is given (an existing instance's re-wrap "would fail" with a file whose key is another recipient's; fold 7's reads
@@ -747,7 +754,11 @@ def test_a_key_file_age_reads_otherwise_is_refused(fresh_repo, monkeypatch, caps
     (fold 9's read 131, N3); a remedy that sent a --fresh run to the installer shell, which leaves instance/ root's
     where `fresh-init` hands it back (read 131, N5), and a --key-file of this machine's into the container, where it
     names nothing, so a --fresh run minted a key there that the container discarded at exit (read 130, N1); and
-    "removing it does not fix this", untrue where another age-keygen on PATH runs (read 130, N2)."""
+    "removing it does not fix this", untrue where another age-keygen on PATH runs (read 130, N2); and fold 10's "with
+    the key file in ~/.config/sops/age, the directory of keys it mounts: a --key-file naming another path of this
+    machine names nothing there", which reads as if a --key-file into that directory named something there, so an
+    operator who kept the flag the refusal invites minted a key the container discarded (fold 10's reads 140 and 141,
+    S1)."""
     if run == "fresh":
         _mock_fresh_seams(monkeypatch)
         _write_key(ki.AGE_KEY_FILE, MINTED)
@@ -768,13 +779,76 @@ def test_a_key_file_age_reads_otherwise_is_refused(fresh_repo, monkeypatch, caps
         assert "cannot confirm that the line names the file's key" in err and "rest on the line alone" in err
         assert "age-keygen gave no answer" in err and "fix it, or run this through the installer" in err
         assert "fresh-init …` for a --fresh run" in err and "kontroll-installer.sh shell` otherwise" in err
-        assert "a --key-file naming another path of this machine names nothing there" in err
+        assert "with the key at ~/.config/sops/age/keys.txt and no --key-file" in err
+        assert "so a --key-file as this machine spells it names nothing there" in err
+        assert "another file of that directory is /root/.config/sops/age/<name>" in err
+        assert "naming another path of this machine" not in err   # fold 10's clause: that directory's files named too
         assert "(it cannot run here, ran past 60 s, failed, or printed what is not UTF-8)" in err
         assert "fixes this only where another age-keygen on PATH runs" in err and "takes its line as written" in err
         assert "or remove it" not in err                 # no remedy that switches the check off
         assert "Nothing was written" in err
     else:
         assert rc == 0 and wrote, err
+
+
+@pytest.mark.parametrize("run", ["fresh", "existing"])
+def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_repo, monkeypatch, capsys, tmp_path, run):
+    """In the installer container (KONTROLL_IN_CONTAINER=1), a `--fresh` run and a run on an existing instance whose
+    key file does not exist exit 1 before anything is read or written (no key made, no directory created, no instance/
+    scaffolded, .sops.yaml unchanged) when the file's directory is not the one the installer mounts for keys, the
+    default key file's: a directory the container lacks (a --key-file as the operator's machine spells it), another
+    directory of the container, or a bare name read from another working directory. The refusal names the file, that
+    directory and the remedy (no --key-file, or `<that directory>/<name>`). A file of that directory, however the path
+    spells it, goes on, as does a file that exists elsewhere (it is read, not made) and the same run on the operator's
+    machine. Guards the route fold 10's remedy printed: `fresh-init --key-file ~/.config/sops/age/<name>`, expanded on
+    the host to a home the container does not have, made a key in a directory step 1 created in the container's own
+    layer, printed it as the key to keep and wrote the instance to it with rc 0, and the container discarded it at exit
+    (T11 fold 10's reads 140 and 141, S1)."""
+    if run == "fresh":
+        _mock_fresh_seams(monkeypatch)
+        argv = _FRESH + ["--no-break-glass"]
+    else:
+        sops_path = _existing_instance(fresh_repo, monkeypatch)
+        before = open(sops_path, encoding="utf-8").read()
+        argv = []
+    keys = os.path.dirname(ki.AGE_KEY_FILE)
+    os.makedirs(keys, exist_ok=True)
+    other = tmp_path / "other"
+    other.mkdir()
+    host = str(tmp_path / "home" / "op" / ".config" / "sops" / "age" / "kontroll.txt")   # as the host spells it
+    monkeypatch.setenv("KONTROLL_IN_CONTAINER", "1")
+    monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+    monkeypatch.setattr(keygen, "generate_keypair", _never("the mint"))
+    monkeypatch.chdir(str(other))
+    for key_file in (host, str(other / "keys.txt"), "keys.txt"):
+        capsys.readouterr()
+        assert ki.main(argv + ["--key-file", key_file]) == 1, key_file
+        err = capsys.readouterr().err
+        assert "there is no key file at %s." % key_file in err and "makes a control key only in %s," % keys in err
+        assert "Give no --key-file, so the key is %s" % ki.AGE_KEY_FILE in err and "%s/<name>" % keys in err
+        assert "lost when the container exits" in err and "Nothing was written" in err
+        assert not os.path.exists(str(tmp_path / "home")) and not os.listdir(str(other)), key_file
+        if run == "fresh":
+            assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+        else:
+            assert open(sops_path, encoding="utf-8").read() == before
+    made = []
+    monkeypatch.setattr(ki, "ensure_control_key", lambda kf: made.append(kf) or (MINTED, True))
+    present = str(other / "present.txt")
+    _write_key(present, MINTED)
+
+    def _goes_on(key_file):
+        if run == "fresh":
+            shutil.rmtree(os.path.join(fresh_repo, "instance"), ignore_errors=True)
+        del made[:]
+        assert ki.main(argv + ["--key-file", key_file]) == 0, (key_file, capsys.readouterr().err)
+        assert made == [key_file]
+    monkeypatch.chdir(keys)
+    _goes_on("kontroll.txt")                                     # a bare name, read from the key directory
+    _goes_on(os.path.join(keys, os.pardir, os.path.basename(keys), "kontroll.txt"))
+    _goes_on(present)                                            # there already: read, not made
+    monkeypatch.delenv("KONTROLL_IN_CONTAINER")
+    _goes_on(host)                                               # the operator's machine: step 1 makes it, as before
 
 
 @_POSIX_ONLY
@@ -824,8 +898,8 @@ def test_the_age_read_runs_age_keygen_on_the_key_file(tmp_path, monkeypatch, cap
     tests patch: an argv that asks age-keygen something else, or hands it a file named `-k.txt` as a flag; a failure
     read as agreement, or a missing tool read as a key age cannot read, which would refuse every run on a machine
     without age; an age-keygen that cannot be run read as no age-keygen, which would skip the check (T11 fold 6's read
-    100, N1), as `shutil.which`, which counts no file without an execute bit, read one on PATH that the shell finds
-    (fold 9's read 130, S1); a run with no bound, an output that is not UTF-8 ending the run in a traceback, and
+    100, N1), as it did for a file on PATH without an execute bit, which `shutil.which` does not count (fold 9's read
+    130, S1); a run with no bound, an output that is not UTF-8 ending the run in a traceback, and
     age-keygen's stderr reaching the terminal (read 90, N4); the working directory joined to the path, which refused a
     good absolute file when that directory had been removed (fold 8's read 120, N1); and decoding in the locale's
     encoding, under which a runner whose locale is not UTF-8 decodes the row that prints byte 0xFF as text and answers

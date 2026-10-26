@@ -229,17 +229,19 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
     assert "exit $rc" in block, "the scaffold's own exit code must survive the chown"
 
 
-# A route by which a script's output reaches a file or a log: a tee, the shell's own output redirected by `exec` (`exec
-# >f`, `exec 2>f`, `exec &>>f`, `exec {fd}>f`, at a line's start or after `;`, `&&` or `||`), a recorder of the terminal
-# (`script`, `asciinema`, `ttyrec`, `logsave`, `screen` with a `-L` among its flags or `-X log` or `-X hardcopy`, `tmux
-# pipe-pane` or `save-buffer` by any prefix tmux takes (from `pi` and `sa` on) or by their aliases `pipep` and `saveb`,
-# or a copy-mode command that pipes a selection, `copy-pipe-and-cancel` among them), a runner that gives the command a
-# terminal of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), `logger` or `systemd-cat`, or a command that files its
-# output away from the terminal (`nohup`, `systemd-run`, `start-stop-daemon`).
-_LOG_ROUTE = re.compile(r"\btee\b|(?:^|[;&|]\s*)exec\s*(?:\{\w+\}|[0-9&]*)>|\bscript\b|\blogger\b|\bsystemd-cat\b"
+# A route by which a script's output reaches a file or a log: a tee, a file `exec` opens (`exec >f`, `exec 2>f`, `exec
+# &>>f`, `exec {fd}>f`, `exec 3<>f`, wherever `exec` stands on the line), a recorder of the terminal (`script`,
+# `asciinema`, `ttyrec`, `logsave`, `screen` with a `-L` among its flags or `-X log` or `-X hardcopy`, `tmux pipe-pane`
+# or `save-buffer` by any prefix tmux takes (from `pi` and `sa` on) or by their aliases `pipep` and `saveb`, a copy-mode
+# command that pipes a selection (`copy-pipe-and-cancel` among them) or `copy-command`, before or after "tmux" on the
+# line), a runner that gives the command a terminal of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), `logger` or
+# `systemd-cat`, or a command that files its output away from the terminal (`nohup`, `systemd-run`,
+# `start-stop-daemon`).
+_LOG_ROUTE = re.compile(r"\btee\b|\bexec\s*(?:\{\w+\}|[0-9&]*)[<>]|\bscript\b|\blogger\b|\bsystemd-cat\b"
                         r"|\bnohup\b|\bsystemd-run\b|\bstart-stop-daemon\b|\basciinema\b|\bttyrec\b|\blogsave\b"
                         r"|\bscreen\b[^\n]*(?:\s-\w*L|\s-X\s+(?:log|hardcopy)\b)"
-                        r"|\btmux\b[^\n]*\b(?:pi(?:pe?)?|pipe-[\w-]*|pipep|sa(?:ve?)?|save-\w*|saveb)(?![\w-])"
+                        r"|(?=[^\n]*\btmux\b)[^\n]*\b(?:pi(?:pe?)?|pipe-[\w-]*|pipep|sa(?:ve?)?|save-\w*|saveb"
+                        r"|copy-command)(?![\w-])"
                         r"|\bexpect\b|\bunbuffer\b|\brlwrap\b|\bsocat\b")
 # A redirect of a command's output to a file: `>`, `>>`, `>|`, `&>`, `>&file`, `>& file`, `>&"$fd_var"` and a
 # target that begins with any other character (`>+k.log`, `> >(dd …)`); `>&2`, `2>&1`, `>&-` and `>/dev/null`
@@ -266,11 +268,12 @@ def _joined_lines(rel):
 def test_fresh_init_output_is_never_teed_to_a_log():
     """None of the places `fresh-init` passes through — the launcher (scripts/kontroll-installer.sh), the launch kit's
     (scripts/kontroll.sh), the libraries they source or run (scripts/lib/canonical-group.sh, plaintext-guard.sh) and the
-    image's dispatcher (docker/installer/entrypoint.sh) — routes output through `run_log_init`, a `tee`, an `exec`
-    redirect of the shell's output, a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen`
-    with a `-L` among its flags or `-X log` or `-X hardcopy`, `tmux pipe-pane` or `save-buffer` by any prefix tmux takes
-    (from `pi` and `sa` on) or by their aliases `pipep` and `saveb`, or a copy-mode command that pipes a selection,
-    `copy-pipe-and-cancel` among them), a runner that gives the command a terminal of its own (`expect`, `unbuffer`,
+    image's dispatcher (docker/installer/entrypoint.sh) — routes output through `run_log_init`, a `tee`, a file `exec`
+    opens (wherever `exec` stands on the line), a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`,
+    `screen` with a `-L` among its flags or `-X log` or `-X hardcopy`, `tmux pipe-pane` or `save-buffer` by any prefix
+    tmux takes (from `pi` and `sa` on) or by their aliases `pipep` and `saveb`, a copy-mode command that pipes a
+    selection (`copy-pipe-and-cancel` among them) or `copy-command`, before or after "tmux" on the line, as a
+    control-mode client's input is), a runner that gives the command a terminal of its own (`expect`, `unbuffer`,
     `rlwrap`, `socat`), `logger` or `systemd-cat`, or a command that files its output away from the terminal (`nohup`,
     `systemd-run`, `start-stop-daemon`); the `init` service has no `tty: true`; no launcher's `compose … run` passes
     `-t`, `--tty` or `--tty=…`; no line of the launchers or the dispatcher sends output to a file (`>`, `>>`, `>|`,
@@ -283,9 +286,10 @@ def test_fresh_init_output_is_never_teed_to_a_log():
     is of spellings, not of what a program can do). Refused although sound, each in the safe direction: "screen" and any
     `-…L` on one line (`echo "clear the screen"; curl -L …`), a `nohup` or `systemd-run` that files nothing, a bare
     `tmux pipe-pane` (which closes a pipe), "tmux" with "save" or "pipe", or a prefix of either that tmux takes, as a
-    word on the line (`echo "in tmux? save the key"`), the word "expect" anywhere, any other recorder's or runner's name
-    as a word anywhere on the line (a message, `echo "run this script again"`, a variable, `script=…`, a path,
-    `install-script.sh`, or a trailing comment), any `exec` redirect (`exec 2>&1` and `exec >/dev/null` included), and a
+    word on the line (`echo "in tmux? save the key"`), the word "expect" anywhere, any name the scan refuses (`tee`, a
+    recorder, a runner, a logger, `nohup`) as a word anywhere on the line (a message, `echo "run this script again"`, a
+    variable, `script=…`, a path, `install-script.sh`, or a trailing comment), any `exec` redirect, wherever `exec`
+    stands (`exec 2>&1`, `exec >/dev/null` and an input one, `exec 3<k.in`, included), and a
     `>` in a message (`echo "a -> b"`) or one that compares (`(( $# >= 2 ))`, `awk '$3 >= 1000'`).
     `test_the_capture_scan_reads_each_route_it_names` holds each spelling. compose run gives the container a terminal
     only when the launcher's stdout is one, so a pipe around `fresh-init --mint-break-glass` is refused by kontroll-init
@@ -297,7 +301,9 @@ def test_fresh_init_output_is_never_teed_to_a_log():
     and a redirected `case` or group passed; fold 6's reads, 90 N2 and 100 N3: `nohup`, the recorders and
     `>/dev/null.log` passed; fold 7's reads, 110 N2 and 111 N3: the recorders' other spellings, the runners and a target
     beginning with a symbol passed; fold 9's read 130, N3 and N4: tmux's copy-mode pipes, refused at fold 8, passed fold
-    9's arm, and the sound lines it refuses were not all listed). The container's own log is held by
+    9's arm, and the sound lines it refuses were not all listed; fold 10's read 140, N1 and N2: `pipe-pane` written
+    before "tmux" on a control-mode client's line, `copy-command`, and an `exec` after `then` or `{` passed). The
+    container's own log is held by
     `test_the_installer_container_keeps_no_log`."""
     for rel in _NO_FILE_REDIRECT + ("scripts/lib/plaintext-guard.sh",):
         for line in _joined_lines(rel):
@@ -315,6 +321,9 @@ _RUN = 'docker compose run --rm init "$@"'
 @pytest.mark.parametrize("line,refused_by", [
     ("%s | tee k.log" % _RUN, "route"),
     ("exec {fd}>k.log", "route"),
+    ("if [ -t 1 ]; then exec >k.log; fi", "route"),
+    ("{ exec >k.log; }", "route"),
+    ("exec 3<>k.log", "route"),
     ('script -q -c "%s" k.log' % _RUN, "route"),
     ('asciinema rec -c "%s" k.cast' % _RUN, "route"),
     ('ttyrec -e "%s" k.rec' % _RUN, "route"),
@@ -324,6 +333,7 @@ _RUN = 'docker compose run --rm init "$@"'
     ('screen -S "k#1" -L %s' % _RUN, "route"),
     ("screen -X log on", "route"),
     ("screen -S k -X hardcopy -h k.log", "route"),
+    ("screen \\\n  -L %s" % _RUN, "route"),
     ("tmux pipe-pane -o 'dd of=k.log'", "route"),
     ("tmux pipep -o 'dd of=k.log'", "route"),
     ("tmux pipe -o 'dd of=k.log'", "route"),
@@ -339,6 +349,8 @@ _RUN = 'docker compose run --rm init "$@"'
     ("tmux send -X copy-pipe-end-of-line 'dd of=k.log'", "route"),
     ("tmux send -X pipe-and-cancel 'dd of=k.log'", "route"),
     ("tmux send -X pipe-no-clear 'dd of=k.log'", "route"),
+    (r"""printf 'pipe-pane -o "dd of=k.log"\n' | tmux -C attach -t k""", "route"),
+    ("tmux set -s copy-command 'dd of=k.log'", "route"),
     ('expect -c "log_file k.log; spawn %s; interact"' % _RUN, "route"),
     ("unbuffer -p %s | dd of=k.log" % _RUN, "route"),
     ("rlwrap -l k.log %s" % _RUN, "route"),
@@ -391,26 +403,36 @@ _RUN = 'docker compose run --rm init "$@"'
     ('bash "$REPO/scripts/install-script.sh"', "route"),
     ("%s   # never tee this" % _RUN, "route"),
     ("exec 2>&1", "route"),
+    ("if [ -t 1 ]; then exec 2>&1; fi", "route"),
+    ("exec 3<k.in", "route"),
     ("(( $# >= 2 )) || usage", "file"),
     ('echo "a -> b"', "file"),
 ], ids=lambda v: v if isinstance(v, str) and len(v) < 40 else None)
-def test_the_capture_scan_reads_each_route_it_names(line, refused_by):
-    """Each spelling `test_fresh_init_output_is_never_teed_to_a_log` names is refused by the pattern that names it, as a
-    line of a launcher (both patterns apply): every recorder with each spelling listed there, each runner that gives the
-    command a terminal of its own, each redirect target; a `/dev/null` quoted, closing a quote or before `<`, `screen`
-    and `tmux` with no logging, and a message holding "screen" pass. The last rows are refused although sound, as that
+def test_the_capture_scan_reads_each_route_it_names(line, refused_by, monkeypatch):
+    """Each spelling `test_fresh_init_output_is_never_teed_to_a_log` names is refused by the pattern that names it, each
+    row read as the scan reads a line of a launcher (through `_joined_lines`: a whole-line comment skipped, a trailing
+    one read, a backslash-continued command joined, as in the continued `screen` row), both patterns applying: every
+    recorder with each spelling listed there, each runner that gives the command a terminal of its own, each redirect
+    target, a file `exec` opens wherever it stands; a `/dev/null` quoted, closing a quote or before `<`, `screen` and
+    `tmux` with no logging, and a message holding "screen" pass. The last rows are refused although sound, as that
     test's docstring says: "screen" and any `-…L` on one line, a `nohup` or `systemd-run` that files nothing, a bare
     `tmux pipe-pane` (which closes a pipe), "tmux" with "save" or "pipe" (or a prefix tmux takes) as a word, the word
-    "expect", "script" in a message or a path, a trailing comment that names `tee`, an `exec` redirect with no file, and
-    a `>` in a message or one that compares. Guards a scan that names a recorder but misses its common spellings
-    (`screen -dmL`, `tmux pipep`, expect's `log_file`, `unbuffer` into a writer), and a redirect target outside the
-    characters the old pattern listed (`>+k.log`): the tree holds none, and the planted mutants were killed only because
-    the image lacks `screen`, `tmux` and `expect`, so the scan alone passed them (T11 fold 7's reads, 110 N2 and 111
-    N3); and a `/dev/null` closing a quoted command, refused by fold 7's rule (read 110, N2); and `tmux pi`, `pip`, `sa`
-    and `sav`, the prefixes tmux takes that fold 8's arm passed (fold 8's reads 120 N2 and 121 N3); and tmux's copy-mode
-    pipes (`copy-pipe-and-cancel`, `pipe-no-clear`), refused at fold 8 and passed by fold 9's arm, which ended at the
-    first `-` after `pipe-` (fold 9's read 130, N3)."""
-    got = "route" if _LOG_ROUTE.search(line) else "file" if _TO_A_FILE.search(line) else None
+    "expect", "script" in a message or a path, a trailing comment that names `tee`, an `exec` redirect with no file or
+    an input one, wherever `exec` stands, and a `>` in a message or one that compares. Guards a scan that names a
+    recorder but misses its common spellings (`screen -dmL`, `tmux pipep`, expect's `log_file`, `unbuffer` into a
+    writer), and a redirect target outside the characters the old pattern listed (`>+k.log`): the tree holds none, and
+    the planted mutants were killed only because the image lacks `screen`, `tmux` and `expect`, so the scan alone
+    passed them (T11 fold 7's reads, 110 N2 and 111 N3); and a `/dev/null` closing a quoted command, refused by fold
+    7's rule (read 110, N2); and `tmux pi`, `pip`, `sa` and `sav`, the prefixes tmux takes that fold 8's arm passed
+    (fold 8's reads 120 N2 and 121 N3); and tmux's copy-mode pipes (`copy-pipe-and-cancel`, `pipe-no-clear`), refused
+    at fold 8 and passed by fold 9's arm, which ended at the first `-` after `pipe-` (fold 9's read 130, N3); and
+    `pipe-pane` written before "tmux" on a control-mode client's line, `copy-command`, and an `exec` after `then` or
+    `{`, which fold 10's arms passed (fold 10's read 140, N1 and N2); and a reader that cuts a trailing comment or
+    joins no continued line, which every row passed while the rows were matched as written (fold 10's read 141,
+    N2)."""
+    monkeypatch.setitem(globals(), "_read", lambda rel: line + "\n")   # the row, as the scan reads a launcher's text
+    (read,) = _joined_lines("a launcher")
+    got = "route" if _LOG_ROUTE.search(read) else "file" if _TO_A_FILE.search(read) else None
     assert got == refused_by, line
 
 

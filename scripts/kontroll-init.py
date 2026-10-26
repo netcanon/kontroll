@@ -135,9 +135,11 @@ def _age_reads_public(key_file):
     directory is looked up, so a removed one does not refuse an absolute path. "" when age-keygen cannot read a key
     there (a byte-order mark, a file holding only a public line), or cannot be run (one on PATH without an execute bit,
     or on a noexec mount, among them: an executable one later on PATH is preferred), fails, runs past 60 s or prints
-    what is not UTF-8; None when no file named age-keygen is on PATH (the check is then skipped; kontroll-init runs no
-    shell, so an alias, a shell function or a PATH entry written `~/bin` is none; the installer image has one). The seam
-    the tests patch. Prints nothing: age-keygen's output is captured, and holds only public halves."""
+    what is not UTF-8; None when `shutil.which` finds no age-keygen on PATH: none is there, or only a directory, a
+    dangling link or one in a directory the user cannot search, which the shell also reports as not found (the check
+    is then skipped; kontroll-init runs no shell, so an alias, a shell function or a PATH entry written `~/bin` is
+    none; the installer image has one). The seam the tests patch. Prints nothing: age-keygen's output is captured, and
+    holds only public halves."""
     exe = shutil.which("age-keygen") or shutil.which("age-keygen", mode=os.F_OK)
     if not exe:
         return None
@@ -313,11 +315,37 @@ def _misread_key_file(key_file):
             "`age-keygen -y %s` prints the public half age reads; correct the file, or name the right one with "
             "--key-file (if age-keygen itself does not run, fix it, or run this through the installer, whose "
             "age-keygen runs — `scripts/kontroll-installer.sh fresh-init …` for a --fresh run, "
-            "`scripts/kontroll-installer.sh shell` otherwise — with the key file in ~/.config/sops/age, the directory "
-            "of keys it mounts: a --key-file naming another path of this machine names nothing there; removing "
-            "age-keygen fixes this only where another age-keygen on PATH runs: with none, kontroll-init cannot check "
-            "the file and takes its line as written). Nothing was written."
+            "`scripts/kontroll-installer.sh shell` otherwise — with the key at ~/.config/sops/age/keys.txt and no "
+            "--key-file: the installer mounts ~/.config/sops/age at /root/.config/sops/age, so a --key-file as this "
+            "machine spells it names nothing there, and another file of that directory is "
+            "/root/.config/sops/age/<name>; removing age-keygen fixes this only where another age-keygen on PATH "
+            "runs: with none, kontroll-init cannot check the file and takes its line as written). Nothing was written."
             % (key_file, key_file))
+
+
+def _key_made_away(key_file):
+    """The refusal for a run in the installer container (KONTROLL_IN_CONTAINER=1) that would make its control key
+    outside the one directory of keys the installer mounts, the default key file's (/root/.config/sops/age there),
+    or None. A --key-file spelled as the operator's machine spells it names a directory the container lacks, which
+    step 1 would create in the container's own layer: the key made there is lost when the container exits, after the
+    run has written the instance to it and printed it as the key to keep; one made in another directory of the
+    container is lost the same way, or left in the checkout. None on the operator's machine, when something is at the
+    path (it is read, not made), and when the file's directory is that one however the path spells it (compared with
+    os.path.samefile, by what the kernel opens; a directory os.stat cannot reach is not that one). Pure but for the
+    stat (testable)."""
+    if os.environ.get("KONTROLL_IN_CONTAINER") != "1" or os.path.lexists(key_file):
+        return None
+    keys = os.path.dirname(AGE_KEY_FILE)
+    try:
+        if os.path.samefile(os.path.dirname(key_file) or os.curdir, keys):
+            return None
+    except (OSError, ValueError):
+        pass
+    return ("ERROR: there is no key file at %s. In the installer container kontroll-init makes a control key only in "
+            "%s, the directory the installer mounts from this machine's ~/.config/sops/age: a key made in any other "
+            "directory is lost when the container exits, or left in the checkout or another mount, where no key "
+            "belongs. Give no --key-file, so the key is %s (this machine's ~/.config/sops/age/keys.txt), or name "
+            "another file of that directory as %s/<name>. Nothing was written." % (key_file, keys, AGE_KEY_FILE, keys))
 
 
 def _show_break_glass_once(private, warning):
@@ -500,6 +528,10 @@ def main(argv):
                          "auto-promote; this edition has no auto-promoter, so it behaves like 'separated'). NEVER "
                          "defaulted — choose. See docs/trust-mode.md.")
     args = ap.parse_args(argv)
+    away = _key_made_away(args.key_file)         # first: a key the installer container would discard at exit
+    if away:
+        print(away, file=sys.stderr)
+        return 1
 
     # The break-glass choice is judged — and a minted key minted — before anything is written, so every refusal and
     # every failure to mint leaves the tree and the key directory exactly as they were. The --fresh checks come before

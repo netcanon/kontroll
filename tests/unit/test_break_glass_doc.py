@@ -344,7 +344,8 @@ def test_the_runbooks_sops_self_check_prints_runs_where_the_block_runs_the_check
     `runs`, and leaves no directory behind. Guards the self-check being made so strict that it fails everywhere: the
     operator would then chase a fault their machine does not have (T11 fold 7's read 110, N3); and a self-check that
     sets HOME to a path that does not exist, which printed nothing for a shim the block runs (and, run as root, could
-    create that path: fold 8's read 120, N4), or XDG_CONFIG_HOME, which every row passed (fold 9's read 131, N4)."""
+    create that path: fold 8's read 120, N4); or one that sets XDG_CONFIG_HOME to a path that does not exist, which
+    every row passed before this one (fold 9's read 131, N4)."""
     env, files, _ = _hostile_machine(tmp_path)
     if sops != "stock":
         var = "HOME" if sops == "a-shim-that-needs-its-home-to-exist" else "XDG_CONFIG_HOME"

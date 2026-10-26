@@ -67,7 +67,9 @@ def _load_init():
 
 def _fresh_counts(tmp_path, monkeypatch):
     """{choice: the fewest recipients any rule of the new instance/.sops.yaml names} for each break-glass choice of
-    `kontroll-init --fresh`, each run in its own scratch root."""
+    `kontroll-init --fresh`, each run in its own scratch root, as on the operator's machine (KONTROLL_IN_CONTAINER
+    unset: in the installer container a key file missing outside the mounted key directory is refused first)."""
+    monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)
     ki = _load_init()
     monkeypatch.setattr(ki, "ensure_control_key", lambda kf: ("age1honestycontrolpub000000000000000000000000000000000", True))
     monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
