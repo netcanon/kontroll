@@ -54,11 +54,13 @@ brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`(
 not: the `)` joins the check's command, which then reads as no `pip check`), a `;` inside a quoted string after a check
 (`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN, the word `exit`,
 `return`, `trap` or `exec` in a message (`echo "will exit on error"`), a function or an alias anywhere in the RUN (the
-word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too), an ANSI-C `$'…'` before the check or later in
-its own list, a `sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#` right after a
-`$(…)` (`echo $(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space inside quotes
-(`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or
-two outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared without its value in a later stage.
+word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too), the word `set` or `shopt` in a message before
+a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set up (once)"`), an ANSI-C `$'…'` before the
+check or later in its own list, a `sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#`
+right after a `$(…)` (`echo $(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space
+inside quotes (`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget
+naming two URLs or two outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared without its value
+in a later stage.
 """
 import json
 import os

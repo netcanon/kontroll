@@ -45,12 +45,12 @@ a `;`, `&` or `|`, so `echo done` closes nothing) and before a delimiter (so `do
 Errexit is switched on by a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command at the top of
 the text and runs whenever the text reaches it (not behind `&&` or `||`, not piped, not sent to the background, nothing
 open). It is switched off by a `set +e` or `set +o errexit` anywhere in the text (inside a compound, behind `eval` or
-`command`, written through quotes or backslashes), by a `set` given a variable, a backquoted command, a glob, a
-brace expansion or an extended glob (`set $o`, `` set `cat o` ``, `set +[e]`, `set +{e,}`, `set +@(e)`), and by a
-`shopt` naming errexit or given any of those (`shopt -ou $x`). A `set -e` the reader cannot place switches nothing
-on, and a `set` it cannot rule out switches errexit off, so each misreading of these that it knows of refuses. The
-reader refuses what it knows it cannot read; what it still cannot see is listed in tests/unit/test_image_pins.py's
-docstring ("What the checks still cannot see").
+`command`, written through quotes, backslashes or a locale string's `$""`), by a `set` given a variable, a backquoted
+command, a glob, a brace expansion or an extended glob (`set $o`, `` set `cat o` ``, `set +[e]`, `set +{e,}`, `set
++@(e)`), and by a `shopt` naming errexit or given any of those (`shopt -ou $x`). A `set -e` the reader cannot place
+switches nothing on, and a `set` it cannot rule out switches errexit off, so each misreading of these that it knows of
+refuses. The reader refuses what it knows it cannot read; what it still cannot see is listed in
+tests/unit/test_image_pins.py's docstring ("What the checks still cannot see").
 """
 import re
 
@@ -67,8 +67,9 @@ _STAND_IN = re.compile(r"(?:^|[\s(])(?:alias|hash|enable)(?=[\s<>])|\bBASH_(?:AL
 
 
 def _plain(command):
-    """`command` with its quotes and backslashes removed, so `"set" +e` and `e\\xit 0` read as written plainly."""
-    return re.sub(r"""["'\\]""", "", command)
+    """`command` with its quotes and backslashes removed, and the `$` of a locale string (bash expands `$""` to
+    nothing), so `"set" +e`, `e\\xit 0` and `exit$""` read as written plainly."""
+    return re.sub(r"""\$(?=["'])|["'\\]""", "", command)
 
 
 def unquote(token):

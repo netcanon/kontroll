@@ -245,9 +245,9 @@ _UNCONDITIONED = {"always()", "success()", "!cancelled()"}
 # expands when it traces (`PS4`: its `${BASH_CMDS[…]:=…}` makes an entry that stands in for a program), where it
 # finds a program (`PATH`), a function it imports (`BASH_FUNC_<name>%%`), where Python finds pip-audit's modules
 # (`PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`) and a library the loader puts first (`LD_PRELOAD`,
-# `LD_LIBRARY_PATH`).
+# `LD_LIBRARY_PATH`) or loads to audit the others (`LD_AUDIT`).
 _BASH_ENV = (r"BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|PATH|BASH_FUNC_.*"
-             r"|PYTHONPATH|PYTHONHOME|PYTHONUSERBASE|LD_PRELOAD|LD_LIBRARY_PATH")
+             r"|PYTHONPATH|PYTHONHOME|PYTHONUSERBASE|LD_PRELOAD|LD_AUDIT|LD_LIBRARY_PATH")
 
 
 def _script(run):
@@ -336,18 +336,20 @@ def pip_audit_faults(workflow):
     `"$(…)"`), or a C0 control character that is not whitespace (a NUL, which bash drops inside a word, or one of this
     check's own marks), in the step's script; an env key that changes what the step runs (`_BASH_ENV`: `BASH_ENV`,
     `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`,
-    `LD_PRELOAD`, `LD_LIBRARY_PATH`), or an env that is not a mapping, on the step, the job or the workflow; or a
-    `container:` on the job (its env and its options reach bash unread). It refuses sound shapes too, each loudly: a
-    pipe after the audit under `shell: bash` (which runs with pipefail), an `exit 0` after it, and the word `exit`,
+    `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`), or an env that is not a mapping, on the step, the job or the workflow;
+    or a `container:` on the job (its env and its options reach bash unread). It refuses sound shapes too, each loudly:
+    a pipe after the audit under `shell: bash` (which runs with pipefail), an `exit 0` after it, and the word `exit`,
     `return`, `trap` or `exec` in a message (`echo "will exit on error"`), an `&>` redirect after the audit, an
     audit sent to the background and waited for (`& wait $!`), a `$(…)#` (to bash the `#` is part of a word), an
-    ANSI-C `$'…'` in the audit's list, the word `alias`, `hash` or `enable` in a message (and a `hash -r`), a
-    newline inside a quoted string (a message over two lines), a `shopt -u` of noexec or onecmd, and an audit that
-    opens a subshell (`(pip-audit -r a)`: it is not read as a run, so the coverage test fails). It cannot see an
-    earlier step that writes one of those env keys through `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a
+    ANSI-C `$'…'` in the audit's list, the word `alias`, `hash` or `enable` in a message (and a `hash -r`), the word
+    `set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set up
+    (once)"`), a newline inside a quoted string (a message over two lines), a `shopt -uo` of noexec or onecmd, and an
+    audit that opens a subshell (`(pip-audit -r a)`: it is not read as a run, so the coverage test fails). It cannot see
+    an earlier step that writes one of those env keys through `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a
     later step runs under it; nor another env key that leads the audit to a planted file; nor a `working-directory:`
     or a `cd` that moves the file a `-r` names (a copy planted at `<dir>/docker/…` is then audited instead; with
-    none, pip-audit fails on the missing file)."""
+    none, pip-audit fails on the missing file); nor a command word glued to a command substitution, which is built at
+    run time (`` exit`:` 0 ``, `$(:)hash …`, `` set`:` +e ``)."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -397,8 +399,8 @@ def pip_audit_faults(workflow):
                 if env is not None and (not isinstance(env, dict) or any(re.fullmatch(_BASH_ENV, str(k)) for k in env)):
                     faults.append("%s: `BASH_ENV` or another env key that changes what the step runs "
                                   "(`ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, "
-                                  "`PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_LIBRARY_PATH`), or an env "
-                                  "that is not a mapping, on the pip-audit %s" % (name, where))
+                                  "`PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`), "
+                                  "or an env that is not a mapping, on the pip-audit %s" % (name, where))
             for where, node in (("step", step), ("job", job)):
                 if node.get("continue-on-error"):
                     faults.append("%s: continue-on-error on the pip-audit %s" % (name, where))
@@ -596,7 +598,8 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": 'x="$(echo "a"; # )"; ' + _AUDIT + '; echo "\n)"'}, {}, {"docker/a/requirements.txt"},
      ["a newline inside a quoted string"]),
     ({"run": 'echo "it\'s" \\\n&& echo \'x\'\n' + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
-    ({"run": "e\x00xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a C0 control character"]),
+    ({"run": "true\ne\x00xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a C0 control character"]),
+    ({"run": "true\ne\x01xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a C0 control character"]),
     ({"run": "echo x\x02" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a C0 control character"]),
     ({"run": "(:)\\\n# && " + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["right after a `)`"]),
     ({"run": "set -x\n" + _AUDIT, "env": {"PS4": "${BASH_CMDS[pip-audit]:=/bin/true}"}}, {},
@@ -609,6 +612,32 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": _AUDIT}, {"env": {"LD_PRELOAD": "/tmp/x.so"}}, {"docker/a/requirements.txt"}, ["another env key"]),
     ({"run": _AUDIT, "env": {"LD_LIBRARY_PATH": "/tmp"}}, {}, {"docker/a/requirements.txt"}, ["another env key"]),
     ({"run": _AUDIT}, {"container": "python:3.12"}, {"docker/a/requirements.txt"}, ["a `container:`"]),
+    ({"run": "true\nexit$\"\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit"]),
+    ({"run": "$\"\"hash -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "hash$\"\" -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "set$\"\" -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `set"]),
+    ({"run": "set$\"\" +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "shopt -so no{exec,}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
+    ({"run": "shopt -so `echo noe`xec\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
+    ({"run": "shopt -so noexe[c]\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
+    ({"run": "shopt -so noex*\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
+    ({"run": "shopt -so noexe?\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
+    ({"run": "shopt -so @(noe)xec\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
+    ({"run": "if shopt -uo err{exit,exit}; then :; fi\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `if shopt", "not followed"]),
+    ({"run": "shopt -uo `echo err`exit\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `shopt", "not followed"]),
+    ({"run": "shopt -uo errexi[t]\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `shopt", "not followed"]),
+    ({"run": "shopt -uo errex*\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `shopt", "not followed"]),
+    ({"run": "shopt -uo errexi?\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `shopt", "not followed"]),
+    ({"run": "shopt -uo @(err)exit\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `shopt", "not followed"]),
+    ({"run": _AUDIT}, {"env": {"LD_AUDIT": "/tmp/x.so"}}, {"docker/a/requirements.txt"}, ["another env key"]),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -643,10 +672,17 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "shopt-noexec", "shopt-onecmd", "shopt-of-a-variable",
         "eval-rejoins-through-double-quotes", "eval-rejoins-through-juxtaposed-quotes",
         "comment-in-a-quote-nested-in-a-substitution", "apostrophe-in-double-quotes-before-a-continuation",
-        "nul-inside-an-exit", "reader-mark-in-the-script", "subshell-hash-split-by-a-continuation",
+        "nul-inside-an-exit", "soh-inside-an-exit",
+        "reader-mark-in-the-script", "subshell-hash-split-by-a-continuation",
         "ps4-on-the-step", "ps4-on-the-job", "pythonpath-on-the-step", "pythonhome-on-the-job",
         "pythonuserbase-on-the-step", "ld-preload-on-the-job", "ld-library-path-on-the-step",
-        "job-container-image-only"])
+        "job-container-image-only", "exit-glued-to-a-locale-string", "locale-string-before-hash",
+        "hash-glued-to-a-locale-string", "set-n-glued-to-a-locale-string", "set-plus-e-glued-to-a-locale-string",
+        "shopt-noexec-of-a-brace-expansion", "shopt-noexec-of-a-backquoted-command", "shopt-noexec-of-a-bracket-glob",
+        "shopt-noexec-of-a-star-glob", "shopt-noexec-of-a-question-mark-glob", "shopt-noexec-of-a-extended-glob",
+        "shopt-errexit-of-a-brace-expansion", "shopt-errexit-of-a-backquoted-command",
+        "shopt-errexit-of-a-bracket-glob", "shopt-errexit-of-a-star-glob", "shopt-errexit-of-a-question-mark-glob",
+        "shopt-errexit-of-a-extended-glob", "ld-audit-on-the-job"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -686,21 +722,26 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     rejoins an `exit 0` split by a backslash-newline inside single quotes, a `set` given a variable flag or a glob (`set
     -$x`, `set +[e]`, `set +?`, `set +*`), an imported function, `SHELLOPTS`, `BASHOPTS`, `PATH` or `ENV` in the env,
     and a `container:` on the job; it passes env keys that only look like those (`ENVIRONMENT`, `XBASH_ENV`). Fold
-    8's reads added: a `hash` after a `(` or glued to a redirect, an `alias` glued to one, a `BASH_CMDS` entry
-    inside a word (`: ${BASH_CMDS[…]:=…}`); a `set` given a brace expansion (inside a closed `if` too, where only the
-    errexit rule sees it) or an extended glob, `set -t`, `set -o onecmd`, `shopt -os noexec` and a `shopt` given a
-    variable; an `eval` whose string a backslash-newline inside double quotes or between juxtaposed quotes rejoins, and
-    a comment in a quote nested in a `"$(…)"` (each a newline inside a quoted string, which replaces fold 7's
-    single-quote rule); a NUL, or one of the check's own marks, in the script; a `PS4`, `PYTHONPATH`, `PYTHONHOME`,
-    `PYTHONUSERBASE`, `LD_PRELOAD` or `LD_LIBRARY_PATH` in the env; a `container:` that names only an image; and a `)#`
-    a backslash-newline splits. It passes an apostrophe inside double quotes on a line a backslash continues. Each row's
-    job runs on ubuntu-latest unless the row names another. Guards a check that counts a dead audit as coverage (T29's
-    fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body,
-    PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a;
-    N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read
-    B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold
-    7's read A, S1 to S5; its read B, S1, S2, N6; fold 8's read A, S1 to S5, N1: M1 to M13; its read B, S1 to S4, N2,
-    N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's mutant X9a)."""
+    8's reads added: a `hash` after a `(` or glued to a redirect, an `alias` glued to one, a `BASH_CMDS` entry inside a
+    word (`: ${BASH_CMDS[…]:=…}`); a `set` given a brace expansion (inside a closed `if` too) or an extended glob, `set
+    -t`, `set -o onecmd`, `shopt -os noexec`, `shopt -so onecmd` and a `shopt` given a variable; an `eval` whose string
+    a backslash-newline inside double quotes or between juxtaposed quotes rejoins, and a comment in a quote nested in a
+    `"$(…)"` (each a newline inside a quoted string, which replaces the single-quote rule fold 8 wrote); a NUL, or one
+    of the check's own marks, in the script; a `PS4`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD` or
+    `LD_LIBRARY_PATH` in the env; a `container:` that names only an image; and a `)#` a backslash-newline splits. It
+    passes an apostrophe inside double quotes on a line a backslash continues. Fold 9's read added: a `shopt` given each
+    other shape of its class (a brace expansion, a backquoted command, a bracket, star, question-mark or extended glob),
+    naming noexec or errexit; a locale string's `$` glued to `exit`, `hash` or `set` (`exit$""`, `$""hash`, `hash$""`,
+    `set$"" -n`, `set$"" +e`: bash expands `$""` to nothing); a NUL on a line after the first (bash drops it inside a
+    word; on the first line it refuses the script, loudly), and a SOH beside it, so a class cut to a NUL and the marks
+    fails; and an `LD_AUDIT` in the env. Each row's job runs on ubuntu-latest unless the row names another. Guards a
+    check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read,
+    S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold
+    4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2,
+    N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3;
+    its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5; its read B, S1, S2, N6; fold 8's read A, S1 to
+    S5, N1: M1 to M13; its read B, S1 to S4, N2, N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's mutant X9a; its read B, S1,
+    S2, N1, N8; fold 10's mutant run: B9-control-class-nul-and-stx-only)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults

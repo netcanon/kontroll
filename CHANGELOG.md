@@ -47,9 +47,9 @@ were built from was not.
   image, a list with no OS label or an expression in it, no `runs-on`), may hold no `${{` expression (in a comment too),
   no odd whitespace, no `#` right after a `)`, no newline inside a quoted string and no C0 control character that is
   not whitespace, and run under no env key that changes what it runs (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`,
-  `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_LIBRARY_PATH`) and no job
-  `container:`, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner. The
-  refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+  `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) and
+  no job `container:`, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner.
+  The refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
 The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is
 in `docker/services/semaphore.yaml`, not the image lock). A box that builds locally also rebuilds the control image
