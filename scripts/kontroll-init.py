@@ -51,6 +51,11 @@ from kontroll.service import keygen  # noqa: E402
 from kontroll.service import secrets as secrets_service  # noqa: E402
 
 AGE_KEY_FILE = os.path.join(os.path.expanduser("~"), ".config", "sops", "age", "keys.txt")
+# The installer container's key file, on the directory docker/services/installer.yaml mounts from the operator's
+# ~/.config/sops/age (its SOPS_AGE_KEY_FILE), and the marker docker/installer/Dockerfile bakes into the image, which
+# a `sudo` or an `env -i` in the installer's shell cannot drop as it drops KONTROLL_IN_CONTAINER (_key_made_away).
+INSTALLER_KEY_FILE = "/root/.config/sops/age/keys.txt"
+INSTALLER_IMAGE_MARKER = "/etc/kontroll/installer-image"
 CONTROL_ANCHORS = ["base_recipients", "ops_recipients"]   # the control key must decrypt EVERY domain
 BOOTSTRAP_DOMAINS = ["dashboards", "semaphore"]            # auto-mintable bootstrap domains deploy-stack's .env needs
 #   dashboards: GUI/Grafana passwords + the C10 API token; semaphore: DB pw + admin login + access-key key.
@@ -317,35 +322,42 @@ def _misread_key_file(key_file):
             "age-keygen runs — `scripts/kontroll-installer.sh fresh-init …` for a --fresh run, "
             "`scripts/kontroll-installer.sh shell` otherwise — with the key at ~/.config/sops/age/keys.txt and no "
             "--key-file: the installer mounts ~/.config/sops/age at /root/.config/sops/age, so a --key-file as this "
-            "machine spells it names nothing there, and another file of that directory is "
-            "/root/.config/sops/age/<name>; removing age-keygen fixes this only where another age-keygen on PATH "
-            "runs: with none, kontroll-init cannot check the file and takes its line as written). Nothing was written."
+            "machine spells it names nothing there, and every installer verb reads that one file; removing "
+            "age-keygen fixes this only where another age-keygen on PATH runs: with none, kontroll-init cannot "
+            "check the file and takes its line as written). Nothing was written."
             % (key_file, key_file))
 
 
 def _key_made_away(key_file):
-    """The refusal for a run in the installer container (KONTROLL_IN_CONTAINER=1) that would make its control key
-    outside the one directory of keys the installer mounts, the default key file's (/root/.config/sops/age there),
-    or None. A --key-file spelled as the operator's machine spells it names a directory the container lacks, which
-    step 1 would create in the container's own layer: the key made there is lost when the container exits, after the
-    run has written the instance to it and printed it as the key to keep; one made in another directory of the
-    container is lost the same way, or left in the checkout. None on the operator's machine, when something is at the
-    path (it is read, not made), and when the file's directory is that one however the path spells it (compared with
-    os.path.samefile, by what the kernel opens; a directory os.stat cannot reach is not that one). Pure but for the
-    stat (testable)."""
-    if os.environ.get("KONTROLL_IN_CONTAINER") != "1" or os.path.lexists(key_file):
+    """The refusal for a run in the installer container (KONTROLL_IN_CONTAINER set, as the playbooks read it, or the
+    image's INSTALLER_IMAGE_MARKER present, which a `sudo` or an `env -i` in its shell cannot drop) that would make its
+    control key anywhere but INSTALLER_KEY_FILE (/root/.config/sops/age/keys.txt, in the one directory of keys the
+    installer mounts, whatever HOME is), or None. A --key-file spelled as the operator's machine spells it names a
+    directory the container lacks, which step 1 would create in the container's own layer: the key made there is lost
+    when the container exits, after the run has written the instance to it and printed it as the key to keep; one made
+    in another directory of the container is lost the same way, or left in the checkout; and one of another name in that
+    directory is root's, and no installer verb reads it (installer.yaml's SOPS_AGE_KEY_FILE, bootstrap.yml, the
+    dispatcher's hand-back), so the next documented step mints a keys.txt that cannot open the instance. None outside
+    the installer container, when something is at the path (it is read, not made), and when the file is that key file
+    however the path spells its directory (compared with os.path.samefile, by what the kernel opens; a directory os.stat
+    cannot reach is not that one). Pure but for the environment and the stats (testable)."""
+    in_container = os.environ.get("KONTROLL_IN_CONTAINER") or os.path.exists(INSTALLER_IMAGE_MARKER)
+    if not in_container or os.path.lexists(key_file):
         return None
-    keys = os.path.dirname(AGE_KEY_FILE)
+    keys = os.path.dirname(INSTALLER_KEY_FILE)
     try:
-        if os.path.samefile(os.path.dirname(key_file) or os.curdir, keys):
+        if (os.path.basename(key_file) == os.path.basename(INSTALLER_KEY_FILE)
+                and os.path.samefile(os.path.dirname(key_file) or os.curdir, keys)):
             return None
     except (OSError, ValueError):
         pass
-    return ("ERROR: there is no key file at %s. In the installer container kontroll-init makes a control key only in "
-            "%s, the directory the installer mounts from this machine's ~/.config/sops/age: a key made in any other "
-            "directory is lost when the container exits, or left in the checkout or another mount, where no key "
-            "belongs. Give no --key-file, so the key is %s (this machine's ~/.config/sops/age/keys.txt), or name "
-            "another file of that directory as %s/<name>. Nothing was written." % (key_file, keys, AGE_KEY_FILE, keys))
+    return ("ERROR: there is no key file at %s. In the installer container kontroll-init refuses a missing control key "
+            "file anywhere but keys.txt in %s, the directory the installer mounts from this machine's "
+            "~/.config/sops/age: a key made in any other directory is lost when the container exits, or left in "
+            "the checkout or another mount, where no key belongs, and one of another name there is a file no "
+            "installer verb reads. Give no --key-file in the installer's shell as it starts (HOME=/root), or "
+            "--key-file %s: this machine's ~/.config/sops/age/keys.txt, the one file every installer verb reads. "
+            "Nothing was written." % (key_file, keys, INSTALLER_KEY_FILE))
 
 
 def _show_break_glass_once(private, warning):
@@ -384,7 +396,7 @@ def ensure_control_key(key_file):
     (public, created). Never prints the private key."""
     created = False
     if not os.path.exists(key_file):
-        os.makedirs(os.path.dirname(key_file), mode=0o700, exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(key_file)), mode=0o700, exist_ok=True)   # a bare name too
         subprocess.run(["age-keygen", "-o", key_file], check=True, capture_output=True)
         os.chmod(key_file, 0o600)
         created = True

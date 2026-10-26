@@ -1128,11 +1128,13 @@ distinct control.
   and, where an `age-keygen` program is on its `PATH` (an alias, a shell function or a `PATH` entry written `~/bin` does
   not count; the installer has one), one whose line is not the public half of the key age reads there, or from which
   age reads no key (or where `age-keygen` gives no answer, one on `PATH` that cannot be executed included). In the
-  installer container any run first refuses a key file that does not exist and would be made outside the directory of
-  keys the installer mounts (`/root/.config/sops/age`): a key made there is lost when the container exits, with the
-  instance written to it. On an existing instance it also refuses a key file that is not the control recipient of
-  every rule (read as sops reads it: a rule's key groups when it has any), and stops after adding the recipient, before
-  the bootstrap secrets.
+  installer container (known by `KONTROLL_IN_CONTAINER` or by the image's `/etc/kontroll/installer-image`, which a
+  `sudo` or an `env -i` in its shell cannot drop) any run first refuses a key file that does not exist and is not
+  `keys.txt` in the directory of keys the installer mounts (`/root/.config/sops/age`, whatever `HOME` is): a key made
+  anywhere else is lost when the container exits, or left in the checkout or another mount, after the instance has been
+  written to it, and one of another name there is a file no installer verb reads. On an existing instance it also
+  refuses a key file that is not the control recipient of every rule (read as sops reads it: a rule's key groups when it
+  has any), and stops after adding the recipient, before the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing
@@ -1154,7 +1156,10 @@ malformed, mis-checksummed, plugin, post-quantum, low-order or non-zero-padding 
 low-order check held to `cryptography`'s X25519 by `test_the_low_order_check_agrees_with_x25519_itself`; a key file
 kontroll-init cannot read (empty, a directory, a FIFO, a link to nothing, not UTF-8) or one age reads otherwise,
 refused on both paths, and at the path `--key-file` names
-(`test_the_key_file_flag_names_the_file_every_check_reads`); a key file that is not the control recipient refused;
+(`test_the_key_file_flag_names_the_file_every_check_reads`); in the installer container, a missing key file anywhere but
+the mounted `keys.txt` refused first (`test_the_installer_container_makes_a_key_only_where_it_mounts_keys`), the guard's
+constants held to the installer's (`test_the_container_guard_reads_what_the_installer_sets`); a key file that is not the
+control recipient refused;
 the existing-instance run stopping before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
 (`test_fresh_init_output_is_never_teed_to_a_log`, `test_the_installer_container_keeps_no_log`) +
 `tests/unit/test_installer_log_driver.py` (both launchers, run, choose the driver per verb); `gitleaks` (CI) scans

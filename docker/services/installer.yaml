@@ -46,7 +46,9 @@ services:
     environment:
       # MF-6: the playbooks skip their HOST-setup tasks (Docker install, qemu-guest-agent, OS packages) when this
       # is set — those belong to scripts/install-prereqs.sh + scripts/host-systemd.sh on the host, not an
-      # ephemeral container. local-canonical also skips the named gid-1001 group/membership host gestures.
+      # ephemeral container. local-canonical also skips the named gid-1001 group/membership host gestures, and
+      # kontroll-init refuses a missing control key file anywhere but keys.txt on the age-key mount below (with the
+      # image's /etc/kontroll/installer-image marker, which outlives a `sudo` or an `env -i` in the shell).
       KONTROLL_IN_CONTAINER: "1"
       # MF-1: the INVOKING host operator's identity (the launcher exports these from id -un/-u/-g + $HOME). The
       # playbooks chown the canonical + render docker/.env to THIS uid/gid (numeric, user-DB-free) instead of the

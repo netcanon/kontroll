@@ -76,7 +76,11 @@ present. Phase B integrates the init services into the main compose with `depend
 The installer runs the playbooks unchanged **except** their host-only tasks, which skip when
 `KONTROLL_IN_CONTAINER=1`: deploy-stack's Docker install (the host already has Docker — the floor) + the
 qemu-guest-agent systemd unit (no systemd in a container) + bootstrap's OS-package/sops/gitleaks provisioning
-(baked into the image) + local-canonical's named gid-1001 group (a host gesture). The host residual lives in
+(baked into the image) + local-canonical's named gid-1001 group (a host gesture). In the container, kontroll-init
+makes a missing control key only as `keys.txt` in the mounted `~/.config/sops/age` (`/root/.config/sops/age`),
+the one file every installer verb reads; it knows the container by that variable or by the image's
+`/etc/kontroll/installer-image`, which a `sudo` or an `env -i` in the `shell` verb cannot drop
+([docs/troubleshooting.md](../../docs/troubleshooting.md) §11). The host residual lives in
 [scripts/host-systemd.sh](../../scripts/host-systemd.sh). Operator identity (MF-1) comes from
 `KONTROLL_OPERATOR_{USER,UID,GID,HOME}`; on a host-direct run those are absent and the playbooks fall back to the
 gathered facts (the same value), so nothing changes off-container.

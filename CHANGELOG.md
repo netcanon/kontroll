@@ -59,13 +59,16 @@ losing that key destroyed every device credential, API token and service passwor
     cannot run (one on PATH without an execute bit included: an executable one later on PATH is preferred), fails, runs
     past 60 s or prints what is not UTF-8 gets the same refusal. It says kontroll-init cannot confirm the line; that the
     step can run through the installer, whose age-keygen runs (`fresh-init` for a `--fresh` run, `shell` otherwise, with
-    the key at `~/.config/sops/age/keys.txt` and no `--key-file`, or another file there named
-    `/root/.config/sops/age/<name>`); and that removing age-keygen fixes it only where another on PATH runs (with none,
-    the line is taken as written);
-  - in the installer container, a run whose key file does not exist and would be made outside the directory of keys
-    the installer mounts (`/root/.config/sops/age`): a `--key-file` as the host spells it names a directory the
-    container lacks, so the key was made in the container's own layer, the instance written to it, and the key lost
-    when the container exited.
+    the key at `~/.config/sops/age/keys.txt` and no `--key-file`, the one file every installer verb reads); and that
+    removing age-keygen fixes it only where another on PATH runs (with none, the line is taken as written);
+  - in the installer container, a run whose key file does not exist and is not `keys.txt` in the directory of keys
+    the installer mounts (`/root/.config/sops/age`, whatever `HOME` is). A `--key-file` as the host spells it names a
+    directory the container lacks, so the key was made in the container's own layer, the instance written to it, and
+    the key lost when the container exited; one made in another directory is lost the same way, or left in the
+    checkout or another mount; and one of another name in that directory is a file no installer verb reads. The
+    container is known by `KONTROLL_IN_CONTAINER` (any value, as the playbooks read it) or by the installer image's
+    `/etc/kontroll/installer-image`, which a `sudo` or an `env -i` in its shell cannot drop. Step 1 also makes a key
+    named by a bare file name, where it failed before.
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,

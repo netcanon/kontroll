@@ -84,6 +84,11 @@ RUN set -eu; \
 # trust any repo path (single-tenant, ephemeral). Mirrors the runner image.
 RUN git config --system --add safe.directory '*'
 
+# The installer image's marker. kontroll-init's in-container guard (scripts/kontroll-init.py, _key_made_away) reads
+# it as well as KONTROLL_IN_CONTAINER, which a `sudo` or an `env -i` in the installer's shell drops: a control key
+# made outside the mounted key directory would be lost when the container exits (docs/troubleshooting.md §11).
+RUN install -d -m 0755 /etc/kontroll && : > /etc/kontroll/installer-image
+
 COPY docker/installer/entrypoint.sh /usr/local/bin/kontroll-installer
 RUN chmod 0755 /usr/local/bin/kontroll-installer
 
