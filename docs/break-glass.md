@@ -157,18 +157,20 @@ file and run `bash verify.sh`, which you can keep for the next time.
 
 sops uses every key it can find — `SOPS_AGE_KEY_FILE`, `~/.config/sops/age/keys.txt` (where a proven copy of the
 control key may live), `SOPS_AGE_KEY`, `SOPS_AGE_KEY_CMD`, an SSH key, a key service — so a plain
-`SOPS_AGE_KEY_FILE=… sops -d` passes on the control key alone. The block first checks that sops runs as the block
-runs it (no environment, an empty home), then that `BG` holds one key and that it is the break-glass key (`age-keygen
--y` prints one line per key). Then, for each file, it checks that the file is wrapped to that key, runs sops with an
-empty home and no environment but the key it names, and proves that a key which is not a recipient fails on that file
-before it tries the break-glass key:
+`SOPS_AGE_KEY_FILE=… sops -d` passes on the control key alone. The block first checks that it has an empty directory of
+its own (`mktemp -d`) and that sops runs as the block runs it (no environment, that empty home), then that `BG` holds
+one key and that it is the break-glass key (`age-keygen -y` prints one line per key). Then, for each file, it checks
+that the file is wrapped to that key, runs sops with an empty home and no environment but the key it names, and proves
+that a key which is not a recipient fails on that file before it tries the break-glass key:
 
 ```bash
 BG="$HOME/kontroll-breakglass.key"
 BGPUB="age1…"
 ISO="$(mktemp -d)"
 v() { env -i PATH="$PATH" HOME="$ISO" XDG_CONFIG_HOME="$ISO" SOPS_AGE_KEY_FILE="$1" sops -d "$2" >/dev/null 2>&1; }
-if ! env -i PATH="$PATH" HOME="$ISO" XDG_CONFIG_HOME="$ISO" sops --help >/dev/null 2>&1; then
+if [ ! -d "$ISO" ]; then
+  echo "BROKEN: no temporary directory here (mktemp -d made none)"
+elif ! env -i PATH="$PATH" HOME="$ISO" XDG_CONFIG_HOME="$ISO" sops --help >/dev/null 2>&1; then
   echo "BROKEN: no sops runs here as the check runs it (a stock sops build on PATH; a shell function, an alias or a version-manager shim does not count)"
 elif ! PUB="$(age-keygen -y "$BG" 2>/dev/null)"; then
   echo "BROKEN: age-keygen could not read a key from $BG (install age, or check the file: one AGE-SECRET-KEY-1… line)"
@@ -194,6 +196,8 @@ Expect `ok` for every file and no `BROKEN` line.
   file's break-glass stanza is damaged, and a re-wrap leaves it as it is (`already up to date`): rotate that file's
   data key on the node, in the installer shell (`sops -r -i instance/secrets/<domain>.sops.yml`), hand it back and
   land it as steps 5 and 6 do, then verify again.
+- `BROKEN: no temporary directory here`: `mktemp -d` made no directory, and the block keeps sops' empty home and its
+  throwaway key in one. Run it where `mktemp -d` works (coreutils and macOS have it).
 - `BROKEN: no sops runs here`: this machine cannot check anything yet. The block runs sops with no environment and an
   empty home, so a shell function or an alias named `sops`, or a version-manager shim that needs your own home or a
   variable of its own, does not count: put a stock sops build on `PATH`.

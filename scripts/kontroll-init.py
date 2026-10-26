@@ -129,15 +129,16 @@ def _is_plugin_recipient(s):
 
 
 def _age_reads_public(key_file):
-    """The public half `age-keygen -y` derives from the first key in key_file, which it is given as kontroll-init
-    reads the path (a relative one led by `./`), never normalised: a file named `-k.txt` is not read as a flag, a `..`
-    after a symlinked directory is resolved by the kernel, as kontroll-init's own read and sops resolve it, and no
-    working directory is looked up, so a removed one does not refuse an absolute path. "" when age-keygen cannot read
-    a key there (a byte-order mark, a file holding only a public line), or cannot be run, fails, runs past 60 s or
-    prints what is not UTF-8; None when no age-keygen is on PATH (the check is then skipped; the installer image
-    has one). The seam the tests patch. Prints nothing: age-keygen's output is captured, and holds only public
-    halves."""
-    exe = shutil.which("age-keygen")
+    """The public half `age-keygen -y` derives from the first key in key_file, which it is given as kontroll-init reads
+    the path (a relative one led by `./`), never normalised: a file named `-k.txt` is not read as a flag, a `..` after a
+    symlinked directory is resolved by the kernel, as kontroll-init's own read and sops resolve it, and no working
+    directory is looked up, so a removed one does not refuse an absolute path. "" when age-keygen cannot read a key
+    there (a byte-order mark, a file holding only a public line), or cannot be run (one on PATH without an execute bit,
+    or on a noexec mount, among them: an executable one later on PATH is preferred), fails, runs past 60 s or prints
+    what is not UTF-8; None when no file named age-keygen is on PATH (the check is then skipped; kontroll-init runs no
+    shell, so an alias, a shell function or a PATH entry written `~/bin` is none; the installer image has one). The seam
+    the tests patch. Prints nothing: age-keygen's output is captured, and holds only public halves."""
+    exe = shutil.which("age-keygen") or shutil.which("age-keygen", mode=os.F_OK)
     if not exe:
         return None
     try:
@@ -310,8 +311,11 @@ def _misread_key_file(key_file):
             "instance to the line's key, and on an existing instance the control-key check would rest on the line "
             "alone. "
             "`age-keygen -y %s` prints the public half age reads; correct the file, or name the right one with "
-            "--key-file (if age-keygen itself does not run, fix it, or run this in the installer shell, whose "
-            "age-keygen runs; removing it does not fix this: with no age-keygen on PATH kontroll-init cannot check "
+            "--key-file (if age-keygen itself does not run, fix it, or run this through the installer, whose "
+            "age-keygen runs — `scripts/kontroll-installer.sh fresh-init …` for a --fresh run, "
+            "`scripts/kontroll-installer.sh shell` otherwise — with the key file in ~/.config/sops/age, the directory "
+            "of keys it mounts: a --key-file naming another path of this machine names nothing there; removing "
+            "age-keygen fixes this only where another age-keygen on PATH runs: with none, kontroll-init cannot check "
             "the file and takes its line as written). Nothing was written."
             % (key_file, key_file))
 

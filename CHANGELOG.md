@@ -48,15 +48,19 @@ losing that key destroyed every device credential, API token and service passwor
     and for a `--fresh` run where something is at the key file's path; the refusal says the line could not be read
     and gives the `age-keygen -y` command that prints it. Before this, `--fresh` scaffolded `instance/` and then
     failed on such a file, a link to nothing ended in a traceback, and a FIFO hung the run;
-  - where `age-keygen` is installed (the installer has it), a key file whose `# public key:` line is not the public
-    half of the key age reads there, or from which age reads no key (a byte-order mark before the key, a public line
-    alone, another key's line): the line names a key the file cannot open, so a `--fresh` run would have written the
-    instance to it, and on an existing instance the control-key check rested on the line alone. age-keygen is
-    given the file's path as kontroll-init reads it (a relative one led by `./`), never normalised, so a file named
-    `-k.txt` is not read as a flag, a `..` after a symlinked directory names the file sops reads, and no working
-    directory is looked up; an age-keygen that cannot run, fails, runs past 60 s or prints what is not UTF-8 gets
-    the same refusal, which says kontroll-init cannot confirm the line, and that removing age-keygen does not fix
-    it (with none on PATH the line is taken as written).
+  - where an `age-keygen` program is on kontroll-init's `PATH` (an alias, a shell function or a `PATH` entry written
+    `~/bin` does not count; the installer has one), a key file whose `# public key:` line is not the public half of the
+    key age reads there, or from which age reads no key (a byte-order mark before the key, a public line alone, another
+    key's line): the line names a key the file cannot open, so a `--fresh` run would have written the instance to it,
+    and on an existing instance the control-key check rested on the line alone. age-keygen is given the file's path as
+    kontroll-init reads it (a relative one led by `./`), never normalised, so a file named `-k.txt` is not read as a
+    flag, a `..` after a symlinked directory names the file sops reads, and no working directory is looked up (a
+    `--fresh` run from a removed working directory still fails at sops' first encrypt, as before); an age-keygen that
+    cannot run (one on PATH without an execute bit included: an executable one later on PATH is preferred), fails, runs
+    past 60 s or prints what is not UTF-8 gets the same refusal. It says kontroll-init cannot confirm the line; that the
+    step can run through the installer, whose age-keygen runs (`fresh-init` for a `--fresh` run, `shell` otherwise, with
+    the key file in the directory it mounts); and that removing age-keygen fixes it only where another on PATH runs
+    (with none, the line is taken as written).
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
@@ -91,14 +95,15 @@ losing that key destroyed every device credential, API token and service passwor
     runs by hand. The terminal still shows every line (`tests/unit/test_installer_log_driver.py`).
   - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect (a named
     fd's included), a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen -L` or `-X log`,
-    `tmux pipe-pane` or `save-buffer` by any prefix tmux takes or by their aliases), a runner that gives it a terminal
-    of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), a logger (`logger`, `systemd-cat`) or a command that files its
-    output away from the terminal (`nohup`, `systemd-run`, `start-stop-daemon`), and none forces the container a
-    terminal. No line of the launchers or the installer's dispatcher sends output to a file (`>`, `>>`, `>|`, `&>`,
-    `>&file`, a target beginning with any other character; `>/dev/null` passes, quoted or closing a quote,
-    `>/dev/null.log` does not), so neither the run line nor a `case` or `{ … }` around it does; in the plaintext guard,
-    whose awk compares with `>`, no line that runs compose `run` or kontroll-init does (the scan reads a
-    backslash-continued command as one line; `tests/unit/test_installer_phase1.py`).
+    `tmux pipe-pane` or `save-buffer` by any prefix tmux takes or by their aliases, or a copy-mode pipe such as
+    `copy-pipe-and-cancel`), a runner that gives it a terminal of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), a
+    logger (`logger`, `systemd-cat`) or a command that files its output away from the terminal (`nohup`, `systemd-run`,
+    `start-stop-daemon`), and none forces the container a terminal. No line of the launchers or the installer's
+    dispatcher sends output to a file (`>`, `>>`, `>|`, `&>`, `>&file`, a target beginning with any other character;
+    `>/dev/null` passes, quoted or closing a quote, `>/dev/null.log` does not), so neither the run line nor a `case` or
+    `{ … }` around it does; in the plaintext guard, whose awk compares with `>`, no line that runs compose `run` or
+    kontroll-init does (the scan reads a backslash-continued command as one line;
+    `tests/unit/test_installer_phase1.py`).
   - A refusal after the scaffold (`could not add the break-glass recipient`) left `instance/` root-owned: the
     dispatcher read the exit code with a bare `rc=$?` under `set -e`, so the hand-back never ran. It runs now.
   - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).
