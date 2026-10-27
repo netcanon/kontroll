@@ -31,6 +31,9 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
   `tests/integration/test_api_secrets.py`, `tests/integration/test_api_onboard.py`,
   `tests/integration/test_plaintext_guard_sops.py`.
 - Nothing that names a deployment ships — `tests/unit/test_leak_guard.py` and the PII-guard workflow.
+- A new instance has a second recipient on every secret domain from its first secret, unless the operator declines
+  one at `kontroll-init --fresh` — `tests/unit/test_kontroll_init.py`,
+  `tests/unit/test_break_glass_claim_is_honest.py`.
 
 ## Known broken, or never run live
 
@@ -40,7 +43,10 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 - `backend_params` are written at onboard and read by nothing → the parameter channel (S22).
 - Every host is probed on port 22 → T17.
 - The onboard form's "install + verify (after promote)" checkbox changes nothing → not yet scheduled.
-- There is no break-glass recipient (SECURITY.md, "Break-glass") → T11.
+- An instance created before `kontroll-init --fresh` asked for a break-glass choice, or with `--no-break-glass`,
+  has one recipient per domain until docs/break-glass.md is run on it; and whether a break-glass key opens every
+  domain is checked by hand only (SECURITY.md R-KEY-1) → an operator action per instance: docs/break-glass.md,
+  then its Verify.
 - No gate checks that a task handling a credential carries `no_log` → SECURITY.md C2 (planned).
 - A second apply reporting `0 changed` is checked by hand, and no run of it is recorded here → not yet scheduled.
 
@@ -48,8 +54,7 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 
 1. The onboarding lane says what is true: refuse a backend nothing can run, then a fail-closed classifier with a
    generic SSH card (T15, T16).
-2. A break-glass recipient from an instance's first commit (T11).
-3. A release after v0.1.2, with the CHANGELOG cut (T30).
+2. A release after v0.1.2, with the CHANGELOG cut (T30).
 
 ## Waiting on a decision
 

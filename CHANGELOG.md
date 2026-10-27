@@ -11,6 +11,118 @@ NetConfig project.
 
 ## [Unreleased]
 
+### feat(scripts): a new instance gets a break-glass recipient before its first secret, unless the operator declines one (T11, 2026-10-23)
+
+SECURITY.md C1 had said since 2026-07-28 that break-glass was not implemented, but its key-management paragraph
+still said that losing the control key was recoverable because every secret was encrypted to both recipients. No
+instance had a second recipient: `kontroll-init --fresh` wrote a `.sops.yaml` naming only the minted control key, so
+losing that key destroyed every device credential, API token and service password in the instance (R-KEY-1).
+
+- **Changed (breaking for a scripted install).** `kontroll-init --fresh`, and so `fresh-init`, refuses to run
+  without a break-glass choice:
+  - `--break-glass-recipient <age1…>`: the public half of a key made on another machine (preferred);
+  - `--mint-break-glass`: minted on the node, with its private half printed once, alone on its line, in a
+    delimited block; kontroll writes it to no file, and the installer keeps no container log of `fresh-init`;
+  - `--no-break-glass`: one recipient per domain; the run says what that costs.
+  The choice is applied under both recipient anchors (the groups `key-roles/break-glass.yml` names) before the
+  first secret is written, so a fresh instance never needs a re-wrap. A scaffold command copied from an older
+  document stops at that refusal.
+- **Refusals, before anything is written:**
+  - a private key passed as the recipient (not echoed back), a value that is not an age public key, or one whose
+    bech32 checksum or X25519 length fails (a character mistyped, added or lost in a hand copy, an `l` read as `1`
+    among them) or whose padding bits are not zero (a value no age-keygen prints), which sops would refuse only at
+    the first encrypt;
+  - a plugin recipient (`age1<name>1…`, such as a hardware token's), which sops encrypts to only where
+    `age-plugin-<name>` is installed — kontroll's images ship none; a post-quantum one (`age1pq1…`), which needs a
+    sops whose age knows it on every machine that encrypts or decrypts, the trusted machine's included; and a
+    low-order X25519 point, which age refuses at encrypt;
+  - the control key's own public half;
+  - `--mint-break-glass` when standard output is not a terminal, so the key cannot land in a pipe or a file;
+  - `--mint-break-glass` or `--no-break-glass` on an existing instance;
+  - `--break-glass-recipient` without `--fresh` where no control key file exists. The non-fresh path would
+    otherwise mint a control key and add it to every domain first;
+  - the same on an existing instance whose key file holds a key that is not a recipient of every rule (a rule's
+    key groups when it has any, as sops reads it), which step 2 would otherwise add to every domain;
+  - a key file kontroll-init cannot read a `# public key:` line from (the line missing, or the file empty, not a
+    regular file — a directory, a FIFO, a link to nothing — unreadable or not UTF-8), for `--break-glass-recipient`,
+    and for a `--fresh` run where something is at the key file's path; the refusal says the line could not be read
+    and gives the `age-keygen -y` command that prints it. Before this, `--fresh` scaffolded `instance/` and then
+    failed on such a file, a link to nothing ended in a traceback, and a FIFO hung the run;
+  - where an `age-keygen` program is on kontroll-init's `PATH` (an alias, a shell function or a `PATH` entry written
+    `~/bin` does not count; the installer has one), a key file whose `# public key:` line is not the public half of the
+    key age reads there, or from which age reads no key (a byte-order mark before the key, a public line alone, another
+    key's line): the line names a key the file cannot open, so a `--fresh` run would have written the instance to it,
+    and on an existing instance the control-key check rested on the line alone. age-keygen is given the file's path as
+    kontroll-init reads it (a relative one led by `./`), never normalised, so a file named `-k.txt` is not read as a
+    flag, a `..` after a symlinked directory names the file sops reads, and no working directory is looked up (a
+    `--fresh` run from a removed working directory still fails at sops' first encrypt, as before); an age-keygen that
+    cannot run (one on PATH without an execute bit included: an executable one later on PATH is preferred), fails, runs
+    past 60 s or prints what is not UTF-8 gets the same refusal. It says kontroll-init cannot confirm the line; that the
+    step can run through the installer, whose age-keygen runs (`fresh-init` for a `--fresh` run, `shell` otherwise, with
+    the key at `~/.config/sops/age/keys.txt` and no `--key-file`, the one file every installer verb reads); and that
+    removing age-keygen fixes it only where another on PATH runs (with none, the line is taken as written);
+  - in the installer container, a run that would key the instance to a control key file other than `keys.txt` in the
+    directory of keys the installer mounts (`/root/.config/sops/age`, whatever `HOME` is), whether the file is there or
+    not: a `--fresh` run, or one on an existing instance but for its `--break-glass-recipient`, which only reads the
+    file (one that is there, a regular file: a link to no file, a directory or a FIFO is refused too). Before this, a
+    `--key-file` as the host spells it named a directory the container lacks, so the key was made in the container's own
+    layer, the instance written to it, and the key lost when the container exited; one made in another directory was
+    lost the same way, or left in the checkout or another mount; and a key file of another name, made then or there
+    before, was one no installer verb reads, so the next step minted a `keys.txt` that could not open the instance. The
+    container is known by `KONTROLL_IN_CONTAINER` (any non-empty value, as the playbooks read it) or by either of two
+    files in the installer image, which a `sudo` or an `env -i` in its shell cannot drop:
+    `/etc/kontroll/installer-image`, and the dispatcher `/usr/local/bin/kontroll-installer`, which every installer image
+    carries (one published before the marker too). The refusal names each of these it finds (the variable, then
+    `/etc/kontroll/installer-image`, then the dispatcher), so a host that carries a marker file by chance is told every
+    reason in one refusal; `keys.txt` itself under another path or name (a link, a hard link, a second bind), once it is
+    there, counts as `keys.txt`. Step 1 also makes a key named by a bare file name, where it failed before.
+  `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
+  docs/troubleshooting.md §11 maps each refusal to its remedy.
+- **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
+  prints and re-encrypts no secret. docs/break-glass.md is the runbook. It runs in the installer shell and has:
+  - a quiet window, a proven off-box control-key copy, and a checkout level with the canonical first;
+  - the re-wrap's dry run, then the apply;
+  - the check with the control key, the hand-back of root-owned files, and a scoped commit;
+  - the landing with `--check --diff` first, a rollback, and the operator's own proof that the key opens every
+    domain. It checks that sops runs as it will run it (no environment, an empty home: a shell function, an alias,
+    or a version-manager shim that needs the operator's environment does not count) and that the key file holds one
+    key, whose public half is the break-glass recipient as the control node showed it (the check's one anchor);
+    then, for each file, that it is wrapped to that key, and that a key which is no recipient fails on it, with sops
+    given no environment and an empty home (a plain `SOPS_AGE_KEY_FILE=… sops -d` passes on a control key in
+    `~/.config`). A BROKEN line says when the check cannot be trusted, and the block holds no comment, so an
+    interactive zsh runs it too. The runbook's one-line self-check for the no-sops BROKEN line runs sops as the
+    block does, in an empty home of its own that it then removes.
+- **Security.**
+  - The bootstrap play's warning counts recipients per creation rule of `instance/.sops.yaml` (the rules, not the
+    encrypted files). It used to count across rules, so a second recipient on one rule hid a rule with one.
+  - SECURITY.md C1 and R-KEY-1 state three cases: an instance with a second recipient from its first secret; one
+    with a single recipient until the runbook is run; and in either case, that kontroll cannot know whether
+    anyone kept the private half. C8 conditions the offline half on a recipient having been added; C11 describes
+    the CLI's show-once path.
+  - `tests/unit/test_break_glass_claim_is_honest.py` runs `--fresh` for each choice and holds C1 to what it writes.
+  - The installer keeps no container log for any verb but `init` and `check`. Through either launcher, what `fresh-init`
+    printed once — the bootstrap passwords, and now a minted break-glass key — reached the Docker log driver:
+    json-file until `--rm` removed the container, journald or a remote driver beyond it, and Loki through Vector's
+    docker_logs source on a box whose stack runs. The driver is now `${KONTROLL_INSTALLER_LOG_DRIVER:-none}`
+    (`docker/services/installer.yaml`), and both launchers set it for every verb, whatever the operator's shell
+    exported: `json-file` for `init` and `check`, which run no kontroll-init and print no secret value and whose
+    log (`services-init` in Loki) is the deploy's record; `none` for the rest, `shell` included, where kontroll-init
+    runs by hand. The terminal still shows every line (`tests/unit/test_installer_log_driver.py`).
+  - No launcher, nor a library it sources, routes `fresh-init` through a run log, a `tee`, an `exec` redirect (a named
+    fd's included), a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen -L` or `-X log`,
+    `tmux pipe-pane` or `save-buffer` by any prefix tmux takes or by their aliases, or a copy-mode pipe such as
+    `copy-pipe-and-cancel`), a runner that gives it a terminal of its own (`expect`, `unbuffer`, `rlwrap`, `socat`), a
+    logger (`logger`, `systemd-cat`) or a command that files its output away from the terminal (`nohup`, `systemd-run`,
+    `start-stop-daemon`), and none forces the container a terminal. No line of the launchers or the installer's
+    dispatcher sends output to a file (`>`, `>>`, `>|`, `&>`, `>&file`, a target beginning with any other character;
+    `>/dev/null` passes, quoted or closing a quote, `>/dev/null.log` does not), so neither the run line nor a `case` or
+    `{ … }` around it does; in the plaintext guard, whose awk compares with `>`, no line that runs compose `run` or
+    kontroll-init does (the scan reads a backslash-continued command as one line;
+    `tests/unit/test_installer_phase1.py`).
+  - A refusal after the scaffold (`could not add the break-glass recipient`) left `instance/` root-owned: the
+    dispatcher read the exit code with a bare `rc=$?` under `set -e`, so the hand-back never ran. It runs now.
+  - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).
+
 ### test(unit): the promote-hint check reads what its last review found it skipping (T19 tail, 2026-10-26)
 
 T19's last review found shapes `tests/unit/test_promote_hint_single_source.py` passed although they type the

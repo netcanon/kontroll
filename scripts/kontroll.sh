@@ -11,7 +11,8 @@
 # repo because scripts/kontroll/ is the Python service package — the name would collide).
 #
 # Usage (verbs mirror docker/installer/entrypoint.sh):
-#   ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/ + the control key
+#   ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated \
+#       --break-glass-recipient <age1…>                   # scaffold instance/ + the control key (docs/break-glass.md)
 #   $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
 #   ./kontroll check                                         # the mandated --check --diff dry-run
 #   ./kontroll init                                          # bootstrap → deploy-stack (pulls runner/vector by digest)
@@ -80,11 +81,20 @@ fi
 # The verb, read here because the capture below is not for every one of them.
 verb="${1:-init}"
 
+# The installer's log driver (docker/services/installer.yaml), chosen here for every verb so a value exported in the
+# operator's shell never chooses it: a deploy (`init`, `check`) keeps its record; every other verb, fresh-init's
+# show-once values and kontroll-init by hand in `shell` among them, reaches the terminal only.
+case "$verb" in
+  init|check) KONTROLL_INSTALLER_LOG_DRIVER=json-file ;;
+  *)          KONTROLL_INSTALLER_LOG_DRIVER=none ;;
+esac
+export KONTROLL_INSTALLER_LOG_DRIVER
+
 # The C10 canonical is seeded from THIS working tree's git (local-canonical adds a `local` remote to it + lands HEAD). A
 # launch kit is a tarball extract with NO .git, so git-init it (the step scripts/install.sh does for the bundle path)
 # and capture the current tree — including a freshly-scaffolded instance/ — so the canonical seed has a HEAD to land.
 # Operator-owned, local-only, no remote. Idempotent: re-commits only when the tree changed (e.g. after fresh-init).
-# `shell` deploys nothing and captures nothing. It is the break-glass verb, and the only way to the image's sops on a
+# `shell` deploys nothing and captures nothing. It is the escape hatch, and the only way to the image's sops on a
 # host that has none — so a refusal of the gate below must not lock it out.
 if [ "$verb" != shell ]; then
   # A GIT_DIR exported in the operator's shell (some dotfile set-ups do) would send every git call below to THAT

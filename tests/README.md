@@ -206,14 +206,15 @@ tests/e2e/           # GUI in a headless browser over the REAL booted Flask app 
 ```
 
 ```bash
-pip install -r tests/requirements-dev.txt          # tiny: pytest + pyyaml + flask
+# tests/requirements-dev.txt: pytest + pytest-cov, PyYAML, flask, FastAPI + httpx, cryptography, pytest-playwright
+pip install -r tests/requirements-dev.txt
 pytest -m "not e2e and not slow"                   # the hermetic default (CI runs this)
-pytest --cov=scripts --cov=gui --cov-report=term-missing
+pytest --cov=scripts --cov=gui --cov=api --cov-report=term-missing
 ```
 
 `validate` runs this as its L2 step automatically when `pytest` is installed (it
 skips gracefully on a box without it); CI runs it as a dedicated matrix job
-(py3.11–3.13). `e2e`/`slow` are excluded from the default — the live lab and any
+(py3.11–3.14). `e2e`/`slow` are excluded from the default — the live lab and any
 Playwright GUI flow are never in the hermetic gate.
 
 ## Identifier-leak gate (`tests/_leak_guard.py`)
@@ -308,6 +309,17 @@ control — a planted thing that fools nobody proves nothing), then ask the code
 what it would ask of a clean repository. `seam_without()` gives the seam's environment minus
 named entries, for showing that one entry is the one that answers a planted thing. These
 tests run real git and take the suite's `isolated_git` fixture.
+
+### Age recipients (`tests/unit/_age_recipient.py`)
+
+kontroll-init takes a break-glass recipient only as an X25519 one (bech32 checksum, 32 bytes,
+zero padding bits, not a low-order point; a plugin or post-quantum recipient is refused), so a
+test that passes one needs a real-length key, and a real-length key written into the source is
+what the leak guard flags. `bech32()` encodes bytes under any human part (`pad=` sets the
+padding bits age refuses); `x25519_recipient()` builds one as age-keygen prints it, at import,
+from fixed bytes. The low-order check is held to X25519 itself by the `cryptography` package
+(`tests/requirements-dev.txt`), which `test_the_low_order_check_agrees_with_x25519_itself`
+imports plainly, so it fails rather than skips where the package is missing.
 
 ## Playbook and role hygiene sweeps
 

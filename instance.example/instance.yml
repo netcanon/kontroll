@@ -35,7 +35,8 @@ frontend:
 #                promote on each staged proposal). THIS EDITION HAS NO AUTO-PROMOTER: `solo` behaves like
 #                `separated` (proposals stay staged for a manual promote). The GUI is propose-only + AST
 #                read-only-pinned in BOTH modes; trust_mode only ever drops the human review keystroke.
-# `kontroll-init --fresh --trust-mode {separated|solo}` writes this; read docs/trust-mode.md before choosing.
+# `kontroll-init --fresh` writes this from its required `--trust-mode {separated|solo}`; read docs/trust-mode.md
+# before choosing.
 # trust_mode: separated
 
 # Optional per-device-class TRUST decisions — the instance DECISION half of the no-bespoke-config tenet (the

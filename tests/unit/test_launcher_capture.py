@@ -6,7 +6,7 @@ guard's call stands in front of the `git add -A`; it cannot say what the pair DO
 running it (review 2026-10-12, report 38): a kit extracted inside another git repository — a home directory kept
 under git — created no repository of its own, so the "capture" staged and committed the OUTER repository, and the
 gate, which lists below the directory it is given, never saw those files; and a refusal locked out every verb,
-including `shell`, the break-glass verb and the only way to the image's sops on a host that has none.
+including `shell`, the escape-hatch verb and the only way to the image's sops on a host that has none.
 
 These tests build a minimal kit under tmp_path (the launcher, the guard, the two files the launcher looks for),
 put a stand-in `docker` first on PATH (the launcher needs one to exist, and ends by handing over to it), and run
