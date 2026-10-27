@@ -11,6 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test(unit): the promote-hint check reads what its last review found it skipping (T19 tail, 2026-10-26)
+
+T19's last review found shapes `tests/unit/test_promote_hint_single_source.py` passed although they type the
+instruction by hand, and docs that said it read more than it does. No route or document changes: the tree held none
+of these shapes.
+
+- A hoisted hint that the function also binds another way — an unpacking (`hint, _ = "land …", None`), `:=`, `for`,
+  `+=`, `with … as` — is checked as the name, and refused, instead of as its `=` value alone; in a committing route too.
+  A hoisted hint extended with `+=` onto the helper's own text is refused as well where a check reads the name itself
+  (in a committing route, or as the staged branch of a conditional): write it as one `=`. A hand value on the staged
+  path is still read when the function also binds the name another way — an unpacking given a conditional (`nxt, code =
+  ("land …", 202) if staged else …`) included — and a name given no value in the function (a module constant, a
+  parameter, an import) set as the staged `next` is refused. The refusal names the rule: a name also bound another way
+  is refused too, and the `next` is built with one `=` of the helper.
+- A `next` in the else of `not (a and staged)`, or the body of `bool(a and staged)`, is read as staged: `not` swaps
+  a test's sides, `bool()` keeps them.
+- The scan strips the inline tags `<br>`, `<cite>`, `<del>`, `<dfn>`, `<ins>`, `<q>`, `<s>` and `<tt>` too, and a
+  self-closing one (`<br/>`), and reads a run id in quotes after "promote". Its docstrings say what it does not read
+  — a tag outside `_INLINE` (`<font>`, `<label>`), a tag that joins two words — and what it refuses although it is
+  no instruction: code that names `type` just before `run_id` (a field tuple), which is reordered.
+- Samples: a module constant, a hand value between two helper `=`s, an unpacking, `:=`, `for` and `+=` rebinding, a hand
+  value past a `+=` or given by an unpacking (given a conditional too), a name given another name's value,
+  `not`/`bool()` of an `and`, an `if` on `len()` of the outcome (not read as the outcome), every tag of the list at
+  once, a `<script>` left alone, a self-closing tag and a quoted run id (in `‘` too); and a new sample test for the
+  committing routes' check.
+
 ### refactor(onboard): the backend registry owns an onboard's defaults — domain, params, the token var (T18 / S27, 2026-10-22)
 
 The secrets domain `network`, the `network_os` rule and the api token's host var were code: copies of the
