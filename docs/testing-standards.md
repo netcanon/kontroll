@@ -31,8 +31,14 @@ kontroll is a *composed* control plane, so it has two test halves. Both are firs
 The single mock seam (IaC: `tests/mock-inventory.yml` via `device_role`; code: the I/O seams in their
 home modules — `kontroll.probe.{_ad,deep_probe}`, `kontroll.catalog.{local_installed,galaxy_search}`,
 `kontroll.gitio._run`, and the GUI's in-process service seams) is described in [../tests/README.md](../tests/README.md).
-Never patch below the seam. The live lab and the Playwright flows are never in the blind hermetic gate
-(`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
+Never patch below the seam. A dict served in place of a real call — a canned return, a `page.route` body —
+belongs once in `tests/_canned.py`, with a row in `tests/unit/test_mock_conformance.py` that compares its shape with
+the real function's answer on a fixture: a mock shaped by belief keeps a UI test green while the server emits
+something else (S33). The e2e server's seams are enforced in the replacement forms the conformance file's parse
+reads or refuses; the forms it does not read, and whether a body or a route test's fake comes from `_canned.py`, are
+held only by review. [../tests/README.md](../tests/README.md) lists the fakes still written by hand and points to
+the parse's docstring, which names some of the forms it does not read. The live lab and the Playwright flows are never in the blind
+hermetic gate (`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
 
 ---
 
@@ -66,6 +72,13 @@ def test_onboard(page):
 Per-module docstrings that **enumerate** a surface (endpoints, markers, seams) are updated in the
 same commit when that surface changes (Documentation Sync Checklist) — a docstring that says
 "covers /api/search, /api/onboard" becomes a lie the instant a third endpoint lands.
+
+**A sweep is proven against a planted violation.** A test that reads the whole tree for a class
+of fault passes on a clean tree whether or not it can see the fault, so a test beside it plants
+the fault in a scratch tree and asserts the sweep names it, and plants the near-misses the sweep
+must pass. Prefer a rule that reads the tree to a hand-kept list of names: a list is silent about
+the entry nobody added. `tests/unit/test_bind_sources.py` and
+`tests/unit/test_check_mode_resolvers.py` are the pattern.
 
 ---
 

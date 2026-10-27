@@ -150,11 +150,21 @@ def test_a_module_file_that_is_not_a_mapping_is_repository_data(reuse, tmp_repo,
     assert "not a mapping" in str(stop.value)
 
 
+def _maps_to_passes(maps_to, template_ok):
+    """The planner's rule for a credential field's `maps_to`: none, an identifier, or — in the backend registry
+    alone (`template_ok`) — a template that renders, for a representative credential key, inside
+    catalog.MAPS_TO_RE. A module file's entry names its var as written (T18's read, F1)."""
+    if template_ok and isinstance(maps_to, str) and "{" in maps_to:
+        return bool(catalog.render_template(maps_to, {"cred_key": "sw2"}, catalog.MAPS_TO_RE))
+    return maps_to is None or bool(onboard._STEM_RE.fullmatch(maps_to))
+
+
 def test_every_shipped_class_and_backend_passes_the_adoption_rule():
     """Every shipped module file passes the adoption rule for the names it holds, every credential field a shipped
-    module or backend declares maps to nothing or to an identifier, and every role a shipped backend declares passes
-    the adopted role's rule. Guards the re-check refusing a healthy shipped class: this is the corpus the rule was
-    measured against, kept in the suite."""
+    module declares maps to nothing or to an identifier, one a shipped backend declares also to a template (S27)
+    that renders to a host var name, every role a shipped backend declares passes the adopted role's rule, and its default domain passes the
+    request field's. Guards the re-check refusing a healthy shipped class: this is the corpus the rule was measured
+    against, kept in the suite."""
     seen = 0
     for path in sorted(glob.glob(os.path.join(ROOT, "modules", "*", "module.yml"))):
         with open(path, encoding="utf-8") as fh:
@@ -162,11 +172,12 @@ def test_every_shipped_class_and_backend_passes_the_adoption_rule():
         for field in onboard._ADOPTED:
             onboard._adopted(module, field, module.get("key") or "x")
         for entry in module.get("auth") or []:
-            assert entry.get("maps_to") is None or onboard._STEM_RE.fullmatch(entry["maps_to"]), path
+            assert _maps_to_passes(entry.get("maps_to"), template_ok=False), path
         seen += 1
     for backend in catalog.load_backends():
         for entry in backend.get("auth") or []:
-            assert entry.get("maps_to") is None or onboard._STEM_RE.fullmatch(entry["maps_to"]), backend.get("name")
+            assert _maps_to_passes(entry.get("maps_to"), template_ok=True), backend.get("name")
+        onboard.default_secrets_domain(backend, backend["name"])         # raises RepositoryDataError if it fails
         if catalog.backend_role(backend) is not None:                    # one with none is never chosen (S26)
             assert onboard._role_of(backend, "x", False)
         assert paths.is_component(backend["name"]) and onboard.plain_scalar(backend["name"]), backend.get("name")
@@ -273,7 +284,7 @@ def test_a_backend_the_request_sent_is_the_requests_fault_on_a_reuse_too(reuse, 
 
 
 _CLI = {"name": "netcommon_cli", "requires": [], "classify": {"plugin": "cliconf"},    # a registry entry that
-        "role": "backend_netcommon_cli"}                                                # runs (it declares a role)
+        "role": "backend_netcommon_cli", "default_secrets_domain": "network"}          # runs (it declares a role)
 
 
 @pytest.mark.parametrize("name", ["r" * 60, "Weird.Name", "x y", "netcommon_cli"])
@@ -405,8 +416,9 @@ def test_drop_refused_still_skips_a_path_it_cannot_confine(tmp_path, monkeypatch
 @pytest.mark.parametrize("second_device", [False, True], ids=["new-class", "reuse"])
 def test_apply_confines_the_targets_it_will_write_before_its_first_write(reuse, monkeypatch, second_device):
     """`apply_onboard_plan` asks `confined()` about every drop-in target it is going to write before any writer
-    runs — the module target and the inventory target for a new class, the inventory target alone for a second
-    device of an existing one — so a layout the confinement refuses leaves nothing behind.
+    runs — the module target and the inventory target for a new class, the inventory target alone for a reuse (an
+    onboard of a collection the class under that key already declares, or, under a class with `collections: []`, a
+    collection ansible-core ships) — so a layout the confinement refuses leaves nothing behind.
 
     Guards the partial write: the module file used to be written first, and the inventory write then refused —
     "before any write" was not true of a symlinked inventory directory. And guards the opposite fault: a reuse
@@ -543,7 +555,7 @@ def test_the_cli_prints_a_repository_refusal_as_one_line(tmp_repo, monkeypatch, 
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
         *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
-                       "match": {"any": [{"plugin": "cliconf"}]}}]))
+                       "default_secrets_domain": "network", "match": {"any": [{"plugin": "cliconf"}]}}]))
 
     def refuse(rel_path):
         raise paths.RepositoryDataError("path", "a write target does not resolve inside the repository")
@@ -573,7 +585,7 @@ def test_cmd_scaffold_writes_under_the_write_root(tmp_path, monkeypatch, make_fa
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
         *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
-                       "match": {"any": [{"plugin": "cliconf"}]}}]))
+                       "default_secrets_domain": "network", "match": {"any": [{"plugin": "cliconf"}]}}]))
     galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
                                            secrets="network", backend="netcommon_cli", dry_run=True))
     assert "a real run refuses" not in capsys.readouterr().out      # the note is only true when the class exists
@@ -581,6 +593,28 @@ def test_cmd_scaffold_writes_under_the_write_root(tmp_path, monkeypatch, make_fa
                                            secrets="network", backend="netcommon_cli", dry_run=False))
     assert (write_root / "modules" / "ios_x" / "module.yml").exists()
     assert not (code_root / "modules" / "ios_x").exists()
+
+
+def test_cmd_scaffold_with_a_blank_domain_takes_the_backend_default(tmp_path, monkeypatch, make_facts, capsys):
+    """`galaxy.py scaffold --secrets ""` writes the class with the backend's `default_secrets_domain`, as an omitted
+    flag does: blank means omitted, as in `onboard`, the API and the GUI.
+
+    Guards the scaffold half of T18's read F10 (mutant M6 of its fold read passed the blank through, and the
+    scaffold refused it as a domain that is not a name)."""
+    import galaxy
+    (tmp_path / "modules").mkdir()
+    monkeypatch.setattr(paths, "ROOT", str(tmp_path))
+    monkeypatch.setenv("KONTROLL_WRITE_ROOT", str(tmp_path))
+    monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(
+        collection=coll, plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
+    monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
+        *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
+                       "default_secrets_domain": "lab", "match": {"any": [{"plugin": "cliconf"}]}}]))
+    for secrets in ("", None):
+        galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
+                                               secrets=secrets, backend="netcommon_cli", dry_run=True))
+        assert "secrets_domain: lab" in capsys.readouterr().out
 
 
 def test_cmd_scaffold_does_not_shadow_a_class_the_code_root_ships(tmp_path, monkeypatch, make_facts, capsys):
@@ -603,7 +637,7 @@ def test_cmd_scaffold_does_not_shadow_a_class_the_code_root_ships(tmp_path, monk
     monkeypatch.setattr(catalog, "local_installed", lambda: {"cisco.ios": "1.0.0"})
     monkeypatch.setattr(galaxy, "build_scaffold", lambda *a, **k: scaffold.build_scaffold(
         *a, backends=[{"name": "netcommon_cli", "role": "backend_netcommon_cli", "requires": [],
-                       "match": {"any": [{"plugin": "cliconf"}]}}]))
+                       "default_secrets_domain": "network", "match": {"any": [{"plugin": "cliconf"}]}}]))
     with pytest.raises(SystemExit) as stop:
         galaxy.cmd_scaffold(argparse.Namespace(collection="cisco.ios", key="ios_x", group="core_switch",
                                                secrets="network", backend="netcommon_cli", dry_run=False))
@@ -693,7 +727,7 @@ def test_apply_takes_a_second_device_of_a_class_only_the_code_root_holds(tmp_pat
     under the write root, no module file is, and nothing is a conflict.
 
     Guards the reader's-view conflict being asked of a reuse as well: a reuse writes no module file, so there is
-    nothing to shadow, and asking would refuse every second device of a shipped class on a clone older than its
+    nothing to shadow, and asking would refuse every reuse of a shipped class on a clone older than its
     image — with a message that tells the operator to pick another key."""
     code_root, write_root = tmp_path / "code", tmp_path / "write"
     (code_root / "modules" / "cisco_ios").mkdir(parents=True)

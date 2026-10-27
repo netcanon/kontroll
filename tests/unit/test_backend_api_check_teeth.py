@@ -16,6 +16,8 @@ highest-blast-radius device in the fleet:
               is always None and an onboarded host gets `<host>_api_token` — a name the role never looked
               up. paths.py defines RECIPES_DIR and no Python reads it. The documented design was never
               implemented, so the check could not have authenticated even with a perfect credential.
+              (That is the planner before S27. Since S27 the api backend's `api_token` entry names the
+              per-host var as data, a `maps_to` template; still nothing resolves a recipe's `token_var`.)
 
   F-CENSORED  `lookup('vars', X)` raises AnsibleUndefinedVariable for a missing name, and the resolve task
               carries `no_log: true`, so that fatal arrived CENSORED. ping.yml's block/rescue turned it into
@@ -172,7 +174,11 @@ def test_the_recipe_still_declares_the_name_the_role_reads():
 def test_the_backend_doc_no_longer_claims_the_planner_resolves_it():
     """The false comment is part of the defect. `backend.yml` asserted "resolved by the planner" while
     onboard.py never did, and that claim is why nobody looked. A doc that describes unimplemented behaviour
-    is a trap, so the corrected text must survive."""
+    is a trap, so the corrected text must survive. Since S27 the per-host name is the descriptor's own data:
+    its `api_token` entry's `maps_to` template is the name the role's second candidate reads
+    (`inventory_hostname` with `-` as `_`, then `_api_token`), and the text says no recipe var is resolved."""
     text = open(os.path.join(_ROOT, "ansible", "backends", "api", "backend.yml"), encoding="utf-8").read()
-    assert "how it ACTUALLY resolves" in text, "the corrected token-var explanation must stay"
-    assert "network_os" in text, "and must name what backend_params actually carries"
+    assert "resolved by the planner" not in text, "the false claim must not come back"
+    assert "Nothing resolves a recipe's `token_var` at onboard time" in text, "the correction must stay"
+    token = next(e for e in yaml.safe_load(text)["auth"] if e["field"] == "api_token")
+    assert token["maps_to"] == "{cred_key}_api_token", "the per-host name the role reads, stated as data"

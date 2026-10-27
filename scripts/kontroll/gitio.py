@@ -127,13 +127,14 @@ def owned_merge(text, group, hosts):
 def write_inventory_host(rel_path, group, hosts, banner, overwrite=False):
     """Write/refresh the drop-in inventory file at `rel_path`, placing `hosts` ({name: vars}) under `group`.
 
-    Unlike `_write_new` (whole-file no-clobber), this MERGES via `owned_merge`: if the file already carries our
-    `banner` (we wrote it), the new host(s) are added ALONGSIDE any siblings already there — so onboarding a 2nd
-    device of an existing class never drops the 1st (#124, the "add a host to an existing class" path). A FOREIGN
-    file (no banner — an operator rewrite) still hard-stops with WriteConflict unless `overwrite=True` (the
-    deliberate escape hatch), preserving the no-clobber-operator-edits guarantee. Idempotent: an identical result
-    is a no-op (returns False). The key-level overwrite is now visible through `owned_merge`'s collisions (G3) —
-    the host-var reconfigure surface (service/hostvars) consumes them; onboard's additive add ignores them."""
+    Unlike `_write_new` (whole-file no-clobber), this MERGES via `owned_merge`: if the file opens with our `banner`
+    (we wrote it), the new host(s) are added ALONGSIDE any siblings already there — so onboarding a 2nd device of an
+    existing class never drops the 1st (#124, the "add a host to an existing class" path). A FOREIGN file (one that
+    does not open with the banner — an operator rewrite) still hard-stops with WriteConflict unless
+    `overwrite=True` (the deliberate escape hatch), preserving the no-clobber-operator-edits guarantee. Idempotent:
+    an identical result is a no-op (returns False). The key-level overwrite is now visible through `owned_merge`'s
+    collisions (G3) — the host-var reconfigure surface (service/hostvars) consumes them; onboard's additive add
+    ignores them."""
     import yaml
     path = paths.confined(rel_path)                        # never outside write_root() (finding 1)
     doc = {group: {"hosts": dict(hosts)}}                     # the default (a fresh drop-in, or an overwrite-replace)

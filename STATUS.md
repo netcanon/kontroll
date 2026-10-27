@@ -17,7 +17,8 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 ## What works
 
 - The composed stack deploys from one command and previews with `--check --diff`, a brand-new node included —
-  `tests/unit/test_deploy_stack_check_mode.py`, `tests/unit/test_fresh_node_preview.py`.
+  `tests/unit/test_deploy_stack_check_mode.py`, `tests/unit/test_check_mode_resolvers.py`,
+  `tests/unit/test_fresh_node_preview.py`.
 - Device classes are data: the fleet file selects them and the collection list is generated —
   `tests/unit/test_deploy_stack_requirements.py`, `tests/unit/test_gen_*.py`.
 - A device is onboarded from the GUI or the API with no task code of its own — `tests/e2e/test_onboard_flow.py`,

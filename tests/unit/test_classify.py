@@ -76,3 +76,26 @@ def test_manual_backend_never_autoclassified(backends, make_facts):
               make_facts(modules=["thing"]),
               make_facts()):
         assert manual.isdisjoint(galaxy.classify(f, backends))
+
+
+def test_galaxy_classify_exits_with_the_sentence_for_a_requires_that_is_not_a_list_of_names(monkeypatch,
+                                                                                             make_facts):
+    """`galaxy classify` of a collection whose best backend's registry `requires:` is not a list of param names exits
+    non-zero with the repository-data sentence naming `requires`, as `GET /classify` answers 409 for it.
+
+    Guards the CLI half of T18's fold-3 read, N3: the command printed a string `requires:` letter by letter and raised
+    a TypeError for a non-string entry, and nothing ran it against a malformed registry, so a `RepositoryDataError`
+    escaping it as a traceback survived every suite (fold-4 read, N5: its mutant Z9)."""
+    import sys
+
+    from kontroll import catalog, probe
+    real = catalog.load_backends
+    monkeypatch.setattr(catalog, "load_backends", lambda *a, **k: [
+        dict(b, requires="network_os") if b.get("name") == "netcommon_cli" else b for b in real(*a, **k)])
+    monkeypatch.setattr(probe, "deep_probe", lambda coll, version=None: make_facts(
+        collection=coll, version="5.0.0", plugins={"cliconf": ["ios"]}, modules=["ios_command"]))
+    monkeypatch.setattr(sys, "argv", ["galaxy.py", "classify", "cisco.ios"])
+    with pytest.raises(SystemExit) as stop:
+        galaxy.main()
+    assert isinstance(stop.value.code, str), "sys.exit(<sentence>) exits 1; an int 0 or None would be success"
+    assert "netcommon_cli backend's requires is not a list of param names" in stop.value.code

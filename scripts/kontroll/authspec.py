@@ -110,7 +110,8 @@ _GENERIC_UNION = (
     {"field": "username", "kind": "identity", "label": "username (SSH)", "maps_to": "ansible_user"},
     {"field": "password", "kind": "password", "label": "password (SSH)", "maps_to": "ansible_password",
      "group": "ssh_login"},
-    {"field": "api_token", "kind": "token", "label": "API token (REST devices)"},   # maps_to is dynamic (token_var)
+    # a TEMPLATE (S27): the planner renders it per host, as the api backend's own entry (onboard.py)
+    {"field": "api_token", "kind": "token", "label": "API token (REST devices)", "maps_to": "{cred_key}_api_token"},
     {"field": "ssh_private_key", "kind": "ssh_key", "label": "SSH private key (PEM)",
      "maps_to": "ansible_ssh_private_key_file", "group": "ssh_login"},
 )

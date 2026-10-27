@@ -14,6 +14,10 @@ classify: {manual: true}          # never auto-matched; chosen explicitly
 # Derivation still gates on applies_when, so a method only attaches when the device's facts support it.
 confers: {actuate: true, backup: true, telemetry: [snmp, blackbox], logs: [syslog_push]}
 requires: [napalm_driver]         # e.g. ios | eos | junos | nxos
+# The SOPS domain a class of this backend stores its credentials in when the onboard request names none and the
+# class is new (a reused class keeps its own `secrets_domain`). Read by service/onboard.py and the scaffold, and
+# shown as the onboard form's default; no code names a domain (S27). A new name needs a rule in .sops.yaml.
+default_secrets_domain: network
 # Self-describing credential SHAPE (F1 TIER-A): NAPALM connects with an SSH login. Read by scripts/kontroll/authspec.py.
 auth:
   - {field: username, kind: identity, label: "username", maps_to: ansible_user, required: true}

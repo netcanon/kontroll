@@ -123,6 +123,154 @@ losing that key destroyed every device credential, API token and service passwor
     dispatcher read the exit code with a bare `rc=$?` under `set -e`, so the hand-back never ran. It runs now.
   - Every written scaffold command names a choice (`tests/unit/test_install_commands.py`).
 
+### test(unit): the promote-hint check reads what its last review found it skipping (T19 tail, 2026-10-26)
+
+T19's last review found shapes `tests/unit/test_promote_hint_single_source.py` passed although they type the
+instruction by hand, and docs that said it read more than it does. No route or document changes: the tree held none
+of these shapes.
+
+- A hoisted hint that the function also binds another way — an unpacking (`hint, _ = "land …", None`), `:=`, `for`,
+  `+=`, `with … as` — is checked as the name, and refused, instead of as its `=` value alone; in a committing route too.
+  A hoisted hint extended with `+=` onto the helper's own text is refused as well where a check reads the name itself
+  (in a committing route, or as the staged branch of a conditional): write it as one `=`. A hand value on the staged
+  path is still read when the function also binds the name another way — an unpacking given a conditional (`nxt, code =
+  ("land …", 202) if staged else …`) included — and a name given no value in the function (a module constant, a
+  parameter, an import) set as the staged `next` is refused. The refusal names the rule: a name also bound another way
+  is refused too, and the `next` is built with one `=` of the helper.
+- A `next` in the else of `not (a and staged)`, or the body of `bool(a and staged)`, is read as staged: `not` swaps
+  a test's sides, `bool()` keeps them.
+- The scan strips the inline tags `<br>`, `<cite>`, `<del>`, `<dfn>`, `<ins>`, `<q>`, `<s>` and `<tt>` too, and a
+  self-closing one (`<br/>`), and reads a run id in quotes after "promote". Its docstrings say what it does not read
+  — a tag outside `_INLINE` (`<font>`, `<label>`), a tag that joins two words — and what it refuses although it is
+  no instruction: code that names `type` just before `run_id` (a field tuple), which is reordered.
+- Samples: a module constant, a hand value between two helper `=`s, an unpacking, `:=`, `for` and `+=` rebinding, a hand
+  value past a `+=` or given by an unpacking (given a conditional too), a name given another name's value,
+  `not`/`bool()` of an `and`, an `if` on `len()` of the outcome (not read as the outcome), every tag of the list at
+  once, a `<script>` left alone, a self-closing tag and a quoted run id (in `‘` too); and a new sample test for the
+  committing routes' check.
+
+### refactor(onboard): the backend registry owns an onboard's defaults — domain, params, the token var (T18 / S27, 2026-10-22)
+
+The secrets domain `network`, the `network_os` rule and the api token's host var were code: copies of the
+domain's name across the planner, the scaffold, the routes, the form and the CLI, and two branches on a backend's or
+a field's name in the planner. A backend an operator adds could not change any of them. Each is now a field of
+`ansible/backends/<name>/backend.yml`. For a new class of the `netcommon_cli` and `api` backends, the drop-in, the
+credentials it stores and its module file's `backend_params` are what the former code wrote, and every runnable
+backend's default domain is `network` (`tests/unit/test_backend_defaults.py`'s oracle).
+
+- `default_secrets_domain` (every shipped backend: `network`). An onboard or scaffold that names no domain stores
+  credentials there; a request's domain wins over it, and a reused class's own `secrets_domain` over both, as before.
+  A backend that declares none makes a domain required (422 `invalid_secrets_domain`) — so an onboard through an
+  operator's own `backend.yml` written before this change must name one until the file declares a default. A class
+  whose module file names a backend this install does not ship is told so in the same refusal.
+- `derive_params` (`netcommon_cli`: `network_os: "{collection}.{name}"`): what a new class's `backend_params` are
+  written with. Only a param the backend `requires:` is written, and every param's name is held to an identifier.
+  A backend whose `connection:` block reads a param it requires and does not derive, or names one anywhere in a
+  templated value but as a bare `{{ param }}` (a filter, an expression, text beside it, a `{% %}` block, an unclosed
+  `{{`, a `#jinja2:` header, or a list, a set or a map at any depth; a name built at render time is not seen), is
+  refused as `repository_data`: the drop-in would hold it unrendered. So is a `requires:` that is not a list of param
+  names (a YAML string made every check a substring test), by the planner, the scaffold and `GET /classify` / `galaxy
+  classify` alike (`GET /classify` answered 500 or 200, the GUI's `/api/classify` 200, and `galaxy classify` raised,
+  printed a string letter by letter, or printed the rest as if well-formed: `nothing` for `""` or `false`). The
+  former code filled `network_os` by name for any backend that required it; the registry now says how, so an
+  operator's copy of `netcommon_cli` written before this change must add
+  `derive_params: {network_os: "{collection}.{name}"}`. An operator's backend whose `connection:` block
+  reads a required value set at run time (a group var) is refused too, where the former code planned it: drop the param
+  from the backend's `requires:` (the planner then leaves it for the class's group vars), or move that connection var
+  into the class's group vars. The planner reads no class's own `backend_params`, a reused class's included.
+- A templated `maps_to` (`api` and the generic union's `api_token`: `{cred_key}_api_token`) names the host var a
+  token is written under. A template is a closed `{name}` grammar rendered to a fixed charset; a default or template
+  that fails is answered `repository_data` and never written. Only the registry and the generic union declare one:
+  a template lets the request's host name choose the var, so a module file's own `auth:` entry names its var as
+  written; it may repeat, for the same field, the template its backend's registry entry or the generic union
+  declares (today only `api_token`'s), and any other template is refused as `repository_data` once a value is
+  given. The rendered names keep the former code's var names for a dotted, IP-literal or digit-first host, which
+  ansible-core 2.19 accepts with a warning until 2.23 (a var name that is not an identifier): before the stack
+  reaches 2.23 they must become identifiers, `_` for `.` and `:` and a leading letter or `_`.
+- Two differences, pinned by tests: a class's own `api_token` with a literal `maps_to` is now written under that var
+  (it was `<cred key>_api_token` whatever the file said), and a class's own `api_token` with no `maps_to`, on a
+  backend without the template, is stored in SOPS with no host var. No shipped module declares either.
+  Two more, not pinned and unreachable with shipped data: a class's own `api_token` of kind `ssh_key` on the `api`
+  backend now gets the template's var (the key file's path) and `kontroll_ssh_key_domain` where it got none, and
+  one marked `inline: true` is refused as repository data where it was written as a SOPS lookup (T18's read, F6).
+- API and GUI: `secrets` is optional on `POST /onboard` and `GET /onboard/cred-fields` — a blank value now means
+  omitted (it was a 422) — and `cred-fields` answers the backend's default as its `secrets`, and shows the api
+  token's descriptor with its template `maps_to` (`{cred_key}_api_token`), where it showed none. The onboard form's
+  domain box ships empty, its placeholder naming the backend's default (a reuse — an onboard of a collection the class
+  under that key already declares (shipped, or onboarded before; under a class with `collections: []`, a collection
+  ansible-core ships) — stores in that class's own domain, whatever the box shows) or saying a domain is required; a
+  typed domain now counts as input to the form's collapse check. The CLI's `--secrets` has no default of its own, and a
+  blank one means omitted, as in the API.
+
+### test: bind sources and check-mode resolvers are found by rule, not listed (T24 / S34 (a), (b), 2026-10-23)
+
+Two guards held hand lists. The bind-source check named the Loki and Vector configs; a third service was then
+found to ship the same fault: the snmp_exporter config was rendered only when SNMP credentials existed, Docker
+created the missing source as a root-owned directory, and the exporter died on a fresh box. The check-mode
+guard named seven registers and claimed to catch a new resolver added without `check_mode: false`; `_img_env`
+was added without the mark and without a row, and `kontroll check` stopped at the fail-closed "no recorded
+digest" assert. Both faults are fixed; the guards now read the tree.
+
+- `tests/unit/test_bind_sources.py`: every bind source written relative to its fragment (a bare long-form
+  `type: bind` source included), and every `env_file`, in every `docker/services/` fragment, generated ones
+  included, is in the tree; or it is an `instance/` path `kontroll-init --fresh` scaffolds (its exceptions
+  mirrored, and checked against the scaffold); or a `deploy-stack.yml` task before the stack's one bring-up
+  writes it whenever the service runs. The writer's `when:`, and its blocks', may only test `stack_services`
+  membership, and must name the service and every service that starts it through `depends_on`; a writer under
+  `rescue:`, tagged `never`, run with `check_mode: true` or delegated off the control node does not count.
+  Planted cases show a secrets-present condition, another service's, a credentials test ANDed with a membership
+  group, a block's condition, and a writer after the bring-up are flagged, the bring-up written in any of these
+  shapes: `command` (`cmd`, free form, `argv`, `args: {cmd: …}`), `shell`, `raw`, the compose module (v2 or v1),
+  or a `run` or `create`. A compose call's subcommand is the first word after `compose` that is not a global
+  option, an option's value or a `{{ … }}` (which may print options), so an `exec … create` is not a bring-up and an
+  `up;` is; after a `{% … %}` (which may choose any word after it), or a `{{ … }}` where the subcommand would be, a
+  later `up`, `run` or `create` counts too. Where the tree is a git checkout, a rendered file git does not track is
+  not in it. It replaces `test_loki_and_vector_config_bind_sources_exist`.
+- `tests/unit/test_check_mode_resolvers.py`: in every control-node play (`hosts:` of `localhost` or
+  `127.0.0.1` — a list, a string joined by `,` or `:`, or a templated value whose `default('…')` or `d('…')`
+  literals name only those — or the `ansible_connection: local` play var), less a task delegated anywhere else,
+  and every task delegated to `localhost`, in the task files those import at any depth, and in the roles they
+  apply, a read-only `command` / `shell` / `raw` task whose register is read anywhere under `ansible/` or in a Jinja
+  template carries `check_mode: false` (on itself or its block), or has an exemption row that says why an empty
+  value is right in a dry-run. The `connection: local` keyword does not count: a host's own `ansible_connection`
+  overrides it. YAML is read through its parsed values, so a comment is not a read; nor is a `register:` value,
+  or a `name:` string that holds no Jinja. Three rows today: the two bootstrap key reads (the key is not minted in a
+  dry-run on a fresh node) and the post-deploy `ps`. A row whose read is forced, or whose register is gone from
+  everywhere under `ansible/` and every template, fails as stale; any other mention of that name keeps it. No
+  `command` / `shell` / `raw` task of any other role, `.role-template` included, may carry `check_mode: false`,
+  since that role runs against a device. It replaces the `_RESOLVERS` list; `test_deploy_stack_check_mode.py`
+  keeps the keystone resolver and the boundary that keeps writers skipped.
+- No play changed. The canonical's reads that the plan expected the sweep to flag were rewritten into
+  `_land_check`, which runs in a dry-run. Promote's were folded into the promote script, a writer, so
+  `promote.yml`'s dry-run still previews nothing — out of this sweep's class.
+- docs/testing-standards.md states the planted-violation norm these follow.
+
+### test: a canned shape lives once and is held to the real function's (T21 / S33, 2026-10-22)
+
+No runtime change. The dicts the browser suite and the route tests are served in place of a service call were
+written by hand, some of them twice, and nothing compared one with what the function returns. Compared, several had
+drifted: the Pending panel's payload lacked `changes_read`, `note_kind`, `main_note` and `skipped_note`, the discard
+answer lacked `run_id_audit` and its refusal `run_id`, both homepage mocks lacked keys the board and the plan carry,
+a route test's copy of the discovery inbox lacked `vendor`, the keygen e2e's answer lacked `placement`,
+`private_key_path`, `recipient_domains`, `high_blast` and `sops_updatekeys` (and named `main` where nothing changed,
+where the route names no ref), and the unit-pick e2e's list lacked `collection` and each unit's `id`.
+
+- `tests/_canned.py` holds each canned dict once; the e2e conftest, the Discard, Re-propose, keygen and unit-pick e2e
+  tests and the route tests read it, and each seam hands out a copy. A few bodies are still written by hand in
+  their tests; `tests/README.md` lists them.
+- `tests/unit/test_mock_conformance.py` builds the smallest real fixture for each, calls the real function (the
+  keygen answer through the real route) and compares key sets and value types. A seam the e2e server replaces with
+  no row fails it, and so does one it does not hand back to be restored, or one replaced in a form the file's parse
+  refuses (a nested target, a `setattr` by a variable name or handed on, a monkeypatch object's `.setattr`, an
+  assignment through an imported name outside the seam function, `unittest.mock`, or a write through `__dict__`,
+  `vars` or `exec`), or a conftest without its one restore loop. The forms the parse does not read (among them a
+  replacement outside the seam function through a name that is not an import, a patching fixture, one made in
+  another file; `_seams`' docstring names more) are held by review.
+- Round-trip tests feed a generator's real output to its real reader: gen-backup's schedules file to
+  configure-semaphore (driven against a fake Semaphore; the retention and destination it describes the template
+  with), gen-requirements' trust sidecar to the provenance view (its pins, policies, default policy and keyring),
+  and a ref the real stager pushed to the Pending list.
+
 ### feat(ansible): reachability as data — an api host is probed on its API port, an SSH host on the port typed for it (T17 / S28, 2026-10-22)
 
 `ping.yml` decides a host is reachable with a TCP connect from the control node, on `mgmt_port` or 22 — and nothing
@@ -272,7 +420,7 @@ The role now comes from declared data only. A `backend` a request names must be 
 declares a role; any other is refused as the `backend` field (422 `invalid_backend`, the CLI one line) before the
 collection is probed. With no `backend`, the planner and the scaffold choose the first match that declares a role
 (`catalog.runnable`), or answer `no_backend`; a search record's `suggested_backend` and `galaxy classify`'s `best`
-are that same choice. A second device of a class whose module file declares its own role keeps that role, whatever
+are that same choice. A reuse of a class whose module file declares its own role keeps that role, whatever
 shipped backend the request names (one that declares none included); with none named it takes the first match that
 declares a role, or the first match when none does. Every fault in a name the reuse adopts from a class's module
 file is answered before the collection is probed. A class whose file names no role and whose backend declares none is
