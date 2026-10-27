@@ -19,14 +19,19 @@ of these shapes.
 
 - A hoisted hint that the function also binds another way — an unpacking (`hint, _ = "land …", None`), `:=`, `for`,
   `+=`, `with … as` — is checked as the name, and refused, instead of as its `=` value alone; in a committing route
-  too. A hoisted hint extended with `+=` onto the helper's own text is refused as well: write it as one `=`.
-- A `next` under `not (a and staged)`, or `bool(a and staged)`, is read like the same test without them.
-- The scan strips the inline tags `<br>`, `<cite>`, `<del>`, `<dfn>`, `<ins>`, `<q>`, `<s>` and `<tt>` too, and its
-  docstrings say what it does not read — a tag outside that list (`<font>`, `<label>`) — and what it refuses
-  although it is no instruction: code that names `type` just before `run_id` (a field tuple), which is reordered.
-- Samples: a module constant, a hand value between two helper `=`s, each rebinding, `not`/`bool()` of an `and`, an
-  `if` on `len()` of the outcome (not read as the outcome), every tag of the list at once, a `<script>` left alone;
-  and a new sample test for the committing routes' check.
+  too. A hoisted hint extended with `+=` onto the helper's own text is refused as well: write it as one `=`. A hand
+  `=` on the staged path is still read when the function also binds the name another way, and a name given no value
+  in the function (a module constant, a parameter, an import) set as the staged `next` is refused.
+- A `next` in the else of `not (a and staged)`, or the body of `bool(a and staged)`, is read as staged: `not` swaps
+  a test's sides, `bool()` keeps them.
+- The scan strips the inline tags `<br>`, `<cite>`, `<del>`, `<dfn>`, `<ins>`, `<q>`, `<s>` and `<tt>` too, and a
+  self-closing one (`<br/>`), and reads a run id in quotes after "promote". Its docstrings say what it does not read
+  — a tag outside `_INLINE` (`<font>`, `<label>`), a tag that joins two words — and what it refuses although it is
+  no instruction: code that names `type` just before `run_id` (a field tuple), which is reordered.
+- Samples: a module constant, a hand value between two helper `=`s, an unpacking, `:=`, `for` and `+=` rebinding, a
+  hand `=` hidden by one, `not`/`bool()` of an `and`, an `if` on `len()` of the outcome (not read as the outcome),
+  every tag of the list at once, a `<script>` left alone, a self-closing tag and a quoted run id; and a new sample
+  test for the committing routes' check.
 
 ### refactor(onboard): the backend registry owns an onboard's defaults — domain, params, the token var (T18 / S27, 2026-10-22)
 
