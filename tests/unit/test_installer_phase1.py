@@ -315,42 +315,45 @@ def test_fresh_init_output_is_never_teed_to_a_log():
     a tmux command after an assignment on a control-mode client's line (`K=1 pipe …`), a later element of an array, or a
     quoted one on a line of its own (`K=(x "pipe …")`), a value after an expansion (`K="$X pipe …"`, `K=${X:-pipe …}`),
     a command name quoted on a control-mode client's line (`"pipe" -o …`), a prefix inside another tmux command's
-    argument, or in braces on its line (`if -F 1 'pi …'`, `if -F 1 { pi … }`), in plaintext-guard.sh an `exec` after a
-    redirect spelled otherwise (a backslash or a quote inside the word, or through a variable set on another line), or a
-    recorder, runner or flag spelled otherwise than these (the list is of spellings, not of what a program can do).
-    Refused although sound, each in the safe direction: "screen" and any `-…L` on one line (`echo "clear the screen";
-    curl -L …`), a `nohup` or `systemd-run` that files nothing, a bare `tmux pipe-pane` (which closes a pipe), "tmux"
-    with "save" or "pipe", or a prefix of either that tmux takes, as a word on the line (`echo "in tmux? save the
-    key"`), or at a line's start, after a `;` or as a variable's value (a heredoc's `save the key offline`, `true; pip
-    install …`, `MODE=save`), `pipep`, `save-buffer`, `saveb`, any `pipe-…` word, `copy-command` or a `copy-pipe`
-    command as a word anywhere, a tmux option read or unset included (`tmux show -s copy-command`), the word "expect"
-    anywhere, any name the scan refuses (`tee`, a recorder, a runner, a logger, `nohup`) as a word anywhere on the line
-    (a message, `echo "run this script again"`, a variable, `script=…`, a path, `install-script.sh`, or a trailing
-    comment), any `exec` redirect, wherever `exec` stands (`exec 2>&1`, `exec >/dev/null` and an input one, `exec
-    3<k.in`, included), and a `>` in a message (`echo "a -> b"`) or one that compares (`(( $# >= 2 ))`, `awk '$3 >=
-    1000'`). `test_the_capture_scan_reads_each_route_it_names` holds each spelling. compose run gives the container a
-    terminal only when the launcher's stdout is one, so a pipe around `fresh-init --mint-break-glass` is refused by
-    kontroll-init itself, unless a runner such as `expect` gives compose a terminal (the bootstrap passwords would still
-    reach a pipe or a file the operator adds); this guards the forms that keep a terminal while copying it — a forced
-    tty, a run log, a recorder, a runner, a logger — which would put the show-once break-glass private key
-    `--mint-break-glass` prints in a log nobody chose to keep, and a redirect on the run line or around it, or a `nohup`
-    or `systemd-run`, which files the bootstrap passwords (T11 fold 4's read B, N5; fold 5's reads, 70 N6 and 80 N4:
-    `>&file`, `>|`, a named fd and a redirected `case` or group passed; fold 6's reads, 90 N2 and 100 N3: `nohup`, the
-    recorders and `>/dev/null.log` passed; fold 7's reads, 110 N2 and 111 N3: the recorders' other spellings, the
-    runners and a target beginning with a symbol passed; fold 9's read 130, N3 and N4: tmux's copy-mode pipes, refused
-    at fold 8, passed fold 9's arm, and the sound lines it refuses were not all listed; fold 10's read 140, N1 and N2:
-    `pipe-pane` written before "tmux" on a control-mode client's line, `copy-command`, and an `exec` after `then` or `{`
-    passed; fold 11's read 150, N4: a control-mode client fed by a heredoc or a variable, and `exec --` or `exec -c`,
-    passed, and read 151, N7: the sound lines the arm refuses were not all listed; fold 12's reads 160, N3 and 161, N5:
-    `exec -a NAME >f`, `exec -c>f`, a redirect written before `exec`, and a prefix or a copy-mode pipe on a control-mode
-    client's line from a heredoc or a variable passed in plaintext-guard.sh; fold 13's read 171, N3: an assignment
-    before a redirect written before `exec`, `K=1 >f exec`, passed there; read 170, N2-N4: a redirect before `exec`
-    after `!`, `time`, `if`, `while` or a `case` pattern, or before an assignment, `command`, or a quoted or escaped
-    `exec`, passed plaintext-guard.sh, a variable's value quoted after a space, in `$'…'` or an array's passed, and the
-    exec arm took seconds on a run of dashes, as it did on dashed operands (fold 14's own probe); fold 14's read 180, N1
-    and N2: the redirect-before-exec arm took seconds on a run of appends, and a variable's value quoted inside an array
-    passed; fold 15's read 190, N1: a prefix after `;` on a control-mode client's line passed, and the arm's other
-    limits were not named). The container's own log is held by `test_the_installer_container_keeps_no_log`."""
+    argument, or in braces on its line, on a control-mode client's line (`if -F 1 'pi …'`, `if -F 1 { pi … }`), in
+    plaintext-guard.sh an `exec` after a redirect spelled otherwise (a backslash or a quote inside the word, or through
+    a variable set on another line), or a recorder, runner or flag spelled otherwise than these (the list is of
+    spellings, not of what a program can do). Refused although sound, each in the safe direction: "screen" and any `-…L`
+    on one line (`echo "clear the screen"; curl -L …`), a `nohup` or `systemd-run` that files nothing, a bare `tmux
+    pipe-pane` (which closes a pipe), "tmux" with "save" or "pipe", or a prefix of either that tmux takes, as a word on
+    the line (`echo "in tmux? save the key"`), or at a line's start, after a `;` or as a variable's value (a heredoc's
+    `save the key offline`, `true; pip install …`, `MODE=save`), `pipep`, `save-buffer`, `saveb`, any `pipe-…` word,
+    `copy-command` or a `copy-pipe` command as a word anywhere, a tmux option read or unset included (`tmux show -s
+    copy-command`), the word "expect" anywhere, any name the scan refuses (`tee`, a recorder, a runner, a logger,
+    `nohup`) as a word anywhere on the line (a message, `echo "run this script again"`, a variable, `script=…`, a path,
+    `install-script.sh`, or a trailing comment), any `exec` redirect, wherever `exec` stands (`exec 2>&1`, `exec
+    >/dev/null` and an input one, `exec 3<k.in`, included), and a `>` in a message (`echo "a -> b"`) or one that
+    compares (`(( $# >= 2 ))`, `awk '$3 >= 1000'`). `test_the_capture_scan_reads_each_route_it_names` holds each
+    spelling. compose run gives the container a terminal only when the launcher's stdout is one, so a pipe around
+    `fresh-init --mint-break-glass` is refused by kontroll-init itself, unless a runner such as `expect` gives compose a
+    terminal (the bootstrap passwords would still reach a pipe or a file the operator adds); this guards the forms that
+    keep a terminal while copying it — a forced tty, a run log, a recorder, a runner, a logger — which would put the
+    show-once break-glass private key `--mint-break-glass` prints in a log nobody chose to keep, and a redirect on the
+    run line or around it, or a `nohup` or `systemd-run`, which files the bootstrap passwords (T11 fold 4's read B, N5;
+    fold 5's reads, 70 N6 and 80 N4: `>&file`, `>|`, a named fd and a redirected `case` or group passed; fold 6's reads,
+    90 N2 and 100 N3: `nohup`, the recorders and `>/dev/null.log` passed; fold 7's reads, 110 N2 and 111 N3: the
+    recorders' other spellings, the runners and a target beginning with a symbol passed; fold 9's read 130, N3 and N4:
+    tmux's copy-mode pipes, refused at fold 8, passed fold 9's arm, and the sound lines it refuses were not all listed;
+    fold 10's read 140, N1 and N2: `pipe-pane` written before "tmux" on a control-mode client's line, `copy-command`,
+    and an `exec` after `then` or `{` passed; fold 11's read 150, N4: a control-mode client fed by a heredoc or a
+    variable, and `exec --` or `exec -c`, passed, and read 151, N7: the sound lines the arm refuses were not all listed;
+    fold 12's reads 160, N3 and 161, N5: `exec -a NAME >f`, `exec -c>f`, a redirect written before `exec`, and a prefix
+    or a copy-mode pipe on a control-mode client's line from a heredoc or a variable passed in plaintext-guard.sh; fold
+    13's read 171, N3: an assignment before a redirect written before `exec`, `K=1 >f exec`, passed there; read 170,
+    N2-N4: a redirect before `exec` after `!`, `time`, `if`, `while` or a `case` pattern, or before an assignment,
+    `command`, or a quoted or escaped `exec`, passed plaintext-guard.sh, a variable's value quoted after a space, in
+    `$'…'` or an array's passed, and the exec arm took seconds on a run of dashes, as it did on dashed operands (fold
+    14's own probe); fold 14's read 180, N1 and N2: the redirect-before-exec arm took seconds on a run of appends, and a
+    variable's value quoted inside an array passed; fold 15's read 190, N1: a prefix after `;` on a control-mode
+    client's line passed, and the arm's other limits were not named; fold 16's reads 200, N1 and 201, N3: a prefix
+    inside another tmux command's argument or in braces on a control-mode client's line passed, unnamed, and a bare
+    element on a line of its own was named as passing, which the scan reads). The container's own log is held by
+    `test_the_installer_container_keeps_no_log`."""
     for rel in _NO_FILE_REDIRECT + ("scripts/lib/plaintext-guard.sh",):
         for line in _joined_lines(rel):
             assert "run_log_init" not in line and not _LOG_ROUTE.search(line), "%s: %s" % (rel, line)
@@ -599,18 +602,21 @@ def test_plaintext_guard_holds_a_line_that_names_exec_to_the_file_pattern(line, 
 
 def test_the_exec_arm_reads_a_run_of_dashes_in_linear_time():
     """`_LOG_ROUTE` searches, within 60 s each, a line holding `exec`, then a long run of dashes, or many flags with
-    dashed operands, and no redirect, a group of many appends with no `exec` after them, and a `;` then a long run of
-    spaces, each search in a child process that the timeout kills (a signal would stop it only on a POSIX main thread).
-    Guards the exec arm's flag and operand, which, read with no edge, a run of dashes or a dashed operand splits in
-    exponentially many ways: 24 dashes took 4 s at fold 13, and with fold 13's read 170's lookahead on the flag alone
-    each dashed operand still multiplied the time (twelve took 7 s); and the redirect-before-exec arm, which read each
-    `>>k.log` either as `>` then `>k.log` or as `>>` then `k.log`, so that 24 appends took 6.8 s at fold 14; and the
-    prefix arm's `;`, which no line held, where a pattern that read each space after it two ways would double the time
-    with each space; a long line of any of these shapes in a launcher would stall the suite for minutes instead of
-    failing (T11 fold 13's read 170, N4; the operands, fold 14's own probe; the appends, fold 14's read 180, N1; the
-    spaces, fold 16's read 200, N5)."""
+    dashed operands, and no redirect, a group of many appends with no `exec` after them, a `;` then a long run of
+    spaces, or of spaces and tabs, and a long run of spaces at a line's start, after `=(` and after a quote, each search
+    in a child process that the timeout kills (a signal would stop it only on a POSIX main thread). Guards the exec
+    arm's flag and operand, which, read with no edge, a run of dashes or a dashed operand splits in exponentially many
+    ways: 24 dashes took 4 s at fold 13, and with fold 13's read 170's lookahead on the flag alone each dashed operand
+    still multiplied the time (twelve took 7 s); and the redirect-before-exec arm, which read each `>>k.log` either as
+    `>` then `>k.log` or as `>>` then `k.log`, so that 24 appends took 6.8 s at fold 14; and the prefix arm's `;`, which
+    no line held, where a pattern that read each space after it two ways would double the time with each space, and its
+    other three alternatives and a tab after a `;`, which no line held either; a long line of any of these shapes in a
+    launcher would stall the suite for minutes instead of failing (T11 fold 13's read 170, N4; the operands, fold 14's
+    own probe; the appends, fold 14's read 180, N1; the spaces, fold 16's read 200, N5; the other alternatives and the
+    tab, fold 17's read 210, N2)."""
     for line in ('echo "exec %s x"' % ("-" * 64), "echo exec " + " ".join(["-a x-x-x-x"] * 40) + " x",
-                 "{ " + " ".join(">>k%d.log" % i for i in range(64)) + "; }", "true;" + " " * 64 + "x"):
+                 "{ " + " ".join(">>k%d.log" % i for i in range(64)) + "; }", "true;" + " " * 64 + "x",
+                 " " * 64 + "x", "K=(" + " " * 64 + "x", "K='" + " " * 64 + "x", "true;" + " \t" * 32 + "x"):
         subprocess.run([sys.executable, "-c", "import re, sys; re.compile(sys.argv[1]).search(sys.argv[2])",
                         _LOG_ROUTE.pattern, line], check=True, timeout=60)
 
