@@ -334,22 +334,26 @@ def pip_audit_faults(workflow):
     `)`, not after a `$(…)`'s, and this check tells neither), a newline inside a quoted string or a quote left open
     (an `eval` reads a backslash-newline there as a continuation, and this check does not read a quote nested in a
     `"$(…)"`), or a C0 control character that is not whitespace (a NUL, which bash drops inside a word, or one of this
-    check's own marks), in the step's script; an env key that changes what the step runs (`_BASH_ENV`: `BASH_ENV`,
-    `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`,
-    `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`), or an env that is not a mapping, on the step, the job or the workflow;
-    or a `container:` on the job (its env and its options reach bash unread). It refuses sound shapes too, each loudly:
-    a pipe after the audit under `shell: bash` (which runs with pipefail), an `exit 0` after it, and the word `exit`,
-    `return`, `trap` or `exec` in a message (`echo "will exit on error"`), an `&>` redirect after the audit, an
-    audit sent to the background and waited for (`& wait $!`), a `$(…)#` (to bash the `#` is part of a word), an
-    ANSI-C `$'…'` in the audit's list, the word `alias`, `hash` or `enable` in a message (and a `hash -r`), the word
-    `set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set up
-    (once)"`), a newline inside a quoted string (a message over two lines), a `shopt -uo` of noexec or onecmd, and an
-    audit that opens a subshell (`(pip-audit -r a)`: it is not read as a run, so the coverage test fails). It cannot see
-    an earlier step that writes one of those env keys through `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a
-    later step runs under it; nor another env key that leads the audit to a planted file; nor a `working-directory:`
-    or a `cd` that moves the file a `-r` names (a copy planted at `<dir>/docker/…` is then audited instead; with
-    none, pip-audit fails on the missing file); nor a command word glued to a command substitution, which is built at
-    run time (`` exit`:` 0 ``, `$(:)hash …`, `` set`:` +e ``)."""
+    check's own marks), in the step's script; an env key, in any case (a Windows runner reads `Path` as `PATH`), that
+    changes what the step runs (`_BASH_ENV`: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`,
+    `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`), or an env that is not a
+    mapping, on the step, the job or the workflow; or a `container:` on the job (its env and its options reach bash
+    unread). It refuses sound shapes too, each loudly: a pipe after the audit under `shell: bash` (which runs with
+    pipefail), an `exit 0` after it, and the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on
+    error"`), an `&>` redirect after the audit, an audit sent to the background and waited for (`& wait $!`), a `$(…)#`
+    (to bash the `#` is part of a word), an ANSI-C `$'…'` in the audit's list, the word `alias`, `hash` or `enable` in a
+    message (and a `hash -r`), the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob
+    character, `{` or `(` (`echo "set up (once)"`), a newline inside a quoted string (a message over two lines), a C0
+    control character in a message (the ESC of an ANSI colour code), a `shopt -uo` of noexec or onecmd, an ANSI-C `$'…'`
+    before the audit, and an audit that opens a subshell (`(pip-audit -r a)`), sits inside a function or is spelt other
+    than `pip-audit …` (`python -m pip_audit`, the pip-audit action): none of these is read as a run, so the coverage
+    test fails. It cannot see an earlier step that writes one of those env keys through `$GITHUB_ENV`, or a PATH entry
+    through `$GITHUB_PATH`: a later step runs under it; nor another env key that leads the audit to a planted file; nor
+    a `working-directory:` or a `cd` that moves the file a `-r` names (a copy planted at `<dir>/docker/…` is then
+    audited instead; with none, pip-audit fails on the missing file); nor a command word built at run time, glued to or
+    made of a parameter expansion (but a special parameter the script starts with empty, `exit$@`, which is read), a
+    command substitution or a glob (`exit$x 0`, `set$x +e`, `${x:-exit} 0`, `` exit`:` 0 ``, `$(:)hash …`, `ex?t 0`, ``
+    set`:` +e ``)."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -396,7 +400,8 @@ def pip_audit_faults(workflow):
                               "not read here)" % name)
             for where, node in (("step", step), ("job", job), ("workflow", workflow)):
                 env = node.get("env")
-                if env is not None and (not isinstance(env, dict) or any(re.fullmatch(_BASH_ENV, str(k)) for k in env)):
+                if env is not None and (not isinstance(env, dict)
+                                        or any(re.fullmatch(_BASH_ENV, str(k), re.I) for k in env)):
                     faults.append("%s: `BASH_ENV` or another env key that changes what the step runs "
                                   "(`ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, "
                                   "`PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`), "
@@ -624,7 +629,8 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": "shopt -so noexe[c]\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
     ({"run": "shopt -so noex*\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
     ({"run": "shopt -so noexe?\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
-    ({"run": "shopt -so @(noe)xec\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `shopt"]),
+    ({"run": "shopt -s extglob\nshopt -so @(noe)xec\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `shopt"]),
     ({"run": "if shopt -uo err{exit,exit}; then :; fi\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `if shopt", "not followed"]),
     ({"run": "shopt -uo `echo err`exit\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
@@ -635,9 +641,45 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
      ["shares the step with `shopt", "not followed"]),
     ({"run": "shopt -uo errexi?\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `shopt", "not followed"]),
-    ({"run": "shopt -uo @(err)exit\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
-     ["shares the step with `shopt", "not followed"]),
+    ({"run": "shopt -s extglob\nshopt -uo @(err)exit\n" + _AUDIT + "\necho done"}, {},
+     {"docker/a/requirements.txt"}, ["shares the step with `shopt", "not followed"]),
     ({"run": _AUDIT}, {"env": {"LD_AUDIT": "/tmp/x.so"}}, {"docker/a/requirements.txt"}, ["another env key"]),
+    ({"run": "true\n{exit,0}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exit,0}"]),
+    ({"run": "{hash,-p,/bin/true,pip-audit}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "{set,-n}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `{set,-n}"]),
+    ({"run": "true\ncommand {exit,0}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `command {exit,0}"]),
+    ({"run": "if {set,+e}; then :; fi\n" + _AUDIT + "\necho done"}, {},
+     {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "{e..e}xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{e..e}xit"]),
+    ({"run": "{e..e}x{i..i}t 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{e..e}x{i..i}t"]),
+    ({"run": "if {s..s}et +e; then :; fi\n" + _AUDIT + "\necho done"}, {},
+     {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "if shopt -uo err{exit,\"a b\"}; then :; fi\n" + _AUDIT + "\necho done"}, {},
+     {"docker/a/requirements.txt"}, ["shares the step with `if shopt", "not followed"]),
+    ({"run": "set {+e,\"a b\"}\n" + _AUDIT + "\necho done"}, {},
+     {"docker/a/requirements.txt"}, ["shares the step with `set {+e", "not followed"]),
+    ({"run": _AUDIT}, {"env": {"Path": "./tools"}}, {"docker/a/requirements.txt"}, ["another env key"]),
+    ({"run": "true\nexit$@\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$@`"]),
+    ({"run": "true\n$@exit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `$@exit 0`"]),
+    ({"run": "true\nexit$*\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$*`"]),
+    ({"run": "true\nexit$!\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$!`"]),
+    ({"run": "true\nexit$1\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$1`"]),
+    ({"run": "true\n$9exit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `$9exit 0`"]),
+    ({"run": "true\nexit${@}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${@}`"]),
+    ({"run": "hash$@ -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "set$@ +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "true\n$\"ex\"it 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `$\"ex\"it 0`"]),
+    ({"run": "echo {a,b}\nmkdir -p out/{a,b}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "echo {a..c}\nmkdir -p out/{1..3}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "echo $\"hello\"\necho \"cost: $\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "echo \"$@\" $1 $* $!\necho \"cost: $1\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -682,7 +724,20 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "shopt-noexec-of-a-star-glob", "shopt-noexec-of-a-question-mark-glob", "shopt-noexec-of-a-extended-glob",
         "shopt-errexit-of-a-brace-expansion", "shopt-errexit-of-a-backquoted-command",
         "shopt-errexit-of-a-bracket-glob", "shopt-errexit-of-a-star-glob", "shopt-errexit-of-a-question-mark-glob",
-        "shopt-errexit-of-a-extended-glob", "ld-audit-on-the-job"])
+        "shopt-errexit-of-a-extended-glob", "ld-audit-on-the-job",
+        "exit-built-by-a-brace-expansion", "hash-built-by-a-brace-expansion",
+        "set-n-built-by-a-brace-expansion", "command-exit-built-by-a-brace-expansion",
+        "set-plus-e-built-by-a-brace-expansion-in-a-closed-if", "exit-built-by-a-brace-sequence",
+        "exit-built-by-two-brace-sequences",
+        "set-plus-e-built-by-a-brace-sequence-in-a-closed-if", "shopt-errexit-of-a-brace-the-view-leaves",
+        "set-plus-e-of-a-brace-the-view-leaves", "path-in-another-case-on-the-job",
+        "exit-glued-to-an-empty-parameter", "empty-parameter-glued-to-exit", "exit-glued-to-a-star-parameter",
+        "exit-glued-to-the-last-background-pid", "exit-glued-to-a-positional-parameter",
+        "positional-parameter-nine-glued-to-exit", "exit-glued-to-a-braced-empty-parameter",
+        "hash-glued-to-an-empty-parameter", "set-plus-e-glued-to-an-empty-parameter",
+        "exit-spelled-through-a-locale-string",
+        "brace-list-in-a-message-and-a-path", "brace-sequence-in-a-message-and-a-path", "locale-strings-in-messages",
+        "special-parameters-in-messages"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -733,15 +788,26 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     other shape of its class (a brace expansion, a backquoted command, a bracket, star, question-mark or extended glob),
     naming noexec or errexit; a locale string's `$` glued to `exit`, `hash` or `set` (`exit$""`, `$""hash`, `hash$""`,
     `set$"" -n`, `set$"" +e`: bash expands `$""` to nothing); a NUL on a line after the first (bash drops it inside a
-    word; on the first line it refuses the script, loudly), and a SOH beside it, so a class cut to a NUL and the marks
-    fails; and an `LD_AUDIT` in the env. Each row's job runs on ubuntu-latest unless the row names another. Guards a
-    check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read,
-    S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold
-    4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2,
-    N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3;
-    its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5; its read B, S1, S2, N6; fold 8's read A, S1 to
-    S5, N1: M1 to M13; its read B, S1 to S4, N2, N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's mutant X9a; its read B, S1,
-    S2, N1, N8; fold 10's mutant run: B9-control-class-nul-and-stx-only)."""
+    word; on the first line it refuses the script, loudly); and an `LD_AUDIT` in the env. Fold 10's mutant run added a
+    SOH inside an `exit` on a line after the first, so a class cut to a NUL and STX fails. Its read A added: a command
+    word a brace expansion builds, from a list or a sequence (`{exit,0}`, `command {exit,0}`, `{e..e}xit 0`,
+    `{e..e}x{i..i}t 0`, `{hash,-p,/bin/true,pip-audit}`, `{set,-n}`, and `{set,+e}` or `{s..s}et +e` in a closed `if`);
+    a `shopt` or a `set` given a brace the view leaves (an item holding a quoted space: the raw `{` is read); and an env
+    key in another case (`Path`, which a Windows runner reads as `PATH`). It passes a brace expansion in a message or a
+    path (`echo {a,b}`, `mkdir -p out/{1..3}`) and a locale string in a message (`echo $"hello"`, `echo "cost: $"`). Its
+    read B added: a special parameter the script starts with empty glued to `exit`, `hash` or `set` (`exit$@`, `$@exit
+    0`, `exit$*`, `exit$!`, `exit$1`, `$9exit 0`, `exit${@}`, `hash$@ …`, `set$@ +e`: a step's script is given no
+    arguments, so each is dead) and a locale string that is not empty (`$"ex"it 0`: bash expands it to its text); and
+    the two extended-glob `shopt` rows turn `extglob` on first (without it bash refuses them as it parses, loudly). It
+    passes those parameters in a message (`echo "$@" $1 $* $!`, `echo "cost: $1"`). Each row's job runs on ubuntu-latest
+    unless the row names another. Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2,
+    PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell,
+    PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c,
+    A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold
+    6's mutant W56; its read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5;
+    its read B, S1, S2, N6; fold 8's read A, S1 to S5, N1: M1 to M13; its read B, S1 to S4, N2, N3, N6, N7: CT1, CT2,
+    SI2, MK2; fold 9's mutant X9a; its read B, S1, S2, N1, N8; fold 10's mutant run: B9-control-class-nul-and-stx-only;
+    its read A, S1, N1; its read B, S1, S2, N1, N2)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults

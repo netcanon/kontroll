@@ -28,8 +28,10 @@ Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the w
   `(hash -p …` and `hash>/dev/null -p …` are read): each can stand in for the checked program, or for `set`;
 - no `trap`, `exec`, `return` or `exit` shares the text, but `exit 1` to `exit 255` (`exit 256` is 0): each of the
   others can end the text with a status that is not the failure's. One is read as a word anywhere in a command, as
-  written or with its quotes and backslashes removed (`\\exit 0`, `"exit" 0`, `command exit 0`, `eval 'exit 0'`),
-  after an `&`, `|` or redirect and before a redirect too (`true&exit 0`, `exit>/dev/null`);
+  written or with its quotes, backslashes, a locale string's `$` and the special parameters empty at the start (`$@`,
+  `$*`, `$!`, `$1` to `$9`) removed and its brace expansions expanded (`\\exit 0`, `"exit" 0`, `exit$""`, `exit$@`,
+  `{exit,0}`, `command exit 0`, `eval 'exit 0'`), after an `&`, `|` or redirect and before a redirect too (`true&exit
+  0`, `exit>/dev/null`);
 - no `set -n`, `set -t`, `set -o noexec` or `set -o onecmd` shares the text (a flag cluster holding `n` or `t`), nor
   a `shopt` naming noexec or onecmd (`shopt -so noexec`), nor a `set` or a `shopt` given a variable, a backquoted
   command, a glob, a brace expansion or an extended glob (`set -$x`, `` set `cat o` ``, `set +[e]`, `set -{n,n}`,
@@ -45,13 +47,13 @@ a `;`, `&` or `|`, so `echo done` closes nothing) and before a delimiter (so `do
 Errexit is switched on by a `set -e` (a flag cluster holding `e`, or `-o errexit`) that is a whole command at the top of
 the text and runs whenever the text reaches it (not behind `&&` or `||`, not piped, not sent to the background, nothing
 open). It is switched off by a `set +e` or `set +o errexit` anywhere in the text (inside a compound, behind `eval` or
-`command`, written through quotes, backslashes or a locale string's `$""`), by a `set` given a variable, a backquoted
-command, a glob, a brace expansion or an extended glob (`set $o`, `` set `cat o` ``, `set +[e]`, `set +{e,}`, `set
-+@(e)`), and by a `shopt` naming errexit or given any of those (`shopt -ou $x`). A `set -e` the reader cannot place
-switches nothing on, and a `set` it cannot rule out switches errexit off, so each misreading of these that it knows of
-refuses. The reader refuses what it knows it cannot read; what it still cannot see is listed in
-tests/unit/test_image_pins.py's docstring ("What the checks still cannot see").
-"""
+`command`, written through quotes, backslashes, a locale string's `$""` or a special parameter empty at the start
+(`set$@ +e`), or built by a brace expansion, `{set,+e}`), by a `set` given a variable, a backquoted command, a glob, a
+brace expansion or an extended glob (`set $o`, `` set `cat o` ``, `set +[e]`, `set +{e,}`, `set +@(e)`), and by a
+`shopt` naming errexit or given any of those (`shopt -ou $x`). A `set -e` the reader cannot place switches nothing on,
+and a `set` it cannot rule out switches errexit off, so each misreading of these that it knows of refuses. The reader
+refuses what it knows it cannot read; what it still cannot see is listed in tests/unit/test_image_pins.py's docstring
+("What the checks still cannot see"). """
 import re
 
 _OPERATORS = re.compile(r"(&&|\|\||;|\||\x02)")
@@ -66,10 +68,44 @@ _NOEXEC = re.compile(r"\bset\s+(?:\S+\s+)*?(?:-[a-zA-Z]*[nt][a-zA-Z]*|-o\s+(?:no
 _STAND_IN = re.compile(r"(?:^|[\s(])(?:alias|hash|enable)(?=[\s<>])|\bBASH_(?:ALIASES|CMDS)\b")
 
 
+# A brace expansion bash expands (none after a `$`): a list, `{a,b}`, or a sequence of single letters or of integers,
+# with an optional step, `{a..e}`, `{1..9..2}` (bash's braces.c). An item holds no space and no brace.
+_BRACE = re.compile(r"(?<!\$)\{(?:([^{}\s]*,[^{}\s]*)"
+                    r"|([a-zA-Z]\.\.[a-zA-Z]|[-+]?\d+\.\.[-+]?\d+)(?:\.\.([-+]?\d+))?)\}")
+
+
+def _braced(text):
+    """`text` with each brace expansion (`_BRACE`) expanded as bash expands it, in any word, the command's own too: a
+    list (`{exit,0}` -> `exit 0`, `a{b,c}d` -> `abd acd`) or a sequence (`{e..e}xit` -> `exit`, its step read, at most
+    64 items), innermost first, until none is left. Quotes are not read, so a quoted `{a,b}`, which bash leaves, is
+    expanded too, and /bin/sh (a Dockerfile RUN) expands none: `_plain`'s view is only ever read beside the text as
+    written, so each of these only adds a reading (a refusal), never hides one."""
+    def items(b):
+        if b.group(1) is not None:
+            return b.group(1).split(",")
+        a, z = b.group(2).split("..")
+        num = not a.isalpha()
+        lo, hi = (int(a), int(z)) if num else (ord(a), ord(z))
+        step = (abs(int(b.group(3) or 1)) or 1) * (1 if hi >= lo else -1)
+        return [str(n) if num else chr(n) for n in range(lo, hi + (1 if step > 0 else -1), step)[:64]]
+
+    def word(m):
+        w, b = m.group(0), _BRACE.search(m.group(0))
+        return " ".join(w[:b.start()] + item + w[b.end():] for item in items(b)) if b else w
+    prev = None
+    while prev != text:
+        prev, text = text, re.sub(r"\S+", word, text)
+    return text
+
+
 def _plain(command):
-    """`command` with its quotes and backslashes removed, and the `$` of a locale string (bash expands `$""` to
-    nothing), so `"set" +e`, `e\\xit 0` and `exit$""` read as written plainly."""
-    return re.sub(r"""\$(?=["'])|["'\\]""", "", command)
+    """`command` with its brace expansions expanded (`_braced`), then its quotes, backslashes, the `$` of a locale
+    string (bash expands `$""` to nothing) and the special parameters a step's script and a RUN start with empty
+    removed (`$@`, `$*` and `$1` to `$9`: neither is given arguments; `$!`: no job is in the background yet; braced or
+    not), so `{exit,0}`, `"set" +e`, `e\\xit 0`, `exit$""` and `exit$@` read as written plainly. One of these
+    that is not empty (a `set --` before it, a job sent to the background) only adds a reading (a refusal)."""
+    command = _braced(command)
+    return re.sub(r"""\$(?=["'])|["'\\]|\$(?:[@*!1-9]|\{[@*!1-9]\})""", "", command)
 
 
 def unquote(token):
@@ -213,11 +249,12 @@ def conditions(cmds):
 def ender(cmds):
     """The first command of the text holding a `trap`, `exec`, `return` or `exit` that can end it with a status other
     than a failure's (each but `exit 1` to `exit 255`), as a word of its own anywhere in the command (after a keyword,
-    an opening `(`, `{` or `!`, a case pattern, `command`, `eval`, an assignment, an `&`, `|` or redirect; or before
-    a redirect, `exit>/dev/null`), as written or with its quotes and backslashes removed; or a `set -n`, `set -t`,
-    `set -o noexec` or `set -o onecmd` (a flag cluster holding `n` or `t`), a `shopt` naming noexec or onecmd, or a
-    `set` or `shopt` that can be one (the module docstring's last rule: the shell then runs none of the rest of the
-    text, or stops after one command); or None."""
+    an opening `(`, `{` or `!`, a case pattern, `command`, `eval`, an assignment, an `&`, `|` or redirect; or before a
+    redirect, `exit>/dev/null`), as written or in `_plain`'s view (its quotes, backslashes, a locale string's `$` and
+    the special parameters empty at the start removed, its brace expansions expanded); or a `set -n`, `set -t`, `set -o
+    noexec` or `set -o onecmd` (a flag cluster holding `n` or `t`), a `shopt` naming noexec or onecmd, or a `set` or
+    `shopt` that can be one (the module docstring's last rule: the shell then runs none of the rest of the text, or
+    stops after one command); or None."""
     for command, _, _ in cmds:
         for text in (command, _plain(command)):
             m = _ENDER.search(text)

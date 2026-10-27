@@ -52,15 +52,16 @@ option that takes a value and is not named here (its value reads as a package), 
 `sha256sum -c <file>`, a check line written with `printf`, a `;` inside a compound (under `set -e`, or the one before a
 brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`( install && check )`, behind `&&` or
 not: the `)` joins the check's command, which then reads as no `pip check`), a `;` inside a quoted string after a check
-(`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN, the word `exit`,
-`return`, `trap` or `exec` in a message (`echo "will exit on error"`), a function or an alias anywhere in the RUN (the
-word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too), the word `set` or `shopt` in a message before
-a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set up (once)"`), an ANSI-C `$'…'` before the
-check or later in its own list, a `sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#`
-right after a `$(…)` (`echo $(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space
-inside quotes (`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget
-naming two URLs or two outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared without its value
-in a later stage.
+(`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN (one a brace expansion
+builds too, `{exit,0}`: sh expands no brace, so it runs a command not found, which fails the RUN, while these checks
+read it as bash would), the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), a
+function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too),
+the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set
+up (once)"`), an ANSI-C `$'…'` before the check or later in its own list, a `sha256sum` that is not the first word of
+its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo $(true)#x`: one word to sh, a comment inside a
+RUN to these checks), a `#` after a space inside quotes (`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash",
+"-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two outputs, a trailing comment on a RUN's last line, and a
+digest ARG redeclared without its value in a later stage.
 """
 import json
 import os
@@ -1049,6 +1050,8 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
     ("set -e; set +[e]; " + _INSTALL + "; python3 -m pip check; true",
      ["pip install shares the RUN with `set", "pip install not followed",
       "pip check shares the RUN with `set", "pip check not followed"]),
+    ("true; exit$@; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit$@`", "pip check shares the RUN with `exit$@`"]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1087,7 +1090,7 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "ansi-c-quote-later-in-the-list", "continuation-after-trailing-blanks",
         "ansi-c-quote-after-a-pipe", "subshell-after-a-pipe",
         "subshell-after-a-background", "subshell-after-one-closed-behind-or", "set-of-a-variable-flag",
-        "set-of-a-glob"])
+        "set-of-a-glob", "exit-glued-to-an-empty-parameter"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1132,14 +1135,15 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     status is the RUN's, and one after a subshell closed behind `||` (a closed one skips nothing that follows it; fold
     7's mutants: O3s). Fold 7's read A added: a `set` given a variable, a backquoted command or a glob (`set $o`, `set
     -$x`, `` set `cat o` ``, `set +[e]`) shares the RUN as a `set -n` would, since it can be one, and switches errexit
-    off. Guards a pin check that a common install shape walks past, and a `pip check` that cannot fail the build — "make
-    the cleanup tolerant" with a trailing `|| true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1,
-    N3, N4; its fold-3 read, S2, N1, N2, N6: Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read,
-    S1, S2, S4, S5, N1, N2, N6: G-a, C-g, O-a to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33,
-    O10 to O14, O17, S5, C4; fold 5's read A, S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4,
-    C6, C7, D1, D2, D4, D8, E1, E3, F1, G1, G2, I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's
-    mutants: Q7, QX1, QX2; its read A, S3, S4, S5, S7; its read B, S3, N1, N4: R1, SK1, SK2, BK1; fold 7's read A,
-    S2)."""
+    off. Fold 10's read B added: an `exit` glued to a special parameter the RUN starts with empty (`exit$@`: `sh -c` is
+    given no arguments, so the RUN ends there, its status 0). Guards a pin check that a common install shape walks past,
+    and a `pip check` that cannot fail the build — "make the cleanup tolerant" with a trailing `|| true` was one (T29's
+    read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4; its fold-3 read, S2, N1, N2, N6: Z1, Z5, Z6, Z10, V2,
+    V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2, S4, S5, N1, N2, N6: G-a, C-g, O-a to O-d, O-i, E-a to
+    E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to O14, O17, S5, C4; fold 5's read A, S1 to S4, S6, N1 to
+    N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7, D1, D2, D4, D8, E1, E3, F1, G1, G2, I1, K1, K4; its read
+    B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants: Q7, QX1, QX2; its read A, S3, S4, S5, S7; its read B, S3,
+    N1, N4: R1, SK1, SK2, BK1; fold 7's read A, S2; fold 10's read B, S1)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 
