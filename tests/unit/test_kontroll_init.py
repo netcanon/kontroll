@@ -807,39 +807,40 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
     that reads as that directory but leads out through a link, or another name in that directory, which no installer
     verb reads; the default key file under a HOME other than the installer's (its key directory present); and a file
     that is there already, of another name (in that directory or elsewhere) or a keys.txt in another directory, which
-    the run would key the instance to; and a link in that directory to no file, a directory or a FIFO, even on the run
-    that only reads (there is no key to read). The refusal names the file, what made kontroll-init take the run for the
-    installer's (the variable, then each marker that is there: all three with the variable and both markers there, as in
-    the image as built), that directory and the remedy (no --key-file, through `fresh-init` for a --fresh run; on a
-    host, undo what the parenthesis names), and comes before the break-glass refusal and a break-glass mint. The default
-    key file, however the path spells its directory (through a link too), goes on, and so does `keys.txt` itself under
-    another name (a link to it); so do a file of another name or in another directory that an existing instance's
-    `--break-glass-recipient` only reads, and the same run on the operator's machine, where step 1 makes a bare-named
-    key in the working directory. Guards the route fold 10's remedy printed: `fresh-init --key-file
-    ~/.config/sops/age/<name>`, expanded on the host to a home the container does not have, made a key in a directory
-    step 1 created in the container's own layer, printed it as the key to keep and wrote the instance to it with rc 0,
-    and the container discarded it at exit (T11 fold 10's reads 140 and 141, S1); and fold 11's remedy, `<that
-    directory>/<name>`, which gave an rc-0 instance keyed to a root-owned file no installer verb reads, while the next
-    documented step minted a keys.txt that cannot open it (fold 11's read 151, S1); a guard comparing the directory's
-    spelling, not what the kernel opens, and one moved after the break-glass mint, which printed a key no instance would
-    name, each passed every row (its N2, N3); and a guard keyed on the variable's value "1" and on HOME, which `sudo`,
-    `env -i`, another value or a moved HOME turned off, and step 1's crash on a bare name the guard lets through, which
-    a stubbed step 1 hid (fold 11's read 150, N2, N3); and a guard reading "1" or "true" only, or comparing against
-    HOME's key directory, which every row passed; the published image, which lacks the marker, where `sudo` or `env -i`
-    turned the guard off; and a file of another name that was there already, which keyed a --fresh instance to a file no
-    installer verb reads, or was added to every rule (fold 12's reads 160, N1, N4 and 161, N1, N3, N4); and a guard that
-    passes `keys.txt` when it cannot stat the directory, which no row held once fold 13 rewrote the rows, and a guard
-    that takes a link to no file as a file that is there, which lets the run that only reads past it to a later check
-    and refuses the other runs as if a key file were there (fold 13's own mutants); and one that lets through any
-    keys.txt that is there, which keys a --fresh instance to one in the container's own layer (fold 13's read 171, N2);
-    and a refusal that did not say which of the variable or a marker fired, so a host with a file at a marker path was
-    refused as the installer with no reason it could act on, and wordings that told a run with no file that it only
-    reads it, a run without --fresh that it would key the instance, and a link to keys.txt that it is a key file no
-    installer verb reads (fold 13's read 170, N5, N6); and a refusal that named one of several triggers, which no row
-    held, so a host was refused again after it undid the one named, a remedy that fitted the installer alone, and a
-    directory taken for a key file that is there (fold 14's reads 180, N4, and 181, N2); and a FIFO taken for one, which
-    no row held, and a host remedy that told the operator to unset a variable the parenthesis did not name (fold 15's
-    read 191, N4, N7)."""
+    the run would key the instance to; and a path that is no regular file (a link to no file, a link to a directory or a
+    FIFO in that directory, the directory itself, and `/dev/null`), even on the run that only reads (there is no key to
+    read). The refusal names the file, what made kontroll-init take the run for the installer's (the variable, then each
+    marker that is there: all three with the variable and both markers there, as in the image as built), that directory
+    and the remedy (no --key-file, through `fresh-init` for a --fresh run; on a host, undo what the parenthesis names),
+    and comes before the break-glass refusal and a break-glass mint. The default key file, however the path spells its
+    directory (through a link too), goes on, and so does `keys.txt` itself under another name (a link to it); so do a
+    file of another name or in another directory that an existing instance's `--break-glass-recipient` only reads, and
+    the same run on the operator's machine, where step 1 makes a bare-named key in the working directory. Guards the
+    route fold 10's remedy printed: `fresh-init --key-file ~/.config/sops/age/<name>`, expanded on the host to a home
+    the container does not have, made a key in a directory step 1 created in the container's own layer, printed it as
+    the key to keep and wrote the instance to it with rc 0, and the container discarded it at exit (T11 fold 10's reads
+    140 and 141, S1); and fold 11's remedy, `<that directory>/<name>`, which gave an rc-0 instance keyed to a root-owned
+    file no installer verb reads, while the next documented step minted a keys.txt that cannot open it (fold 11's read
+    151, S1); a guard comparing the directory's spelling, not what the kernel opens, and one moved after the break-glass
+    mint, which printed a key no instance would name, each passed every row (its N2, N3); and a guard keyed on the
+    variable's value "1" and on HOME, which `sudo`, `env -i`, another value or a moved HOME turned off, and step 1's
+    crash on a bare name the guard lets through, which a stubbed step 1 hid (fold 11's read 150, N2, N3); and a guard
+    reading "1" or "true" only, or comparing against HOME's key directory, which every row passed; the published image,
+    which lacks the marker, where `sudo` or `env -i` turned the guard off; and a file of another name that was there
+    already, which keyed a --fresh instance to a file no installer verb reads, or was added to every rule (fold 12's
+    reads 160, N1, N4 and 161, N1, N3, N4); and a guard that passes `keys.txt` when it cannot stat the directory, which
+    no row held once fold 13 rewrote the rows, and a guard that takes a link to no file as a file that is there, which
+    lets the run that only reads past it to a later check and refuses the other runs as if a key file were there (fold
+    13's own mutants); and one that lets through any keys.txt that is there, which keys a --fresh instance to one in the
+    container's own layer (fold 13's read 171, N2); and a refusal that did not say which of the variable or a marker
+    fired, so a host with a file at a marker path was refused as the installer with no reason it could act on, and
+    wordings that told a run with no file that it only reads it, a run without --fresh that it would key the instance,
+    and a link to keys.txt that it is a key file no installer verb reads (fold 13's read 170, N5, N6); and a refusal
+    that named one of several triggers, which no row held, so a host was refused again after it undid the one named, a
+    remedy that fitted the installer alone, and a directory taken for a key file that is there (fold 14's reads 180, N4,
+    and 181, N2); and a FIFO taken for one, which no row held, and a host remedy that told the operator to unset a
+    variable the parenthesis did not name (fold 15's read 191, N4, N7); and a link to a directory and `/dev/null`, which
+    no row held, while the docstring read as if a link to a FIFO were held (fold 16's reads 200, N3 and 201, N6)."""
     real_step_1 = ki.ensure_control_key                           # before the seams stub it
     if run == "fresh":
         _mock_fresh_seams(monkeypatch)
@@ -945,7 +946,8 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
     os.symlink(str(tmp_path / "nowhere" / "k.txt"), dangling)    # a link to no file: no key there to read
     fifo = os.path.join(keys, "pipe.txt")
     os.mkfifo(fifo)                                              # nor is a FIFO
-    for nokey in (dangling, keys, fifo):                         # a directory is no key to read either
+    to_dir = os.path.join(keys, "out")                           # the link to a directory made above
+    for nokey in (dangling, keys, fifo, to_dir, os.devnull):     # nor is a directory, a link to one or /dev/null
         for args in (argv, (_FRESH if run == "fresh" else []) + ["--break-glass-recipient", BG]):
             capsys.readouterr()
             assert ki.main(args + ["--key-file", nokey]) == 1, (nokey, args)

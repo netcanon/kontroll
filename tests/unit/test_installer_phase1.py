@@ -312,9 +312,10 @@ def test_fresh_init_output_is_never_teed_to_a_log():
     other than `tee` (`| dd of=…`), a command queued by `at` or `batch` (which mails its output), the copy-mode command
     `pipe` on a control-mode client's line with no "tmux" on it (`send -X pipe …`), a control-mode client's line built
     by `read`, `printf -v` or a command substitution, a variable's value in `$'…'` whose escaped newline starts a line,
-    a tmux command after an assignment on a control-mode client's line (`K=1 pipe …`), a later element of an array, or
-    one on a line of its own (`K=(x "pipe …")`), a value after an expansion (`K="$X pipe …"`, `K=${X:-pipe …}`), a
-    command name quoted on a control-mode client's line (`"pipe" -o …`), in plaintext-guard.sh an `exec` after a
+    a tmux command after an assignment on a control-mode client's line (`K=1 pipe …`), a later element of an array, or a
+    quoted one on a line of its own (`K=(x "pipe …")`), a value after an expansion (`K="$X pipe …"`, `K=${X:-pipe …}`),
+    a command name quoted on a control-mode client's line (`"pipe" -o …`), a prefix inside another tmux command's
+    argument, or in braces on its line (`if -F 1 'pi …'`, `if -F 1 { pi … }`), in plaintext-guard.sh an `exec` after a
     redirect spelled otherwise (a backslash or a quote inside the word, or through a variable set on another line), or a
     recorder, runner or flag spelled otherwise than these (the list is of spellings, not of what a program can do).
     Refused although sound, each in the safe direction: "screen" and any `-…L` on one line (`echo "clear the screen";
@@ -434,6 +435,7 @@ _RUN = 'docker compose run --rm init "$@"'
     ("K=( \"pipe\" -o k.log )\necho \"${K[*]}\" | tmux -C attach -t k", "route"),
     ("tmux -C attach -t k <<'EOF'\nlist-keys ; save-buffer k.log\nEOF", "route"),
     ("tmux -C attach -t k <<'EOF'\nlist-keys ; pi -o 'dd of=k.log'\nEOF", "route"),
+    ("tmux -C attach -t k <<'EOF'\nlist-keys ;sa k.log\nEOF", "route"),
     ("tmux -C attach -t k <<'EOF'\nif-shell true 'save-buffer k.log'\nEOF", "route"),
     ("tmux -C attach -t k <<'EOF'\nsend -X copy-pipe 'dd of=k.log'\nEOF", "route"),
     ("tmux -C attach -t k <<'EOF'\npi -o 'dd of=k.log'\nEOF", "route"),
@@ -550,7 +552,8 @@ def test_the_capture_scan_reads_each_route_it_names(line, refused_by, monkeypatc
     after `;` on a control-mode client's line, which the prefix arm passed, and a double redirect's target after a space
     (`>> k.log exec`), which no row held (fold 15's read 190, N1, N2); and `save-buffer` inside another tmux command
     (`if-shell true 'save-buffer k.log'`), which only the arm that needs no "tmux" reads, and which no row held once the
-    prefix arm read the row after `;` (fold 16's own mutants)."""
+    prefix arm read the row after `;` (fold 16's own mutants); and `sa` after a `;` with no space, which no row held
+    (fold 16's read 201, N4)."""
     monkeypatch.setitem(globals(), "_read", lambda rel: line + "\n")   # the row, as the scan reads a launcher's text
     reads = _joined_lines("a launcher")
     got = ("route" if any(_LOG_ROUTE.search(r) for r in reads) else "file" if any(_TO_A_FILE.search(r) for r in reads)
@@ -596,16 +599,18 @@ def test_plaintext_guard_holds_a_line_that_names_exec_to_the_file_pattern(line, 
 
 def test_the_exec_arm_reads_a_run_of_dashes_in_linear_time():
     """`_LOG_ROUTE` searches, within 60 s each, a line holding `exec`, then a long run of dashes, or many flags with
-    dashed operands, and no redirect, and a group of many appends with no `exec` after them, each search in a child
-    process that the timeout kills (a signal would stop it only on a POSIX main thread). Guards the exec arm's flag and
-    operand, which, read with no edge, a run of dashes or a dashed operand splits in exponentially many ways: 24 dashes
-    took 4 s at fold 13, and with fold 13's read 170's lookahead on the flag alone each dashed operand still multiplied
-    the time (twelve took 7 s); and the redirect-before-exec arm, which read each `>>k.log` either as `>` then `>k.log`
-    or as `>>` then `k.log`, so that 24 appends took 6.8 s at fold 14; a long line of any of these shapes in a launcher
-    would stall the suite for minutes instead of failing (T11 fold 13's read 170, N4; the operands, fold 14's own probe;
-    the appends, fold 14's read 180, N1)."""
+    dashed operands, and no redirect, a group of many appends with no `exec` after them, and a `;` then a long run of
+    spaces, each search in a child process that the timeout kills (a signal would stop it only on a POSIX main thread).
+    Guards the exec arm's flag and operand, which, read with no edge, a run of dashes or a dashed operand splits in
+    exponentially many ways: 24 dashes took 4 s at fold 13, and with fold 13's read 170's lookahead on the flag alone
+    each dashed operand still multiplied the time (twelve took 7 s); and the redirect-before-exec arm, which read each
+    `>>k.log` either as `>` then `>k.log` or as `>>` then `k.log`, so that 24 appends took 6.8 s at fold 14; and the
+    prefix arm's `;`, which no line held, where a pattern that read each space after it two ways would double the time
+    with each space; a long line of any of these shapes in a launcher would stall the suite for minutes instead of
+    failing (T11 fold 13's read 170, N4; the operands, fold 14's own probe; the appends, fold 14's read 180, N1; the
+    spaces, fold 16's read 200, N5)."""
     for line in ('echo "exec %s x"' % ("-" * 64), "echo exec " + " ".join(["-a x-x-x-x"] * 40) + " x",
-                 "{ " + " ".join(">>k%d.log" % i for i in range(64)) + "; }"):
+                 "{ " + " ".join(">>k%d.log" % i for i in range(64)) + "; }", "true;" + " " * 64 + "x"):
         subprocess.run([sys.executable, "-c", "import re, sys; re.compile(sys.argv[1]).search(sys.argv[2])",
                         _LOG_ROUTE.pattern, line], check=True, timeout=60)
 
