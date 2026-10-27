@@ -61,9 +61,9 @@ losing that key destroyed every device credential, API token and service passwor
     step can run through the installer, whose age-keygen runs (`fresh-init` for a `--fresh` run, `shell` otherwise, with
     the key at `~/.config/sops/age/keys.txt` and no `--key-file`, the one file every installer verb reads); and that
     removing age-keygen fixes it only where another on PATH runs (with none, the line is taken as written);
-  - in the installer container, a run that would key the instance to a control key file other than `keys.txt` in
-    the directory of keys the installer mounts (`/root/.config/sops/age`, whatever `HOME` is), whether the file is there
-    or not: a `--fresh` run, or one on an existing instance but for its `--break-glass-recipient`, which only reads the
+  - in the installer container, a run that would key the instance to a control key file other than `keys.txt` in the
+    directory of keys the installer mounts (`/root/.config/sops/age`, whatever `HOME` is), whether the file is there or
+    not: a `--fresh` run, or one on an existing instance but for its `--break-glass-recipient`, which only reads the
     file (one that is there: a link to no file is refused too). Before this, a `--key-file` as the host spells it named
     a directory the container lacks, so the key was made in the container's own layer, the instance written to it, and
     the key lost when the container exited; one made in another directory was lost the same way, or left in the checkout
@@ -71,8 +71,10 @@ losing that key destroyed every device credential, API token and service passwor
     next step minted a `keys.txt` that could not open the instance. The container is known by `KONTROLL_IN_CONTAINER`
     (any non-empty value, as the playbooks read it) or by either of two files in the installer image, which a `sudo` or
     an `env -i` in its shell cannot drop: `/etc/kontroll/installer-image`, and the dispatcher
-    `/usr/local/bin/kontroll-installer`, which every installer image carries (one published before the marker too). Step
-    1 also makes a key named by a bare file name, where it failed before.
+    `/usr/local/bin/kontroll-installer`, which every installer image carries (one published before the marker too). The
+    refusal names which of these it found, so a host that carries a marker file by chance is told why; a link to that
+    `keys.txt` of another name is taken as it. Step 1 also makes a key named by a bare file name, where it failed
+    before.
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,

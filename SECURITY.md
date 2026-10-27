@@ -1133,9 +1133,10 @@ distinct control.
   whatever `HOME` is), whether it is there or not, unless the run only reads it (`--break-glass-recipient` on an
   existing instance, and the file is there: a link to no file is not): a key made in any other directory is lost when
   the container exits, or left in the checkout or another mount, after the instance has been written to it, and a key
-  file of another name, made then or there before, is one no installer verb reads. On an existing instance it also
-  refuses a key file that is not the control recipient of every rule (read as sops reads it: a rule's key groups when it
-  has any), and stops after adding the recipient, before the bootstrap secrets.
+  file of another name, made then or there before, is one no installer verb reads (a link to that `keys.txt` of another
+  name is taken as it); the refusal names which of these made it take the run for the installer's. On an existing
+  instance it also refuses a key file that is not the control recipient of every rule (read as sops reads it: a rule's
+  key groups when it has any), and stops after adding the recipient, before the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing
@@ -1157,9 +1158,10 @@ malformed, mis-checksummed, plugin, post-quantum, low-order or non-zero-padding 
 low-order check held to `cryptography`'s X25519 by `test_the_low_order_check_agrees_with_x25519_itself`; a key file
 kontroll-init cannot read (empty, a directory, a FIFO, a link to nothing, not UTF-8) or one age reads otherwise,
 refused on both paths, and at the path `--key-file` names
-(`test_the_key_file_flag_names_the_file_every_check_reads`); in the installer container, a missing key file anywhere but
-the mounted `keys.txt` refused first (`test_the_installer_container_makes_a_key_only_where_it_mounts_keys`), the guard's
-constants held to the installer's (`test_the_container_guard_reads_what_the_installer_sets`); a key file that is not the
+(`test_the_key_file_flag_names_the_file_every_check_reads`); in the installer container, a control key file anywhere but
+the mounted `keys.txt`, there or not, refused first, unless an existing instance's `--break-glass-recipient` only reads
+it (`test_the_installer_container_makes_a_key_only_where_it_mounts_keys`), the guard's constants held to the installer's
+(`test_the_container_guard_reads_what_the_installer_sets`); a key file that is not the
 control recipient refused;
 the existing-instance run stopping before the bootstrap secrets) + `tests/unit/test_installer_phase1.py`
 (`test_fresh_init_output_is_never_teed_to_a_log`, `test_the_installer_container_keeps_no_log`) +
