@@ -1109,30 +1109,31 @@ distinct control.
   is **never** written to the box, the repo, an audit line, or a log. The audit + the commit message carry only
   the **public** recipient.
 - **The CLI's show-once path is the same.** `--mint-break-glass`, a choice `kontroll-init --fresh` takes, mints the
-  break-glass keypair with the same primitive (`keygen.generate_keypair`, nothing on disk), adds its public half
-  under the groups `key-roles/break-glass.yml` names (the dialog's), and prints the private half **once**, in a
-  delimited block, straight after the recipient is written — before any later step can fail, so no recipient is
-  left that nobody was shown. It refuses before minting anything when standard output is not a terminal, so the key cannot land in a
-  pipe or a file; the installer container's log driver is `none` for every verb but a deploy (`init`, `check`:
-  both launchers choose it per verb, `docker/services/installer.yaml`), and no launcher routes `fresh-init`
-  through a run log, a `tee`, a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen -L`,
-  `tmux pipe-pane`, in the spellings `tests/unit/test_installer_phase1.py` lists), a runner that gives it a terminal
-  of its own (`expect`, `unbuffer`, `rlwrap`, `socat`) or a command that files its output away from the terminal
-  (`nohup`, `systemd-run`, `start-stop-daemon`). A terminal the operator records themselves is beyond kontroll's
-  reach.
-  `--break-glass-recipient` takes the public half of an X25519 key made elsewhere and, without echoing the value,
-  refuses a private key, a plugin recipient (`age1<name>1…`: kontroll's images ship no age plugin) or a post-quantum one
-  (it needs a sops whose age knows it on every machine), one whose checksum, X25519 length or padding fails, and a
-  low-order point age refuses. A run that reads the control key file (`--break-glass-recipient`, or any `--fresh` run
-  where something is at its path) refuses, before anything is written, one it cannot read a `# public key:` line from,
-  and, where an `age-keygen` program is on its `PATH` (an alias, a shell function or a `PATH` entry written `~/bin` does
-  not count; the installer has one), one whose line is not the public half of the key age reads there, or from which
-  age reads no key (or where `age-keygen` gives no answer, one on `PATH` that cannot be executed included). In the
-  installer container (known by `KONTROLL_IN_CONTAINER` or by the image's `/etc/kontroll/installer-image`, which a
-  `sudo` or an `env -i` in its shell cannot drop) any run first refuses a key file that does not exist and is not
-  `keys.txt` in the directory of keys the installer mounts (`/root/.config/sops/age`, whatever `HOME` is): a key made
-  anywhere else is lost when the container exits, or left in the checkout or another mount, after the instance has been
-  written to it, and one of another name there is a file no installer verb reads. On an existing instance it also
+  break-glass keypair with the same primitive (`keygen.generate_keypair`, nothing on disk), adds its public half under
+  the groups `key-roles/break-glass.yml` names (the dialog's), and prints the private half **once**, in a delimited
+  block, straight after the recipient is written — before any later step can fail, so no recipient is left that nobody
+  was shown. It refuses before minting anything when standard output is not a terminal, so the key cannot land in a pipe
+  or a file; the installer container's log driver is `none` for every verb but a deploy (`init`, `check`: both launchers
+  choose it per verb, `docker/services/installer.yaml`), and no launcher routes `fresh-init` through a run log, a `tee`,
+  a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen -L`, `tmux pipe-pane`, in the
+  spellings `tests/unit/test_installer_phase1.py` lists), a runner that gives it a terminal of its own (`expect`,
+  `unbuffer`, `rlwrap`, `socat`) or a command that files its output away from the terminal (`nohup`, `systemd-run`,
+  `start-stop-daemon`). A terminal the operator records themselves is beyond kontroll's reach. `--break-glass-recipient`
+  takes the public half of an X25519 key made elsewhere and, without echoing the value, refuses a private key, a plugin
+  recipient (`age1<name>1…`: kontroll's images ship no age plugin) or a post-quantum one (it needs a sops whose age
+  knows it on every machine), one whose checksum, X25519 length or padding fails, and a low-order point age refuses. A
+  run that reads the control key file (`--break-glass-recipient`, or any `--fresh` run where something is at its path)
+  refuses, before anything is written, one it cannot read a `# public key:` line from, and, where an `age-keygen`
+  program is on its `PATH` (an alias, a shell function or a `PATH` entry written `~/bin` does not count; the installer
+  has one), one whose line is not the public half of the key age reads there, or from which age reads no key (or where
+  `age-keygen` gives no answer, one on `PATH` that cannot be executed included). In the installer container (known by
+  `KONTROLL_IN_CONTAINER`, any non-empty value, or by the image's `/etc/kontroll/installer-image` or its dispatcher
+  `/usr/local/bin/kontroll-installer`, which a `sudo` or an `env -i` in its shell cannot drop) any run first refuses a
+  control key file that is not `keys.txt` in the directory of keys the installer mounts (`/root/.config/sops/age`,
+  whatever `HOME` is), whether it is there or not, unless the run only reads it (`--break-glass-recipient` on an
+  existing instance, and the file is there: a link to no file is not): a key made in any other directory is lost when
+  the container exits, or left in the checkout or another mount, after the instance has been written to it, and a key
+  file of another name, made then or there before, is one no installer verb reads. On an existing instance it also
   refuses a key file that is not the control recipient of every rule (read as sops reads it: a rule's key groups when it
   has any), and stops after adding the recipient, before the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient

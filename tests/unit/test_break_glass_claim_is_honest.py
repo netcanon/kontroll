@@ -72,7 +72,7 @@ def _fresh_counts(tmp_path, monkeypatch):
     key directory is refused first)."""
     monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)
     ki = _load_init()
-    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKER", str(tmp_path / "no-installer-image"))   # not the image
+    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKERS", (str(tmp_path / "no-installer-image"),))   # not the image
     monkeypatch.setattr(ki, "ensure_control_key", lambda kf: ("age1honestycontrolpub000000000000000000000000000000000", True))
     monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
     monkeypatch.setattr(keygen, "generate_keypair",

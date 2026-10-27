@@ -9,7 +9,7 @@ stack. Design-of-record: [docs/reviews/2026-06-29-compose-native-install/99-synt
 
 | File | Role |
 |---|---|
-| `Dockerfile` | `debian:12-slim` + pinned ansible-core + the **control-plane** collections (`modules/_core.yml`, generated in the build by `gen-requirements.py --core`, installed via the unchanged never-brick wrapper) + sops/age + the docker CLI. Bakes **no** secret, age key, or `instance/`. |
+| `Dockerfile` | `debian:12-slim` + pinned ansible-core + the **control-plane** collections (`modules/_core.yml`, generated in the build by `gen-requirements.py --core`, installed via the unchanged never-brick wrapper) + sops/age + the docker CLI + an empty marker, `/etc/kontroll/installer-image`, by which kontroll-init knows the installer container. Bakes **no** secret, age key, or `instance/`. |
 | `entrypoint.sh` | Thin verb dispatcher — `init` · `check` · `fresh-init` · `configure-semaphore` · `shell` · `*` (ansible-playbook passthrough). No provisioning logic; every verb shells an existing playbook/script. |
 | `../services/installer.yaml` | The ephemeral, portless, `network_mode: host` compose service (a standalone fragment — see *Why standalone*). |
 | `../../scripts/kontroll-installer.sh` | The launcher: injects the operator identity (MF-1) + ensures the host bind targets exist, then runs the service. |
@@ -77,9 +77,10 @@ The installer runs the playbooks unchanged **except** their host-only tasks, whi
 `KONTROLL_IN_CONTAINER=1`: deploy-stack's Docker install (the host already has Docker — the floor) + the
 qemu-guest-agent systemd unit (no systemd in a container) + bootstrap's OS-package/sops/gitleaks provisioning
 (baked into the image) + local-canonical's named gid-1001 group (a host gesture). In the container, kontroll-init
-makes a missing control key only as `keys.txt` in the mounted `~/.config/sops/age` (`/root/.config/sops/age`),
-the one file every installer verb reads; it knows the container by that variable or by the image's
-`/etc/kontroll/installer-image`, which a `sudo` or an `env -i` in the `shell` verb cannot drop
+keys an instance only to `keys.txt` in the mounted `~/.config/sops/age` (`/root/.config/sops/age`), the one file
+every installer verb reads, made now or there before; it knows the container by that variable or by the image's
+`/etc/kontroll/installer-image` or its dispatcher, `/usr/local/bin/kontroll-installer`, which a `sudo` or an `env
+-i` in the `shell` verb cannot drop
 ([docs/troubleshooting.md](../../docs/troubleshooting.md) §11). The host residual lives in
 [scripts/host-systemd.sh](../../scripts/host-systemd.sh). Operator identity (MF-1) comes from
 `KONTROLL_OPERATOR_{USER,UID,GID,HOME}`; on a host-direct run those are absent and the playbooks fall back to the

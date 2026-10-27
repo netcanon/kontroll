@@ -96,7 +96,7 @@ def test_main_idempotent_node_makes_no_change_and_never_prints_private(monkeypat
     the installer container a missing key file anywhere but keys.txt in the mounted key directory is refused first, and
     the runner's default key path need not exist."""
     monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)
-    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKER", str(tmp_path / "no-installer-image"))   # not the image
+    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKERS", (str(tmp_path / "no-installer-image"),))   # not the image
     monkeypatch.setattr(ki, "ensure_control_key", lambda kf: ("age1ctlpub00000000000000000000000000", False))
     monkeypatch.setattr(keygen, "add_recipient",
                         lambda pub, anchors: {"error": None, "changed": False, "paths": [".sops.yaml"],
@@ -145,7 +145,7 @@ def fresh_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(ki, "AGE_KEY_FILE", str(tmp_path / "age" / "keys.txt"))
     monkeypatch.setattr(ki, "_age_reads_public", lambda key_file: None)   # as where no age-keygen is installed
     monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)            # a run on the operator's machine
-    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKER", str(tmp_path / "no-installer-image"))   # not the image
+    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKERS", (str(tmp_path / "no-installer-image"),))   # not the image
     return tmp_path
 
 
@@ -797,26 +797,36 @@ def test_a_key_file_age_reads_otherwise_is_refused(fresh_repo, monkeypatch, caps
 @_POSIX_ONLY
 @pytest.mark.parametrize("run", ["fresh", "existing"])
 def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_repo, monkeypatch, capsys, tmp_path, run):
-    """In the installer container (KONTROLL_IN_CONTAINER=1, or any value, or the image's marker with the variable gone,
-    as a `sudo` or an `env -i` in its shell leaves it), a `--fresh` run and a run on an existing instance whose key file
-    does not exist exit 1 before anything is read or written (no key made, no directory created, no instance/
-    scaffolded, .sops.yaml unchanged) when the file is not the default key file, in the directory the installer mounts
-    for keys: a directory the container lacks (a --key-file as the operator's machine spells it), another directory of
-    the container, a bare name read from another working directory, a path that reads as that directory but leads out
-    through a link, or another name in that directory, which no installer verb reads; and the default key file under a
-    HOME other than the installer's. The refusal names the file, that directory and the remedy (no --key-file), and
-    comes before the break-glass refusal and a break-glass mint. The default key file, however the path spells its
-    directory (through a link too), goes on, as does a file that exists elsewhere (it is read, not made) and the same
-    run on the operator's machine, where step 1 makes a bare-named key in the working directory. Guards the route fold
-    10's remedy printed: `fresh-init --key-file ~/.config/sops/age/<name>`, expanded on the host to a home the container
-    does not have, made a key in a directory step 1 created in the container's own layer, printed it as the key to keep
-    and wrote the instance to it with rc 0, and the container discarded it at exit (T11 fold 10's reads 140 and 141,
-    S1); and fold 11's remedy, `<that directory>/<name>`, which gave an rc-0 instance keyed to a root-owned file no
-    installer verb reads, while the next documented step minted a keys.txt that cannot open it (fold 11's read 151, S1);
-    a guard comparing the directory's spelling, not what the kernel opens, and one moved after the break-glass mint,
-    which printed a key no instance would name, each passed every row (its N2, N3); and a guard keyed on the variable's
-    value "1" and on HOME, which `sudo`, `env -i`, another value or a moved HOME turned off, and step 1's crash on a
-    bare name the guard lets through, which a stubbed step 1 hid (fold 11's read 150, N2, N3)."""
+    """In the installer container (KONTROLL_IN_CONTAINER set to any non-empty value, "0" included, or one of the image's
+    markers with the variable gone, as a `sudo` or an `env -i` in its shell leaves it: the marker the Dockerfile makes,
+    or the dispatcher every installer image carries), a `--fresh` run and a run on an existing instance exit 1 before
+    anything is read or written (no key made, no directory created, no instance/ scaffolded, .sops.yaml unchanged) when
+    the key file is not the default key file in the directory the installer mounts for keys: a missing one in a
+    directory the container lacks (a --key-file as the operator's machine spells it, `keys.txt` too, whose directory the
+    guard cannot stat), in another directory of the container, a bare name read from another working directory, a path
+    that reads as that directory but leads out through a link, or another name in that directory, which no installer
+    verb reads; the default key file under a HOME other than the installer's (its key directory present); and a file of
+    another name that is there already, in that directory or elsewhere, which the run would key the instance to; and a
+    link in that directory to no file, even on the run that only reads (there is no key to read). The refusal names the
+    file, that directory and the remedy (no --key-file, through `fresh-init` for a --fresh run), and comes before the
+    break-glass refusal and a break-glass mint. The default key file, however the path spells its directory (through a
+    link too), goes on; so do a file of another name that an existing instance's `--break-glass-recipient` only reads,
+    and the same run on the operator's machine, where step 1 makes a bare-named key in the working directory. Guards the
+    route fold 10's remedy printed: `fresh-init --key-file ~/.config/sops/age/<name>`, expanded on the host to a home
+    the container does not have, made a key in a directory step 1 created in the container's own layer, printed it as
+    the key to keep and wrote the instance to it with rc 0, and the container discarded it at exit (T11 fold 10's reads
+    140 and 141, S1); and fold 11's remedy, `<that directory>/<name>`, which gave an rc-0 instance keyed to a root-owned
+    file no installer verb reads, while the next documented step minted a keys.txt that cannot open it (fold 11's read
+    151, S1); a guard comparing the directory's spelling, not what the kernel opens, and one moved after the break-glass
+    mint, which printed a key no instance would name, each passed every row (its N2, N3); and a guard keyed on the
+    variable's value "1" and on HOME, which `sudo`, `env -i`, another value or a moved HOME turned off, and step 1's
+    crash on a bare name the guard lets through, which a stubbed step 1 hid (fold 11's read 150, N2, N3); and a guard
+    reading "1" or "true" only, or comparing against HOME's key directory, which every row passed; the published image,
+    which lacks the marker, where `sudo` or `env -i` turned the guard off; and a file of another name that was there
+    already, which keyed a --fresh instance to a file no installer verb reads, or was added to every rule (fold 12's
+    reads 160, N1, N4 and 161, N1, N3, N4); and a guard that passes `keys.txt` when it cannot stat the directory, which
+    no row held once fold 13 rewrote the rows, and a link to no file taken as a file that is there, which let the run
+    that only reads reach step 1, which would make a key through the link (fold 13's own mutants)."""
     real_step_1 = ki.ensure_control_key                           # before the seams stub it
     if run == "fresh":
         _mock_fresh_seams(monkeypatch)
@@ -826,8 +836,8 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
         before = open(sops_path, encoding="utf-8").read()
         argv = []
     monkeypatch.setattr(ki, "INSTALLER_KEY_FILE", ki.AGE_KEY_FILE)     # the mount, here the fixture's key file
-    marker = str(tmp_path / "installer-image")
-    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKER", marker)
+    marker, dispatcher = str(tmp_path / "installer-image"), str(tmp_path / "kontroll-installer")
+    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKERS", (marker, dispatcher))
     keys = os.path.dirname(ki.AGE_KEY_FILE)
     os.makedirs(keys, exist_ok=True)
     other = tmp_path / "other"
@@ -840,36 +850,41 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
     os.symlink(str(other), os.path.join(keys, "out"))          # a link in the key directory that leads out
     moved = str(tmp_path / "h" / ".config" / "sops" / "age" / "keys.txt")
 
-    def _refused(err, key_file, keys):
-        assert "there is no key file at %s." % key_file in err
-        assert "refuses a missing control key file anywhere but keys.txt in %s," % keys in err
+    def _refused(err, key_file, keys, there=False):
+        assert ("%s is a key file no installer verb reads, and this run would key the instance to it." % key_file
+                if there else "there is no key file at %s." % key_file) in err
+        assert "refuses a control key file anywhere but keys.txt in %s," % keys in err
         assert "or --key-file %s:" % ki.INSTALLER_KEY_FILE in err and "HOME=/root" in err and "<name>" not in err
-        assert "the one file every installer verb reads" in err and "a file no installer verb reads" in err
+        assert "the one file every installer verb reads" in err and "is one no installer verb reads" in err
         assert "lost when the container exits, or left in the checkout or another mount" in err
-        assert "Nothing was written" in err
-    for how in ("true", "marker", "moved-home"):                # the shell's `sudo`, `env -i` and a changed HOME
-        if how == "true":
-            monkeypatch.setenv("KONTROLL_IN_CONTAINER", "true")
+        assert "for a --fresh run, through fresh-init, which hands the key back" in err
+        assert "unless the run only reads it (an existing instance's --break-glass-recipient)" in err
+        assert "move a control key kept under another name there first. Nothing was written" in err
+    for how in ("true", "0", "marker", "dispatcher", "moved-home"):   # any value; `sudo` or `env -i`; another HOME
+        if how in ("true", "0"):
+            monkeypatch.setenv("KONTROLL_IN_CONTAINER", how)
         else:
             monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)
-            open(marker, "w").close()
+            open(dispatcher if how == "dispatcher" else marker, "w").close()
         flags = [] if how == "moved-home" else ["--key-file", host]
         if how == "moved-home":
             monkeypatch.setattr(ki, "AGE_KEY_FILE", moved)       # no --key-file: the default under HOME=/tmp/h
+            os.makedirs(os.path.dirname(moved))                  # whose key directory is there
         capsys.readouterr()
         assert ki.main(argv + flags) == 1, how
         _refused(capsys.readouterr().err, moved if how == "moved-home" else host, keys)
-        assert not os.path.exists(str(tmp_path / "h")) and not os.path.exists(str(tmp_path / "home")), how
+        assert not os.path.exists(moved) and not os.path.exists(str(tmp_path / "home")), how
         if run == "fresh":
             assert not os.path.exists(os.path.join(fresh_repo, "instance"))
         else:
             assert open(sops_path, encoding="utf-8").read() == before
         monkeypatch.setattr(ki, "AGE_KEY_FILE", ki.INSTALLER_KEY_FILE)
-        if os.path.exists(marker):
-            os.remove(marker)
+        for m in (marker, dispatcher):
+            if os.path.exists(m):
+                os.remove(m)
     monkeypatch.setenv("KONTROLL_IN_CONTAINER", "1")
-    for key_file in (host, str(other / "keys.txt"), "keys.txt", os.path.join(keys, "kontroll.txt"),
-                     os.path.join(keys, "out", os.pardir, "keys.txt")):
+    for key_file in (host, os.path.join(os.path.dirname(host), "keys.txt"), str(other / "keys.txt"), "keys.txt",
+                     os.path.join(keys, "kontroll.txt"), os.path.join(keys, "out", os.pardir, "keys.txt")):
         capsys.readouterr()
         assert ki.main(argv + ["--key-file", key_file]) == 1, key_file
         err = capsys.readouterr().err
@@ -884,10 +899,39 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
             assert not os.path.exists(os.path.join(fresh_repo, "instance"))
         else:
             assert open(sops_path, encoding="utf-8").read() == before
+    for there in (str(tmp_path / "elsewhere" / "kontroll.txt"), os.path.join(keys, "kontroll.txt")):
+        _write_key(there, MINTED)                                # there already, under a name no installer verb reads
+        capsys.readouterr()
+        assert ki.main(argv + ["--key-file", there]) == 1, there
+        _refused(capsys.readouterr().err, there, keys, there=True)
+        if run == "fresh":
+            assert ki.main(_FRESH + ["--break-glass-recipient", BG, "--key-file", there]) == 1, there   # keys to it
+            _refused(capsys.readouterr().err, there, keys, there=True)
+            assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+        else:
+            assert open(sops_path, encoding="utf-8").read() == before
+            monkeypatch.setattr(ki, "ensure_control_key", lambda kf: (ki._read_public(kf), False))   # step 1 reads
+            assert ki.main(["--break-glass-recipient", BG, "--key-file", there]) == 0, there   # only read
+            monkeypatch.setattr(ki, "ensure_control_key", _never("the control key"))
+            assert BG in open(sops_path, encoding="utf-8").read(), there
+            with open(sops_path, "w", encoding="utf-8") as fh:
+                fh.write(before)
+        os.remove(there)
+    dangling = os.path.join(keys, "gone.txt")
+    os.symlink(str(tmp_path / "nowhere" / "k.txt"), dangling)    # a link to no file: no key there to read
+    for args in (argv, (_FRESH if run == "fresh" else []) + ["--break-glass-recipient", BG]):
+        capsys.readouterr()
+        assert ki.main(args + ["--key-file", dangling]) == 1, args
+        _refused(capsys.readouterr().err, dangling, keys)
+        assert not os.path.exists(str(tmp_path / "nowhere")), args
+        if run == "fresh":
+            assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+        else:
+            assert open(sops_path, encoding="utf-8").read() == before
+    os.remove(dangling)
     made = []
     monkeypatch.setattr(ki, "ensure_control_key", lambda kf: made.append(kf) or (MINTED, True))
     present = str(other / "present.txt")
-    _write_key(present, MINTED)
 
     def _goes_on(key_file):
         if run == "fresh":
@@ -900,11 +944,9 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
     _goes_on(os.path.join(keys, os.pardir, os.path.basename(keys), "keys.txt"))
     os.symlink(keys, str(tmp_path / "keys-link"))
     _goes_on(str(tmp_path / "keys-link" / "keys.txt"))           # the key directory through a link
-    _goes_on(present)                                            # there already: read, not made
     monkeypatch.delenv("KONTROLL_IN_CONTAINER")
     _goes_on(host)                                               # the operator's machine: step 1 makes it, as before
     monkeypatch.chdir(str(other))
-    os.remove(present)
     monkeypatch.setattr(ki, "ensure_control_key", real_step_1)
     orig_run = ki.subprocess.run
 
@@ -924,11 +966,13 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
 def test_the_container_guard_reads_what_the_installer_sets():
     """The guard's constants are the installer's: docker/services/installer.yaml's `init` service sets
     KONTROLL_IN_CONTAINER to "1", its SOPS_AGE_KEY_FILE is INSTALLER_KEY_FILE, and it mounts the operator's
-    ~/.config/sops/age at that file's directory; docker/installer/Dockerfile makes INSTALLER_IMAGE_MARKER in the image.
-    Guards the guard going quiet in the container it exists for: a service that stopped setting the variable, a key file
-    or mount moved without kontroll-init, or an image without the marker would each let a control key be made where the
-    container discards it, with every guard row still passing, as they set their own values (T11 fold 11's read 151, N1,
-    and read 150, N2)."""
+    ~/.config/sops/age at that file's directory; and in the stage the image keeps (after the Dockerfile's last FROM),
+    docker/installer/Dockerfile makes the first of INSTALLER_IMAGE_MARKERS on one RUN line that no other line names, and
+    copies the dispatcher to the second. Guards the guard going quiet in the container it exists for: a service that
+    stopped setting the variable, a key file or mount moved without kontroll-init, or an image without either marker
+    would each let a control key be made where the container discards it, with every guard row still passing, as they
+    set their own values (T11 fold 11's read 151, N1, and read 150, N2); and a marker made in a stage the image does not
+    keep, or removed by a later line, which this test passed (fold 12's read 161, N2)."""
     tool = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     with open(os.path.join(tool, "docker", "services", "installer.yaml"), encoding="utf-8") as fh:
         init = yaml.safe_load(fh)["services"]["init"]
@@ -937,8 +981,43 @@ def test_the_container_guard_reads_what_the_installer_sets():
     mounts = [v.split(":")[1] for v in init["volumes"] if v.split(":")[0].endswith("/.config/sops/age")]
     assert mounts == [os.path.dirname(ki.INSTALLER_KEY_FILE)], init["volumes"]
     with open(os.path.join(tool, "docker", "installer", "Dockerfile"), encoding="utf-8") as fh:
-        runs = [line for line in fh if line.startswith("RUN ")]
-    assert [r for r in runs if r.rstrip().endswith(": > %s" % ki.INSTALLER_IMAGE_MARKER)], runs
+        lines = [line.rstrip() for line in fh if not line.lstrip().startswith("#")]
+    stage = lines[max(i for i, line in enumerate(lines) if line.startswith("FROM ")):]   # the image kept
+    marker, dispatcher = ki.INSTALLER_IMAGE_MARKERS
+    named = [line for line in stage if marker in line]
+    assert len(named) == 1 and named[0].startswith("RUN ") and named[0].endswith(": > %s" % marker), named
+    assert [line for line in stage if line.startswith("COPY ") and line.endswith(" " + dispatcher)], stage
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize("shape", ["bare", "relative-sub", "missing-dotdot-abs", "missing-dotdot-rel", "link-dotdot"])
+def test_step_one_makes_the_key_where_the_kernel_opens_its_path(tmp_path, monkeypatch, shape):
+    """Step 1 (`ensure_control_key`), run for real with age-keygen stubbed by a writer that opens the path as age-keygen
+    does, makes the key there on a bare name, a relative path, and paths with `..` after a directory that is missing or
+    a link that leads out, and makes no directory at a lexical place the kernel does not open. Guards step 1 making the
+    key's directory where the kernel will not look: fold 12's `os.path.abspath` folded `miss/..` and `out/..` lexically,
+    so age-keygen failed after the scaffold and left a stray directory, and fold 11's `os.path.dirname` crashed on a
+    bare name (T11 fold 12's read 160, N2; fold 11's read 150, N3)."""
+    def _keygen(cmd, **kw):
+        assert cmd[:2] == ["age-keygen", "-o"], cmd
+        with open(cmd[2], "w", encoding="utf-8") as fh:          # opened as age-keygen opens it
+            fh.write("# public key: %s\nAGE-SECRET-KEY-1FAKEZZ\n" % MINTED)
+        return type("P", (), {"returncode": 0})()
+    monkeypatch.setattr(ki.subprocess, "run", _keygen)
+    work = tmp_path / "work"
+    work.mkdir()
+    other = tmp_path / "other" / "d"
+    other.mkdir(parents=True)
+    monkeypatch.chdir(str(work))
+    kf = {"bare": "k.txt", "relative-sub": os.path.join("sub", "k.txt"),
+          "missing-dotdot-abs": str(tmp_path / "miss" / ".." / "k3" / "k.txt"),
+          "missing-dotdot-rel": os.path.join("nothere", "..", "k2", "k.txt"),
+          "link-dotdot": os.path.join("out", "..", "k4", "k.txt")}[shape]
+    if shape == "link-dotdot":
+        os.symlink(str(other), "out")
+    assert ki.ensure_control_key(kf) == (MINTED, True) and os.path.isfile(kf), kf
+    if shape == "link-dotdot":
+        assert not os.path.exists(str(work / "k4")), "a stray directory at the lexical place"
 
 
 @_POSIX_ONLY

@@ -52,10 +52,12 @@ from kontroll.service import secrets as secrets_service  # noqa: E402
 
 AGE_KEY_FILE = os.path.join(os.path.expanduser("~"), ".config", "sops", "age", "keys.txt")
 # The installer container's key file, on the directory docker/services/installer.yaml mounts from the operator's
-# ~/.config/sops/age (its SOPS_AGE_KEY_FILE), and the marker docker/installer/Dockerfile bakes into the image, which
-# a `sudo` or an `env -i` in the installer's shell cannot drop as it drops KONTROLL_IN_CONTAINER (_key_made_away).
+# ~/.config/sops/age (its SOPS_AGE_KEY_FILE), and the files by which kontroll-init knows the installer image, which a
+# `sudo` or an `env -i` in the installer's shell cannot drop as it drops KONTROLL_IN_CONTAINER (_key_made_away): the
+# marker docker/installer/Dockerfile bakes, and the dispatcher it installs, which every installer image has carried
+# (one published before the marker too).
 INSTALLER_KEY_FILE = "/root/.config/sops/age/keys.txt"
-INSTALLER_IMAGE_MARKER = "/etc/kontroll/installer-image"
+INSTALLER_IMAGE_MARKERS = ("/etc/kontroll/installer-image", "/usr/local/bin/kontroll-installer")
 CONTROL_ANCHORS = ["base_recipients", "ops_recipients"]   # the control key must decrypt EVERY domain
 BOOTSTRAP_DOMAINS = ["dashboards", "semaphore"]            # auto-mintable bootstrap domains deploy-stack's .env needs
 #   dashboards: GUI/Grafana passwords + the C10 API token; semaphore: DB pw + admin login + access-key key.
@@ -328,21 +330,24 @@ def _misread_key_file(key_file):
             % (key_file, key_file))
 
 
-def _key_made_away(key_file):
-    """The refusal for a run in the installer container (KONTROLL_IN_CONTAINER set, as the playbooks read it, or the
-    image's INSTALLER_IMAGE_MARKER present, which a `sudo` or an `env -i` in its shell cannot drop) that would make its
-    control key anywhere but INSTALLER_KEY_FILE (/root/.config/sops/age/keys.txt, in the one directory of keys the
-    installer mounts, whatever HOME is), or None. A --key-file spelled as the operator's machine spells it names a
-    directory the container lacks, which step 1 would create in the container's own layer: the key made there is lost
-    when the container exits, after the run has written the instance to it and printed it as the key to keep; one made
-    in another directory of the container is lost the same way, or left in the checkout; and one of another name in that
-    directory is root's, and no installer verb reads it (installer.yaml's SOPS_AGE_KEY_FILE, bootstrap.yml, the
-    dispatcher's hand-back), so the next documented step mints a keys.txt that cannot open the instance. None outside
-    the installer container, when something is at the path (it is read, not made), and when the file is that key file
-    however the path spells its directory (compared with os.path.samefile, by what the kernel opens; a directory os.stat
-    cannot reach is not that one). Pure but for the environment and the stats (testable)."""
-    in_container = os.environ.get("KONTROLL_IN_CONTAINER") or os.path.exists(INSTALLER_IMAGE_MARKER)
-    if not in_container or os.path.lexists(key_file):
+def _key_made_away(key_file, reads_only=False):
+    """The refusal for a run in the installer container (KONTROLL_IN_CONTAINER set to any non-empty value, as the
+    playbooks read it, or one of INSTALLER_IMAGE_MARKERS present, which a `sudo` or an `env -i` in its shell cannot
+    drop) whose control key file is not INSTALLER_KEY_FILE (/root/.config/sops/age/keys.txt, in the one directory of
+    keys the installer mounts, whatever HOME is), or None. A missing file would be made: a --key-file spelled as the
+    operator's machine spells it names a directory the container lacks, which step 1 would create in the container's own
+    layer, so the key made there is lost when the container exits, after the run has written the instance to it and
+    printed it as the key to keep; one made in another directory of the container is lost the same way, or left in the
+    checkout. A file of another name, made now or there before, is one no installer verb reads (installer.yaml's
+    SOPS_AGE_KEY_FILE, bootstrap.yml, the dispatcher's hand-back), so the next documented step mints a keys.txt that
+    cannot open the instance a --fresh run keyed to it, or that a run on an existing one added it to. None outside the
+    installer container, for a file that is there (a link to no file is not) and that the run only reads (`reads_only`:
+    --break-glass-recipient on an existing instance), and when the file is that key file however the path spells its
+    directory (compared with os.path.samefile, by what the kernel opens; a directory os.stat cannot reach is not that
+    one). Pure but for the environment and the stats (testable)."""
+    in_container = os.environ.get("KONTROLL_IN_CONTAINER") or any(os.path.exists(m) for m in INSTALLER_IMAGE_MARKERS)
+    there = os.path.exists(key_file)                    # a link to no file is no key to read
+    if not in_container or (there and reads_only):
         return None
     keys = os.path.dirname(INSTALLER_KEY_FILE)
     try:
@@ -351,13 +356,17 @@ def _key_made_away(key_file):
             return None
     except (OSError, ValueError):
         pass
-    return ("ERROR: there is no key file at %s. In the installer container kontroll-init refuses a missing control key "
-            "file anywhere but keys.txt in %s, the directory the installer mounts from this machine's "
-            "~/.config/sops/age: a key made in any other directory is lost when the container exits, or left in "
-            "the checkout or another mount, where no key belongs, and one of another name there is a file no "
-            "installer verb reads. Give no --key-file in the installer's shell as it starts (HOME=/root), or "
-            "--key-file %s: this machine's ~/.config/sops/age/keys.txt, the one file every installer verb reads. "
-            "Nothing was written." % (key_file, keys, INSTALLER_KEY_FILE))
+    return (("ERROR: %s is a key file no installer verb reads, and this run would key the instance to it." if there
+             else "ERROR: there is no key file at %s.") % key_file
+            + " In the installer container kontroll-init refuses a control key file anywhere but keys.txt in %s, the "
+            "directory the installer mounts from this machine's ~/.config/sops/age, unless the run only reads it (an "
+            "existing instance's --break-glass-recipient): a key made in any other directory is lost when the "
+            "container exits, or left in the checkout or another mount, where no key belongs, and a key file of "
+            "another name, made now or there before, is one no installer verb reads. Give no --key-file, with "
+            "HOME=/root as the installer sets it (for a --fresh run, through fresh-init, which hands the key back), "
+            "or --key-file %s: this machine's ~/.config/sops/age/keys.txt, the one file every installer verb reads; "
+            "move a control key kept under another name there first. Nothing was written."
+            % (keys, INSTALLER_KEY_FILE))
 
 
 def _show_break_glass_once(private, warning):
@@ -396,7 +405,7 @@ def ensure_control_key(key_file):
     (public, created). Never prints the private key."""
     created = False
     if not os.path.exists(key_file):
-        os.makedirs(os.path.dirname(os.path.abspath(key_file)), mode=0o700, exist_ok=True)   # a bare name too
+        os.makedirs(os.path.dirname(key_file) or os.curdir, mode=0o700, exist_ok=True)   # as the kernel walks it
         subprocess.run(["age-keygen", "-o", key_file], check=True, capture_output=True)
         os.chmod(key_file, 0o600)
         created = True
@@ -540,7 +549,8 @@ def main(argv):
                          "auto-promote; this edition has no auto-promoter, so it behaves like 'separated'). NEVER "
                          "defaulted — choose. See docs/trust-mode.md.")
     args = ap.parse_args(argv)
-    away = _key_made_away(args.key_file)         # first: a key the installer container would discard at exit
+    # first: in the installer container, a control key file other than the mounted keys.txt
+    away = _key_made_away(args.key_file, reads_only=bool(args.break_glass_recipient and not args.fresh))
     if away:
         print(away, file=sys.stderr)
         return 1
