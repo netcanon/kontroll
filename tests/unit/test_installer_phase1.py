@@ -232,20 +232,20 @@ def test_fresh_init_hands_the_scaffolded_instance_to_the_operator():
 
 # A route by which a script's output reaches a file or a log: a tee, a file `exec` opens (`exec >f`, `exec 2>f`, `exec
 # &>>f`, `exec {fd}>f`, `exec 3<>f`, after flags of its own and their operands, `exec -- >f`, `exec -c>f` and `exec -a
-# NAME >f`, wherever `exec` stands on the line, each flag and operand read whole, and after a redirect written before it
-# at a line's start, after a separator or `then`, `do` or `else`, or after an assignment there, `>f exec` or `K=1 >f
-# exec`), a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen` with a `-L` among its flags
-# or `-X log` or `-X hardcopy`, `tmux pipe-pane` or `save-buffer` by any prefix tmux takes (from `pi` and `sa` on) or a
-# copy-mode command that pipes a selection (`pipe-and-cancel` among them), before or after "tmux" on the line, and at a
-# line's start, after a `;` or as a variable's value (quoted, in `$'…'`, an array's first element, bare or quoted, after
-# spaces inside the quote or the array too), as a control-mode client's input on a line of its own is, from a heredoc or
-# a variable; and by the full names, their aliases `pipep` and `saveb`, any `pipe-…` command, `copy-command` or a
-# `copy-pipe` command anywhere), a runner that gives the command a terminal of its own (`expect`, `unbuffer`, `rlwrap`,
-# `socat`), `logger` or `systemd-cat`, or a command that files its output away from the terminal (`nohup`,
-# `systemd-run`, `start-stop-daemon`).
+# NAME >f`, wherever `exec` stands on the line, each flag and operand read whole and after a space of its own, and after
+# a redirect written before it at a line's start, after a separator or `then`, `do` or `else`, or after an assignment
+# there, `>f exec` or `K=1 >f exec`), a recorder of the terminal (`script`, `asciinema`, `ttyrec`, `logsave`, `screen`
+# with a `-L` among its flags or `-X log` or `-X hardcopy`, `tmux pipe-pane` or `save-buffer` by any prefix tmux takes
+# (from `pi` and `sa` on) or a copy-mode command that pipes a selection (`pipe-and-cancel` among them), before or after
+# "tmux" on the line, and at a line's start, after a `;` or as a variable's value (quoted, in `$'…'`, an array's first
+# element, bare or quoted, after spaces inside the quote or the array too), as a control-mode client's input on a line
+# of its own is, from a heredoc or a variable; and by the full names, their aliases `pipep` and `saveb`, any `pipe-…`
+# command, `copy-command` or a `copy-pipe` command anywhere), a runner that gives the command a terminal of its own
+# (`expect`, `unbuffer`, `rlwrap`, `socat`), `logger` or `systemd-cat`, or a command that files its output away from the
+# terminal (`nohup`, `systemd-run`, `start-stop-daemon`).
 _LOG_ROUTE = re.compile(r"\btee\b|\bscript\b|\blogger\b|\bsystemd-cat\b"
-                        r"|\bexec\s*(?:-[^\s<>]*(?=[\s<>]|$)"
-                        r"(?:\s+(?:'[^']*'|\"[^\"]*\"|[^\s<>'\"-][^\s<>]*(?=[\s<>]|$)))?\s*)*"
+                        r"|\bexec(?:\s+-[^\s<>]*(?=[\s<>]|$)"
+                        r"(?:\s+(?:'[^']*'|\"[^\"]*\"|[^\s<>'\"-][^\s<>]*(?=[\s<>]|$)))?)*\s*"
                         r"(?:\{\w+\}|[0-9&]*)[<>]"
                         r"|(?:^|[;&|({]|\b(?:then|do|else)\b)\s*(?:\w+=\S*\s+)*"
                         r"(?:[0-9&]*[<>](?:[>|&]\s*\S+|\s+\S+|[^\s>|&]\S*)\s+)+exec\b"
@@ -413,6 +413,7 @@ _RUN = 'docker compose run --rm init "$@"'
     ("exec -a 'x y' >k.log", "route"),
     ("exec -la k 2>>k.log", "route"),
     ("exec -c>k.log", "route"),
+    ("exec-c>k.log", "file"),
     (">k.log exec", "route"),
     ("2>k.log exec", "route"),
     ("{ >k.log exec; }", "route"),
@@ -556,7 +557,10 @@ def test_the_capture_scan_reads_each_route_it_names(line, refused_by, monkeypatc
     (`>> k.log exec`), which no row held (fold 15's read 190, N1, N2); and `save-buffer` inside another tmux command
     (`if-shell true 'save-buffer k.log'`), which only the arm that needs no "tmux" reads, and which no row held once the
     prefix arm read the row after `;` (fold 16's own mutants); and `sa` after a `;` with no space, which no row held
-    (fold 16's read 201, N4)."""
+    (fold 16's read 201, N4). A command whose name only begins with `exec` (`exec-c>k.log`: bash runs `exec-c`) is
+    refused as a file, not as a route, since fold 19 opened each of the exec arm's flags with a space of its own, a
+    shape CodeQL's exponential-backtracking query reads as linear (it flagged fold 18's, which only its lookaheads
+    kept linear)."""
     monkeypatch.setitem(globals(), "_read", lambda rel: line + "\n")   # the row, as the scan reads a launcher's text
     reads = _joined_lines("a launcher")
     got = ("route" if any(_LOG_ROUTE.search(r) for r in reads) else "file" if any(_TO_A_FILE.search(r) for r in reads)
@@ -613,7 +617,8 @@ def test_the_exec_arm_reads_a_run_of_dashes_in_linear_time():
     other three alternatives and a tab after a `;`, which no line held either; a long line of any of these shapes in a
     launcher would stall the suite for minutes instead of failing (T11 fold 13's read 170, N4; the operands, fold 14's
     own probe; the appends, fold 14's read 180, N1; the spaces, fold 16's read 200, N5; the other alternatives and the
-    tab, fold 17's read 210, N2)."""
+    tab, fold 17's read 210, N2). Fold 19 opened each of the exec arm's flags with a space of its own, which parts
+    them without the lookaheads too; they stay, so that a flag or an operand is read whole and once."""
     for line in ('echo "exec %s x"' % ("-" * 64), "echo exec " + " ".join(["-a x-x-x-x"] * 40) + " x",
                  "{ " + " ".join(">>k%d.log" % i for i in range(64)) + "; }", "true;" + " " * 64 + "x",
                  " " * 64 + "x", "K=(" + " " * 64 + "x", "K='" + " " * 64 + "x", "true;" + " \t" * 32 + "x"):
