@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test(unit): the promote-hint check reads what its last review found it skipping (T19 tail, 2026-10-26)
+
+T19's last review found shapes `tests/unit/test_promote_hint_single_source.py` passed although they type the
+instruction by hand, and docs that said it read more than it does. No route or document changes: the tree held none
+of these shapes.
+
+- A hoisted hint that the function also binds another way — an unpacking (`hint, _ = "land …", None`), `:=`, `for`,
+  `+=`, `with … as` — is checked as the name, and refused, instead of as its `=` value alone; in a committing route
+  too. A hoisted hint extended with `+=` onto the helper's own text is refused as well: write it as one `=`.
+- A `next` under `not (a and staged)`, or `bool(a and staged)`, is read like the same test without them.
+- The scan strips the inline tags `<br>`, `<cite>`, `<del>`, `<dfn>`, `<ins>`, `<q>`, `<s>` and `<tt>` too, and its
+  docstrings say what it does not read — a tag outside that list (`<font>`, `<label>`) — and what it refuses
+  although it is no instruction: code that names `type` just before `run_id` (a field tuple), which is reordered.
+- Samples: a module constant, a hand value between two helper `=`s, each rebinding, `not`/`bool()` of an `and`, an
+  `if` on `len()` of the outcome (not read as the outcome), every tag of the list at once, a `<script>` left alone;
+  and a new sample test for the committing routes' check.
+
 ### refactor(onboard): the backend registry owns an onboard's defaults — domain, params, the token var (T18 / S27, 2026-10-22)
 
 The secrets domain `network`, the `network_os` rule and the api token's host var were code: copies of the
