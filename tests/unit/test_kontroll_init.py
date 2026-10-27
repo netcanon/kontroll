@@ -807,8 +807,8 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
     that reads as that directory but leads out through a link, or another name in that directory, which no installer
     verb reads; the default key file under a HOME other than the installer's (its key directory present); and a file
     that is there already, of another name (in that directory or elsewhere) or a keys.txt in another directory, which
-    the run would key the instance to; and a link in that directory to no file, or a directory, even on the run that
-    only reads (there is no key to read). The refusal names the file, what made kontroll-init take the run for the
+    the run would key the instance to; and a link in that directory to no file, a directory or a FIFO, even on the run
+    that only reads (there is no key to read). The refusal names the file, what made kontroll-init take the run for the
     installer's (the variable, then each marker that is there: all three with the variable and both markers there, as in
     the image as built), that directory and the remedy (no --key-file, through `fresh-init` for a --fresh run; on a
     host, undo what the parenthesis names), and comes before the break-glass refusal and a break-glass mint. The default
@@ -837,7 +837,9 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
     reads it, a run without --fresh that it would key the instance, and a link to keys.txt that it is a key file no
     installer verb reads (fold 13's read 170, N5, N6); and a refusal that named one of several triggers, which no row
     held, so a host was refused again after it undid the one named, a remedy that fitted the installer alone, and a
-    directory taken for a key file that is there (fold 14's reads 180, N4, and 181, N2)."""
+    directory taken for a key file that is there (fold 14's reads 180, N4, and 181, N2); and a FIFO taken for one, which
+    no row held, and a host remedy that told the operator to unset a variable the parenthesis did not name (fold 15's
+    read 191, N4, N7)."""
     real_step_1 = ki.ensure_control_key                           # before the seams stub it
     if run == "fresh":
         _mock_fresh_seams(monkeypatch)
@@ -875,7 +877,7 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
                 "--break-glass-recipient)") in err
         assert "move a control key kept under another name there first. Nothing was written" in err
         assert ("Nothing was written. If this is not the installer container, undo what the parenthesis names: unset "
-                "KONTROLL_IN_CONTAINER, and move each file it names away from that path.") in err
+                "KONTROLL_IN_CONTAINER if it names it, and move away each file it names.") in err
     hows = (("true", "true", []), ("0", "0", []), ("marker", None, [marker]), ("dispatcher", None, [dispatcher]),
             ("moved-home", None, [marker]), ("1+marker", "1", [marker]), ("both", None, [marker, dispatcher]),
             ("1+both", "1", [marker, dispatcher]))     # any value; `sudo` or `env -i`; another HOME; several at once
@@ -941,7 +943,9 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
         os.remove(there)
     dangling = os.path.join(keys, "gone.txt")
     os.symlink(str(tmp_path / "nowhere" / "k.txt"), dangling)    # a link to no file: no key there to read
-    for nokey in (dangling, keys):                               # a directory is no key to read either
+    fifo = os.path.join(keys, "pipe.txt")
+    os.mkfifo(fifo)                                              # nor is a FIFO
+    for nokey in (dangling, keys, fifo):                         # a directory is no key to read either
         for args in (argv, (_FRESH if run == "fresh" else []) + ["--break-glass-recipient", BG]):
             capsys.readouterr()
             assert ki.main(args + ["--key-file", nokey]) == 1, (nokey, args)
@@ -952,6 +956,7 @@ def test_the_installer_container_makes_a_key_only_where_it_mounts_keys(fresh_rep
             else:
                 assert open(sops_path, encoding="utf-8").read() == before
     os.remove(dangling)
+    os.remove(fifo)
     made = []
     monkeypatch.setattr(ki, "ensure_control_key", lambda kf: made.append(kf) or (MINTED, True))
     present = str(other / "present.txt")

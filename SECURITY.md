@@ -1131,13 +1131,13 @@ distinct control.
   `/usr/local/bin/kontroll-installer`, which a `sudo` or an `env -i` in its shell cannot drop) any run first refuses a
   control key file that is not `keys.txt` in the directory of keys the installer mounts (`/root/.config/sops/age`,
   whatever `HOME` is), whether it is there or not, unless the run only reads it (`--break-glass-recipient` on an
-  existing instance, and the file is there: a link to no file is not): a key made in any other directory is lost when
-  the container exits, or left in the checkout or another mount, after the instance has been written to it, and a key
-  file of another name, made then or there before, is one no installer verb reads (`keys.txt` itself under another path
-  or name, a link, a hard link or a second bind, counts as `keys.txt` once it is there); the refusal names each of these
-  it finds (the variable, then the marker, then the dispatcher). On an existing instance it also refuses a key file that
-  is not the control recipient of every rule (read as sops reads it: a rule's key groups when it has any), and stops
-  after adding the recipient, before the bootstrap secrets.
+  existing instance, and the file is there, a regular file: a link to no file or a directory is not): a key made in any
+  other directory is lost when the container exits, or left in the checkout or another mount, after the instance has
+  been written to it, and a key file of another name, made then or there before, is one no installer verb reads
+  (`keys.txt` itself under another path or name, a link, a hard link or a second bind, counts as `keys.txt` once it is
+  there); the refusal names each of these it finds (the variable, then the marker, then the dispatcher). On an existing
+  instance it also refuses a key file that is not the control recipient of every rule (read as sops reads it: a rule's
+  key groups when it has any), and stops after adding the recipient, before the bootstrap secrets.
 - **`.sops.yaml` edits are additive + parse-verified.** Adding a key role writes only the **public** recipient
   into the named `/.sops.yaml` anchor group(s) — **anchor-preserving text insertion**, **idempotent**, and
   guarded by a **parse-verify gate** that refuses to write unless the edit is strictly additive (no existing

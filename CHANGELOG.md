@@ -64,18 +64,18 @@ losing that key destroyed every device credential, API token and service passwor
   - in the installer container, a run that would key the instance to a control key file other than `keys.txt` in the
     directory of keys the installer mounts (`/root/.config/sops/age`, whatever `HOME` is), whether the file is there or
     not: a `--fresh` run, or one on an existing instance but for its `--break-glass-recipient`, which only reads the
-    file (one that is there: a link to no file is refused too). Before this, a `--key-file` as the host spells it named
-    a directory the container lacks, so the key was made in the container's own layer, the instance written to it, and
-    the key lost when the container exited; one made in another directory was lost the same way, or left in the checkout
-    or another mount; and a key file of another name, made then or there before, was one no installer verb reads, so the
-    next step minted a `keys.txt` that could not open the instance. The container is known by `KONTROLL_IN_CONTAINER`
-    (any non-empty value, as the playbooks read it) or by either of two files in the installer image, which a `sudo` or
-    an `env -i` in its shell cannot drop: `/etc/kontroll/installer-image`, and the dispatcher
-    `/usr/local/bin/kontroll-installer`, which every installer image carries (one published before the marker too). The
-    refusal names each of these it finds (the variable, then `/etc/kontroll/installer-image`, then the dispatcher), so a
-    host that carries a marker file by chance is told why, and of each at once; `keys.txt` itself under another path or
-    name (a link, a hard link, a second bind), once it is there, counts as `keys.txt`. Step 1 also makes a key named by
-    a bare file name, where it failed before.
+    file (one that is there, a regular file: a link to no file, a directory or a FIFO is refused too). Before this, a
+    `--key-file` as the host spells it named a directory the container lacks, so the key was made in the container's own
+    layer, the instance written to it, and the key lost when the container exited; one made in another directory was
+    lost the same way, or left in the checkout or another mount; and a key file of another name, made then or there
+    before, was one no installer verb reads, so the next step minted a `keys.txt` that could not open the instance. The
+    container is known by `KONTROLL_IN_CONTAINER` (any non-empty value, as the playbooks read it) or by either of two
+    files in the installer image, which a `sudo` or an `env -i` in its shell cannot drop:
+    `/etc/kontroll/installer-image`, and the dispatcher `/usr/local/bin/kontroll-installer`, which every installer image
+    carries (one published before the marker too). The refusal names each of these it finds (the variable, then
+    `/etc/kontroll/installer-image`, then the dispatcher), so a host that carries a marker file by chance is told every
+    reason in one refusal; `keys.txt` itself under another path or name (a link, a hard link, a second bind), once it is
+    there, counts as `keys.txt`. Step 1 also makes a key named by a bare file name, where it failed before.
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
