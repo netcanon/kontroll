@@ -14,6 +14,8 @@ YAML parse where the shape matters). CLAUDE.md: the test lands with the behaviou
 import glob
 import os
 import re
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -345,15 +347,18 @@ def pip_audit_faults(workflow):
     message (and a `hash -r`), the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob
     character, `{` or `(` (`echo "set up (once)"`), a newline inside a quoted string (a message over two lines), a C0
     control character in a message (the ESC of an ANSI colour code), a `shopt -uo` of noexec or onecmd, an ANSI-C `$'…'`
-    before the audit, and an audit that opens a subshell (`(pip-audit -r a)`), sits inside a function or is spelt other
-    than `pip-audit …` (`python -m pip_audit`, the pip-audit action): none of these is read as a run, so the coverage
-    test fails. It cannot see an earlier step that writes one of those env keys through `$GITHUB_ENV`, or a PATH entry
-    through `$GITHUB_PATH`: a later step runs under it; nor another env key that leads the audit to a planted file; nor
-    a `working-directory:` or a `cd` that moves the file a `-r` names (a copy planted at `<dir>/docker/…` is then
-    audited instead; with none, pip-audit fails on the missing file); nor a command word built at run time, glued to or
-    made of a parameter expansion (but a special parameter the script starts with empty, `exit$@`, which is read), a
-    command substitution or a glob (`exit$x 0`, `set$x +e`, `${x:-exit} 0`, `` exit`:` 0 ``, `$(:)hash …`, `ex?t 0`, ``
-    set`:` +e ``)."""
+    before the audit, a brace expansion where bash builds no command word from it (an assignment's value, a redirect's
+    target, a quoted string: `TARGETS={exit,0}`, `x={exit,0} true`, `echo hi >{exit,}`, `echo "mode: {exec,dry-run}"`,
+    `jq '{hash,set}'`), and an audit that opens a subshell (`(pip-audit -r a)`), sits inside a function or is spelt
+    other than `pip-audit …` (`python -m pip_audit`, the pip-audit action): none of these is read as a run, so the
+    coverage test fails, or (a function over several lines) it is read and refused. It cannot see an earlier step that
+    writes one of those env keys through `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a later step runs under
+    it; nor another env key that leads the audit to a planted file; nor a `working-directory:` or a `cd` that moves the
+    file a `-r` names (a copy planted at `<dir>/docker/…` is then audited instead; with none, pip-audit fails on the
+    missing file); nor a command word built at run time, glued to or made of a parameter expansion (but a special
+    parameter the script starts with empty, bare or braced, `exit$@`, `exit${10}`, and one with a `-` or `:-` default,
+    read as its default word, `${1-exit} 0`, which are read), a command substitution or a glob (`exit$x 0`, `set$x +e`,
+    `${x:-exit} 0`, `` exit`:` 0 ``, `$(:)hash …`, `ex?t 0`, `` set`:` +e ``)."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -680,6 +685,74 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": "echo {a..c}\nmkdir -p out/{1..3}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
     ({"run": "echo $\"hello\"\necho \"cost: $\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
     ({"run": "echo \"$@\" $1 $* $!\necho \"cost: $1\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "{exec,true,\"a b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,\"a b\"}`"]),
+    ({"run": "{hash,-p,/bin/true,pip-audit,\"a b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "{exec,true,{}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,{}}`"]),
+    ({"run": "true\n{exit,${@}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exit,${@}}`"]),
+    ({"run": "{exec,true,$(echo a b)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,$(echo a b)}`"]),
+    ({"run": "{exec,true,{{}}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,{{}}}`"]),
+    ({"run": "{exec,true,`echo a b`}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,`echo a b`}`"]),
+    ({"run": "true\n{,,exit,0}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `{,,exit,0}`"]),
+    ({"run": "true\n{exit,} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `{exit,} 0`"]),
+    ({"run": "{e..e}{x..x}{i..i}t 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{e..e}{x..x}{i..i}t"]),
+    ({"run": "true\nexit${*}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${*}`"]),
+    ({"run": "true\nexit${!}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${!}`"]),
+    ({"run": "true\nexit${1}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${1}`"]),
+    ({"run": "true\nexit${@:-}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${@:-}`"]),
+    ({"run": "true\nexit${10}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${10}`"]),
+    ({"run": "true\n${1-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-exit} 0`"]),
+    ({"run": "set${10} +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "find . -name nothing -exec echo {} \\; ; mkdir -p o/{b,c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     []),
+    ({"run": "echo \"${1:-none}\" ${10} ${@:-all}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "TARGETS={exit,0}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `TARGETS={exit,0}`"]),
+    ({"run": "x={exit,0} true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `x={exit,0} true`"]),
+    ({"run": "echo hi >{exit,}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `echo hi >{exit,}`"]),
+    ({"run": "echo \"mode: {exec,dry-run}\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `echo \"mode: {exec,dry-run}\"`"]),
+    ({"run": "jq '{hash,set}' a.json\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a function or an alias"]),
+    ({"run": "{exec,true,'a b'}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,'a b'}`"]),
+    ({"run": "{exec,true,a\\ b}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,a\\ b}`"]),
+    ({"run": "{exec,true,\"a\\\" b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,\"a\\\" b\"}`"]),
+    ({"run": "{exec,true,\"}\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,\"}\"}`"]),
+    ({"run": "{exec,true,${x:-a b}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,${x:-a b}}`"]),
+    ({"run": "{set,-n,\"a b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{set,-n,\"a b\"}`"]),
+    ({"run": "{trap,\"ex\"\"it 0\",EXIT}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{trap,\"ex\"\"it 0\",EXIT}`"]),
+    ({"run": "true\n${@:-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${@:-exit} 0`"]),
+    ({"run": "true\nexit${@#x}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${@#x}`"]),
+    ({"run": "{exec,true,{${x}}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,{${x}}}`"]),
+    ({"run": "{hash,-p,/bin/true,pip-audit,{\"a,b\"}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "{exec,true,{\\,}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,{\\,}}`"]),
+    ({"run": "{exec,true,{$(echo a)}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,{$(echo a)}}`"]),
+    ({"run": "{set,+e,{${x}}}\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{set,+e,{${x}}}`", "not followed"]),
+    ({"run": "true\n${10-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${10-exit} 0`"]),
+    ({"run": "echo {x$(:,exit)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -729,15 +802,37 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "set-n-built-by-a-brace-expansion", "command-exit-built-by-a-brace-expansion",
         "set-plus-e-built-by-a-brace-expansion-in-a-closed-if", "exit-built-by-a-brace-sequence",
         "exit-built-by-two-brace-sequences",
-        "set-plus-e-built-by-a-brace-sequence-in-a-closed-if", "shopt-errexit-of-a-brace-the-view-leaves",
-        "set-plus-e-of-a-brace-the-view-leaves", "path-in-another-case-on-the-job",
+        "set-plus-e-built-by-a-brace-sequence-in-a-closed-if", "shopt-errexit-of-a-brace-list-with-a-quoted-space",
+        "set-plus-e-of-a-brace-list-with-a-quoted-space", "path-in-another-case-on-the-job",
         "exit-glued-to-an-empty-parameter", "empty-parameter-glued-to-exit", "exit-glued-to-a-star-parameter",
         "exit-glued-to-the-last-background-pid", "exit-glued-to-a-positional-parameter",
         "positional-parameter-nine-glued-to-exit", "exit-glued-to-a-braced-empty-parameter",
         "hash-glued-to-an-empty-parameter", "set-plus-e-glued-to-an-empty-parameter",
         "exit-spelled-through-a-locale-string",
         "brace-list-in-a-message-and-a-path", "brace-sequence-in-a-message-and-a-path", "locale-strings-in-messages",
-        "special-parameters-in-messages"])
+        "special-parameters-in-messages", "exec-built-by-a-brace-list-with-a-quoted-space",
+        "hash-built-by-a-brace-list-with-a-quoted-space", "exec-built-by-a-brace-list-with-an-empty-brace",
+        "exit-built-by-a-brace-list-with-a-braced-parameter", "exec-built-by-a-brace-list-with-a-substitution",
+        "exec-built-by-a-brace-list-with-a-nested-brace", "exec-built-by-a-brace-list-with-a-backquoted-command",
+        "exit-built-by-the-third-item-of-a-brace-expansion", "exit-built-by-a-brace-expansion-with-an-empty-item",
+        "exit-built-by-three-brace-sequences", "exit-glued-to-a-braced-star-parameter",
+        "exit-glued-to-the-braced-last-background-pid", "exit-glued-to-a-braced-positional-parameter",
+        "exit-glued-to-an-empty-parameter-with-a-default", "exit-glued-to-the-tenth-parameter",
+        "exit-as-the-default-of-an-empty-parameter", "set-plus-e-glued-to-the-tenth-parameter",
+        "find-braces-then-a-brace-list", "parameters-with-operators-in-a-message", "brace-list-in-an-assignment",
+        "brace-list-in-an-assignment-before-a-command", "brace-list-in-a-redirect-target",
+        "brace-list-in-a-double-quoted-message", "brace-list-in-a-single-quoted-argument",
+        "exec-built-by-a-brace-list-with-a-single-quoted-space", "exec-built-by-a-brace-list-with-an-escaped-space",
+        "exec-built-by-a-brace-list-with-an-escaped-quote", "exec-built-by-a-brace-list-with-a-quoted-closing-brace",
+        "exec-built-by-a-brace-list-with-a-default-holding-a-space", "set-n-built-by-a-brace-list-with-a-quoted-space",
+        "trap-built-by-a-brace-list-with-a-quoted-space", "exit-as-the-colon-default-of-an-empty-parameter",
+        "exit-glued-to-an-empty-parameter-with-another-operator",
+        "exec-built-by-a-brace-list-around-a-brace-holding-a-braced-parameter",
+        "hash-built-by-a-brace-list-around-a-brace-holding-a-quoted-comma",
+        "exec-built-by-a-brace-list-around-a-brace-holding-an-escaped-comma",
+        "exec-built-by-a-brace-list-around-a-brace-holding-a-substitution",
+        "set-plus-e-built-by-a-brace-list-around-a-brace-holding-a-braced-parameter",
+        "exit-as-the-default-of-the-tenth-parameter", "substitution-holding-a-comma-inside-a-brace"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -791,26 +886,60 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     word; on the first line it refuses the script, loudly); and an `LD_AUDIT` in the env. Fold 10's mutant run added a
     SOH inside an `exit` on a line after the first, so a class cut to a NUL and STX fails. Its read A added: a command
     word a brace expansion builds, from a list or a sequence (`{exit,0}`, `command {exit,0}`, `{e..e}xit 0`,
-    `{e..e}x{i..i}t 0`, `{hash,-p,/bin/true,pip-audit}`, `{set,-n}`, and `{set,+e}` or `{s..s}et +e` in a closed `if`);
-    a `shopt` or a `set` given a brace the view leaves (an item holding a quoted space: the raw `{` is read); and an env
-    key in another case (`Path`, which a Windows runner reads as `PATH`). It passes a brace expansion in a message or a
-    path (`echo {a,b}`, `mkdir -p out/{1..3}`) and a locale string in a message (`echo $"hello"`, `echo "cost: $"`). Its
-    read B added: a special parameter the script starts with empty glued to `exit`, `hash` or `set` (`exit$@`, `$@exit
-    0`, `exit$*`, `exit$!`, `exit$1`, `$9exit 0`, `exit${@}`, `hash$@ …`, `set$@ +e`: a step's script is given no
-    arguments, so each is dead) and a locale string that is not empty (`$"ex"it 0`: bash expands it to its text); and
-    the two extended-glob `shopt` rows turn `extglob` on first (without it bash refuses them as it parses, loudly). It
-    passes those parameters in a message (`echo "$@" $1 $* $!`, `echo "cost: $1"`). Each row's job runs on ubuntu-latest
-    unless the row names another. Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2,
-    PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell,
-    PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c,
-    A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold
-    6's mutant W56; its read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5;
-    its read B, S1, S2, N6; fold 8's read A, S1 to S5, N1: M1 to M13; its read B, S1 to S4, N2, N3, N6, N7: CT1, CT2,
-    SI2, MK2; fold 9's mutant X9a; its read B, S1, S2, N1, N8; fold 10's mutant run: B9-control-class-nul-and-stx-only;
-    its read A, S1, N1; its read B, S1, S2, N1, N2)."""
+    `{hash,-p,/bin/true,pip-audit}`, `{set,-n}`, and `{set,+e}` or `{s..s}et +e` in a closed `if`); a `shopt` given a
+    brace list holding a quoted space (`shopt -uo err{exit,"a b"}`); and an env key in another case (`Path`, which a
+    Windows runner reads as `PATH`). It passes a brace expansion in a message or a path (`echo {a,b}`, `mkdir -p
+    out/{1..3}`) and a locale string in a message (`echo $"hello"`, `echo "cost: $"`). Its read B added: a special
+    parameter the script starts with empty glued to `exit`, `hash` or `set` (`exit$@`, `$@exit 0`, `exit$*`, `exit$!`,
+    `exit$1`, `$9exit 0`, `exit${@}`, `hash$@ …`, `set$@ +e`: a step's script is given no arguments, so each is dead)
+    and a locale string that is not empty (`$"ex"it 0`: bash expands it to its text); and the two extended-glob `shopt`
+    rows turn `extglob` on first (without it bash refuses them as it parses, loudly). It passes those parameters in a
+    message (`echo "$@" $1 $* $!`, `echo "cost: $1"`). Fold 11's mutant run added `{e..e}x{i..i}t 0`, and fold 11 a
+    `set` given a brace list holding a quoted space (`set {+e,"a b"}`). Fold 11's reads added: a command word a brace
+    list builds from an item holding a quoted or escaped space or a quoted `}`, a substitution, a backquoted command, a
+    braced parameter, or an empty or nested brace (`{exec,true,"a b"}`, `{hash,-p,/bin/true,pip-audit,"a b"}`,
+    `{exec,true,$(echo a b)}`, `` {exec,true,`echo a b`} ``, `{exit,${@}}`, `{exec,true,{}}`, `{exec,true,{{}}}`,
+    `{exec,true,'a b'}`, `{exec,true,a\\ b}`, `{exec,true,"a\\" b"}`, `{exec,true,"}"}`, `{exec,true,${x:-a b}}`, and a
+    `set -n` or a `trap` one builds the same way, `{set,-n,"a b"}`, `{trap,"ex""it 0",EXIT}`), from a list's third or
+    empty item (`{,,exit,0}`, `{exit,} 0`) or from three sequences (`{e..e}{x..x}{i..i}t 0`); and a special parameter
+    braced (`exit${*}`, `exit${!}`, `exit${1}`), past `$9` (`exit${10}`, `set${10} +e`) or with a `-` or `:-` default
+    (`exit${@:-}`, `${1-exit} 0`, `${@:-exit} 0`) or another operator (`exit${@#x}`): bash expands a brace before a
+    parameter, and both before it runs the command word. They pass `find`'s `{}` before a brace list and those
+    parameters in a message (`echo "${1:-none}" ${10} ${@:-all}`), and refuse, sound, a brace list in an assignment's
+    value, a redirect's target or a quoted string (`TARGETS={exit,0}`, `x={exit,0} true`, `echo hi >{exit,}`, `echo
+    "mode: {exec,dry-run}"`, `jq '{hash,set}'`). Fold 12's mutant run added a command word a brace list builds around a
+    brace that holds no list, only a braced parameter, a quoted or escaped comma or a substitution
+    (`{exec,true,{${x}}}`, `{hash,-p,/bin/true,pip-audit,{"a,b"}}`, `{exec,true,{\\,}}`, `{exec,true,{$(echo a)}}`, and
+    `{set,+e,{${x}}}`, which bash expands to `set +e {}`), and the tenth parameter's default (`${10-exit} 0`); and it
+    passes a substitution holding a comma inside a brace (`echo {x$(:,exit)}`: bash's brace_gobbler skips the whole
+    `$(…)`, so the brace holds no comma and is kept). Each row's job runs on ubuntu-latest unless the row names another.
+    Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its
+    fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if,
+    PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold
+    5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its
+    read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5; its read B, S1, S2,
+    N6; fold 8's read A, S1 to S5, N1: M1 to M13; its read B, S1 to S4, N2, N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's
+    mutant X9a; its read B, S1, S2, N1, N8; fold 10's mutant run: B9-control-class-nul-and-stx-only; its read A, S1, N1;
+    its read B, S1, S2, N1, N2; fold 11's mutant X11h; its read A, S1, S2, N1: A10; its read B, S1, S2, N6, N7; fold
+    12's mutant run: X12u, X12aa, X12ab)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
+
+
+def test_the_pip_audit_check_reads_a_long_word_after_a_brace_at_once():
+    """The pip-audit check reads a step whose word opens a brace and then holds forty command substitutions with no
+    comma or closing brace after them (`echo {$(a)$(a)…`) at once, in a fresh interpreter given a minute: each piece
+    of a brace's item is read once, whole where it can be (tests/unit/_build_read.py, `_PIECE`). Guards a piece
+    pattern that tries each way of cutting a `$(…)` (whole, or one character at a time) before it gives up, which
+    doubles its time with each one: twenty-four took five seconds, and forty would hang every suite that reads a
+    workflow or a Dockerfile (T29's fold-12 mutant run, X12ab)."""
+    step = {"run": "echo {" + "$(a)" * 40 + "\n" + _AUDIT}
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import test_ci_workflows as t; "
+            "print(t.pip_audit_faults({'jobs': {'a': {'runs-on': 'ubuntu-latest', 'steps': [%r]}}}))" % step)
+    r = subprocess.run([sys.executable, "-c", code, os.path.dirname(os.path.abspath(__file__))], capture_output=True,
+                       text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip() == "({'docker/a/requirements.txt'}, [])", (r.stdout, r.stderr)
 
 
 @pytest.mark.parametrize("shell,runs_on,expected", [

@@ -53,16 +53,15 @@ option that takes a value and is not named here (its value reads as a package), 
 brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`( install && check )`, behind `&&` or
 not: the `)` joins the check's command, which then reads as no `pip check`), a `;` inside a quoted string after a check
 (`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN (one a brace expansion
-builds too, `{exit,0}`: sh expands no brace, so it runs a command not found, which fails the RUN, while these checks
-read it as bash would), the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), a
-function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too),
-the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set
-up (once)"`), an ANSI-C `$'…'` before the check or later in its own list, a `sha256sum` that is not the first word of
-its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo $(true)#x`: one word to sh, a comment inside a
-RUN to these checks), a `#` after a space inside quotes (`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash",
-"-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two outputs, a trailing comment on a RUN's last line, and a
-digest ARG redeclared without its value in a later stage.
-"""
+builds too, `{exit,0}`: sh expands no brace, so it runs a command not found and goes on (or fails, behind `&&`), while
+these checks read it as bash would), the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on
+error"`), a function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`, in a quoted
+message too), the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or
+`(` (`echo "set up (once)"`), an ANSI-C `$'…'` before the check or later in its own list, a `sha256sum` that is not the
+first word of its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo $(true)#x`: one word to sh, a
+comment inside a RUN to these checks), a `#` after a space inside quotes (`echo "see #1"`), a SHELL such as hadolint's
+`["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two outputs, a trailing comment on a RUN's
+last line, and a digest ARG redeclared without its value in a later stage. """
 import json
 import os
 import re
@@ -70,7 +69,7 @@ import re
 import pytest
 import yaml
 from _build_read import commands as _commands
-from _build_read import _plain, gate_faults, image_reference
+from _build_read import gate_faults, image_reference
 from _build_read import unquote as _unquote
 
 pytestmark = pytest.mark.unit
@@ -440,7 +439,8 @@ def _digest_names(commands, digests):
     and backslashes removed (`export TOOL_'SHA256'=…`)."""
     assigned = {}
     for command, _, _ in commands:
-        for name, value in re.findall(r"""(?:^|[\s();&|`])["']?(\w+)=(\S*)""", command + " " + _plain(command)):
+        plain = re.sub(r"""["'\\]""", "", command)
+        for name, value in re.findall(r"""(?:^|[\s();&|`])["']?(\w+)=(\S*)""", command + " " + plain):
             assigned.setdefault(name, []).append(_unquote(value))
         for m in re.finditer(r"""(?:^|[\s();&|`])(read|for|getopts|unset)((?:\s+[^\s;&|<>()]+)+)""", command):
             for name in re.findall(r"""\s["']?(\w+)""", m.group(2)):
@@ -1052,6 +1052,12 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
       "pip check shares the RUN with `set", "pip check not followed"]),
     ("true; exit$@; " + _INSTALL + " && python3 -m pip check",
      ["pip install shares the RUN with `exit$@`", "pip check shares the RUN with `exit$@`"]),
+    ("true; exit${@:-}; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit${@:-}`", "pip check shares the RUN with `exit${@:-}`"]),
+    ("true; ${1-exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${1-exit} 0`", "pip check shares the RUN with `${1-exit} 0`"]),
+    ("true; exit${10}; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit${10}`", "pip check shares the RUN with `exit${10}`"]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1090,7 +1096,8 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "ansi-c-quote-later-in-the-list", "continuation-after-trailing-blanks",
         "ansi-c-quote-after-a-pipe", "subshell-after-a-pipe",
         "subshell-after-a-background", "subshell-after-one-closed-behind-or", "set-of-a-variable-flag",
-        "set-of-a-glob", "exit-glued-to-an-empty-parameter"])
+        "set-of-a-glob", "exit-glued-to-an-empty-parameter", "exit-glued-to-an-empty-parameter-with-a-default",
+        "exit-as-the-default-of-an-empty-parameter", "exit-glued-to-the-tenth-parameter"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1136,14 +1143,16 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     7's mutants: O3s). Fold 7's read A added: a `set` given a variable, a backquoted command or a glob (`set $o`, `set
     -$x`, `` set `cat o` ``, `set +[e]`) shares the RUN as a `set -n` would, since it can be one, and switches errexit
     off. Fold 10's read B added: an `exit` glued to a special parameter the RUN starts with empty (`exit$@`: `sh -c` is
-    given no arguments, so the RUN ends there, its status 0). Guards a pin check that a common install shape walks past,
-    and a `pip check` that cannot fail the build — "make the cleanup tolerant" with a trailing `|| true` was one (T29's
-    read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4; its fold-3 read, S2, N1, N2, N6: Z1, Z5, Z6, Z10, V2,
-    V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2, S4, S5, N1, N2, N6: G-a, C-g, O-a to O-d, O-i, E-a to
-    E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to O14, O17, S5, C4; fold 5's read A, S1 to S4, S6, N1 to
-    N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7, D1, D2, D4, D8, E1, E3, F1, G1, G2, I1, K1, K4; its read
-    B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants: Q7, QX1, QX2; its read A, S3, S4, S5, S7; its read B, S3,
-    N1, N4: R1, SK1, SK2, BK1; fold 7's read A, S2; fold 10's read B, S1)."""
+    given no arguments, so the RUN ends there, its status 0). Fold 11's read A added: one braced past `$9` or with a `-`
+    or `:-` default (`exit${10}`, `exit${@:-}`, `${1-exit} 0`: sh expands each as bash does). Guards a pin check that a
+    common install shape walks past, and a `pip check` that cannot fail the build — "make the cleanup tolerant" with a
+    trailing `|| true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4; its fold-3 read, S2,
+    N1, N2, N6: Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2, S4, S5, N1, N2, N6:
+    G-a, C-g, O-a to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to O14, O17, S5, C4;
+    fold 5's read A, S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7, D1, D2, D4, D8, E1,
+    E3, F1, G1, G2, I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants: Q7, QX1, QX2; its
+    read A, S3, S4, S5, S7; its read B, S3, N1, N4: R1, SK1, SK2, BK1; fold 7's read A, S2; fold 10's read B, S1; fold
+    11's read A, S2)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 
@@ -1468,6 +1477,10 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
      ["no later sha256sum"]),
     ("RUN " + _GET + " && export TOOL_'SHA256'=$(sha256sum /usr/local/bin/tool | cut -c1-64) && " + _SUM,
      ["no later sha256sum"]),
+    ("ARG FOO\nENV X=$FOO\nRUN " + _GET + " && echo X$1=" + "a" * 64 + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["checks against a digest in the tree"]),
+    ("ARG FOO\nENV X=$FOO\nRUN " + _GET + " && echo {X,Y}=" + "a" * 64 + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["checks against a digest in the tree"]),
     ("RUN " + _GET + ' && case "$a" in x)TOOL_SHA256=$(sha256sum /usr/local/bin/tool | cut -c1-64);; esac && ' + _SUM,
      ["a download not followed", "no later sha256sum"]),
     ("RUN curl -fsSL -o /usr/local/bin/tool --remote-name-all https://x.test/tool && " + _SUM, ["more than one URL"]),
@@ -1507,7 +1520,9 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
         "subshell-piped", "done-as-an-assignment", "substitution-split-by-a-continuation",
         "add-after-a-double-backslash", "sh-c-after-an-apostrophe-and-a-backquote", "sha256sum-function",
         "output-dir", "digest-set-in-a-subshell", "digest-set-after-a-background", "digest-read-in-a-subshell",
-        "digest-name-partly-quoted", "digest-set-after-a-case-pattern", "remote-name-all", "wget-two-outputs",
+        "digest-name-partly-quoted", "echo-of-a-digest-name-glued-to-a-parameter",
+        "echo-of-a-digest-name-in-a-brace-list", "digest-set-after-a-case-pattern", "remote-name-all",
+        "wget-two-outputs",
         "sha256sum-an-echo-argument", "sha256sum-a-colon-argument", "sha256sum-function-spaced",
         "ampersand-in-a-quoted-url", "add-after-a-tab", "ansi-c-quote-later-in-the-list",
         "set-of-a-variable-flag-before-a-download", "sha256sum-from-the-working-directory", "sha256sum-from-tmp",
@@ -1545,13 +1560,15 @@ def test_the_download_check_tells_a_checked_download_from_a_near_miss(text, expe
     ends, and an ANSI-C `$'…'` later in the check's own list; it passes a quoted URL holding a `&`. Fold 7's read A
     added: a `set` given a variable before the download (it can be a `set -n`), and a `sha256sum` run from the working
     directory or /tmp (any program can be put there); it passes `/usr/bin/sha256sum`. Fold 8's read B added: a `set`
-    given a glob before the download; it passes `/bin/sha256sum`. Guards a check that finds "some checksum later"
-    for a download it does not check, and a checksum fetched from where the file came from — whoever swaps the file
-    swaps it too (T29's read, S2 and S3: D1, D2, D3, D5, D6; its fold-2 read, S1 and S2; the rules fold 3's mutants
-    found no row for; its fold-3 read, S2, N2, N3, N4: Z2, Z8, Z9, Z11, D1, D2, D4, D5, D6, G8; fold 4's mutants:
-    O5, D1, D2, D3, T2; its read, S1, S4, S5, N3: G-b, G-c, O-j, D-a, D-c, D-e, D-f, Z22, Z26, Z30, R3, R4, D6; fold
-    5's read A, S1 to S4, N1, N4, N5: A2, B2, B5, B9, C5, D3, D7, E2, K5, N1; its read B, N2, N8: NM1, NM3, NM5;
-    fold 6's read A, S1, S4, S6; its read B, S1, S3, N4: FA1, MA2; fold 7's read A, S2, N1; fold 8's read B, N1, N4:
-    SH1)."""
+    given a glob before the download; it passes `/bin/sha256sum`. Fold 11's read B added: an `echo` whose word only
+    reads as a digest name's assignment once a parameter is dropped or a brace list expanded (`echo X$1=<hex>`, `echo
+    {X,Y}=<hex>`): an assignment is read as written, its quotes and backslashes removed, and in no other view. Guards a
+    check that finds "some checksum later" for a download it does not check, and a checksum fetched from where the file
+    came from — whoever swaps the file swaps it too (T29's read, S2 and S3: D1, D2, D3, D5, D6; its fold-2 read, S1 and
+    S2; the rules fold 3's mutants found no row for; its fold-3 read, S2, N2, N3, N4: Z2, Z8, Z9, Z11, D1, D2, D4, D5,
+    D6, G8; fold 4's mutants: O5, D1, D2, D3, T2; its read, S1, S4, S5, N3: G-b, G-c, O-j, D-a, D-c, D-e, D-f, Z22, Z26,
+    Z30, R3, R4, D6; fold 5's read A, S1 to S4, N1, N4, N5: A2, B2, B5, B9, C5, D3, D7, E2, K5, N1; its read B, N2, N8:
+    NM1, NM3, NM5; fold 6's read A, S1, S4, S6; its read B, S1, S3, N4: FA1, MA2; fold 7's read A, S2, N1; fold 8's read
+    B, N1, N4: SH1; fold 11's read B, S3)."""
     faults = download_faults(_TREE + text + "\n")
     assert _found(faults, expected), faults
