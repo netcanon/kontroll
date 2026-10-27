@@ -335,22 +335,22 @@ def _key_made_away(key_file, reads_only=False):
     playbooks read it, or one of INSTALLER_IMAGE_MARKERS present, which a `sudo` or an `env -i` in its shell cannot
     drop) whose control key file is not INSTALLER_KEY_FILE (/root/.config/sops/age/keys.txt, in the one directory of
     keys the installer mounts, whatever HOME is), or None. The refusal names what made kontroll-init take the run for
-    the installer's (the variable, or which marker is there), so an operator on a host that carries a marker file by
-    chance sees why. A missing file would be made: a --key-file spelled as the operator's machine spells it names a
-    directory the container lacks, which step 1 would create in the container's own layer, so the key made there is lost
-    when the container exits, after the run has written the instance to it and printed it as the key to keep; one made
-    in another directory of the container is lost the same way, or left in the checkout. A file of another name, made
-    now or there before, is one no installer verb reads (installer.yaml's SOPS_AGE_KEY_FILE, bootstrap.yml, the
-    dispatcher's hand-back), so the next documented step mints a keys.txt that cannot open the instance a --fresh run
-    keyed to it, or that a run on an existing one added it to. None outside the installer container, for a file that is
-    there (a link to no file is not) and that the run only reads (`reads_only`: --break-glass-recipient on an existing
-    instance), and when the file is that key file however the path spells its directory (compared with os.path.samefile,
-    by what the kernel opens; a directory os.stat cannot reach is not that one) or, where it is there, its own name (a
-    link to it). Pure but for the environment and the stats (testable)."""
-    marker = next((m for m in INSTALLER_IMAGE_MARKERS if os.path.exists(m)), None)
-    why = ("KONTROLL_IN_CONTAINER is set" if os.environ.get("KONTROLL_IN_CONTAINER")
-           else "%s is there" % marker if marker else None)
-    there = os.path.exists(key_file)                    # a link to no file is no key to read
+    the installer's (the variable, then each of INSTALLER_IMAGE_MARKERS that is there: all it finds), so an operator on
+    a host that carries a marker file by chance sees why, and each thing to undo at once. A missing file would be made:
+    a --key-file spelled as the operator's machine spells it names a directory the container lacks, which step 1 would
+    create in the container's own layer, so the key made there is lost when the container exits, after the run has
+    written the instance to it and printed it as the key to keep; one made in another directory of the container is lost
+    the same way, or left in the checkout. A file of another name, made now or there before, is one no installer verb
+    reads (installer.yaml's SOPS_AGE_KEY_FILE, bootstrap.yml, the dispatcher's hand-back), so the next documented step
+    mints a keys.txt that cannot open the instance a --fresh run keyed to it, or that a run on an existing one added it
+    to. None outside the installer container, for a file that is there (a link to no file, or a directory, is not) and
+    that the run only reads (`reads_only`: --break-glass-recipient on an existing instance), and when the file is that
+    key file however the path spells its directory (compared with os.path.samefile, by what the kernel opens; a
+    directory os.stat cannot reach is not that one) or, where the file is there, under another name (a link to it,
+    compared the same way). Pure but for the environment and the stats (testable)."""
+    why = "; ".join((["KONTROLL_IN_CONTAINER is set"] if os.environ.get("KONTROLL_IN_CONTAINER") else [])
+                    + ["%s is there" % m for m in INSTALLER_IMAGE_MARKERS if os.path.exists(m)])
+    there = os.path.isfile(key_file)                    # a link to no file, or a directory, is no key to read
     if not why or (there and reads_only):
         return None
     keys = os.path.dirname(INSTALLER_KEY_FILE)
@@ -374,8 +374,9 @@ def _key_made_away(key_file, reads_only=False):
             "belongs, and a key file of another name, made now or there before, is one no installer verb reads. Run "
             "with no --key-file and HOME=/root as the installer sets it (for a --fresh run, through fresh-init, which "
             "hands the key back), or with --key-file %s: this machine's ~/.config/sops/age/keys.txt, the one file "
-            "every installer verb reads; move a control key kept under another name there first. Nothing was written."
-            % (why, keys, INSTALLER_KEY_FILE))
+            "every installer verb reads; move a control key kept under another name there first. Nothing was written. "
+            "If this is not the installer container, undo what the parenthesis names: unset KONTROLL_IN_CONTAINER, "
+            "and move each file it names away from that path." % (why, keys, INSTALLER_KEY_FILE))
 
 
 def _show_break_glass_once(private, warning):

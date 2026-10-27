@@ -72,9 +72,10 @@ losing that key destroyed every device credential, API token and service passwor
     (any non-empty value, as the playbooks read it) or by either of two files in the installer image, which a `sudo` or
     an `env -i` in its shell cannot drop: `/etc/kontroll/installer-image`, and the dispatcher
     `/usr/local/bin/kontroll-installer`, which every installer image carries (one published before the marker too). The
-    refusal names which of these it found, so a host that carries a marker file by chance is told why; a link to that
-    `keys.txt` of another name is taken as it. Step 1 also makes a key named by a bare file name, where it failed
-    before.
+    refusal names each of these it finds (the variable, then `/etc/kontroll/installer-image`, then the dispatcher), so a
+    host that carries a marker file by chance is told why, and of each at once; `keys.txt` itself under another path or
+    name (a link, a hard link, a second bind), once it is there, counts as `keys.txt`. Step 1 also makes a key named by
+    a bare file name, where it failed before.
   `--fresh` checks its trust mode and the configured-overlay guard before it mints a break-glass key.
   docs/troubleshooting.md §11 maps each refusal to its remedy.
 - **Added.** On an existing instance, `--break-glass-recipient` adds the key under both anchors and stops: it mints,
