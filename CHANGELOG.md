@@ -11,6 +11,38 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(security): an error body never carries exception text (T20, 2026-11-02)
+
+An exception's message can quote a request value, a path inside the container or a line of a file being parsed.
+Every GUI read route with a broad `except` put it in its 500 body (CodeQL `py/stack-trace-exposure`), both onboard
+plan routes answered any `ValueError` 422 with its text, the Homepage editor showed a failed write's path, and `kontroll-init
+--fresh` printed the first-run passwords wherever its output went. SECURITY.md C23.
+
+- **Changed.** An exception no GUI route designed answers 500 with `<what> failed — internal error (ref <id>); the
+  service log has the details`, the code `internal_error` and a `run_id`. The GUI's stderr gets `internal-error
+  kontroll_run_id=<id>` with the route, the exception's type and its frames, and the audit log an `internal-error`
+  row with the same id. Neither log holds the exception's message. A route with no `try` now gets the same JSON
+  answer instead of Flask's HTML 500; an HTTP error keeps its own.
+- **Changed.** The onboard planner's guards raise `OnboardRefusal`, and both onboard routes catch that type
+  instead of every `ValueError`: a stray one is answered as the unexpected (the GUI's 500 above, the API's bare
+  500), not as a 422 with its text. A request-boundary or repository-data refusal raised under a GUI read route's
+  broad `except` now gets its own 422 or 409 instead of a 500.
+- **Changed.** A Homepage save whose overlay write fails answers 500 `write_failed` with a `run_id`; the service
+  logs the file, the exception's type and its errno, and a `homepage-write-failed kontroll_run_id=<id>` line.
+- **Changed.** An audit-log write that fails (a full disk, a rollover that cannot rename) prints `audit-log write
+  failed: <type> errno=<n> action=<action>` to the GUI's stderr, not logging's own report, which printed the
+  exception the route was handling. An audit file the GUI cannot open is said once, `audit-log open failed: <type>
+  errno=<n>`, where every row was lost with no line.
+- **Fixed.** Concurrent first requests after a GUI start each built the audit logger, so it kept several
+  handlers and wrote every later row several times. One lock builds it once.
+- **Changed.** `kontroll-init` shows the bootstrap values only when standard output is a terminal. Otherwise it
+  prints each written field's name, `(not shown)` and, for each domain, the `sops -d` command that reads it back,
+  to run from the repository's root or inside `scripts/kontroll-installer.sh shell`; a key file other than the
+  default is named absolute and quoted.
+- **Docs.** docs/troubleshooting.md §12 reads an `internal error (ref <id>)` answer: a `sed` range for the frames,
+  Loki's `run_id` label and the frames by service and time, the audit row in Loki or its file, and the two lines
+  that say an audit row was lost.
+
 ### fix(security): the leak guard no longer spells the maintainer's email, even as a character class (2026-11-01)
 
 The structural layer of `tests/_leak_guard.py` matched the maintainer's personal email local part with a

@@ -107,10 +107,14 @@ Prometheus/API — not the TEST-NET stubs), and mints the bootstrap logins.
 
 > ⚠️ **`--fresh` prints generated passwords (onboard-GUI, Grafana, Semaphore admin) ONCE, then exits — copy the
 > whole output to your password manager now.** Your GUI login at §8 is the field printed as **`gui_admin_password`**
-> (the onboard-GUI `admin` password). With `--mint-break-glass` it also prints the break-glass private key once,
-> in a block of its own: that one goes to offline storage, never to a file on this node. To recover any of the
-> passwords later:
-> `SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/dashboards.sops.yml`.
+> (the onboard-GUI `admin` password). They are shown only when the output is a terminal: piped, redirected to a
+> file or captured, `--fresh` prints each field's name with `(not shown)` and, for each domain, the read-back
+> command below instead, so no log holds a password. With `--mint-break-glass` it also prints the break-glass
+> private key once, in a block of its own: that one goes to offline storage, never to a file on this node. To
+> recover any of the passwords later:
+> `SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/<domain>.sops.yml` — `dashboards` for
+> the onboard-GUI and Grafana logins, `semaphore` for the Semaphore admin. Run it from the repository's root; this
+> host has no `sops` of its own (above), so run it inside `scripts/kontroll-installer.sh shell`.
 
 Then declare your hardware in the overlay **under `instance/`** (not `config/` or `instance.example/`):
 
@@ -145,7 +149,7 @@ offline break-glass backup):
   The **first control key + the first `GUI_PASSWORD`** are a CLI **`kontroll-init`** bootstrap (a running GUI
   can't mint the key it needs to run — the keygen split): `python3 scripts/kontroll-init.py` ensures the
   control key, adds its public to `.sops.yaml`, and mints the `dashboards` bootstrap secrets
-  (`GUI_PASSWORD`/Grafana/API token, shown once). See SECURITY.md **C11**.
+  (`GUI_PASSWORD`/Grafana/API token, shown once, on a terminal). See SECURITY.md **C11**.
 - **SOPS domains** (`instance/secrets/<domain>.sops.yml`) — each VALUE minted by the operator, encrypted on the
   box: `network` (device creds), `proxmox` (read-only API token), `compute` (docker-host SSH), `dashboards`
   (Grafana admin pw, GUI pw, **`kontroll_api_token`** for C10), `semaphore` (DB/admin pw, access-key

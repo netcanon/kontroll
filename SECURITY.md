@@ -1698,7 +1698,8 @@ out of the public Ansible Galaxy API and `service_search` returns it to the brow
 unpromoted proposal** (the Pending panel lists a `proposed/*` ref's name, its commit subject and its changed path
 names — and, apart, any ref beside the proposals that the service did not stage), **repository** bytes that a
 promote put on `main` (inventory, fleet, descriptors, settings), and every
-route's **error string**, which can quote request input, a repository value or a remote response.
+route's **error string**, which can quote request input, a repository value or a remote response. (What an error
+string may hold at all is C23's: no exception text.)
 
 **The rule is an allow-list: only literal markup written in `index.html` reaches `innerHTML`.** The template's DOM
 helpers are `E()` (assigns `innerHTML`), `ET()` (assigns `textContent`), `T()` (a text node) and `LINK()` (an
@@ -2172,6 +2173,64 @@ does not confine, and on the GUI's read routes: nothing written, the audit actio
 on a module file that is not a mapping; a reserved host name as a 422 on both apps), and the C19 paint gate for the
 Fleet index.
 
+### C23 — An error body never carries exception text  ✔ implemented (2026-11-02, T20)
+
+**Threat:** an exception's message can quote a request value, an absolute path inside the container, or a line of
+a file being parsed — `gitio.sops_decrypt_domain` parses decrypted text with `yaml.safe_load`, and a YAML error
+quotes what it read. Until T20 every GUI read route with a broad `except` answered `"<what> failed: %s" % e` (CodeQL
+`py/stack-trace-exposure`); both onboard plan routes answered every `ValueError` 422 with its text, so a
+`json.loads` failure on `ansible-doc` output read as the operator's mistake and showed what it was parsing; the
+Homepage editor's apply showed an `OSError`'s path; a GUI route with no `try` fell to Flask's HTML 500, whose log
+line carries the message; and `kontroll-init --fresh` printed the first-run passwords to whatever its standard
+output was — a pipe, a `tee` file, a CI log.
+
+**Control:** errors are kept apart by **type**. A *designed* refusal is raised on purpose with a sentence written
+for the operator, and keeps it: `paths.RequestBoundaryError` (422 and a field code, C22),
+`paths.RepositoryDataError` (409 `repository_data`), `gitio.WriteConflict` (409), `backups.BackupStoreError` (fixed
+strings), and `onboard.OnboardRefusal` — the planner's guards' own type, so a route catches exactly those and no
+other `ValueError`. Everything else reaches one helper, `gui/app.py` `_internal_error`, from each route's broad
+`except` (which hands the two app-wide refusals on to their own answers) and from an app-wide
+`errorhandler(Exception)` (an HTTP error — a 404, a malformed body's 400 — keeps its own answer). The client gets
+`<what> failed — internal error (ref <id>); the service log has the details`, the code `internal_error` and a
+twelve-hex run id; the GUI's stderr gets `internal-error kontroll_run_id=<id> route=<endpoint> what=<what>
+type=<type>` and the frames; the audit log the action `internal-error` with the same id
+([logging-architecture.md](docs/logging-architecture.md)). **Neither the body nor either log holds the exception's
+message**: the frames and the type locate the fault, and the cost — a `KeyError` logged without its key — is
+accepted. An audit write that fails is reported by its type, errno and the row's action only (`audit-log write
+failed: <type> errno=<n> action=<action>`), since logging's own report would print the exception the route was
+handling; an audit file that cannot be opened is reported once, by its type and errno (`audit-log open failed: …`), and
+no row is written until the GUI restarts; one lock builds the audit logger, so concurrent first requests build it once
+(each racing build had added a handler, and every row was written once per handler). The Homepage editor's write failure
+is a code (`write_failed`, a 500 with a run id; the service's line names the file, the exception's type and its errno,
+and the route's `homepage-write-failed kontroll_run_id=<id>` line follows it). `kontroll-init` shows the bootstrap
+values only when standard output is a terminal, as the break-glass mint already does; otherwise it prints each written
+field's name, `(not shown)` and, for each domain, the `sops -d` command that reads them back.
+
+**Residual:** the API answers an unexpected exception with FastAPI's bare 500, which holds no text, no run id and no
+audit row, and its server log still prints the exception's message (brief 16 §9.3 left it; the price of a
+message-free log there is the same type-and-frames handler). Some service-layer warnings print an exception's
+message to the GUI's and the API's stderr (a settings group read, the onboard planner's degrade paths — its TIER-B
+argspec derivation among them — and the catalog's); none reaches a body. A module file YAML cannot build, or that is
+not UTF-8, a JSON body that is not an object, and an onboard apply whose SOPS domain this host cannot decrypt (no
+age key, or another one) answer the GUI's 500 `internal_error` rather than a refusal of their own.
+
+**Covering checks:** `tests/integration/test_gui_api.py` (each read route with a broad `except`, with a `RuntimeError`
+carrying a path: the fixed sentence, the code, the id in the body, the stderr line and the audit row, the text in none
+of them — not in a record's message nor in a traceback printed with it — and that the list it runs over is every such
+route in `gui/app.py`, a bare `except:` or a tuple naming `Exception` counted; a route with no `try`; a 404 and a
+malformed body's 400 kept; the designed refusals kept — a backup-store 400, a repository-data 409 and a boundary 422
+raised under a broad `except`, a write conflict's 409; a stray `ValueError` under the onboard planner answered as the
+unexpected; the Homepage write failure, its id in the audit row and the service log line pinned whole; the text looked
+for at every log level, on stdout and stderr, and in the warnings raised; an `async def` route walked; an audit write
+that fails, through the app's own logger, said by type, errno and action, and a file that cannot open said once — with
+no stderr at all, the audit call still returning — and concurrent first audits building one handler and saying a file
+that cannot open once), `tests/integration/test_api_onboard.py` (the planner's refusal still 422; a stray `ValueError` a
+bare 500 with no text and no `onboard-refuse` line), `tests/unit/test_onboard_proxmox_auth.py` and
+`tests/unit/test_onboard_ssh_key.py` (the planner's guards raise `OnboardRefusal`, not a plain `ValueError`),
+`tests/unit/test_homepage.py` (the write failure's code and its log line), and `tests/unit/test_kontroll_init.py` (the
+values not printed off a terminal, with each domain's read-back command and where to run it, the closing line's too;
+another key file named absolute and quoted, in every read-back of a run; shown once per domain on one).
+
 ---
 ## Accepted risks / known limitations
 
@@ -2181,6 +2240,7 @@ Fleet index.
 | **R-KEY-1** — age key loss | Encrypted secrets become **permanently** unrecoverable | Yes (**uncompensated** for an instance with one recipient) | **Corrected 2026-07-28; narrowed 2026-10-23 (a break-glass choice at `--fresh`).** An instance created by `kontroll-init --fresh` with `--break-glass-recipient` or `--mint-break-glass` has a second recipient on every domain from its first secret. An instance created with `--no-break-glass`, or before `--fresh` asked, has **ONE** recipient per domain: losing its control key destroys every device credential, API token and service password in it. Secrets are low-volume and re-enterable *in principle*, but re-entering them means recovering each one from its device, and for a token-only credential (an API token) the plaintext exists nowhere else and must be reissued on the device. **Fix for such an instance:** [docs/break-glass.md](docs/break-glass.md) — add the recipient, re-wrap, verify. The risk stays open for every instance whose break-glass key has not been proven to open every domain (kontroll counts recipients; it cannot know whether the private half was kept), and an off-box **copy of the private key** never closes it — a copy shares the single point of failure. See [C1](#c1--secrets-encrypted-at-rest-sops--age). |
 | API rate-limit counters in-process | Counters reset on restart + are per-process (wrong if the API is ever run multi-worker / multi-replica) | Yes | One uvicorn container today (mgmt-only, single-operator); the store is a swappable seam → move to a shared backend (Redis) the moment the API scales horizontally |
 | API rate-limit `X-Forwarded-For` trust | A spoofed XFF could shift an inquiry IP bucket | Yes | mgmt-VLAN-only; any fronting proxy is operator-controlled. When SSO/proxy lands (cluster 2c), trust XFF only from the known proxy hop |
+| `kontroll-init --fresh` shows the first-run bootstrap passwords once, on a terminal (C23) | The onboard-GUI, Grafana and Semaphore admin passwords appear on the operator's screen and in that terminal's scrollback | Yes | The operator needs the first login, and a terminal is the one place they chose to see it. Off a terminal (a pipe, a file, a CI log) only the field names and the `sops -d` command that reads them back are printed, so no log holds a value; the values stay readable later with that command |
 | Private git remote holds encrypted secrets | Push exposes ciphertext | Yes | SOPS ciphertext is safe to host; the age key is never pushed |
 | Control VM on a hypervisor it also manages | A bad play against that node could affect the controller | Partial | Snapshot + git + offline key; avoid self-targeting the controller's node in risky plays |
 | Current edge is FortiGate/Cisco (pre-cutover) | Edge creds + API differ from the post-cutover target | Yes | Functional groups isolate the churn to one inventory block |
