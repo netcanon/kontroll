@@ -3,10 +3,13 @@ name: PII guard
 # The public-tree identifier gate (SECURITY.md C21; design-of-record in the 2026-10-08 public-split review's
 # 99-synthesis.md).
 # Fails the build if any shippable, tracked file carries a real network identifier (an RFC-1918 address in any
-# spelling, a non-documentation MAC or global IPv6, a real age recipient/secret key), the maintainer's personal
-# email or an operator-machine user-profile path — or one of THIS instance's own names (hostnames, domain) supplied
-# privately. Same scanner as `tests/validate.sh` step `pii-guard` and the pytest twin tests/unit/test_leak_guard.py:
-# one gate, run everywhere. Runs on every PR and push to main.
+# spelling, a non-documentation MAC or global IPv6, a real age recipient/secret key), a maintainer personal
+# identifier (matched by salted sha256 digest from .github/pii-guard.hashes, so neither this repo nor a failure log
+# ever spells it) or an operator-machine user-profile path — or one of THIS instance's own names (hostnames,
+# domain) supplied privately. Same scanner as `tests/validate.sh` step `pii-guard` and the pytest twin
+# tests/unit/test_leak_guard.py: one gate, run everywhere. It also scans the author, committer and message of every
+# commit being merged, with the shared scanner every netcanon repository carries (.github/scripts/pii_guard.py).
+# Runs on every PR and push to main.
 
 on:
   pull_request:
@@ -27,6 +30,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 0 # the commit-metadata scan walks BASE..HEAD
+
+      - name: Self-test the shared scanner (each layer fires on a synthetic canary; clean text passes)
+        run: python3 -I .github/scripts/pii_guard.py --self-test
 
       - name: Provide the instance-token list (repository secret KONTROLL_LEAK_TOKENS; absent on fork PRs)
         # The names that identify the maintainer's deployment live in a repository SECRET, one regex per line, so
@@ -50,3 +57,12 @@ jobs:
         # instance/.gitignore. A `git add -f`, a bad merge or a lost rule is a finding — the earlier path probe used
         # `git check-ignore` without --no-index, which never reports a TRACKED path, so it passed exactly that case.
         run: python3 -I tests/_leak_guard.py --tree
+
+      - name: Scan the identity and message of every commit being merged
+        # The server-side backstop for a clone without a pre-push hook. Fork and Dependabot PRs have no secrets:
+        # the digest and user-profile-path layers still enforce.
+        env:
+          PII_GUARD_TOKENS: ${{ secrets.KONTROLL_LEAK_TOKENS }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 -I .github/scripts/pii_guard.py --range "$BASE" "$HEAD"

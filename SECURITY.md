@@ -1761,8 +1761,14 @@ they blocked*, so publishing them would have published the denylist.
 `pii-guard`, the required check *No leaked personal identifiers* (`.github/workflows/pii-guard.yml`),
 and the pytest twin `tests/unit/test_leak_guard.py`. Layer 1 is **structural** (public, always on):
 any RFC-1918 address in dotted/dashed/underscored form, a non-documentation MAC or global IPv6, a
-real-length age recipient / `AGE-SECRET-KEY`, the maintainer's personal e-mail, an operator-machine
-user-profile path; RFC-5737 TEST-NET, RFC-7042 MACs and `2001:db8::/32` are the sanctioned examples.
+real-length age recipient / `AGE-SECRET-KEY`, an operator-machine user-profile path; RFC-5737 TEST-NET,
+RFC-7042 MACs and `2001:db8::/32` are the sanctioned examples. The maintainer's personal identifiers
+(e-mail address and local part) are matched in the same layer by salted sha256 digest, listed in
+`.github/pii-guard.hashes` and checked by the shared `.github/scripts/pii_guard.py` every netcanon
+repository carries: the guard never spells them, not even as a character class (`ab[c]d` keeps a grep
+from matching itself but still publishes the value), a character-class spelling is itself a finding,
+and a finding says only that a digest matched. The workflow also runs the shared scanner's
+`--self-test` and scans the author, committer and message of every commit being merged.
 Layer 2 is the **instance-token list** — this deployment's hostnames/domain/users/subnets/VLANs as
 regexes in `instance/leak-tokens.txt` (private overlay; the public CI gets the same list as the
 repository secret `KONTROLL_LEAK_TOKENS`; a public checkout runs the shipped canaries in
@@ -1781,8 +1787,9 @@ the shipped `instance.example/` on a checkout with no `instance/`, so the public
 gates with no overlay present; writers (`keygen`, `enable_in_fleet`, `kontroll-init`) pass
 `write=True` and can never target the example.
 **Proves:** `tests/unit/test_leak_guard.py` (dashed/dotted/underscored RFC-1918 caught; TEST-NET,
-OIDs and version strings never; a planted canary fires and is reported without its value; the whole
-shippable tree scans clean), `tests/unit/test_paths_overlay.py` (the example tier is read-only and
+OIDs and version strings never; a planted canary fires and is reported without its value; a listed
+identifier is caught as a word, an e-mail local part and a character-class spelling, and never printed;
+the whole shippable tree scans clean), `tests/unit/test_paths_overlay.py` (the example tier is read-only and
 off once `instance/` exists), the PII-guard workflow's path assertion (no tracked `instance/` path in
 a tree whose `.gitignore` excludes the overlay). Design-of-record and the full sweep:
 `docs/reviews/2026-10-08-public-split-pii-sweep/`; operator runbook `docs/public-split.md`.
