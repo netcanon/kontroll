@@ -17,6 +17,10 @@ WHY (the failures these guard, found by the 2026-10-08 public-split sweep):
   reports a tracked path, so a `git add -f` passed it; and `docs/reviews/` was never scanned on any tree. The
   overlay invariant + the instance-only strip of docs/reviews/ fix all three; the scratch-repo tests below prove
   the shipped .gitignore rules with real git.
+- (2026-11-01) The structural layer spelled the maintainer's personal email local part as a character-class regex so
+  this file would not match itself, which published the value to every reader, and a finding printed the match. It
+  is now matched by salted sha256 digest from .github/pii-guard.hashes (the shared .github/scripts/pii_guard.py), a
+  character-class spelling is itself a finding, and the report says only that a digest matched.
 """
 import hashlib
 import os
@@ -81,6 +85,20 @@ def test_personal_identifier_and_key_material_shapes_are_caught():
     assert _cats("age1exampleexampleexampleexampleexampleexampleexampleexa") == []
     assert _cats("AGE-SECRET-KEY-1" + "Q" * 58) == ["age-secret-key"]
     assert _cats("AGE-SECRET-KEY-1FAKEZZ") == []
+
+
+def test_listed_personal_identifier_is_caught_by_digest_and_never_printed():
+    """A personal identifier listed by digest in .github/pii-guard.hashes is a finding as a word, as an email local
+    part and when spelled with a character class (`ab[c]d`, the device that leaked the old pattern), and the
+    finding's token never carries the value. The synthetic canary stands in: its digest ships in every hashes file,
+    so this runs on every checkout without the real value appearing anywhere."""
+    canary = "piiguard" + "canary" + "7f3a"
+    spelled = canary[:3] + "[" + canary[3] + "]" + canary[4:]
+    for text in ("by %s today" % canary, "mail %s@example.invalid" % canary, "grep -E '%s'" % spelled):
+        hits = guard.structural_findings(text)
+        assert [cat for _, cat, _ in hits] == ["personal-identifier"], text
+        assert canary not in hits[0][2] and canary[4:] not in hits[0][2]
+    assert _cats("someone@example.com wrote piiguard") == []
 
 
 def test_allow_marker_exempts_exactly_its_line():
