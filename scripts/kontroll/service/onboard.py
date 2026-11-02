@@ -31,6 +31,15 @@ from kontroll.service.classify import derive_class_capabilities, requires_of, su
 
 log = logging.getLogger("kontroll.service.onboard")
 
+
+class OnboardRefusal(ValueError):
+    """A planner guard refused the request before any write: a secret field aimed at a domain the onboard does not
+    target (MF-S2), or a required credential set filled in part (F1 seam S1). Its message is written for the
+    operator and names fields and domains, never a value, so a route answers it as it is (422, `invalid_request`).
+    A type of its own so a route catches exactly the planner's refusals: any other ValueError raised below the
+    planner — a parse error, a library's — is no refusal and goes to the app's one answer for the unexpected,
+    which never shows its text (T20; brief 16 §9.1, class C)."""
+
 # Drop-in banners — also the OWNERSHIP markers gitio.write_inventory_host keys its merge-vs-conflict decision on
 # (a file that opens with our inventory banner is one we wrote, so a 2nd host MERGES; a foreign file hard-stops).
 _MODULE_BANNER = ("# Onboarded by scripts/galaxy.py. Nothing verifies it for you: run ping.yml --limit <host> "
@@ -601,8 +610,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
     # could, so this guard makes the no-leak constraint enforceable in code, not by convention.
     for cf in auth["fields"]:
         if cf.get("secret") and creds.get(cf["field"]) is not None and cf.get("domain", secrets) != secrets:
-            raise ValueError("cred field %s derived for domain %s but onboard targets %s — refusing to cross domains"
-                             % (cf["field"], cf.get("domain"), secrets))
+            raise OnboardRefusal("cred field %s derived for domain %s but onboard targets %s — refusing to cross "
+                                 "domains" % (cf["field"], cf.get("domain"), secrets))
 
     # auth_set COHERENCE (F1 seam S1): a multi-field credential is ALL-or-NONE — you can't half-authenticate (a
     # proxmox API token needs user@realm + token_id + token_secret TOGETHER, else the exporter has a broken cred and
@@ -617,8 +626,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         filled = [m for m in members if creds.get(m) not in (None, "")]
         if filled and len(filled) != len(members):
             missing = [m for m in members if creds.get(m) in (None, "")]
-            raise ValueError("incomplete credential set %r — provide all of %s together (missing %s)"
-                             % (set_name, members, missing))
+            raise OnboardRefusal("incomplete credential set %r — provide all of %s together (missing %s)"
+                                 % (set_name, members, missing))
 
     cred_key = host_name.replace("-", "_")
     _sops = "lookup('community.sops.sops', inventory_dir ~ '/../secrets/%s.sops.yml') | from_yaml" % secrets

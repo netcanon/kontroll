@@ -1336,3 +1336,45 @@ def test_a_missing_break_glass_role_is_refused_before_any_write(fresh_repo, monk
         assert ki.main(_FRESH + ["--break-glass-recipient", BG]) == 1
         assert "key-roles/break-glass.yml" in capsys.readouterr().err
         assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
+# --- T20: a first-run password is shown only on a terminal --------------------------------------------------------- #
+_MINTED_PW = "t20-minted-password-sentinel"
+
+
+def _bootstrap_writes(monkeypatch):
+    """--fresh's seams with each bootstrap domain WRITTEN: a value bootstrap_secret_values supplies for one field (the
+    sentinel), a plan whose view lists it as provided, and an apply that changed the domain."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "bootstrap_secret_values", lambda form, existing: {"gui_password": _MINTED_PW})
+    monkeypatch.setattr(secrets_service, "build_secret_plan",
+                        lambda d, s, r=None: {"error": None, "view": [{"key": "gui_password", "source": "provided"}]})
+    monkeypatch.setattr(secrets_service, "apply_secret_plan", lambda p: {"changed": True, "error": None, "paths": []})
+
+
+def test_bootstrap_secrets_are_not_printed_when_output_is_not_a_terminal(fresh_repo, monkeypatch, capsys):
+    """With standard output not a terminal (a pipe, a `tee` file, a CI log), --fresh writes the bootstrap secrets but
+    prints none of their values: each written field's NAME with `(not shown)`, and the command that reads them back
+    from a terminal — the default key file written `~/…`, the overlay's path. Guards brief 16 §9.4's last row (T20): a
+    first-run GUI/Grafana password printed into a log nobody chose to keep, the same rule the break-glass mint
+    already follows."""
+    _bootstrap_writes(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: False)
+    assert ki.main(_FRESH + ["--no-break-glass"]) == 0
+    out = capsys.readouterr().out
+    assert _MINTED_PW not in out
+    assert "gui_password:" in out and "(not shown)" in out and "SAVE these now" not in out
+    assert "Not shown: standard output is not a terminal." in out
+    assert "SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/dashboards.sops.yml" in out
+
+
+def test_bootstrap_secrets_are_shown_once_on_a_terminal(fresh_repo, monkeypatch, capsys):
+    """On a terminal the written bootstrap values are shown, once per domain, under `SAVE these now:` — the operator's
+    one chance to note the first GUI/Grafana login, unchanged by T20. Guards the non-terminal rule above hiding the
+    values from the operator who ran the command at a terminal."""
+    _bootstrap_writes(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    assert ki.main(_FRESH + ["--no-break-glass"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("SAVE these now:") == len(ki.BOOTSTRAP_DOMAINS)
+    assert out.count(_MINTED_PW) == len(ki.BOOTSTRAP_DOMAINS) and "(not shown)" not in out

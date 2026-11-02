@@ -25,10 +25,12 @@ import logging
 import os
 import sys
 import time
+import traceback
 import uuid
 from logging.handlers import RotatingFileHandler
 
 from flask import Flask, Response, jsonify, render_template, request
+from werkzeug.exceptions import HTTPException
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))   # the kontroll service layer (search/classify in-process)
@@ -48,7 +50,7 @@ from kontroll.service import keygen as keygen_service  # noqa: E402  (the guided
 from kontroll.service import secrets as secrets_service  # noqa: E402  (the secret-onboarding dialog backend)
 from kontroll.service.classify import service_classify  # noqa: E402
 from kontroll.service.onboard import (  # noqa: E402  (in-process onboard)
-    apply_onboard_plan, build_onboard_plan, default_secrets_domain, no_backend_message)
+    OnboardRefusal, apply_onboard_plan, build_onboard_plan, default_secrets_domain, no_backend_message)
 from kontroll.service.pending import promote_hint  # noqa: E402  (the one promote instruction a staged write returns)
 from kontroll.service.search import service_search  # noqa: E402
 
@@ -159,6 +161,41 @@ def _repository_refused(e):
     return jsonify({"error": str(e), "code": e.code}), e.status
 
 
+# The refusals a request can meet on purpose: each has its own answer above, and a broad `except` below hands them on.
+_DESIGNED = (paths.RequestBoundaryError, paths.RepositoryDataError)
+
+
+def _internal_error(what, exc):
+    """The one answer to an exception no route designed (SECURITY.md C19, T20). The client gets a fixed sentence,
+    `internal_error` and a run id; the service log (stderr, through Flask's logger) gets a line with the same id as
+    `kontroll_run_id=`, the endpoint, `what`, the exception's TYPE and its frames; the audit log gets the action
+    `internal-error` with the same id, so what the operator saw joins what happened. Neither the body nor either log
+    holds the exception's MESSAGE: one can quote a request value, an absolute path inside the container, or a line of
+    a file being parsed — `gitio.sops_decrypt_domain` parses decrypted text, and a YAML error quotes what it read.
+    The frames and the type locate the fault; its text stays out on purpose. A designed refusal is handed on to its
+    own answer, never turned into this one."""
+    if isinstance(exc, _DESIGNED):
+        raise exc
+    run_id = uuid.uuid4().hex[:12]
+    endpoint, kind = request.endpoint or "-", type(exc).__name__
+    app.logger.error("internal-error kontroll_run_id=%s route=%s what=%s type=%s\n%s", run_id, endpoint, what, kind,
+                     "".join(traceback.format_tb(exc.__traceback__)).rstrip())
+    _audit("internal-error", "what=%s type=%s route=%s run_id=%s" % (what, kind, endpoint, run_id))
+    return jsonify({"error": "%s failed — internal error (ref %s); the service log has the details" % (what, run_id),
+                    "code": "internal_error", "run_id": run_id}), 500
+
+
+@app.errorhandler(Exception)
+def _unhandled(exc):
+    """An exception a route did not catch ends here, not in Flask's HTML 500 (which the page can only show as
+    "request failed", and which Flask logs with the exception's message): the same fixed answer and id as a route's
+    own broad `except`. An HTTP error (404, 405, a malformed JSON body's 400) keeps its own response; the two
+    refusals above keep theirs, since Flask picks the most specific handler."""
+    if isinstance(exc, HTTPException):
+        return exc
+    return _internal_error("request", exc)
+
+
 def require_auth(fn):
     """HTTP Basic auth on every route; constant-time compare; fail-closed."""
     @functools.wraps(fn)
@@ -196,7 +233,7 @@ def api_search():
     try:
         records = service_search(q, deep=deep, vectors=vectors, overrides=overrides, backends=backends)
     except Exception as e:               # an external probe/search failure → a clean 500, not a crash
-        return jsonify({"error": "search failed: %s" % e}), 500
+        return _internal_error("search", e)
     return jsonify(records)
 
 
@@ -210,7 +247,7 @@ def api_fleet():
     try:
         return jsonify(list_fleet())
     except Exception as e:               # a malformed inventory/module → a clean 500, not a crash
-        return jsonify({"error": "fleet read failed: %s" % e}), 500
+        return _internal_error("fleet read", e)
 
 
 @app.route("/api/services")
@@ -224,7 +261,7 @@ def api_services():
     try:
         return jsonify(list_services())
     except Exception as e:               # a malformed config/services.yml → a clean 500, not a crash
-        return jsonify({"error": "services read failed: %s" % e}), 500
+        return _internal_error("services read", e)
 
 
 @app.route("/api/pending")
@@ -241,7 +278,7 @@ def api_pending():
     try:
         return jsonify(list_pending())
     except Exception as e:               # a git/read failure → a clean 500, not a worker crash
-        return jsonify({"error": "pending read failed: %s" % e}), 500
+        return _internal_error("pending read", e)
 
 
 @app.route("/api/pending/<run_id>/discard", methods=["POST"])
@@ -281,7 +318,7 @@ def api_discovery():
     try:
         return jsonify(read_inbox())
     except Exception as e:               # a malformed artifact/inventory → a clean 500, not a worker crash
-        return jsonify({"error": "discovery read failed: %s" % e}), 500
+        return _internal_error("discovery read", e)
 
 
 @app.route("/api/provenance")
@@ -298,7 +335,7 @@ def api_provenance():
     try:
         out = fleet_provenance()
     except Exception as e:               # a malformed sidecar → a clean 500, not a worker crash
-        return jsonify({"error": "provenance read failed: %s" % e}), 500
+        return _internal_error("provenance read", e)
     s = out.get("summary") or {}
     _audit("provenance-index", "collections=%d unsigned_pinned=%d signed=%d digests=%d" % (
         s.get("total", 0), s.get("unsigned_pinned", 0), s.get("signed", 0), s.get("digests_recorded", 0)))
@@ -319,7 +356,7 @@ def api_image_provenance():
     try:
         out = image_provenance()
     except Exception as e:               # a malformed lock → a clean 500, not a worker crash
-        return jsonify({"error": "image provenance read failed: %s" % e}), 500
+        return _internal_error("image provenance read", e)
     s = out.get("summary") or {}
     _audit("image-provenance-index", "images=%d digest_pinned=%d local_build=%d signed=%d" % (
         s.get("total", 0), s.get("digest_pinned", 0), s.get("local_build", 0), s.get("signed", 0)))
@@ -404,7 +441,7 @@ def api_settings():
     try:
         return jsonify(read_view())
     except Exception as e:               # a malformed source → a clean 500, not a worker crash
-        return jsonify({"error": "settings read failed: %s" % e}), 500
+        return _internal_error("settings read", e)
 
 
 @app.route("/api/homepage")
@@ -416,7 +453,7 @@ def api_homepage():
     try:
         return jsonify(read_board())
     except Exception as e:               # belt-and-braces; read_board already degrades
-        return jsonify({"error": "homepage read failed: %s" % e}), 500
+        return _internal_error("homepage read", e)
 
 
 @app.route("/api/homepage", methods=["POST"])
@@ -441,6 +478,10 @@ def api_homepage_apply():
     out = hp.promote_board(board, d.get("token"))
     if out.get("error") == "drift":
         return jsonify({"error": "homepage config drifted since propose; re-propose"}), 409
+    if out.get("error") == "write_failed":       # the overlay could not be written: the service log has which file
+        _audit("homepage-result", "error=write_failed run_id=%s" % run_id)
+        return jsonify({"error": "homepage write failed — nothing staged (ref %s); the service log has the details"
+                                 % run_id, "code": "write_failed", "run_id": run_id}), 500
     if out.get("error"):
         return jsonify({"error": out["error"], "detail": out.get("detail")}), 422
     if not out["changed"]:
@@ -472,7 +513,7 @@ def api_classify():
     except (paths.RequestBoundaryError, paths.RepositoryDataError):
         raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:
-        return jsonify({"error": "classify failed: %s" % e}), 500
+        return _internal_error("classify", e)
     if result is None:
         return jsonify({"error": "%s not installed locally" % coll}), 404
     return jsonify(result)
@@ -553,9 +594,10 @@ def api_onboard():
             d["collection"], d["key"], d["group"], d["host"],
             host_name=d.get("host_name"), secrets=d.get("secrets") or None, backend=d.get("backend"),
             creds=creds, backends=backends, vectors=vectors, deep=bool(d.get("deep")))
-    except ValueError as e:
-        # A catchable planner guard fired pre-write (MF-S2 domain-confinement, or a partially-filled required
-        # auth_set — more reachable via F1 TIER-B). A clean 422 client error, never a 500 (mirrors the API route).
+    except (paths.RequestBoundaryError, OnboardRefusal) as e:
+        # A planner guard fired pre-write (MF-S2 domain-confinement, or a partially-filled required auth_set — more
+        # reachable via F1 TIER-B). A clean 422 client error, never a 500 (mirrors the API route). Any other
+        # ValueError below the planner is no refusal: it reaches the app's one answer, which never shows its text.
         # The `code` is what lets the browser render per-refusal next-steps copy instead of a bare error (the
         # permissive edition keys its install-offer copy on `invalid_collection`). A request-boundary refusal derives
         # it from the refused FIELD — `collection` → invalid_collection, `device-class key` → invalid_device_class_key —
@@ -632,7 +674,7 @@ def api_configurable():
     except (paths.RequestBoundaryError, paths.RepositoryDataError):
         raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:               # a probe/registry failure → a clean 500, not a worker crash
-        return jsonify({"error": "configurable read failed: %s" % e}), 500
+        return _internal_error("configurable read", e)
     if view.get("error") in ("no_kind", "no_capability", "no_form", "not_onboarded", "no_knob", "not_enabled",
                              "no_unit"):
         return jsonify(view), 404
@@ -652,7 +694,7 @@ def api_capability_suggest(cap):
     except (paths.RequestBoundaryError, paths.RepositoryDataError):
         raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:               # a probe/registry failure → a clean 500, not a crash
-        return jsonify({"error": "suggest failed: %s" % e}), 500
+        return _internal_error("suggest", e)
     if view.get("error") == "no_capability":
         return jsonify({"error": "no such capability: %s" % cap}), 404
     if view.get("error") == "not_onboarded":
@@ -767,7 +809,7 @@ def api_units(collection):
     except (paths.RequestBoundaryError, paths.RepositoryDataError):
         raise                                # the app-wide handlers answer these (422, 409), not a "failed" 500
     except Exception as e:               # a probe failure → a clean 500, not a worker crash
-        return jsonify({"error": "units read failed: %s" % e}), 500
+        return _internal_error("units read", e)
     if result is None:
         return jsonify({"error": "%s not installed locally" % collection}), 404
     _audit("unit-list", "collection=%s units=%d" % (collection, len(result.get("units") or [])))
@@ -859,7 +901,7 @@ def api_actuation():
     try:
         units = registered_units_view()
     except Exception as e:               # a malformed registry → a clean 500, not a worker crash
-        return jsonify({"error": "actuation registry read failed: %s" % e}), 500
+        return _internal_error("actuation registry read", e)
     _audit("unit-registry", "units=%d" % len(units))
     return jsonify({"units": units})
 

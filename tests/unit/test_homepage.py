@@ -8,6 +8,8 @@ comments or corrupted the file would be a config-eating bug. The round-trip-IDEN
 safety net: an unchanged board must re-emit byte-for-byte. They also pin the security invariants: the serializer
 can only relocate/omit existing spans (never synthesize a tile — C11), and read_board is read-only-by-construction.
 """
+import logging
+
 import pytest
 
 from _readonly_pins import assert_read_only
@@ -141,6 +143,24 @@ def test_promote_board_refuses_a_drifted_token(board_repo):
     assert homepage.promote_board(b, "not-the-real-token")["error"] == "drift"
 
 
+def test_a_write_failure_returns_a_code_and_logs_no_exception_text(board_repo, tmp_path, monkeypatch, caplog):
+    """An overlay write that fails (here the file's directory is gone, so the OSError's text holds an absolute path)
+    returns the code `write_failed` with `changed` False, and logs one line naming the file, the exception's type and
+    its errno — never the OSError's text. Guards brief 16 §9.1's class C (T20): the service returned
+    `"write failed: %s" % e`, and the GUI route put that path inside the container in the browser's 422."""
+    b = homepage.read_board()
+    b["sections"][0]["items"].reverse()
+    plan = homepage.build_homepage_plan(b)
+    gone = tmp_path / "t20-leak-sentinel-dir"                        # the write target's directory, never made
+    monkeypatch.setattr(homepage, "_hp_path", lambda name: str(gone / name))
+    with caplog.at_level(logging.ERROR, logger="kontroll.service.homepage"):
+        out = homepage.apply_homepage_plan(plan)
+    assert out["error"] == "write_failed" and out["changed"] is False
+    lines = [rec.getMessage() for rec in caplog.records if rec.name == "kontroll.service.homepage"]
+    assert lines == ["homepage write failed: file=services.yaml type=FileNotFoundError errno=2"], lines
+    assert all("t20-leak-sentinel" not in rec.getMessage() for rec in caplog.records)
+
+
 def test_homepage_read_board_is_read_only_by_construction():
     """read_board is pure-read: the shared AST pin (#133) asserts it calls no write/actuation verb nor opens a
     file for writing. Guards the board READ ever gaining a write path (the writes are apply_homepage_plan /
@@ -172,8 +192,9 @@ def test_read_board_falls_back_to_the_shipped_example_on_an_unconfigured_tree(tm
     """On a tree with NO instance/ overlay at all (a public clone / CI checkout / a node before kontroll-init --fresh),
     read_board() renders the SHIPPED instance.example/ board instead of an empty panel — the failure the first
     GitHub-hosted e2e run of the public cut hit (the Homepage editor opened with zero sections). The tier is
-    READ-only: apply_homepage_plan on that tree fails closed (the overlay dir does not exist) and the example files
-    are byte-identical afterwards — the shipped example can never become a write target."""
+    READ-only: apply_homepage_plan on that tree fails closed (the overlay dir does not exist: the code
+    `write_failed`) and the example files are byte-identical afterwards — the shipped example can never become a
+    write target."""
     ex = tmp_repo / "instance.example" / "dashboards" / "homepage"
     ex.mkdir(parents=True)
     (ex / "services.yaml").write_text(_SERVICES, encoding="utf-8")
@@ -185,7 +206,7 @@ def test_read_board_falls_back_to_the_shipped_example_on_an_unconfigured_tree(tm
     plan = homepage.build_homepage_plan(b)
     assert plan["error"] is None
     out = homepage.apply_homepage_plan(plan)                         # a WRITE on the unconfigured tree
-    assert out["error"] is None or out["error"].startswith("write failed")
+    assert out["error"] in (None, "write_failed")
     assert not (tmp_repo / "instance" / "dashboards" / "homepage" / "services.yaml").exists() or out["error"] is None
     assert (ex / "services.yaml").read_text(encoding="utf-8") == _SERVICES   # the example is never written
     assert (ex / "settings.yaml").read_text(encoding="utf-8") == _SETTINGS

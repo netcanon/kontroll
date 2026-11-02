@@ -19,7 +19,9 @@ that are chicken-and-egg for the GUI (it needs them to run) or that were manual 
 
 Unlike the GUI keygen (show-once, never persisted), this WRITES the control private key to its canonical 0600
 path: the operator IS the trusted actor here and a running GUI mounts that file read-only, so only a local CLI
-can create it. The minted GUI/Grafana passwords are shown ONCE for the operator to record. Idempotent: a second
+can create it. The minted GUI/Grafana passwords are shown ONCE for the operator to record, when standard output is a
+terminal; on a pipe, a file or a captured run only their names are printed, with the command that reads them back
+(they are stored, encrypted — unlike a minted break-glass key, which a non-terminal refuses). Idempotent: a second
 run on a configured node makes no change. Reuses keygen.add_recipient + the secrets service (both tested).
 See docs/SETUP.md §5 + docs/install-from-scratch.md §2 (the keygen split) + SECURITY.md C11.
 
@@ -220,6 +222,23 @@ def _stdout_is_terminal():
         return sys.stdout.isatty()
     except (AttributeError, ValueError):
         return False
+
+
+def _read_back(domain, key_file):
+    """The command that prints `domain`'s secrets from the instance overlay with the control key: what a run whose
+    output is not a terminal names in place of the values (docs/install-from-scratch.md gives the same one). The
+    default key file is written `~/…`: the installer runs this as root in a container whose home holds the host
+    operator's key directory, so its own absolute path would name a directory the operator's shell does not have."""
+    key = "~/.config/sops/age/keys.txt" if os.path.abspath(key_file) == os.path.abspath(AGE_KEY_FILE) else key_file
+    return "SOPS_AGE_KEY_FILE=%s sops -d %s" % (key, paths.overlay_target("ansible/secrets/%s.sops.yml" % domain))
+
+
+def _not_shown(domain, key_file):
+    """The sentence a run whose standard output is not a terminal prints in place of "SAVE these now": a pipe, a
+    file or a captured run (CI, `tee`, a scripted rebuild) would keep a login password in a log nobody chose to
+    keep. The values are stored encrypted, so the operator reads them back later, from a terminal (T20)."""
+    return ("Not shown: standard output is not a terminal. Read them from a terminal with: %s"
+            % _read_back(domain, key_file))
 
 
 def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key_file_exists=False,
@@ -713,17 +732,23 @@ def main(argv):
                   % (domain, applied["error"]), file=sys.stderr)
             return 1
         if applied["changed"]:
-            print("==> %s bootstrap secrets written (encrypted to every recipient .sops.yaml names). "
-                  "SAVE these now:" % domain)
+            tty = _stdout_is_terminal()
+            print("==> %s bootstrap secrets written (encrypted to every recipient .sops.yaml names). %s"
+                  % (domain, "SAVE these now:" if tty else _not_shown(domain, args.key_file)))
             for v in plan["view"]:
                 if v["source"] in ("provided", "generated"):
                     shown = supplied.get(v["key"])
-                    print("    %-28s %s" % (v["key"] + ":", shown if shown else "(generated, stored — used by the deploy)"))
+                    print("    %-28s %s" % (v["key"] + ":", (shown if tty else "(not shown)") if shown
+                                            else "(generated, stored — used by the deploy)"))
         else:
             print("==> %s bootstrap secrets: already set (no change)" % domain)
 
     print("\n==> kontroll-init done. Next:")
-    print("    - SAVE the GUI/Grafana passwords above (your onboard-GUI + Grafana logins).")
+    if _stdout_is_terminal():
+        print("    - SAVE the GUI/Grafana passwords above (your onboard-GUI + Grafana logins).")
+    else:
+        print("    - Read the GUI/Grafana passwords (your onboard-GUI + Grafana logins) from a terminal: %s"
+              % _read_back(BOOTSTRAP_DOMAINS[0], args.key_file))
     if bg_private:
         print("    - Store the break-glass key shown above OFFLINE, then prove it opens every domain from the machine")
         print("      that holds it: docs/break-glass.md.")

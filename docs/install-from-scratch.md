@@ -107,7 +107,9 @@ Prometheus/API — not the TEST-NET stubs), and mints the bootstrap logins.
 
 > ⚠️ **`--fresh` prints generated passwords (onboard-GUI, Grafana, Semaphore admin) ONCE, then exits — copy the
 > whole output to your password manager now.** Your GUI login at §8 is the field printed as **`gui_admin_password`**
-> (the onboard-GUI `admin` password). With `--mint-break-glass` it also prints the break-glass private key once,
+> (the onboard-GUI `admin` password). They are shown only when the output is a terminal: piped, redirected to a
+> file or captured, `--fresh` prints each field's name with `(not shown)` and the read-back command below instead,
+> so no log holds a password. With `--mint-break-glass` it also prints the break-glass private key once,
 > in a block of its own: that one goes to offline storage, never to a file on this node. To recover any of the
 > passwords later:
 > `SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/dashboards.sops.yml`.

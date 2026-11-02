@@ -9,7 +9,9 @@ import a usable app without it).
 """
 import base64
 import copy
+import logging
 import os
+import re
 import subprocess
 from types import SimpleNamespace
 
@@ -19,6 +21,7 @@ import yaml
 import _canned             # tests/_canned.py: each canned shape has a conformance row, bar E2E_UNIT
 import app as gui          # gui/ is on sys.path (conftest); app.py is the GUI
 from kontroll import catalog, gitio, paths, probe
+from kontroll.service.onboard import OnboardRefusal
 
 pytestmark = pytest.mark.integration
 
@@ -195,15 +198,16 @@ def test_onboard_missing_field_is_400(client):
 
 
 def test_onboard_partial_auth_set_is_a_422_not_a_500(client, onboard_env, monkeypatch, tmp_path):
-    """Parity with the API route: a planner guard's catchable ValueError — a partially-filled required auth_set
-    (more reachable via F1 TIER-B's derived proxmox api-token set) or the MF-S2 domain-confinement refusal — is a
-    clean 422 CLIENT error, NOT a 500 worker crash, with the code `invalid_request`, and it is audited as
-    `reason=planner-guard` — not as a request-boundary refusal, which names a field. Guards the GUI onboard relay
-    500-ing on a normal operator credential mistake, and the audit log blaming a field for a refusal that is about
-    the combination of fields. The guard is pinned at the service layer (test_onboard_proxmox_auth.py); this pins
-    the GUI route's mapping."""
+    """Parity with the API route: a planner guard's refusal (`OnboardRefusal`) — a partially-filled required
+    auth_set (more reachable via F1 TIER-B's derived proxmox api-token set) or the MF-S2 domain-confinement refusal —
+    is a clean 422 CLIENT error with its own sentence, NOT a 500 worker crash, with the code `invalid_request`, and it
+    is audited as `reason=planner-guard` — not as a request-boundary refusal, which names a field. Guards the GUI
+    onboard relay 500-ing on a normal operator credential mistake, and the audit log blaming a field for a refusal
+    that is about the combination of fields. The guard is pinned at the service layer (test_onboard_proxmox_auth.py);
+    this pins the GUI route's mapping. Since T20 the route catches that type, not every ValueError: a stray one is
+    pinned by test_a_stray_value_error_under_the_onboard_planner_is_no_refusal."""
     def _raise(*a, **k):
-        raise ValueError("incomplete credential set 'proxmox_api' — provide all of "
+        raise OnboardRefusal("incomplete credential set 'proxmox_api' — provide all of "
                          "['api_user', 'api_token_id', 'api_token_secret'] together (missing ['api_token_secret'])")
     monkeypatch.setattr(gui, "build_onboard_plan", _raise)
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
@@ -1899,3 +1903,226 @@ def test_gui_identity_on_a_module_file_that_is_not_a_mapping_is_a_409(client, ca
     assert "modules/demo_sw/module.yml" in r.get_json()["error"]
     audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
     assert "repository-refuse" in audit and "what=module file" in audit
+
+
+# --- T20: an error body never carries exception text (SECURITY.md C19) ------------------------------------------ #
+# The text an unexpected exception carries in these tests: a path inside the container, as an OSError or a YAML error
+# would quote one. No assertion may find it in a response, a log record or the audit file.
+_LEAK = "t20-leak-sentinel /opt/kontroll/instance/secrets/network.sops.yml"
+
+# Each read route with a broad `except` of its own: (url, the attribute its service call resolves, its endpoint, the
+# words its fixed sentence opens with — the words each route answered with before T20).
+_READ_ROUTES = [
+    ("/api/search?q=cisco", "app.service_search", "api_search", "search failed"),
+    ("/api/fleet", "kontroll.service.fleet.list_fleet", "api_fleet", "fleet read failed"),
+    ("/api/services", "kontroll.service.fleet.list_services", "api_services", "services read failed"),
+    ("/api/pending", "kontroll.service.pending.list_pending", "api_pending", "pending read failed"),
+    ("/api/discovery", "kontroll.service.discovery.read_inbox", "api_discovery", "discovery read failed"),
+    ("/api/provenance", "kontroll.service.provenance.fleet_provenance", "api_provenance", "provenance read failed"),
+    ("/api/image-provenance", "kontroll.service.provenance.image_provenance", "api_image_provenance",
+     "image provenance read failed"),
+    ("/api/settings", "kontroll.service.settings.read_view", "api_settings", "settings read failed"),
+    ("/api/homepage", "kontroll.service.homepage.read_board", "api_homepage", "homepage read failed"),
+    ("/api/classify?collection=cisco.ios", "app.service_classify", "api_classify", "classify failed"),
+    ("/api/configurable?kind=secret-domain&id=dashboards", "kontroll.service.configurable.configurable_view",
+     "api_configurable", "configurable read failed"),
+    ("/api/capability/metrics/suggest?key=demo_sw", "kontroll.service.capability.suggest_view",
+     "api_capability_suggest", "suggest failed"),
+    ("/api/units/cisco.ios", "kontroll.service.units.service_units", "api_units", "units read failed"),
+    ("/api/actuation", "kontroll.service.units.registered_units_view", "api_actuation",
+     "actuation registry read failed"),
+]
+
+
+def _boom(*a, **k):
+    """A service call that fails the way no route designed for: a RuntimeError whose text is the sentinel."""
+    raise RuntimeError(_LEAK)
+
+
+@pytest.fixture
+def audit_file(tmp_path, monkeypatch):
+    """The GUI's audit log redirected to a throwaway file (its cached logger dropped so the next line rebuilds it), so a
+    test reads exactly the lines its own request left."""
+    path = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(path))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    return path
+
+
+def _audit_text(audit_file):
+    """The audit file's text, or '' when the request left no line."""
+    return audit_file.read_text(encoding="utf-8") if audit_file.exists() else ""
+
+
+def _internal_error_seen(r, caplog, audit_file, endpoint, kind):
+    """The checks every answer to an unexpected exception must pass, shared by the tests below: a JSON 500 whose
+    `code` is `internal_error` and whose `run_id` is twelve hex digits the sentence quotes; ONE service-log line naming
+    that id as `kontroll_run_id=`, the endpoint and the exception's type; ONE `internal-error` audit row with the same
+    id and endpoint; and the sentinel nowhere — not in the body, not in any log record, not in the audit file."""
+    body = r.get_json()
+    assert r.status_code == 500 and body is not None, r.get_data(as_text=True)[:200]
+    assert body["code"] == "internal_error" and re.fullmatch("[0-9a-f]{12}", body["run_id"]), body
+    assert "(ref %s)" % body["run_id"] in body["error"]
+    assert _LEAK not in r.get_data(as_text=True)
+    lines = [rec.getMessage() for rec in caplog.records if "internal-error" in rec.getMessage()]
+    assert len(lines) == 1, lines
+    assert "kontroll_run_id=%s" % body["run_id"] in lines[0], lines[0]
+    assert "route=%s " % endpoint in lines[0] and "type=%s" % kind in lines[0], lines[0]
+    assert all(_LEAK not in rec.getMessage() for rec in caplog.records)
+    audit = _audit_text(audit_file)
+    rows = [ln for ln in audit.splitlines() if "\tinternal-error\t" in ln]
+    assert len(rows) == 1 and "run_id=%s" % body["run_id"] in rows[0] and "route=%s " % endpoint in rows[0], rows
+    assert _LEAK not in audit
+    return body
+
+
+@pytest.mark.parametrize("url,seam,endpoint,opens", _READ_ROUTES, ids=[e for _u, _s, e, _o in _READ_ROUTES])
+def test_an_unexpected_exception_answers_a_fixed_sentence_and_an_id(client, monkeypatch, caplog, audit_file, url,
+                                                                     seam, endpoint, opens):
+    """Each read route whose service call raises an exception it did not design for (a RuntimeError carrying a path)
+    answers 500 with its own opening words and a fixed sentence — `<what> failed — internal error (ref <id>)` — the
+    code `internal_error` and a twelve-hex run id; the GUI's service log gets one line with `kontroll_run_id=<id>`, the
+    endpoint and the exception's TYPE, and the audit log one `internal-error` row with the same id; the exception's
+    text reaches none of the three. Guards the CodeQL `py/stack-trace-exposure` class (brief 16 §9.1, class A): before
+    T20 each of these routes put `str(e)` in the body — an absolute path inside the container, a YAML error's excerpt
+    of the file it read — and left no id to find the failure by."""
+    monkeypatch.setattr(seam, _boom)
+    with caplog.at_level(logging.ERROR):
+        r = client.get(url, headers=_auth())
+    body = _internal_error_seen(r, caplog, audit_file, endpoint, "RuntimeError")
+    assert body["error"].startswith(opens + " — internal error"), body["error"]
+
+
+def test_the_route_list_is_every_route_with_a_broad_except():
+    """The list the test above runs over is exactly the GUI's functions that catch `Exception` themselves, and each
+    such handler's whole body is `return _internal_error(...)`. Guards a new read route written in the old shape — a
+    broad `except` that puts `str(e)` in its body — passing the suite because nobody added it to the list: the list
+    is checked against gui/app.py, not kept beside it (T20)."""
+    import ast
+    tree = ast.parse(open(gui.__file__, encoding="utf-8").read())
+    broad, other_shape = set(), []
+    for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef)):
+        for node in ast.walk(fn):
+            if isinstance(node, ast.ExceptHandler) and getattr(node.type, "id", None) in ("Exception", "BaseException"):
+                broad.add(fn.name)
+                ret = node.body[0] if len(node.body) == 1 else None
+                if not (isinstance(ret, ast.Return) and isinstance(ret.value, ast.Call)
+                        and getattr(ret.value.func, "id", None) == "_internal_error"):
+                    other_shape.append(fn.name)
+    listed = {endpoint for _u, _s, endpoint, _o in _READ_ROUTES}
+    assert broad == listed, sorted(broad ^ listed)
+    assert other_shape == [], other_shape
+
+def test_a_route_without_its_own_try_answers_json_not_an_html_500(client, monkeypatch, caplog, audit_file):
+    """A route with no `try` of its own (a secret form's field list) whose service call raises answers the same JSON
+    500 — `request failed — internal error (ref <id>)`, `internal_error`, the id in the service log and the audit log
+    — instead of Flask's HTML 500, and none of them holds the exception's text. Guards the page showing a bare "request
+    failed" with nothing to quote, and Flask's own exception log line, which carries the message (brief 16 §9.3)."""
+    monkeypatch.setattr(gui.secrets_service, "offerable_fields", _boom)
+    with caplog.at_level(logging.ERROR):
+        r = client.get("/api/secrets/dashboards/fields", headers=_auth())
+    body = _internal_error_seen(r, caplog, audit_file, "api_secret_fields", "RuntimeError")
+    assert body["error"].startswith("request failed — internal error"), body["error"]
+
+
+def test_an_http_error_keeps_its_own_answer(client, audit_file):
+    """A 404 for a route that does not exist and the 400 a malformed JSON body raises keep Flask's own answer: the
+    app's catch-all for the unexpected hands an HTTP error back as it is, and writes no `internal-error` row. Guards a
+    catch-all written for `Exception` turning every 404 and 400 into a 500 "internal error" (Flask hands HTTP errors
+    to a handler registered for `Exception` too)."""
+    assert client.get("/api/no-such-route", headers=_auth()).status_code == 404
+    r = client.post("/api/onboard", data="{not json", headers=dict(_auth(), **{"Content-Type": "application/json"}))
+    assert r.status_code == 400
+    assert "internal-error" not in _audit_text(audit_file)
+
+
+def _designed(kind):
+    """A service call that raises one of the refusals the GUI answers on purpose, with its own message."""
+    from kontroll.service.backups import BackupStoreError
+
+    def _raise(*a, **k):
+        raise {"backup": BackupStoreError("invalid rev"),
+               "repository": paths.RepositoryDataError("module file", "modules/demo_sw/module.yml adopts a name that "
+                                                                      "is not one — correct that file"),
+               "boundary": paths.RequestBoundaryError("collection", "collection is not a collection name"),
+               }[kind]
+    return _raise
+
+
+@pytest.mark.parametrize("url,seam,kind,status,want", [
+    ("/api/backups/demo.cfg/view?rev=abc1234", "kontroll.service.backups.get_version", "backup", 400,
+     {"error": "view failed: invalid rev"}),
+    ("/api/fleet", "kontroll.service.fleet.list_fleet", "repository", 409,
+     {"error": "modules/demo_sw/module.yml adopts a name that is not one — correct that file",
+      "code": "repository_data"}),
+    ("/api/services", "kontroll.service.fleet.list_services", "boundary", 422,
+     {"error": "collection is not a collection name", "code": "invalid_collection"}),
+], ids=["backup-store-400", "repository-data-409-through-a-broad-except",
+        "request-boundary-422-through-a-broad-except"])
+def test_designed_errors_keep_their_own_message_and_status(client, monkeypatch, audit_file, url, seam, kind, status,
+                                                           want):
+    """A refusal the GUI designed keeps its own status and message and gets no run id: a backup-store error is 400
+    `view failed: invalid rev`; a repository-data refusal raised under a route's broad `except` is the app's 409
+    `repository_data` with its sentence; a request-boundary refusal raised there is the app's 422 with its field code.
+    Guards the catch-all swallowing a designed refusal into "internal error" (brief 16 §9.4's third test): the broad
+    `except` blocks hand both refusals on to their own answers, where before T20 they turned them into a 500 with the
+    text."""
+    monkeypatch.setattr(seam, _designed(kind))
+    r = client.get(url, headers=_auth())
+    assert r.status_code == status and r.get_json() == want, (r.status_code, r.get_json())
+    assert "internal-error" not in _audit_text(audit_file)
+
+
+def test_a_write_conflict_keeps_its_409_and_its_sentence(client, onboard_env, monkeypatch, audit_file):
+    """An onboard apply whose drop-in exists with different content keeps the designed 409: the conflict's own
+    sentence, `conflict: true` and the onboard's run id, and no `internal-error` row. Guards the third designed
+    mapping of brief 16 §9.4 against the catch-all: the route catches `gitio.WriteConflict` itself, and the answer
+    the Overwrite button keys on must not become an "internal error"."""
+    msg = "modules/proxmox/module.yml exists with different content; pass overwrite to replace it"
+
+    def _conflict(*a, **k):
+        raise gitio.WriteConflict(msg)
+    monkeypatch.setattr(gui, "build_onboard_plan", lambda *a, **k: {"error": None, "creds_to_set": []})
+    monkeypatch.setattr(gui, "apply_onboard_plan", _conflict)
+    r = client.post("/api/onboard", json={"collection": "community.proxmox", "key": "proxmox", "group": "hypervisors",
+                                          "host": "192.0.2.40", "apply": True}, headers=_auth())
+    body = r.get_json()
+    assert r.status_code == 409 and body["error"] == msg and body["conflict"] is True, body
+    assert "code" not in body and "internal-error" not in _audit_text(audit_file)
+
+
+def test_a_stray_value_error_under_the_onboard_planner_is_no_refusal(client, onboard_env, monkeypatch, caplog,
+                                                                    audit_file):
+    """A ValueError raised under the onboard planner that is not one of its refusals (a parse error, a library's) is
+    answered as the unexpected — a JSON 500 with `internal_error` and an id, its text nowhere — and leaves no
+    `onboard-refuse` row. Guards brief 16 §9.1's class C: the route caught every ValueError and answered it 422
+    `invalid_request` with its text, so a `json.loads` failure on `ansible-doc` output read as the operator's mistake
+    and showed what it was parsing. The planner's own refusals are a type of their own (OnboardRefusal), pinned by
+    test_onboard_partial_auth_set_is_a_422_not_a_500."""
+    def _stray(*a, **k):
+        raise ValueError(_LEAK)
+    monkeypatch.setattr(gui, "build_onboard_plan", _stray)
+    with caplog.at_level(logging.ERROR):
+        r = client.post("/api/onboard", json={"collection": "community.proxmox", "key": "proxmox",
+                                              "group": "hypervisors", "host": "192.0.2.40"}, headers=_auth())
+    body = _internal_error_seen(r, caplog, audit_file, "api_onboard", "ValueError")
+    assert body["error"].startswith("request failed — internal error"), body["error"]
+    assert "onboard-refuse" not in _audit_text(audit_file)
+
+
+def test_a_homepage_write_failure_is_a_fixed_500_with_an_id(client, monkeypatch, audit_file):
+    """An apply whose overlay write fails (the service's `write_failed`) answers 500 with a fixed sentence, the code
+    `write_failed` and the run id the audit row `homepage-result error=write_failed` carries — not the 422 with the
+    OSError's text the route gave before. Guards brief 16 §9.1's class C at `/api/homepage` (apply): the service
+    returned `"write failed: %s" % e`, a path inside the container, and the route showed it."""
+    from kontroll.service import homepage as hp
+    monkeypatch.setattr(hp, "build_homepage_plan", lambda board: {
+        "error": None, "paths": [], "diff": "", "summary": {"removed_tiles": []}, "plan_token": "t"})
+    monkeypatch.setattr(hp, "promote_board", lambda board, token: {"error": "write_failed", "changed": False,
+                                                                   "paths": []})
+    r = client.post("/api/homepage", json={"board": {"sections": []}, "apply": True, "token": "t"}, headers=_auth())
+    body = r.get_json()
+    assert r.status_code == 500 and body["code"] == "write_failed" and re.fullmatch("[0-9a-f]{12}", body["run_id"])
+    assert body["error"] == ("homepage write failed — nothing staged (ref %s); the service log has the details"
+                             % body["run_id"])
+    assert "homepage-result\terror=write_failed run_id=%s" % body["run_id"] in _audit_text(audit_file)
