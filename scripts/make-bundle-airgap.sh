@@ -49,6 +49,7 @@ cat <<MSG
 Air-gap install (consumer side — ZERO registry reachability, host floor = Docker + git):
   tar xzf $(basename "$ARCHIVE") && cd ${kit}
   docker load -i kontroll-images-${VERSION}-${ARCH}.tar          # images now local, digest-addressed
-  cd kontroll-launch-${VERSION} && ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated
+  cd kontroll-launch-${VERSION} && ./kontroll fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated --break-glass-recipient <age1…>
+  (<age1…>: the public half of a break-glass key made on another machine — docs/break-glass.md)
   (the whole sequence: docs/install-from-scratch.md — write ./kontroll where it writes scripts/kontroll-installer.sh)
 MSG

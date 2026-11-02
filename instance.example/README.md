@@ -15,13 +15,16 @@ placeholders (`192.0.2.x`, `example.com`) and one obviously-fake age recipient.
 The guided path mints your control key and personalizes this skeleton in one step:
 
 ```bash
-scripts/kontroll-installer.sh fresh-init --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated
+scripts/kontroll-installer.sh fresh-init --mgmt-ip <your-mgmt-ip> --domain <your-domain> --trust-mode separated \
+    --break-glass-recipient <age1…>
 ```
 
 (From a launch kit: `./kontroll fresh-init …`. `--trust-mode` is the promote posture —
 [docs/trust-mode.md](../docs/trust-mode.md); what the scaffold does when it is left out depends on the edition,
-so always name it. The whole install sequence
-is the quickstart at the top of [docs/install-from-scratch.md](../docs/install-from-scratch.md).)
+so always name it. `<age1…>` is the public half of a break-glass key you make on another machine; the scaffold
+refuses to run without a break-glass choice — [docs/break-glass.md](../docs/break-glass.md) has the three. The
+whole install sequence is the quickstart at the top of
+[docs/install-from-scratch.md](../docs/install-from-scratch.md).)
 
 `fresh-init` runs `kontroll-init --fresh` in the installer container, which:
 
@@ -30,12 +33,15 @@ is the quickstart at the top of [docs/install-from-scratch.md](../docs/install-f
 2. mints your control age key (`~/.config/sops/age/keys.txt`, 0600);
 3. writes `instance/.sops.yaml` naming **only your key** — it never inherits another
    instance's recipients (the placeholder below is *replaced*, not appended to);
-4. fills `instance/instance.yml`'s `mgmt_ip` / `domain` from the flags (or leave them
+4. adds the break-glass recipient you chose under both recipient anchors (or, with
+   `--no-break-glass`, says that every domain has one recipient);
+5. fills `instance/instance.yml`'s `mgmt_ip` / `domain` from the flags (or leave them
    and edit by hand);
-5. mints the bootstrap `dashboards` login secrets, encrypted to your key.
+6. mints the bootstrap login secrets (the `dashboards` and `semaphore` domains),
+   encrypted to your key and to the break-glass key if you chose one.
 
-Add the break-glass and scoped-Semaphore keys afterward via the GUI **Keys** dialog
-(or `docs/SETUP.md` §5.2), then re-wrap:
+Add the scoped-Semaphore key afterward via the GUI **Keys** dialog — and a break-glass key the same way, or with
+[docs/break-glass.md](../docs/break-glass.md), if you declined one — then re-wrap:
 
 ```bash
 sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml

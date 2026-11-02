@@ -7,9 +7,15 @@ that are chicken-and-egg for the GUI (it needs them to run) or that were manual 
      decryptor the GUI/Semaphore mount read-only;
   2. adds its PUBLIC half to /.sops.yaml (base + ops groups) via the shared, parse-verified
      keygen.add_recipient (additive + idempotent — closes the manual SETUP §5.1 step);
+  2b. with `--break-glass-recipient <age1…>` (or, with --fresh, `--mint-break-glass`), adds a break-glass recovery
+     recipient to every domain BEFORE step 3, so a fresh node's first secrets are written to two recipients and
+     never need a re-wrap. `--fresh` requires the choice (or `--no-break-glass`, which says what it costs) — the
+     same never-guess rule as --trust-mode. A minted key's private half is shown once and written to no file.
+     Without --fresh, a `--break-glass-recipient` run ends after this step: it mints, prints and re-encrypts no
+     secret (step 3 is a new node's bootstrap, not part of adding a recipient);
   3. mints the `dashboards` BOOTSTRAP secrets if absent — the onboard-GUI password (rendered to GUI_PASSWORD;
      the genuine chicken-and-egg — the GUI can't set the password it needs to start), the Grafana admin
-     password, and the C10 API token — encrypted into the dashboards SOPS domain (the recipient from step 2).
+     password, and the C10 API token — encrypted into the dashboards SOPS domain (the recipients from step 2).
 
 Unlike the GUI keygen (show-once, never persisted), this WRITES the control private key to its canonical 0600
 path: the operator IS the trusted actor here and a running GUI mounts that file read-only, so only a local CLI
@@ -17,13 +23,17 @@ can create it. The minted GUI/Grafana passwords are shown ONCE for the operator 
 run on a configured node makes no change. Reuses keygen.add_recipient + the secrets service (both tested).
 See docs/SETUP.md §5 + docs/install-from-scratch.md §2 (the keygen split) + SECURITY.md C11.
 
-A BRAND-NEW node instead runs `--fresh`: it scaffolds a private `instance/` overlay from the shipped
-`instance.example/` skeleton, writes a `.sops.yaml` naming ONLY the freshly-minted control key (never inheriting
-another instance's recipients — the default path is additive, which a fresh Joe must NOT do), and fills
-`instance.yml`'s mgmt_ip/domain from flags. See docs/install-from-scratch.md (the genericization overlay).
+A BRAND-NEW node instead runs `--fresh`: it scaffolds a private `instance/` overlay from the shipped `instance.example/`
+skeleton, writes a `.sops.yaml` naming only this instance's own keys — the control key (minted unless one is at the key
+file's path) and, unless `--no-break-glass`, the break-glass recipient (never inheriting another instance's recipients —
+the default path is additive, which a fresh Joe must NOT do) — and fills `instance.yml`'s mgmt_ip/domain from flags. See
+docs/install-from-scratch.md (the genericization overlay), and docs/break-glass.md for the recovery key on an instance
+created without one.
 
 Usage:  python3 scripts/kontroll-init.py                                   # existing overlay: add your key (additive)
-        python3 scripts/kontroll-init.py --fresh --mgmt-ip <ip> --domain <d> --trust-mode separated   # brand-new node
+        python3 scripts/kontroll-init.py --break-glass-recipient <age1…>   # existing overlay: docs/break-glass.md
+        python3 scripts/kontroll-init.py --fresh --mgmt-ip <ip> --domain <d> --trust-mode separated \
+            --break-glass-recipient <age1…>        # brand-new node (or --mint-break-glass, or --no-break-glass)
 """
 import argparse
 import os
@@ -33,16 +43,32 @@ import shutil
 import subprocess
 import sys
 
+import yaml
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # so `from kontroll import …` resolves
 from kontroll import catalog, paths  # noqa: E402
 from kontroll.service import keygen  # noqa: E402
 from kontroll.service import secrets as secrets_service  # noqa: E402
 
 AGE_KEY_FILE = os.path.join(os.path.expanduser("~"), ".config", "sops", "age", "keys.txt")
+# The installer container's key file, on the directory docker/services/installer.yaml mounts from the operator's
+# ~/.config/sops/age (its SOPS_AGE_KEY_FILE), and the files by which kontroll-init knows the installer image, which a
+# `sudo` or an `env -i` in the installer's shell cannot drop as it drops KONTROLL_IN_CONTAINER (_key_made_away): the
+# marker docker/installer/Dockerfile bakes, and the dispatcher it installs, which every installer image has carried
+# (one published before the marker too).
+INSTALLER_KEY_FILE = "/root/.config/sops/age/keys.txt"
+INSTALLER_IMAGE_MARKERS = ("/etc/kontroll/installer-image", "/usr/local/bin/kontroll-installer")
 CONTROL_ANCHORS = ["base_recipients", "ops_recipients"]   # the control key must decrypt EVERY domain
 BOOTSTRAP_DOMAINS = ["dashboards", "semaphore"]            # auto-mintable bootstrap domains deploy-stack's .env needs
 #   dashboards: GUI/Grafana passwords + the C10 API token; semaphore: DB pw + admin login + access-key key.
 #   Device-cred domains (proxmox, network, …) stay operator-provided (real creds) — minted via onboarding.
+_AGE_RECIPIENT_RE = re.compile(r"age1[0-9a-z]{20,}")         # an age PUBLIC key, the shape _parse_age_public reads
+_PLUGIN_RECIPIENT_RE = re.compile(r"age1[a-z0-9+._-]+1[0-9a-z]+")   # age1<plugin name>1<data>, as age reads one
+_BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"                  # the bech32 data alphabet (BIP-173) age encodes keys in
+_BREAK_GLASS_CHOICES = (
+    "--break-glass-recipient <age1…> (preferred: the PUBLIC half of a key you made on another machine; its private "
+    "half never touches this node), --mint-break-glass (mint it here and show its private half once), or "
+    "--no-break-glass (ONE recipient per domain — for a scratch instance)")
 
 
 def _parse_age_public(text):
@@ -53,6 +79,322 @@ def _parse_age_public(text):
         return m.group(1)
     m = re.search(r"\bage1[0-9a-z]{20,}\b", text)
     return m.group(0) if m else None
+
+
+def _read_public(key_file):
+    """The age public key in key_file, or None when the file is absent, not a regular file (a directory, a FIFO, a
+    link to nothing), unreadable or not UTF-8. Reads only — never mints, and never opens what is not a file (a FIFO
+    would block the run)."""
+    if not os.path.isfile(key_file):
+        return None
+    try:
+        with open(key_file, encoding="utf-8") as fh:
+            return _parse_age_public(fh.read())
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _bech32_ok(hrp, data):
+    """Whether `data` (bech32 characters, its six checksum characters last) carries a valid BIP-173 checksum under
+    the human part `hrp`. Pure (testable)."""
+    gen, chk = (0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3), 1
+    for v in [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + [_BECH32.index(c) for c in data]:
+        b, chk = chk >> 25, ((chk & 0x1ffffff) << 5) ^ v
+        for i in range(5):
+            chk ^= gen[i] if (b >> i) & 1 else 0
+    return chk == 1
+
+
+def _is_age_recipient(s):
+    """Whether `s` is an X25519 age recipient as age-keygen prints one: lower-case bech32 whose human part is `age`,
+    the bech32 alphabet, a valid BIP-173 checksum, 32 bytes (58 data characters) and the four padding bits after
+    them zero — so a character mistyped or lost in a hand copy is caught before anything is written, where sops would
+    refuse it ("invalid checksum") only at the first encrypt. The length catches what the checksum cannot, a `q`
+    gained or lost just before a final `p`; the padding, a value no age-keygen printed, which age and sops refuse
+    ("non-zero padding"). A plugin or post-quantum recipient (human part `age1<name>`) is not one
+    (`_is_plugin_recipient`). Pure (testable)."""
+    if s != s.lower() or "1" not in s:
+        return False
+    hrp, data = s.rsplit("1", 1)
+    if hrp != "age" or len(data) != 58 or any(c not in _BECH32 for c in data) or _BECH32.index(data[51]) & 15:
+        return False
+    return _bech32_ok(hrp, data)
+
+
+def _is_plugin_recipient(s):
+    """Whether `s` is a plugin or post-quantum age recipient as age reads one: `age1<name>1…`, the name lower-case
+    letters, digits, `+`, `-`, `.` or `_`, and the data after the last `1` carrying a valid bech32 checksum under the
+    whole human part `age1<name>`. sops encrypts to a plugin recipient only where `age-plugin-<name>` is installed,
+    and no kontroll image ships one; to a post-quantum one (`age1pq1…`) only with a sops whose age knows it, on every
+    machine that encrypts or decrypts. An X25519 recipient with an `l` copied as `1`, or a `1` added, has that shape
+    too, but its checksum fails under the longer human part: it is a typo, and `_is_age_recipient` refuses it as one.
+    Pure (testable)."""
+    if not (isinstance(s, str) and _PLUGIN_RECIPIENT_RE.fullmatch(s)):
+        return False
+    hrp, data = s.rsplit("1", 1)
+    return len(data) > 6 and all(c in _BECH32 for c in data) and _bech32_ok(hrp, data)
+
+
+def _age_reads_public(key_file):
+    """The public half `age-keygen -y` derives from the first key in key_file, which it is given as kontroll-init reads
+    the path (a relative one led by `./`), never normalised: a file named `-k.txt` is not read as a flag, a `..` after a
+    symlinked directory is resolved by the kernel, as kontroll-init's own read and sops resolve it, and no working
+    directory is looked up, so a removed one does not refuse an absolute path. "" when age-keygen cannot read a key
+    there (a byte-order mark, a file holding only a public line), or cannot be run (one on PATH without an execute bit,
+    or on a noexec mount, among them: an executable one later on PATH is preferred), fails, runs past 60 s or prints
+    what is not UTF-8; None when `shutil.which` finds no age-keygen on PATH: none is there, or only a directory, a
+    dangling link or one in a directory the user cannot search, which the shell also reports as not found (the check
+    is then skipped; kontroll-init runs no shell, so an alias, a shell function or a PATH entry written `~/bin` is
+    none; the installer image has one). The seam the tests patch. Prints nothing: age-keygen's output is captured, and
+    holds only public halves."""
+    exe = shutil.which("age-keygen") or shutil.which("age-keygen", mode=os.F_OK)
+    if not exe:
+        return None
+    try:
+        run = subprocess.run([exe, "-y", os.path.join(os.curdir, key_file)], capture_output=True, encoding="utf-8",
+                             timeout=60)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    words = run.stdout.split() if run.returncode == 0 else []
+    return words[0] if words else ""
+
+
+def _x25519_low_order(s):
+    """Whether the X25519 recipient `s` (one `_is_age_recipient` takes) is a point of small order: its shared secret
+    with every key is zero, so age refuses to encrypt to it ("low order point"), and no key pair has it as its public
+    half. Read as age reads it (RFC 7748: the top bit masked, the value taken mod p), then run through the X25519
+    ladder with a fixed clamped scalar, a multiple of 8: the result is zero exactly for such a point. Pure
+    (testable)."""
+    bits = [_BECH32.index(c) for c in s.rsplit("1", 1)[1][:-6]]
+    u = int("".join("{:05b}".format(b) for b in bits)[:256], 2).to_bytes(32, "big")
+    p, x1 = 2 ** 255 - 19, int.from_bytes(u, "little") & ((1 << 255) - 1)
+    k = (int.from_bytes(bytes(range(32)), "little") & ~7 & ((1 << 255) - 1)) | (1 << 254)
+    x1 %= p
+    x2, z2, x3, z3, swap = 1, 0, x1, 1, 0
+    for t in reversed(range(255)):
+        bit = (k >> t) & 1
+        if swap ^ bit:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = bit
+        a, b, c, d = x2 + z2, x2 - z2, x3 + z3, x3 - z3
+        aa, bb, da, cb = a * a % p, b * b % p, d * a % p, c * b % p
+        e = (aa - bb) % p
+        x3, z3 = (da + cb) ** 2 % p, x1 * (da - cb) ** 2 % p
+        x2, z2 = aa * bb % p, e * (aa + 121665 * e) % p
+    if swap:
+        x2, z2 = x3, z3
+    return x2 * pow(z2, p - 2, p) % p == 0
+
+
+def _rule_recipients(rule):
+    """The age recipients sops encrypts to under a .sops.yaml creation rule — those of its key groups when it has any
+    (sops then ignores a rule-level `age:`), else the rule's own; as a list or a comma-separated string, every item
+    split at its commas as sops splits it. Pure (testable)."""
+    found = set()
+    if not isinstance(rule, dict):
+        return found
+    for holder in list(rule.get("key_groups") or []) or [rule]:
+        age = holder.get("age") if isinstance(holder, dict) else None
+        for item in ([age] if isinstance(age, str) else age or []):
+            found.update(k.strip() for k in str(item).split(",") if k.strip())
+    return found
+
+
+def _control_everywhere(public):
+    """Whether `public` is a recipient of every rule in instance/.sops.yaml that names an age recipient — the test that
+    the key kontroll-init read is this instance's control key before step 2 adds it beside the break-glass key.
+    True when the file is absent or unreadable: the write step then refuses on its own."""
+    try:
+        with open(paths.resolve(".sops.yaml", write=True), encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return True
+    rules = (doc.get("creation_rules") or []) if isinstance(doc, dict) else []
+    return all(public in keys for keys in map(_rule_recipients, rules) if keys)
+
+
+def _stdout_is_terminal():
+    """Whether standard output is a terminal: the one place a minted break-glass private key may be shown. A pipe,
+    a file or a captured run would put it in a log nobody chose to keep. The seam the tests patch."""
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _break_glass_refusal(args, tty, control_public, control_everywhere=True, key_file_exists=False,
+                         age_public=None):
+    """Why the break-glass flags as given are refused, or None. Runs before anything is written, so every
+    refusal leaves the tree and the key directory as they were. `tty` is whether stdout is a terminal;
+    `control_public` the control key's public half if its file exists, else None; `control_everywhere` whether that
+    key is a recipient of every rule in instance/.sops.yaml (`_control_everywhere`); `key_file_exists` whether
+    anything is at the key file's path (a link to nothing included), so one kontroll-init cannot read a
+    `# public key:` line from is named as such; `age_public` what `age-keygen -y` derives from that file
+    (`_age_reads_public`: "" when age cannot read a key there, None when it was not asked). Pure (testable).
+
+    Refused: `--fresh` without a choice (kontroll never silently creates an instance whose secrets one key opens);
+    `--mint-break-glass` / `--no-break-glass` without `--fresh` (an existing instance adds a recipient it made
+    elsewhere); a recipient that is a PRIVATE key, a plugin or post-quantum one (kontroll's images ship no age plugin,
+    and a post-quantum key needs a sops that knows it on every machine), not an age public key, one whose bech32
+    checksum, X25519 length or padding fails, or a low-order X25519 point age refuses (the value is never echoed back);
+    a recipient, or a `--fresh` run, where something is at the key file's path but kontroll-init cannot read a `# public
+    key:` line from it (its key cannot be checked, and `--fresh` would scaffold the overlay before failing to read it),
+    or where age derives another public half from the file, or none, or age-keygen gives no answer (kontroll-init cannot
+    confirm that the line names the file's key: a `--fresh` run would write the instance to the line's key, and on an
+    existing instance the control-key check would rest on the line alone); a recipient without `--fresh` where no
+    control key file exists (the non-fresh path would otherwise MINT a control key and add it to every domain before
+    reaching the break-glass step), or where it holds a key that is not a recipient of every rule (step 2 would add THAT
+    key to every domain beside the break-glass one); a recipient equal to the control key (a copy is not a second
+    recipient); and a mint whose output is not a terminal."""
+    recipient = args.break_glass_recipient
+    key_file_refusal = (_unread_key_file(args.key_file) if control_public is None and key_file_exists else
+                        _misread_key_file(args.key_file) if control_public and age_public not in (None, control_public)
+                        else None)
+    if args.fresh and recipient is None and not args.mint_break_glass and not args.no_break_glass:
+        return ("ERROR: --fresh requires a break-glass choice — kontroll never silently creates an instance whose "
+                "secrets only one key can open. Pass one of: %s. Without a second recipient, losing the control "
+                "key destroys every secret (SECURITY.md R-KEY-1). See docs/break-glass.md." % _BREAK_GLASS_CHOICES)
+    if (args.mint_break_glass or args.no_break_glass) and not args.fresh:
+        return ("ERROR: --mint-break-glass and --no-break-glass are choices for --fresh. On an existing instance, "
+                "add a recipient you made on another machine with --break-glass-recipient <age1…>; the procedure, "
+                "with its re-wrap, is docs/break-glass.md.")
+    if recipient is not None:
+        if recipient.strip().upper().startswith("AGE-SECRET-KEY"):
+            return ("ERROR: --break-glass-recipient was given a PRIVATE key. Pass the PUBLIC half (the age1… line "
+                    "age-keygen prints) and keep the private half off this machine — and out of your shell history. "
+                    "Nothing was written.")
+        if _is_plugin_recipient(recipient):
+            return ("ERROR: --break-glass-recipient is a plugin or post-quantum age recipient (age1<name>1…). kontroll "
+                    "takes an X25519 recipient (age1…, as age-keygen prints it): sops encrypts to a plugin recipient "
+                    "only where age-plugin-<name> is installed, and kontroll's images ship none, so the first encrypt "
+                    "would fail; a post-quantum one (age1pq1…) needs a sops whose age knows it on every machine that "
+                    "encrypts or decrypts, the trusted machine's included. Nothing was written.")
+        if not _AGE_RECIPIENT_RE.fullmatch(recipient):
+            return ("ERROR: --break-glass-recipient is not an age public key (age1 then lower-case letters and "
+                    "digits, as age-keygen prints it). Nothing was written.")
+        if not _is_age_recipient(recipient):
+            return ("ERROR: --break-glass-recipient is not a valid age public key (its checksum, length or padding "
+                    "does not match — a character was mistyped, added or lost in the copy, an l read as 1 among "
+                    "them — or it was not printed by age-keygen). Nothing was written.")
+        if _x25519_low_order(recipient):
+            return ("ERROR: --break-glass-recipient is a low-order X25519 point: no key pair has it as its public "
+                    "half, and age refuses to encrypt to it. Nothing was written.")
+        if key_file_refusal:
+            return key_file_refusal
+        if not args.fresh and control_public is None:
+            return ("ERROR: no control key at %s, and without --fresh kontroll-init never mints one — run this where "
+                    "the control key is (the installer shell, `scripts/kontroll-installer.sh shell`: "
+                    "docs/break-glass.md), or name it with --key-file. Nothing was written." % args.key_file)
+        if not args.fresh and not control_everywhere:
+            return ("ERROR: the key in %s is not a recipient of every rule in instance/.sops.yaml, so it is not this "
+                    "instance's control key (where a keys.txt holds several keys, kontroll-init reads the first "
+                    "`# public key:` line). Run this where the control key is, or name it with --key-file. Nothing "
+                    "was written." % args.key_file)
+        if recipient == control_public:
+            return ("ERROR: the break-glass recipient is this node's control key — a copy of the control key is not "
+                    "a second recipient. Nothing was written.")
+    if args.fresh and key_file_refusal:
+        return key_file_refusal
+    if args.mint_break_glass and not tty:
+        return ("ERROR: --mint-break-glass shows a private key once, and standard output is not a terminal — the key "
+                "would land in a pipe or a log nobody chose to keep. For an unattended run, make the key on another "
+                "machine and pass --break-glass-recipient <age1…> (docs/break-glass.md). Nothing was written.")
+    return None
+
+
+def _unread_key_file(key_file):
+    """The refusal for a key file kontroll-init cannot read a `# public key:` line from. Pure (testable)."""
+    return ("ERROR: kontroll-init could not read a `# public key:` line from %s (the line is missing, or the file is "
+            "empty, not a file, unreadable or not UTF-8), so it cannot tell which key the file holds. If it is the "
+            "control key, print its public half with `age-keygen -y %s` and add it to the file as "
+            "`# public key: age1…`; otherwise name the right file with --key-file. Nothing was written."
+            % (key_file, key_file))
+
+
+def _misread_key_file(key_file):
+    """The refusal for a key file whose `# public key:` line is not what age reads from it. Pure (testable)."""
+    return ("ERROR: the `# public key:` line in %s is not the public half of the key age reads from that file, or age "
+            "cannot read a key there (a byte-order mark, a public line with no private key, another key's line), or "
+            "age-keygen gave no answer (it cannot run here, ran past 60 s, failed, or printed what is not UTF-8): "
+            "kontroll-init cannot confirm that the line names the file's key, so a --fresh run would write the "
+            "instance to the line's key, and on an existing instance the control-key check would rest on the line "
+            "alone. "
+            "`age-keygen -y %s` prints the public half age reads; correct the file, or name the right one with "
+            "--key-file (if age-keygen itself does not run, fix it, or run this through the installer, whose "
+            "age-keygen runs — `scripts/kontroll-installer.sh fresh-init …` for a --fresh run, "
+            "`scripts/kontroll-installer.sh shell` otherwise — with the key at ~/.config/sops/age/keys.txt and no "
+            "--key-file: the installer mounts ~/.config/sops/age at /root/.config/sops/age, so a --key-file as this "
+            "machine spells it names nothing there, and every installer verb reads that one file; removing "
+            "age-keygen fixes this only where another age-keygen on PATH runs: with none, kontroll-init cannot "
+            "check the file and takes its line as written). Nothing was written."
+            % (key_file, key_file))
+
+
+def _key_made_away(key_file, reads_only=False):
+    """The refusal for a run in the installer container (KONTROLL_IN_CONTAINER set to any non-empty value, as the
+    playbooks read it, or one of INSTALLER_IMAGE_MARKERS present, which a `sudo` or an `env -i` in its shell cannot
+    drop) whose control key file is not INSTALLER_KEY_FILE (/root/.config/sops/age/keys.txt, in the one directory of
+    keys the installer mounts, whatever HOME is), or None. The refusal names what made kontroll-init take the run for
+    the installer's (the variable, then each of INSTALLER_IMAGE_MARKERS that is there: all it finds), so an operator on
+    a host that carries a marker file by chance sees why, and each thing to undo at once. A missing file would be made:
+    a --key-file spelled as the operator's machine spells it names a directory the container lacks, which step 1 would
+    create in the container's own layer, so the key made there is lost when the container exits, after the run has
+    written the instance to it and printed it as the key to keep; one made in another directory of the container is lost
+    the same way, or left in the checkout. A file of another name, made now or there before, is one no installer verb
+    reads (installer.yaml's SOPS_AGE_KEY_FILE, bootstrap.yml, the dispatcher's hand-back), so the next documented step
+    mints a keys.txt that cannot open the instance a --fresh run keyed to it, or that a run on an existing one added it
+    to. None outside the installer container, for a file that is there, a regular file (a link to no file, a directory
+    or a FIFO is not one) and that the run only reads (`reads_only`: --break-glass-recipient on an existing instance),
+    and when the file is that key file however the path spells its directory (compared with os.path.samefile, by what
+    the kernel opens; a directory os.stat cannot reach is not that one) or, where the file is there, under another name
+    (a link to it, compared the same way). Pure but for the environment and the stats (testable)."""
+    why = "; ".join((["KONTROLL_IN_CONTAINER is set"] if os.environ.get("KONTROLL_IN_CONTAINER") else [])
+                    + ["%s is there" % m for m in INSTALLER_IMAGE_MARKERS if os.path.exists(m)])
+    there = os.path.isfile(key_file)    # a link to no file, a directory or a FIFO: anything but a regular file
+    if not why or (there and reads_only):
+        return None
+    keys = os.path.dirname(INSTALLER_KEY_FILE)
+    try:
+        if (os.path.basename(key_file) == os.path.basename(INSTALLER_KEY_FILE)
+                and os.path.samefile(os.path.dirname(key_file) or os.curdir, keys)):
+            return None
+    except (OSError, ValueError):
+        pass
+    try:
+        if there and os.path.samefile(key_file, INSTALLER_KEY_FILE):    # keys.txt itself, under another name
+            return None
+    except (OSError, ValueError):
+        pass
+    return (("ERROR: %s is a key file no installer verb reads, and a run that writes the instance would key the "
+             "instance to it." if there else "ERROR: there is no key file at %s.") % key_file
+            + " In the installer container (%s), kontroll-init refuses a control key file anywhere but keys.txt in %s, "
+            "the directory the installer mounts from this machine's ~/.config/sops/age, unless the file is there and "
+            "the run only reads it (an existing instance's --break-glass-recipient): a key made in any other "
+            "directory is lost when the container exits, or left in the checkout or another mount, where no key "
+            "belongs, and a key file of another name, made now or there before, is one no installer verb reads. Run "
+            "with no --key-file and HOME=/root as the installer sets it (for a --fresh run, through fresh-init, which "
+            "hands the key back), or with --key-file %s: this machine's ~/.config/sops/age/keys.txt, the one file "
+            "every installer verb reads; move a control key kept under another name there first. Nothing was written. "
+            "If this is not the installer container, undo what the parenthesis names: unset KONTROLL_IN_CONTAINER "
+            "if it names it, and move away each file it names." % (why, keys, INSTALLER_KEY_FILE))
+
+
+def _show_break_glass_once(private, warning):
+    """Print the minted break-glass PRIVATE key — the only time it exists outside this process — in a delimited
+    block with the break-glass role's warning (the GUI dialog shows the same text), then flush. Called straight after
+    its public half is written to .sops.yaml, before any later step can fail, so no recipient is left that nobody
+    was shown. Never logged, never written to a file."""
+    bar = "=" * 76
+    print(bar)
+    print("BREAK-GLASS PRIVATE KEY — shown ONCE and NOT saved anywhere. Copy it to offline storage now:")
+    print()
+    print(private)
+    print()
+    if warning:
+        print(" ".join(str(warning).split()))
+    print("Then prove it opens every domain, from the machine that holds it: docs/break-glass.md (verify).")
+    print(bar)
+    sys.stdout.flush()
 
 
 def bootstrap_secret_values(form, existing):
@@ -73,7 +415,7 @@ def ensure_control_key(key_file):
     (public, created). Never prints the private key."""
     created = False
     if not os.path.exists(key_file):
-        os.makedirs(os.path.dirname(key_file), mode=0o700, exist_ok=True)
+        os.makedirs(os.path.dirname(key_file) or os.curdir, mode=0o700, exist_ok=True)   # as the kernel walks it
         subprocess.run(["age-keygen", "-o", key_file], check=True, capture_output=True)
         os.chmod(key_file, 0o600)
         created = True
@@ -192,9 +534,21 @@ def _fresh_guard():
 def main(argv):
     ap = argparse.ArgumentParser(description="Bootstrap a fresh kontroll control node (keygen split, CLI half).")
     ap.add_argument("--key-file", default=AGE_KEY_FILE, help="control age key path (default: %(default)s)")
+    bg = ap.add_mutually_exclusive_group()
+    bg.add_argument("--break-glass-recipient", metavar="AGE1…",
+                    help="the PUBLIC half of a recovery key you generated on another machine; added as a recipient "
+                         "of every domain. The private half never touches this node (preferred). Without --fresh: "
+                         "adds the recipient and stops (no secret is minted) — the existing-instance procedure, "
+                         "docs/break-glass.md")
+    bg.add_argument("--mint-break-glass", action="store_true",
+                    help="(with --fresh) mint the recovery key here and show its private half ONCE; kontroll "
+                         "writes it to no file. Store it offline before you continue. Needs a terminal")
+    bg.add_argument("--no-break-glass", action="store_true",
+                    help="(with --fresh) create the instance with ONE recipient per domain. Losing the control key "
+                         "then destroys every secret (SECURITY.md R-KEY-1). For scratch instances")
     ap.add_argument("--fresh", action="store_true",
-                    help="scaffold a BRAND-NEW instance overlay from instance.example/ with YOUR key only "
-                         "(never inherits another instance's recipients)")
+                    help="scaffold a BRAND-NEW instance overlay from instance.example/ whose recipients are this "
+                         "instance's own keys (never another instance's)")
     ap.add_argument("--mgmt-ip", dest="mgmt_ip", help="(with --fresh) this node's management IP, written to instance.yml")
     ap.add_argument("--domain", help="(with --fresh) this instance's base domain, written to instance.yml")
     ap.add_argument("--tls-mode", dest="tls_mode", choices=["byo_proxy", "self_signed", "acme"],
@@ -205,8 +559,24 @@ def main(argv):
                          "auto-promote; this edition has no auto-promoter, so it behaves like 'separated'). NEVER "
                          "defaulted — choose. See docs/trust-mode.md.")
     args = ap.parse_args(argv)
+    # first: in the installer container, a control key file other than the mounted keys.txt
+    away = _key_made_away(args.key_file, reads_only=bool(args.break_glass_recipient and not args.fresh))
+    if away:
+        print(away, file=sys.stderr)
+        return 1
 
-    # 0. --fresh: scaffold a BRAND-NEW overlay (YOUR key only) before the keygen steps -------------------
+    # The break-glass choice is judged — and a minted key minted — before anything is written, so every refusal and
+    # every failure to mint leaves the tree and the key directory exactly as they were. The --fresh checks come before
+    # the mint too, so a run they refuse has minted nothing.
+    control_public = _read_public(args.key_file) if args.break_glass_recipient or args.fresh else None
+    everywhere = (_control_everywhere(control_public) if control_public and args.break_glass_recipient
+                  and not args.fresh else True)
+    refusal = _break_glass_refusal(args, _stdout_is_terminal(), control_public, everywhere,
+                                   os.path.lexists(args.key_file),
+                                   _age_reads_public(args.key_file) if control_public else None)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 1
     if args.fresh:
         # F3 — the "never a silent default" rule enforced at BIRTH (the only place a fresh overlay is created):
         # --fresh MUST name a trust posture. kontroll fail-LOUDS here (deploy-stack asserts again, belt-and-braces)
@@ -223,6 +593,25 @@ def main(argv):
         if guard:
             print(guard, file=sys.stderr)
             return 1
+    bg_role = bg_public = bg_private = None
+    if args.break_glass_recipient or args.mint_break_glass:
+        bg_role = catalog.key_role("break-glass")        # the groups it joins + the warning, as the GUI dialog's
+        if not bg_role or not bg_role.get("recipient_groups"):
+            print("ERROR: the break-glass key role (key-roles/break-glass.yml) is missing or names no recipient "
+                  "groups. Nothing was written.", file=sys.stderr)
+            return 1
+        if args.mint_break_glass:
+            pair = keygen.generate_keypair()             # age-keygen into memory only; nothing on disk (gitio.age_keygen)
+            if not pair:
+                print("ERROR: could not mint the break-glass key (is age-keygen installed?). Nothing was written.",
+                      file=sys.stderr)
+                return 1
+            bg_public, bg_private = pair["public"], pair["private"]
+        else:
+            bg_public = args.break_glass_recipient
+
+    # 0. --fresh: scaffold a BRAND-NEW overlay (this instance's keys only) before the keygen steps -------
+    if args.fresh:
         sc = scaffold_overlay()
         if sc is None:
             print("ERROR: --fresh needs the shipped instance.example/ skeleton, which is absent.", file=sys.stderr)
@@ -258,12 +647,43 @@ def main(argv):
         print("ERROR: could not write the control recipient to .sops.yaml: %s" % w["error"], file=sys.stderr)
         return 1
     if args.fresh:
-        status = "SEEDED (your key only)" if w["changed"] else "already seeded"
+        status = "SEEDED (this instance's key; none inherited)" if w["changed"] else "already seeded"
     else:
         status = "ADDED" if w["changed"] else "already present"
     print("==> .sops.yaml recipient: %s (domains: %s)" % (status, ", ".join(w["recipient_domains"]) or "(none)"))
     if w["changed"] and not args.fresh:
         print("    NEXT: re-wrap any pre-existing secrets to this recipient: %s" % keygen.SOPS_UPDATEKEYS)
+
+    # 2b. break-glass recipient — added BEFORE the first secret is written, so a fresh node never needs a re-wrap ----
+    if bg_public:
+        if bg_public == public:                          # belt: the check above could compare only a key that existed
+            print("ERROR: the break-glass recipient is this node's control key — a copy of the control key is not a "
+                  "second recipient. It was not added.", file=sys.stderr)
+            return 1
+        w2 = keygen.add_recipient(bg_public, bg_role["recipient_groups"])   # additive, parse-verified, idempotent
+        if w2["error"]:
+            print("ERROR: could not add the break-glass recipient to .sops.yaml: %s. It was not added%s; add one "
+                  "later per docs/break-glass.md." % (w2["error"], ", and the minted key is discarded unshown"
+                                                      if bg_private else ""), file=sys.stderr)
+            return 1
+        print("==> break-glass recipient: %s (%s; domains: %s)"
+              % (bg_public, "ADDED" if w2["changed"] else "already present",
+                 ", ".join(w2["recipient_domains"]) or "(none)"))
+        if bg_private:
+            _show_break_glass_once(bg_private, bg_role.get("warning"))   # the ONLY place the private half is emitted
+        if w2["changed"] and not args.fresh:
+            print("    NEXT: re-wrap the existing secrets to it — the dry run, the apply and the checks are "
+                  "docs/break-glass.md: %s" % keygen.SOPS_UPDATEKEYS)
+    elif args.fresh and args.no_break_glass:
+        print("==> NO break-glass recipient (--no-break-glass): every domain has ONE recipient, the control key. "
+              "Losing %s destroys every secret in this instance (SECURITY.md R-KEY-1). Add one before real "
+              "secrets: docs/break-glass.md." % args.key_file)
+    if bg_public and not args.fresh:
+        # An existing instance's break-glass run adds a recipient and nothing else: step 3 would mint, print and
+        # re-encrypt an absent bootstrap secret the runbook says this procedure does not touch.
+        print("\n==> kontroll-init done: the break-glass recipient only (no secret was minted or changed). Next: the "
+              "re-wrap's dry run, the apply, the checks and the landing — docs/break-glass.md, steps 3 to 6.")
+        return 0
 
     # 3. bootstrap secrets for the auto-mintable domains — deploy-stack's docker/.env render REQUIRES the
     #    dashboards (GUI/Grafana pw + C10 token) AND semaphore (DB pw + admin login + access-key) domains BEFORE
@@ -293,7 +713,8 @@ def main(argv):
                   % (domain, applied["error"]), file=sys.stderr)
             return 1
         if applied["changed"]:
-            print("==> %s bootstrap secrets written (encrypted to the control key). SAVE these now:" % domain)
+            print("==> %s bootstrap secrets written (encrypted to every recipient .sops.yaml names). "
+                  "SAVE these now:" % domain)
             for v in plan["view"]:
                 if v["source"] in ("provided", "generated"):
                     shown = supplied.get(v["key"])
@@ -303,7 +724,16 @@ def main(argv):
 
     print("\n==> kontroll-init done. Next:")
     print("    - SAVE the GUI/Grafana passwords above (your onboard-GUI + Grafana logins).")
-    print("    - Break-glass + scoped Semaphore keys: the GUI 'Keys' dialog (after deploy), or SETUP.md §5.2.")
+    if bg_private:
+        print("    - Store the break-glass key shown above OFFLINE, then prove it opens every domain from the machine")
+        print("      that holds it: docs/break-glass.md.")
+    elif bg_public:
+        print("    - Prove the break-glass key opens every domain, from the machine that holds it: docs/break-glass.md.")
+    elif args.fresh:
+        print("    - NO break-glass recipient: add one before real secrets — docs/break-glass.md.")
+    else:
+        print("    - A break-glass recovery key, if this instance has none: docs/break-glass.md.")
+    print("    - A scoped Semaphore key: the GUI 'Keys' dialog (after deploy).")
     print("    - Enter the remaining service secrets: the GUI 'Secrets' dialog, or `sops instance/secrets/<d>.sops.yml`.")
     print("    - Next: edit instance/fleet.yml and instance/inventory/hosts.yml, then the dry-run —")
     print("      `scripts/kontroll-installer.sh check` (`./kontroll check` from a launch kit).")

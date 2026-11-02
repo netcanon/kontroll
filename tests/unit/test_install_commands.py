@@ -20,10 +20,14 @@ pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# A scaffold command WITH arguments, in either spelling: the launcher verb, or the script it runs. An elided form
-# (`fresh-init …`) and a mention in prose (`kontroll-init --fresh` copies the example overlay) are not commands a
-# reader can paste, and are not matched.
-SCAFFOLD = re.compile(r"\bfresh-init\s+--[A-Za-z]|\bkontroll-init(?:\.py)?\s+--fresh\s+--[A-Za-z]")
+# A scaffold command WITH arguments, in any spelling: the launcher verb (also as an argv list, `"fresh-init", "--…`),
+# or the script it runs with `--fresh` and another flag in either order — up to the end of the code span, the table
+# cell or the line. An elided form (`fresh-init …`) and a mention in prose (`kontroll-init --fresh` copies the
+# example overlay) are not commands a reader can paste, and are not matched.
+SCAFFOLD = re.compile(r"\bfresh-init\s+--[A-Za-z]|[\"']fresh-init[\"']\s*,\s*[\"']--[A-Za-z]"
+                      r"|\bkontroll-init(?:\.py)?(?=[^`|\n]*[\s\"']--fresh\b)(?=[^`|\n]*[\s\"']--(?!fresh\b)[A-Za-z])")
+# A line that ends in the verb or the flag: a code span hard-wrapped there, whose arguments are on the next line.
+_WRAPPED = re.compile(r"(\bfresh-init|\s--fresh)\s*$")
 # Not instructions: the tests themselves, the changelog (history), and the review dossiers (records).
 NOT_INSTRUCTIONS = ("tests/", "CHANGELOG.md", "docs/reviews/")
 
@@ -42,13 +46,17 @@ def _tracked_files():
 
 
 def logical_lines(text):
-    """[(line number, text)] with a backslash-continued command joined into one line, numbered where it starts."""
+    """[(line number, text)] with a backslash-continued command joined into one line, and a line that ends in
+    `fresh-init` or `--fresh` joined with the next, numbered where it starts."""
     out, held, start = [], "", 0
     for number, line in enumerate(text.split("\n"), 1):
         if not held:
             start = number
         if line.rstrip().endswith("\\"):
             held += line.rstrip()[:-1] + " "
+            continue
+        if _WRAPPED.search(line):
+            held += line.rstrip() + " "
             continue
         out.append((start, held + line))
         held = ""
@@ -57,8 +65,23 @@ def logical_lines(text):
     return out
 
 
+# kontroll-init's three break-glass choices; a scaffold command names one (T11).
+BREAK_GLASS_CHOICES = ("--break-glass-recipient", "--mint-break-glass", "--no-break-glass")
+
+
 def scaffold_commands_without_a_trust_mode(files=None, root=ROOT):
     """["path:line"] of every written scaffold command that does not carry `--trust-mode`."""
+    return _scaffold_commands_missing(lambda line: "--trust-mode" in line, files, root)
+
+
+def scaffold_commands_without_a_break_glass_choice(files=None, root=ROOT):
+    """["path:line"] of every written scaffold command that names none of the break-glass choices."""
+    return _scaffold_commands_missing(lambda line: any(c in line for c in BREAK_GLASS_CHOICES), files, root)
+
+
+def _scaffold_commands_missing(carries, files, root):
+    """["path:line"] of every written scaffold command, outside the tests, the changelog and the dossiers, whose
+    logical line `carries` refuses."""
     missing = []
     for rel in sorted(_tracked_files() if files is None else files):
         if rel.startswith(NOT_INSTRUCTIONS):
@@ -68,7 +91,7 @@ def scaffold_commands_without_a_trust_mode(files=None, root=ROOT):
         except (OSError, UnicodeDecodeError):
             continue
         missing += ["%s:%d" % (rel, number) for number, line in logical_lines(text)
-                    if SCAFFOLD.search(line) and "--trust-mode" not in line]
+                    if SCAFFOLD.search(line) and not carries(line)]
     return missing
 
 
@@ -94,6 +117,37 @@ def test_every_written_scaffold_command_names_a_trust_mode(tmp_path):
         path.write_text(text, encoding="utf-8")
     assert scaffold_commands_without_a_trust_mode(files=list(planted), root=str(tmp_path)) == [
         "docs/a.md:3", "scripts/b.sh:1"]
+
+
+def test_every_written_scaffold_command_names_a_break_glass_choice(tmp_path):
+    """No document, usage header, comment or epilogue in the tree shows a scaffold command without one of
+    `--break-glass-recipient`, `--mint-break-glass` or `--no-break-glass` on the same logical line. Guards a copied
+    command that `kontroll-init --fresh` refuses at step one since T11 — on every edition — so a stranger following
+    any copy but the quickstart stops there. The scan is shown to find a planted line in both spellings, over a
+    continuation, with a flag before `--fresh`, as an argv list (the verb's, and the script's in either quote) and in
+    a code span wrapped after the verb; to accept
+    each of the three choices; and to pass a prose mention whose code span ends before the next flag."""
+    assert scaffold_commands_without_a_break_glass_choice() == [], \
+        "add a break-glass choice to the command (`--break-glass-recipient <age1…>`, docs/break-glass.md)"
+    planted = {
+        "docs/a.md": "    scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <d> --trust-mode separated\n",
+        "scripts/b.sh": "#   python3 scripts/kontroll-init.py --fresh --trust-mode separated \\\n#       --mgmt-ip <ip>\n",
+        "docs/c.md": "./kontroll fresh-init --trust-mode separated \\\n    --break-glass-recipient <age1…>\n",
+        "docs/d.md": "./kontroll fresh-init --trust-mode separated --mint-break-glass\n",
+        "docs/e.md": "python3 scripts/kontroll-init.py --fresh --trust-mode solo --no-break-glass\n",
+        "docs/f.md": "python3 scripts/kontroll-init.py --mgmt-ip 192.0.2.10 --fresh --trust-mode separated\n",
+        "docs/g.json": '["./kontroll", "fresh-init", "--mgmt-ip", "192.0.2.10", "--trust-mode", "separated"]\n',
+        "docs/h.md": "Run `./kontroll fresh-init\n--mgmt-ip <ip> --trust-mode separated` first.\n",
+        "docs/i.md": "`kontroll-init --fresh` copies the example overlay; the --trust-mode flag is below.\n",
+        "docs/j.yml": 'cmd: ["python3", "scripts/kontroll-init.py", "--fresh", "--trust-mode", "separated"]\n',
+        "docs/k.yml": "argv: ['scripts/kontroll-init.py', '--fresh', '--mgmt-ip', '192.0.2.10']\n",
+    }
+    for rel, text in planted.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    assert scaffold_commands_without_a_break_glass_choice(files=list(planted), root=str(tmp_path)) == [
+        "docs/a.md:1", "docs/f.md:1", "docs/g.json:1", "docs/h.md:1", "docs/j.yml:1", "docs/k.yml:1", "scripts/b.sh:1"]
 
 
 EPILOGUES = ["scripts/install-prereqs.sh", "scripts/install.sh", "scripts/make-launch-kit.sh",

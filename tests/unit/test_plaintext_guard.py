@@ -456,8 +456,9 @@ def test_key_material_is_refused_wherever_it_sits(tmp_path, under):
     certificate are not. Nor — a DOCUMENTED LIMIT, held here so that the documents and the rule cannot part — is
     an armored block INLINED in another file when its body does not follow the header directly: a PGP
     private-key block (a blank line, often armor header lines, come first) and a passphrase-protected legacy PEM
-    (`Proc-Type:` / `DEK-Info:` lines). Guards the documented break-glass step — `age-keygen -o <file>` run in
-    the repository directory — landing in the canonical, the key pasted into a helper script, and a fleet SSH key
+    (`Proc-Type:` / `DEK-Info:` lines). Guards a key made with `age-keygen -o <file>` inside the repository (the
+    break-glass step was once documented that way; docs/break-glass.md now makes it on another machine) landing
+    in the canonical, the key pasted into a helper script, and a fleet SSH key
     or a TLS key copied in on its way elsewhere; and guards the rule against refusing the fixtures and documents
     that show what a key looks like (which needs no exemption word: they are not keys)."""
     tree = _repo(tmp_path)

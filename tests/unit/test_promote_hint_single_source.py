@@ -39,11 +39,12 @@ def _called(node):
 
 def _next_values(fn, scope=None):
     """Every value function `fn` gives a `next` key — `{"next": v}`, a `next=v` keyword to any call (`dict`, `jsonify`,
-    a response model), `body["next"] = v`, `body.setdefault("next", v)` — with a bare name resolved to every value
-    `fn` assigns that name or, when it assigns none and a `scope` is given (a branch read inside its function), every
-    value `scope` assigns it. A conditional `next` is therefore read as an expression: an `if` statement that assigns
-    the name in each branch yields both values (the committing routes' check holds each to the helper). A value that
-    comes from elsewhere (a parameter, a module constant, an unpacking, `+=`) resolves to nothing."""
+    a response model), `body["next"] = v`, `body.setdefault("next", v)` — with a bare name resolved to every value `fn`
+    assigns that name or, when it assigns none and a `scope` is given (a branch read inside its function), every value
+    `scope` assigns it. A conditional `next` is therefore read as an expression: an `if` statement that assigns the name
+    in each branch yields both values (the committing routes' check holds each to the helper). A name given no value
+    there (a parameter, a module constant, an import) stays the name, as one also bound another way (`_assigned`) does;
+    no check takes it for the helper."""
     values = []
     for n in ast.walk(fn):
         if isinstance(n, ast.Dict):
@@ -59,22 +60,39 @@ def _next_values(fn, scope=None):
     resolved = []
     for v in values:
         if isinstance(v, ast.Name):
-            resolved += _assigned(fn, v.id) or (_assigned(scope, v.id) if scope is not None else [])
+            found = _assigned(fn, v.id)
+            if found == [] and scope is not None:
+                found = _assigned(scope, v.id)
+            resolved += found or [v]
         else:
             resolved.append(v)
     return resolved
 
 
 def _assigned(node, name):
-    """Every value `node` assigns to the bare name `name` (`=` or an annotated assignment)."""
-    return [n.value for n in ast.walk(node) if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value
-            and any(isinstance(t, ast.Name) and t.id == name
-                    for t in (n.targets if isinstance(n, ast.Assign) else [n.target]))]
+    """Every value `node` assigns to the bare name `name` (`=` or an annotated assignment) — or None when `node` also
+    binds the name another way (an unpacking, `:=`, `for`, `+=`, `with … as`), a value the reader cannot follow, so the
+    name is checked as it stands and refused rather than read as its `=` values alone. It sees a store to the name
+    anywhere in `node`, a comprehension's or a nested function's own included (refused, loudly); it does not see a
+    parameter or its default, an import (aliased or not), the module's value of a `global` name, or a `match`
+    capture."""
+    values, plain = [], set()
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Assign, ast.AnnAssign)):
+            mine = [t for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+                    if isinstance(t, ast.Name) and t.id == name]
+            plain.update(id(t) for t in mine)
+            if mine and n.value:
+                values.append(n.value)
+    other = any(isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Store) and id(n) not in plain
+                for n in ast.walk(node))
+    return None if other else values
 
 
 def _resolved(fn, node):
-    """`node` — or, when it is a bare name, every value `fn` assigns that name (`node` itself when it assigns none),
-    so a hint hoisted into a local (`hint = promote_hint(...)`, then `hint if staged else …`) is read as the call."""
+    """`node` — or, when it is a bare name, every value `fn` assigns that name (`node` itself when it assigns none, or
+    binds it another way too: `_assigned`), so a hint hoisted into a local (`hint = promote_hint(...)`, then `hint if
+    staged else …`) is read as the call, and one rebound by hand (`hint, _ = "land …", None`) is refused."""
     return (_assigned(fn, node.id) or [node]) if isinstance(node, ast.Name) else [node]
 
 
@@ -88,6 +106,12 @@ def _staging_routes(rel):
             if values:
                 out.append((fn, values))
     return out
+
+
+def _committed_by_hand(fn, values):
+    """Each of `values` (the `next`s committing function `fn` answers) that does not call `promote_hint` — its staged
+    branch where it is a conditional expression on the outcome, a bare name there resolved in `fn` (`_resolved`)."""
+    return [b for v in values for b in _resolved(fn, _staged_branch(v) or v) if "promote_hint" not in _called(b)]
 
 
 def _staged_polarity(test):
@@ -117,13 +141,19 @@ def _staged_polarity(test):
 
 
 def _staged_side(test):
-    """Which branch of a conditional on `test` runs only when the write was staged: "body" for the outcome itself, or
-    an `and` with an operand whose body is staged (the outcome, or a nested `and` holding it); "orelse" for its
-    negation, or an `or` with an operand whose else is staged; else None (`a and not staged` makes the body an
+    """Which branch of a conditional on `test` runs only when the write was staged: "body" for the outcome itself, or an
+    `and` with an operand whose body is staged (the outcome, or a nested `and` holding it); "orelse" for its negation,
+    or an `or` with an operand whose else is staged; the other side for a `not` of any of these, and the same side
+    through `bool()` (`not (a and staged)` makes the else staged); else None (`a and not staged` makes the body an
     unstaged path and says nothing of the else)."""
     polarity = _staged_polarity(test)
     if polarity:
         return "body" if polarity > 0 else "orelse"
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return {"body": "orelse", "orelse": "body"}.get(_staged_side(test.operand))
+    if (isinstance(test, ast.Call) and isinstance(test.func, ast.Name) and test.func.id == "bool"
+            and len(test.args) == 1 and not test.keywords):
+        return _staged_side(test.args[0])
     if isinstance(test, ast.BoolOp):
         sides = {_staged_side(v) for v in test.values}
         if isinstance(test.op, ast.And) and "body" in sides:
@@ -141,13 +171,26 @@ def _staged_branch(value):
 
 
 def _staged_nexts(fn):
-    """Every `next` value function `fn` answers when the write was staged: the staged branch of a conditional
-    expression on it, a bare name there resolved in the whole function; each `next` set in the staged branch of an
-    `if` statement on it (`_staged_side`), a name there that the branch does not assign resolved in the whole
-    function; and each value that branch assigns to a name the function answers as its `next`. Not read: a staged
-    path reached past an early return on the unstaged one, the outcome under another name (`was_staged`, `target_ref
-    != "main"`), `+=`, an attribute `next` (`reply.next = …`), and a conditional expression nested in another."""
+    """Every `next` value function `fn` answers when the write was staged: the staged branch of a conditional expression
+    on it, a bare name there resolved in the whole function; each `next` set in the staged branch of an `if` statement
+    on it (`_staged_side`), a name there that the branch does not assign resolved in the whole function; and each value
+    that branch assigns to a name the function answers as its `next`. A name the function answers as a name — one also
+    bound another way (`_assigned`), or another name's value (`nxt = msg`, read through `msg`) — is read through each of
+    its `=` values too, an unpacking's whole value included; it, and a name given no value, is itself refused where it
+    is answered on the staged path (a conditional's staged branch, a `next` set in a staged `if`) or the staged branch
+    binds it, even when the helper built it (`hint += "; then reload"` after `hint = promote_hint(...)`, or a helper `=`
+    in the staged branch of a name the `else` extends with `+=`: reword it as one `=`). Not read: a staged path reached
+    past an early return on the unstaged one, the outcome under another name (`was_staged`, `target_ref != "main"`),
+    `+=` on a `next` item (`body["next"] += …`), an attribute `next` (`reply.next = …`), a conditional inside another
+    expression (another conditional, `(… if staged else …) + sfx`, an f-string), a table or a `match` keyed by the
+    outcome (`{True: "land …", False: "done"}[staged]`), a hand fallback assigned before the staged `if` when its branch
+    assigns the name only under a further `if`, a test comparing an `and` or an `or` to True or False (`(a and staged)
+    is True`), and a value that calls the helper and answers something else (`"land …" or promote_hint(run_id)`)."""
     answered = _next_values(fn)
+    kept = {v.id for v in answered if isinstance(v, ast.Name)}     # a name answered as itself: its `=`s too
+    answered += [a.value for a in ast.walk(fn) if isinstance(a, (ast.Assign, ast.AnnAssign)) and a.value
+                 and any(isinstance(t, ast.Name) and t.id in kept
+                         for g in (a.targets if isinstance(a, ast.Assign) else [a.target]) for t in ast.walk(g))]
     out = [r for b in (_staged_branch(v) for v in answered) if b is not None for r in _resolved(fn, b)]
     for n in ast.walk(fn):
         side = _staged_side(n.test) if isinstance(n, ast.If) else None
@@ -156,6 +199,8 @@ def _staged_nexts(fn):
             out += _next_values(branch, fn)
             assigned = {id(a.value) for a in ast.walk(branch) if isinstance(a, (ast.Assign, ast.AnnAssign))}
             out += [v for v in answered if id(v) in assigned]
+            bound = {t.id for t in ast.walk(branch) if isinstance(t, ast.Name) and isinstance(t.ctx, ast.Store)}
+            out += [v for v in answered if isinstance(v, ast.Name) and v.id in bound]   # rebound on the staged path
     return out
 
 
@@ -173,17 +218,16 @@ def test_every_staged_next_is_built_from_the_helper():
     seen = set()
     for rel in ROUTE_FILES:
         for fn, values in _staging_routes(rel):
-            for value in values:
-                for built in _resolved(fn, _staged_branch(value) or value):
-                    assert "promote_hint" in _called(built), (
-                        "%s:%d %s builds its staged `next` by hand — use pending.promote_hint, in a conditional "
-                        "expression on the staging outcome" % (rel, fn.lineno, fn.name))
+            assert not _committed_by_hand(fn, values), (
+                "%s:%d %s builds its staged `next` by hand — use pending.promote_hint, in a conditional "
+                "expression on the staging outcome" % (rel, fn.lineno, fn.name))
             seen.add(rel)
         for fn in ast.walk(ast.parse(_read(rel))):
             if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for value in _staged_nexts(fn):
                     assert "promote_hint" in _called(value), (
-                        "%s:%d %s answers a staged `next` by hand — use pending.promote_hint" % (
+                        "%s:%d %s answers a staged `next` by hand, or through a name it also binds another way "
+                        "(`+=`, an unpacking, `for`): build it with one `=` of pending.promote_hint" % (
                             rel, value.lineno, fn.name))
     assert STAGING_ROUTES <= seen, "a staging route lost its staged `next` (or the scan stopped finding it): %s" % (
         sorted(STAGING_ROUTES - seen))
@@ -211,6 +255,22 @@ def test_every_staged_next_is_built_from_the_helper():
      '        body["next"] = "land it"', True),
     ('def f(git, body):\n    if bool(git["staged"]):\n        body["next"] = "land it"', True),
     ('def f(git):\n    hint = "land it"\n    return dict(next=hint if git["staged"] else "done")', True),
+    ('def f(git):\n    return dict(next=HINT if git["staged"] else "done")', True),
+    ('def f(git, run_id):\n    hint = promote_hint(run_id)\n    if git.get("x"):\n        hint = "land it"\n'
+     '    if git.get("y"):\n        hint = promote_hint(run_id)\n'
+     '    return dict(next=hint if git["staged"] else "done")', True),
+    ('def f(git, run_id):\n    hint = promote_hint(run_id)\n    if git.get("x"):\n        hint, _ = "land it", None\n'
+     '    return dict(next=hint if git["staged"] else "done")', True),
+    ('def f(git, run_id):\n    hint = promote_hint(run_id)\n    if (hint := "land it"):\n        pass\n'
+     '    return dict(next=hint if git["staged"] else "done")', True),
+    ('def f(git, run_id):\n    hint = promote_hint(run_id)\n    for hint in ["land it"]:\n        pass\n'
+     '    return dict(next=hint if git["staged"] else "done")', True),
+    ('def f(git, run_id):\n    hint = promote_hint(run_id)\n    hint += "; land it"\n'
+     '    return dict(next=hint if git["staged"] else "done")', True),
+    ('def f(git, body):\n    if not (git["committed"] and git["staged"]):\n        body["next"] = "done"\n'
+     '    else:\n        body["next"] = "land it"', True),
+    ('def f(git, body, run_id):\n    if bool(run_id and git["staged"]):\n        body["next"] = "land it"', True),
+    ('def f(git, body):\n    if len(git["staged"]):\n        body["next"] = "land it"', False),
     ('def f(git, run_id):\n    return dict(next=promote_hint(run_id) if git["staged"] else "done")', False),
     ('def f(git, run_id):\n    hint = promote_hint(run_id) + "; then reload"\n'
      '    return dict(next=hint if git["staged"] else "done")', False),
@@ -220,19 +280,79 @@ def test_every_staged_next_is_built_from_the_helper():
      '        body["next"] = "done"', False),
     ('def f(git, body):\n    nxt = "done"\n    if git["staged"]:\n        nxt = promote_hint(1)\n'
      '        body["next"] = nxt', False),
+    ('def f(git, body):\n    if not (git["committed"] and git["staged"]):\n        body["next"] = "done"\n'
+     '    else:\n        body["next"] = promote_hint(1)', False),
+    ('def f(git, run_id):\n    nxt = "done"\n    if git["staged"]:\n        nxt = "land it"\n'
+     '    nxt += "; see the log"\n    return dict(next=nxt)', True),
+    ('def f(git):\n    nxt = "land it" if git["staged"] else "done"\n'
+     '    nxt += "; see the log"\n    return dict(next=nxt)', True),
+    ('def f(git):\n    nxt = "done"\n    if git["staged"]:\n        nxt, code = "land it", 202\n'
+     '    return dict(next=nxt)', True),
+    ('def f(git, body):\n    if git["staged"]:\n        body["next"] = HINT', True),
+    ('def f(git, body, run_id):\n    nxt = promote_hint(run_id)\n    if git["staged"]:\n'
+     '        body["next"] = nxt', False),
+    ('def f(git, body):\n    if not git["committed"]:\n        body["next"] = "fix it"', False),
+    ('def f(git):\n    nxt, code = ("land it", 202) if git["staged"] else ("done", 200)\n'
+     '    return dict(next=nxt)', True),
+    ('def f(git, run_id):\n    nxt, code = (promote_hint(run_id), 202) if git["staged"] else ("done", 200)\n'
+     '    return dict(next=nxt)', False),
+    ('def f(git, ws):\n    nxt: str = "land it" if git["staged"] else "done"\n    nxt += ws\n'
+     '    return dict(next=nxt)', True),
+    ('def f(git):\n    nxt = ""\n    if git["staged"]:\n        nxt += "land it"\n'
+     '    return dict(next=nxt)', True),
+    ('def f(git, run_id, ws):\n    nxt = promote_hint(run_id) if git["staged"] else "done"\n'
+     '    if not git["staged"]:\n        nxt += ws\n    return dict(next=nxt)', False),
+    ('def f(git):\n    msg = "land it" if git["staged"] else "done"\n    nxt = msg\n'
+     '    return dict(next=nxt)', True),
+    ('def f(git, run_id, ws):\n    nxt = "done"\n    if git["staged"]:\n'
+     '        nxt = promote_hint(run_id)\n    else:\n        nxt += ws\n    return dict(next=nxt)', True),
 ])
 def test_the_structural_reader_finds_each_staged_next(source, by_hand):
     """Verifies: `_staged_nexts` finds a `next` typed by hand on the staged path in each shape sampled here — a
     `.setdefault`, an `if` on the outcome (`.get`, a local `staged`, `bool()`, an `and` with it, nested `and`s, the
-    `else` of an `or` with its negation, `is True`, the `else` of `is False` or `is not True`), a name assigned before
-    that `if`, a name an `if`/`else` statement assigns, an annotated assignment, an attribute flag, a negated
-    conditional expression, a hint hoisted into a local — and refuses none of the helper's own shapes (hoisted into a
-    local too), an `if` that only the unstaged path takes (`committed and not staged`, `is False`), or a name the
-    staged branch assigns from the helper. Guards against: the reader of the routes going blind, or refusing correct
-    code, with every test green — the routes in the tree use few of these shapes, so only samples can show that it
-    still reads the rest."""
+    `else` of an `or` with its negation, `is True`, the `else` of `is False` or `is not True`, the `else` of a `not` of
+    an `and` with it, `bool()` of one), a name assigned before that `if`, a name an `if`/`else` statement assigns, an
+    annotated assignment, an attribute flag, a negated conditional expression, a hint hoisted into a local, a module
+    constant (as a conditional's branch, and set in a staged `if`), a hoisted hint given a hand value by a later `=`
+    (each `=` is read) or rebound by an unpacking, `:=`, `for` or `+=`, a hand value on the staged path past a `+=`, or
+    given there by an unpacking (given a conditional too), an annotated conditional extended with `+=`, and a name given
+    another name's conditional value (`nxt = msg`) — and refuses none of the helper's own shapes (hoisted into a local
+    too, read in a staged `if` from the whole function, or in the `else` of a `not`), an `if` that only the unstaged
+    path takes (`committed and not staged`, `is False`, `not committed`), an `if` on another call of the outcome
+    (`len()`), a name the staged branch assigns from the helper, the helper's own conditional unpacked, or the helper's
+    conditional extended with `+=` only off the staged path; and that it refuses a helper `=` in the staged branch of a
+    name the `else` extends with `+=`, as its docstring says. Guards against: the reader of the routes going blind, or
+    refusing correct code, with every test green — the routes in the tree use few of these shapes, so only samples can
+    show that it still reads the rest; and a hand value on the staged path past a `+=`, or given there by an unpacking,
+    and a module constant set in a staged `if`, which the reader passed (the T19 tail's read 70, S1 and N1), and an
+    unpacking given a conditional, which it passed, and arms of the reader no sample held (read 80, N1 and N3)."""
     fn = ast.parse(source).body[0]
     assert any("promote_hint" not in _called(value) for value in _staged_nexts(fn)) == by_hand
+
+
+@pytest.mark.parametrize("source, by_hand", [
+    ('def f(run_id):\n    hint = promote_hint(run_id)\n    return dict(next=hint)', False),
+    ('def f(git, run_id):\n    return dict(next=promote_hint(run_id) if git["staged"] else "done")', False),
+    ('def f(git, run_id):\n    hint = promote_hint(run_id)\n    if git.get("x"):\n        hint, _ = "land it", None\n'
+     '    return dict(next=hint)', True),
+    ('def f(run_id):\n    hint = promote_hint(run_id)\n    for hint in ["land it"]:\n        pass\n'
+     '    return dict(next=hint)', True),
+    ('def f(git):\n    return dict(next="land it" if git["staged"] else "done")', True),
+    ('def f(git, run_id):\n    return dict(next=promote_hint(run_id) if not git["staged"] else "land it")', True),
+    ('def f(git, run_id):\n    hint = promote_hint(run_id)\n'
+     '    return dict(next=hint if git["staged"] else "done")', False),
+    ('def f(git):\n    hint = "land it"\n    return dict(next=hint if git["staged"] else "done")', True),
+])
+def test_the_committing_check_reads_each_next(source, by_hand):
+    """Verifies: the check the structural test holds each committing route to (`_committed_by_hand`) refuses a `next`
+    typed by hand in a staged branch (a hoisted hand value there too), and a hoisted hint the function also rebinds
+    another way (an unpacking, `for`), though its `=` value is the helper's — and passes the helper's own `next`,
+    hoisted or in a conditional (hoisted into a conditional's staged branch too). Guards against: a committing route
+    answering a `next` it rebinds by hand with every test green — the routes in the tree rebind none, so only samples
+    can show the check still reads a name past its first `=`; and the check reading a conditional's staged branch
+    without resolving a name there, which no sample held (the T19 tail's read 70, N3)."""
+    fn = ast.parse(source).body[0]
+    assert bool(_committed_by_hand(fn, _next_values(fn))) == by_hand
 
 
 def test_no_next_in_a_route_spells_a_promote_by_hand():
@@ -261,7 +381,7 @@ def test_no_next_in_a_route_spells_a_promote_by_hand():
 # YAML `name: Type` wrapped onto a `run_id:` key) — `type` is also a noun and a builtin — and is reworded.
 _BARE = r"\brun[ _-]?id\b(?!>?@)(?!'s\b)"
 _DEAD = [r"\bkontroll promote\b(?!-)",                     # the command no deploy ships (not `promote-proposal`)
-         r"\bpromote (a |the |each |its )?<?" + _BARE,       # a bare run id as what is promoted
+         r"\bpromote (a |the |each |its )?[\"'“‘]?<?" + _BARE,   # a bare run id as what is promoted, quoted too
          r"\b(enter|paste|type)\b[^.@:={}]{0,30}" + _BARE,   # ... or entered (never across `.`, `@`, `:`, `=`, `{`)
          r"\brun[ _-]?id survey field\b"]                   # the field takes <run id>@<commit id>
 # history and private material: the review dossiers and the CHANGELOG may quote the old text; local/ and instance/
@@ -273,10 +393,11 @@ _SELF = "tests/unit/test_promote_hint_single_source.py"
 # the dashboards' panel text
 _TEXT = (".md", ".py", ".html", ".js", ".json", ".yml", ".yaml", ".sh", ".ps1", ".j2", ".txt", ".cfg", ".toml",
          ".template", ".example", "Dockerfile")
-# the HTML tags that can sit inside a sentence (emphasis, code, a link, a span), stripped so a tagged run id reads as
-# plain text; a fixed list, so a placeholder such as `<runid>` is never taken for a tag
-_INLINE = ("a", "abbr", "b", "code", "em", "i", "kbd", "mark", "samp", "small", "span", "strong", "sub", "sup", "u",
-           "var")
+# the inline HTML tags a sentence holds (emphasis, code, a link, a quote, an edit mark, a span, a line break),
+# stripped so a tagged run id reads as plain text; a fixed list, so a placeholder such as `<runid>` is never taken for
+# a tag, and a tag outside it (`<font>`, `<label>`) is not stripped
+_INLINE = ("a", "abbr", "b", "br", "cite", "code", "del", "dfn", "em", "i", "ins", "kbd", "mark", "q", "s", "samp",
+           "small", "span", "strong", "sub", "sup", "tt", "u", "var")
 # directories a walk does not enter (only outside a git tree): the git store, caches, and what a checkout grows
 _WALK_SKIPS = (".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
                "node_modules", "local", "ansible_collections")
@@ -312,12 +433,12 @@ def _shipped_text_files():
 def _plain(text):
     """`text` lower-cased, with the entities `&nbsp;`, `&#160;`, `&lt;` and `&gt;` decoded and these removed: `*`, a
     backtick, `__`, and an inline HTML tag — one of `_INLINE`, with no attributes or with `name=value` ones (`<b>`,
-    `<code class="x">`), so never a placeholder (`<run id>`, `<runid>`). Single-underscore emphasis is not removed —
-    `_` is part of `run_id`."""
+    `<code class="x">`), self-closing or not (`<br/>`, `<br />`), so never a placeholder (`<run id>`, `<runid>`).
+    Single-underscore emphasis is not removed — `_` is part of `run_id`."""
     text = text.lower()
     for entity, char in (("&nbsp;", " "), ("&#160;", " "), ("&lt;", "<"), ("&gt;", ">")):
         text = text.replace(entity, char)
-    return re.sub(r"</?(?:%s)(?:\s+[a-z-]+=[^<>]*)?>|[*`]|__" % "|".join(_INLINE), "", text)
+    return re.sub(r"</?(?:%s)(?:\s+[a-z-]+=[^<>]*)?\s*/?>|[*`]|__" % "|".join(_INLINE), "", text)
 
 
 def _hits(pattern, text):
@@ -364,6 +485,15 @@ def _hits(pattern, text):
     ("promote  the run_id", {1}),
     ("promote __run_id__", {1}),
     ("promote the <code class=\"x\">run_id</code>", {1}),
+    ("promote the <a><abbr><b><br><cite><code><del><dfn><em><i><ins><kbd><mark><q><s><samp><small><span><strong>"
+     "<sub><sup><tt><u><var>run_id", {1}),
+    ("promote the <script>run_id", set()),
+    ("promote the <br/>run_id", {1}),
+    ("promote the <br />run_id", {1}),
+    ('Promote the "run_id" in Semaphore.', {1}),
+    ("promote the 'run_id'", {1}),
+    ("promote “run_id”", {1}),
+    ("promote the ‘run_id’", {1}),
     ("promote&nbsp;run_id", {1}),
     ("promote&#160;run_id", {1}),
     ("the <b>run_id</b> survey field", {3}),
@@ -386,15 +516,20 @@ def _hits(pattern, text):
 ])
 def test_the_scan_catches_each_stale_form(text, expected):
     """Verifies: each pattern of the scan below finds the stale form it is for, and no other pattern stands in for it,
-    in each disguise sampled here — the dead command, a bare run id to promote or to enter, paste or type (a
-    placeholder `<run_id>` or `<runid>` included, in markup too), the run id survey field; emphasised, tagged, quoted,
-    entity-joined, hyphenated, run together, after each determiner, up to 30 characters and a comma past the verb,
-    ending a string or before a colon, or wrapped across a line break, a comment's, quote's, list item's or table
-    row's included — and that the scan passes the pinned form, a run id that is not an instruction (past a `.`, `@`
-    or `:` after the verb), the `promote-proposal` task and the CLI by name, and a run id that is a key after a key, a
-    keyword or a template variable in code. Guards against: the scan going blind with every test green — dropping the
-    join, a pattern, a marker or the emphasis stripping, or narrowing a gap or widening an exemption, to silence a
-    false positive — since the shipped tree, being clean, can never show that it stopped seeing anything."""
+    in each disguise sampled here — the dead command, a bare run id to promote or to enter, paste or type (a placeholder
+    `<run_id>` or `<runid>` included, in markup too), the run id survey field; emphasised, in each inline tag `_INLINE`
+    names, self-closing too (`<br/>`, `<br />`), quoted (after "promote" too, in a straight or an opening curly quote:
+    `“`, `‘`), entity-joined, hyphenated, run together, after each determiner, up to 30 characters and a comma past the
+    verb, ending a string or before a colon, or wrapped across a line break, a comment's, quote's, list item's or table
+    row's included — and that the scan passes the pinned form, a run id that is not an instruction (past a `.`, `@` or
+    `:` after the verb), the `promote-proposal` task and the CLI by name, and a run id that is a key after a key, a
+    keyword or a template variable in code, and that a tag outside `_INLINE` is not stripped (`<script>`, whose name
+    begins as one in it does). Guards against: the scan going blind with every test green — dropping the join, a
+    pattern, a marker, a tag or the emphasis stripping, or narrowing a gap or widening an exemption, to silence a false
+    positive — since the shipped tree, being clean, can never show that it stopped seeing anything; and a tag pattern
+    loose enough to strip any tag (`<script>`, `<img …>`), the filter CodeQL refuses; and a self-closing `<br/>` or a
+    quoted run id after "promote", which the scan passed (the T19 tail's read 70, N4), and a run id in `‘`, which no
+    sample held (read 80, N3)."""
     assert {i for i, pattern in enumerate(_DEAD) if _hits(pattern, text)} == expected
 
 
@@ -402,15 +537,20 @@ def test_the_scan_catches_each_stale_form(text, expected):
 def test_no_surface_or_document_spells_the_promote_instruction_by_hand(pattern):
     """Verifies: no code surface (GUI app, API routes, the service package, the page) and no shipped document, compose
     comment, Semaphore template, playbook or script says `kontroll promote` (a command no deploy ships) or tells the
-    operator to promote, enter, paste or type a bare run id (the promote-proposal task refuses one) — with `*`,
-    backtick or `__` emphasis, in HTML tags or entities, and across one line break (each line is read with the next
-    one joined to it, that line's comment, quote or list marker dropped). Not read: single-underscore emphasis, a
-    three-line wrap, a string concatenated in code, a line break escaped inside a string, a markdown link's text, a
-    numeric entity other than `&#160;`, a `.`, `@`, `:`, `=` or brace between the verb and the run id
-    (`enter, e.g., the run_id`). A run id that is no promote instruction and still matches (the log-correlation key:
-    "enter a run id to filter the audit log") is reworded, not exempted. Guards against: the dead command, or the
-    stale form, coming back by hand — the operator pastes it and is refused at the moment a change is waiting.
-    Reviews and the CHANGELOG are history and may quote the old text; this file quotes it as samples."""
+    operator to promote, enter, paste or type a bare run id (the promote-proposal task refuses one) — with `*`, backtick
+    or `__` emphasis, in an inline HTML tag (`_INLINE`, self-closing too: `<br/>`) or an entity, in quotes after
+    "promote", and across one line break (each line is read with the next one joined to it, that line's comment, quote
+    or list marker dropped). Not read: single-underscore emphasis, a tag outside `_INLINE` (`<font>`, `<label>`), a tag
+    that joins two words (`the<br>run_id`), a three-line wrap, a string concatenated in code, a line break escaped
+    inside a string, a markdown link's text, a numeric entity other than `&#160;`, a named quote entity (`&quot;`,
+    `&ldquo;`), a closing or low curly quote or a guillemet as the opening quote (`”run_id”`, `„run_id“`, `«run_id»`), a
+    quote before the determiner (`promote "the run_id"`) or with a space inside it, a `.`, `@`, `:`, `=` or brace
+    between the verb and the run id (`enter, e.g., the run_id`). A run id that is no promote instruction and still
+    matches (the log-correlation key: "enter a run id to filter the audit log") is reworded, not exempted; so is code
+    that names `type` up to 30 characters before `run_id` (a field tuple `("type", "run_id")`, `if type(x) is str and
+    "run_id" in x`): reorder it. Guards against: the dead command, or the stale form, coming back by hand — the operator
+    pastes it and is refused at the moment a change is waiting. Reviews and the CHANGELOG are history and may quote the
+    old text; this file quotes it as samples."""
     files = _shipped_text_files()
     assert {"docs/install-from-scratch.md", "config/semaphore/templates/promote-proposal.yml", "START-HERE.md",
             "SECURITY.md", "tests/testid_reference.md", "gui/templates/index.html", "gui/app.py",

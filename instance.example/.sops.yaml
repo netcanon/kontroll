@@ -6,9 +6,11 @@
 #
 # Recipients (age PUBLIC keys), least-privilege per domain:
 #   1. control key   — minted by kontroll-init (~/.config/sops/age/keys.txt). On EVERY domain.
-#   2. break-glass   — offline recovery key; add via the GUI 'Keys' dialog (SETUP §5.2). EVERY domain.
-#   3. semaphore key — scoped runner key; ops domains (network, proxmox) ONLY.
-# Items 2 and 3 are added AFTER --fresh, then re-wrap:
+#   2. break-glass   — offline recovery key. EVERY domain. Added by --fresh (--break-glass-recipient or
+#                      --mint-break-glass) before the first secret is written, or later per docs/break-glass.md.
+#   3. semaphore key — scoped runner key; ops domains (network, proxmox) ONLY. Added after --fresh via the GUI
+#                      'Keys' dialog.
+# A recipient added AFTER secrets exist needs a re-wrap (docs/break-glass.md has the dry run and the checks):
 #   sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml
 #
 # path_regex is BASENAME-anchored ((^|/)<domain>\.sops\.ya?ml$): sops matches it
@@ -22,9 +24,9 @@ creation_rules:
       - age:
           # YOUR control key — kontroll-init --fresh fills this in.
           - "age1exampleexampleexampleexampleexampleexampleexampleexa"   # REPLACE
-          # After --fresh, add via the GUI 'Keys' dialog (then re-wrap):
-          #   - break-glass recovery key (offline)
-          #   - scoped Semaphore runner key (operational domains only)
+          # Added below by --fresh, or later (then re-wrap):
+          #   - break-glass recovery key (offline) — --fresh's choice, or docs/break-glass.md
+          #   - scoped Semaphore runner key (operational domains only) — the GUI 'Keys' dialog
 
   - path_regex: (^|/)proxmox\.sops\.ya?ml$
     key_groups: *ops_recipients
@@ -33,7 +35,7 @@ creation_rules:
   - path_regex: (^|/)compute\.sops\.ya?ml$
     key_groups: &base_recipients
       - age:
-          # YOUR control key — kontroll-init --fresh fills this in (+ break-glass later).
+          # YOUR control key — kontroll-init --fresh fills this in (+ the break-glass key it adds).
           - "age1exampleexampleexampleexampleexampleexampleexampleexa"   # REPLACE
 
   - path_regex: (^|/)dashboards\.sops\.ya?ml$

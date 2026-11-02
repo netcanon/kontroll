@@ -13,8 +13,9 @@ node, encrypted to YOUR key (the recipient in `instance/.sops.yaml`), by either:
 - `sops instance/secrets/<domain>.sops.yml` directly (type values into the editor — never
   on the command line; SECURITY.md C11).
 
-After you add a recipient (break-glass or the scoped Semaphore key), re-wrap so the
-existing files gain it:
+After you add a recipient (the scoped Semaphore key, or a break-glass key an instance was
+created without), re-wrap so the existing files gain it. A break-glass key has a runbook
+of its own, with the dry run and the check: [docs/break-glass.md](../../docs/break-glass.md).
 
 ```bash
 sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml

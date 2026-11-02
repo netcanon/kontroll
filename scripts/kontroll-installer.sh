@@ -6,7 +6,8 @@
 # Design-of-record: docs/reviews/2026-06-29-compose-native-install/99-synthesis.md (Phase A).
 #
 # Usage:
-#   scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated   # scaffold instance/
+#   scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated \
+#       --break-glass-recipient <age1…>                                       # scaffold instance/ (docs/break-glass.md)
 #   $EDITOR instance/fleet.yml instance/inventory/hosts.yml instance/instance.yml
 #   scripts/kontroll-installer.sh check                                         # the mandated --check --diff dry-run
 #   scripts/kontroll-installer.sh                                               # bootstrap → deploy-stack (verb 'init')
@@ -45,6 +46,15 @@ if [ -f "$REPO_ROOT/scripts/lib/canonical-group.sh" ]; then
   . "$REPO_ROOT/scripts/lib/canonical-group.sh"
   canonical_group_ensure_or_warn "$KONTROLL_OPERATOR_USER"
 fi
+
+# The installer's log driver (docker/services/installer.yaml), chosen here for every verb so a value exported in the
+# operator's shell never chooses it: a deploy (`init`, `check`) keeps its record; every other verb, fresh-init's
+# show-once values and kontroll-init by hand in `shell` among them, reaches the terminal only.
+case "${1:-init}" in
+  init|check) KONTROLL_INSTALLER_LOG_DRIVER=json-file ;;
+  *)          KONTROLL_INSTALLER_LOG_DRIVER=none ;;
+esac
+export KONTROLL_INSTALLER_LOG_DRIVER
 
 # --build so a bundle update that changes the Dockerfile (new ansible-core, new collections, a new runtime dep) is
 # reflected — a plain `run` reuses the cached image and would silently run stale glue. Near-noop when nothing changed
