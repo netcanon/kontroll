@@ -7,8 +7,10 @@ Two layers, one loader (design: docs/reviews/2026-10-08-public-split-pii-sweep/9
      appear in the shippable tree, by SHAPE: an RFC-1918 IPv4 in ANY separator form (dotted, dashed as the capture
      filenames spell it, underscored), a non-documentation MAC (anything but the RFC-7042
      `00:00:5e:00:53:xx` range / null / broadcast — colon, dash, dotted-Cisco and space-hex forms), a non-documentation
-     global IPv6 (outside RFC-3849 `2001:db8::/32`), a real-length age recipient or AGE secret key, the maintainer's
-     personal email, and an operator-machine user-profile path. RFC-5737 TEST-NET (`192.0.2/24`, `198.51.100/24`,
+     global IPv6 (outside RFC-3849 `2001:db8::/32`), a real-length age recipient or AGE secret key, and an
+     operator-machine user-profile path. The maintainer's personal identifiers are matched here too, but by salted
+     sha256 digest (.github/pii-guard.hashes, via the shared .github/scripts/pii_guard.py), so this file never
+     spells them and a finding never prints them. RFC-5737 TEST-NET (`192.0.2/24`, `198.51.100/24`,
      `203.0.113/24`) is the sanctioned example space and never matches. Version strings, OIDs (5+-group dotted runs)
      and documentation addresses are stripped before matching so the gate under-fires rather than cries wolf.
 
@@ -38,8 +40,10 @@ Usage (the SAME scan runs locally, on the VM, in the private CI and in the publi
 Exit 1 on any finding, 2 when the tree could not be enumerated (fail closed).
 """
 import hashlib
+import importlib.util
 import ipaddress
 import os
+import pathlib
 import re
 import subprocess
 import sys
@@ -81,11 +85,35 @@ _IPV6 = re.compile(r"(?<![\w:.])(?=[0-9A-Fa-f:]*::|(?:[0-9A-Fa-f]{1,4}:){2})"
                    r"(?:[0-9A-Fa-f]{1,4}:){1,7}(?::?[0-9A-Fa-f]{1,4}){0,7}(?![\w:.])")
 _AGE_PUB = re.compile(r"\bage1[02-9ac-hj-np-z]{58}\b")              # a REAL-length recipient (the placeholder is shorter)
 _AGE_SECRET = re.compile(r"\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b")
-# The personal identifiers use character classes so this public file never spells them out (and never matches
-# itself) — the same device netcanon's PII guard uses. Both forms of the user-profile path (the drive-letter form with
-# one or many separators, and the MSYS mount form) are covered.
-_PERSONAL = re.compile(r"(?i)samuelr[i]pp09|[a-z]:[\\/]+[u]sers[\\/]+|/c/[u]sers/")
+# An operator-machine user-profile path is a SHAPE (any user), so it is matched here: the drive-letter form with one
+# or many separators, and the MSYS mount form. The `[u]` keeps this file from matching itself.
+_PERSONAL = re.compile(r"(?i)[a-z]:[\\/]+[u]sers[\\/]+|/c/[u]sers/")
 _DOC_V6 = ipaddress.ip_network("2001:db8::/32")
+
+
+# A personal identifier (the maintainer's email address and its local part) is NOT a shape, and it is never spelled
+# in this public file, not even as a character class: `ab[c]d` keeps a grep from matching itself but still publishes
+# the value to every reader. It is matched by salted sha256 digest instead, by the shared scanner and digest list
+# every netcanon repository carries (.github/scripts/pii_guard.py, .github/pii-guard.hashes). The scanner also
+# checks each line with `[`, `]` and `\` stripped, so a character-class spelling is itself a finding.
+def _identifier_scanner(root=ROOT):
+    """The shared scanner's digest layer, loaded from `root` (layers 1 and 3 stay this file's own). Raises when the
+    scanner or its digest list is missing, so the guard fails closed instead of silently skipping the layer."""
+    path = os.path.join(root, ".github", "scripts", "pii_guard.py")
+    spec = importlib.util.spec_from_file_location("pii_guard", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.Scanner(mod.load_digests(pathlib.Path(root)), [], paths=False)
+
+
+_IDS = []                                                            # loaded on first use: see _ids()
+
+
+def _ids():
+    """The digest scanner, loaded once. main() calls this first so a missing digest list exits 2 (fail closed)."""
+    if not _IDS:
+        _IDS.append(_identifier_scanner())
+    return _IDS[0]
 
 
 def _norm_mac(tok):
@@ -108,14 +136,18 @@ def _mac_is_doc(tok):
 
 
 def structural_findings(text, path=""):
-    """[(lineno, category, token)] for every structural identifier in `text`. `token` is the matched text —
-    these are SHAPE classes (private IP, MAC, …), not instance names, so showing them is not itself a leak."""
+    """[(lineno, category, token)] for every structural identifier in `text`. `token` is the matched text for the
+    SHAPE classes (private IP, MAC, …), which are not instance names, so showing them is not itself a leak. A listed
+    personal identifier is the exception: its token says only that a digest matched, never the value."""
     out = []
     for ln, line in enumerate(text.split("\n"), 1):
         if ALLOW_MARK in line:
             continue
         for m in _PERSONAL.finditer(line):
             out.append((ln, "personal-identifier", m.group(0)))
+        hit = _ids().identifier_finding(line)
+        if hit:
+            out.append((ln, "personal-identifier", hit))
         scan = _OID_RUN.sub(" ", line)                               # drop OIDs before the IPv4 pass
         for m in _IPV4_ANY.finditer(scan):
             if _VERSION_PREFIX.search(scan[max(0, m.start() - 10):m.start()]):
@@ -268,6 +300,11 @@ def scan_paths(paths, root=ROOT, patterns=None):
 
 def main(argv):
     overlay, state = [], ""
+    try:
+        _ids()
+    except (OSError, ValueError) as exc:
+        print("pii-guard: cannot load the identifier digests (%s) — failing closed" % exc, file=sys.stderr)
+        return 2
     if argv[:1] == ["--tree"]:
         root = os.path.abspath(argv[1]) if len(argv) > 1 else ROOT
         try:

@@ -11,6 +11,22 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(security): the leak guard no longer spells the maintainer's email, even as a character class (2026-11-01)
+
+The structural layer of `tests/_leak_guard.py` matched the maintainer's personal email local part with a
+character-class regex, so that the guard would not match its own text. That kept the scan quiet and published the
+value to anyone who opened the file, and a finding printed the matched text.
+
+- **Changed.** Personal identifiers are matched by salted sha256 digest, listed in `.github/pii-guard.hashes`, through
+  the shared scanner every netcanon repository carries (`.github/scripts/pii_guard.py`). A digest confirms a guess,
+  never reveals a value. Each line is also checked with `[`, `]` and `\` removed, so a character-class spelling is
+  itself a finding. The finding reports that a digest matched, never the value. User-profile paths stay a shape
+  match in this file.
+- **Added.** The `PII guard` workflow runs the shared scanner's `--self-test` and scans the author, committer and
+  message of every commit being merged (the `KONTROLL_LEAK_TOKENS` secret feeds it the same instance tokens).
+- **Fails closed.** A missing scanner or digest list exits 2.
+- **Tests:** `test_listed_personal_identifier_is_caught_by_digest_and_never_printed`; SECURITY.md C21 updated.
+
 ### build(docker): every image input is pinned; Dependabot and pip-audit read the pins (T29 / S15a + S50, 2026-10-23)
 
 A rebuild — the project's recovery move — landed on whatever upstream published that day: the runner built `FROM
