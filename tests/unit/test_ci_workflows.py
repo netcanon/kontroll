@@ -322,43 +322,48 @@ def pip_audit_faults(workflow):
     later `||`, a `;` after it unless the audit starts its AND-OR list and that list ends there, a `;` inside a
     compound, a compound behind `||` or `!`, a condition, a `$(…)` or quoted string around it, a function or an alias in
     the step or an entry in bash's command tables (`hash`, `enable`, `BASH_CMDS`, `BASH_ALIASES`), a `trap`, `exec`,
-    `return`, an `exit` other than `exit 1` to `exit 255`, or a `set -n` or `set -t` (or a `shopt` naming noexec or
-    onecmd, or a `set` or `shopt` given a variable, a backquoted command, a glob or a brace expansion) in the step:
-    the _build_read rules, errexit on at the start and off after a `set +e` or such a `set`), a `set +e`, `set +o
-    errexit` or a `shopt` naming errexit anywhere in the step, a heredoc in the step (its body is not read as the
-    shell reads it), `continue-on-error` on the step or the job, a step that names no shell (itself or a
-    `defaults.run.shell`) under a `runs-on` that is no named Linux or macOS runner (`_named_unix_runner`: an
-    expression, which a repository variable may point at a Windows runner, a Windows image, or labels with no OS
-    label or holding an expression; a Windows runner's default shell is pwsh, which need not stop on a failure); or
-    an audit that runs on a condition (`if:` on the step or the job other than `always()`, `success()` or
-    `!cancelled()`); a whitespace character other than a space, a tab or a line feed, a `${{` expression (in a
-    comment too: GitHub writes its value in first), a `#` right after a `)` (bash opens a comment after a subshell's
-    `)`, not after a `$(…)`'s, and this check tells neither), a newline inside a quoted string or a quote left open
-    (an `eval` reads a backslash-newline there as a continuation, and this check does not read a quote nested in a
-    `"$(…)"`), or a C0 control character that is not whitespace (a NUL, which bash drops inside a word, or one of this
-    check's own marks), in the step's script; an env key, in any case (a Windows runner reads `Path` as `PATH`), that
-    changes what the step runs (`_BASH_ENV`: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`,
-    `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`), or an env that is not a
-    mapping, on the step, the job or the workflow; or a `container:` on the job (its env and its options reach bash
-    unread). It refuses sound shapes too, each loudly: a pipe after the audit under `shell: bash` (which runs with
-    pipefail), an `exit 0` after it, and the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on
-    error"`), an `&>` redirect after the audit, an audit sent to the background and waited for (`& wait $!`), a `$(…)#`
-    (to bash the `#` is part of a word), an ANSI-C `$'…'` in the audit's list, the word `alias`, `hash` or `enable` in a
-    message (and a `hash -r`), the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob
-    character, `{` or `(` (`echo "set up (once)"`), a newline inside a quoted string (a message over two lines), a C0
-    control character in a message (the ESC of an ANSI colour code), a `shopt -uo` of noexec or onecmd, an ANSI-C `$'…'`
-    before the audit, a brace expansion where bash builds no command word from it (an assignment's value, a redirect's
-    target, a quoted string: `TARGETS={exit,0}`, `x={exit,0} true`, `echo hi >{exit,}`, `echo "mode: {exec,dry-run}"`,
-    `jq '{hash,set}'`), and an audit that opens a subshell (`(pip-audit -r a)`), sits inside a function or is spelt
-    other than `pip-audit …` (`python -m pip_audit`, the pip-audit action): none of these is read as a run, so the
-    coverage test fails, or (a function over several lines) it is read and refused. It cannot see an earlier step that
-    writes one of those env keys through `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a later step runs under
-    it; nor another env key that leads the audit to a planted file; nor a `working-directory:` or a `cd` that moves the
-    file a `-r` names (a copy planted at `<dir>/docker/…` is then audited instead; with none, pip-audit fails on the
-    missing file); nor a command word built at run time, glued to or made of a parameter expansion (but a special
-    parameter the script starts with empty, bare or braced, `exit$@`, `exit${10}`, and one with a `-` or `:-` default,
-    read as its default word, `${1-exit} 0`, which are read), a command substitution or a glob (`exit$x 0`, `set$x +e`,
-    `${x:-exit} 0`, `` exit`:` 0 ``, `$(:)hash …`, `ex?t 0`, `` set`:` +e ``)."""
+    `return`, an `exit` other than `exit 1` to `exit 255`, a brace expansion the reader cannot read (an item holding a
+    nested substitution or parameter, or one an operator inside a quote or a substitution cuts), or a `set -n` or `set
+    -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt` given a variable, a backquoted command, a glob or a
+    brace expansion) in the step: the _build_read rules, errexit on at the start and off after a `set +e` or such a
+    `set`), a `set +e`, `set +o errexit` or a `shopt` naming errexit anywhere in the step, a heredoc in the step (its
+    body is not read as the shell reads it), `continue-on-error` on the step or the job, a step that names no shell
+    (itself or a `defaults.run.shell`) under a `runs-on` that is no named Linux or macOS runner (`_named_unix_runner`:
+    an expression, which a repository variable may point at a Windows runner, a Windows image, or labels with no OS
+    label or holding an expression; a Windows runner's default shell is pwsh, which need not stop on a failure); or an
+    audit that runs on a condition (`if:` on the step or the job other than `always()`, `success()` or `!cancelled()`);
+    a whitespace character other than a space, a tab or a line feed, a `${{` expression (in a comment too: GitHub writes
+    its value in first), a `#` right after a `)` (bash opens a comment after a subshell's `)`, not after a `$(…)`'s, and
+    this check tells neither), a newline inside a quoted string or a quote left open (an `eval` reads a
+    backslash-newline there as a continuation, and this check does not read a quote nested in a `"$(…)"`), or a C0
+    control character that is not whitespace (a NUL, which bash drops inside a word, or one of this check's own marks),
+    in the step's script; an env key, in any case (a Windows runner reads `Path` as `PATH`), that changes what the step
+    runs (`_BASH_ENV`: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`,
+    `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`), or an env that is not a mapping, on
+    the step, the job or the workflow; or a `container:` on the job (its env and its options reach bash unread). It
+    refuses sound shapes too, each loudly: a pipe after the audit under `shell: bash` (which runs with pipefail), an
+    `exit 0` after it, and the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), an
+    `&>` redirect after the audit, an audit sent to the background and waited for (`& wait $!`), a `$(…)#` (to bash the
+    `#` is part of a word), an ANSI-C `$'…'` in the audit's list, the word `alias`, `hash` or `enable` in a message (and
+    a `hash -r`), the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{`
+    or `(` (`echo "set up (once)"`), a newline inside a quoted string (a message over two lines), a C0 control character
+    in a message (the ESC of an ANSI colour code), a `shopt -uo` of noexec or onecmd, an ANSI-C `$'…'` before the audit,
+    a brace expansion where bash builds no command word from it (an assignment's value, a redirect's target, a quoted
+    string: `TARGETS={exit,0}`, `x={exit,0} true`, `echo hi >{exit,}`, `echo "mode: {exec,dry-run}"`, `jq
+    '{hash,set}'`), a brace expansion the reader cannot read where bash builds no command word from it (`mkdir -p
+    o/{${x:-${y}},c}`), an arithmetic expansion glued to a command word (`exit$((0))`, which bash runs as `exit0`, a
+    command not found: the reader removes it, as it removes every expansion, so that a substitution holding one is
+    read), and an audit that opens a subshell (`(pip-audit -r a)`), sits inside a function or is spelt other than
+    `pip-audit …` (`python -m pip_audit`, the pip-audit action): none of these is read as a run, so the coverage test
+    fails, or (a function over several lines) it is read and refused. It cannot see an earlier step that writes one of
+    those env keys through `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a later step runs under it; nor
+    another env key that leads the audit to a planted file; nor a `working-directory:` or a `cd` that moves the file a
+    `-r` names (a copy planted at `<dir>/docker/…` is then audited instead; with none, pip-audit fails on the missing
+    file); nor a command word built at run time from what a variable holds or a substitution prints, or by a glob
+    (`x=ex; ${x}it 0`, `exi$_ 0` after `: t`, `$(printf ex)it 0`, `` `echo exit` 0 ``, `$(echo hash) -p …`, `ex?t 0`).
+    An expansion that can come out empty, glued to a command word or splitting it, is read as empty (`exit$x 0`,
+    `` exit`:` 0 ``, `e$(:)xit 0`, `set$x +e`, `hash${x} -p …`), and one given a `-`, `:-`, `+` or `:+` operator as its
+    word (`${1-exit} 0`, `${x:-exit} 0`, `${0:+exit} 0`, `${1-${2-exit}} 0`): those are read."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -753,6 +758,125 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": "true\n${10-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `${10-exit} 0`"]),
     ({"run": "echo {x$(:,exit)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "{exec,true,${x:-${y}}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,${x:-${y}}}`"]),
+    ({"run": "{exec,true,${x:-${y:-a b}}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,${x:-${y:-a`"]),
+    ({"run": "{exec,true,${x:-\"}\"}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,${x:-…}}`"]),
+    ({"run": "{exec,true,$(echo $(echo a))}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,$(echo`"]),
+    ({"run": "{exec,true,$( (echo a) )}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,$(`"]),
+    ({"run": "{exec,true,<(echo a)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,<(echo`"]),
+    ({"run": "{exec,true,>(cat -)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,>(cat`"]),
+    ({"run": "{exec,true,\"$(echo \" \")\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,…`"]),
+    ({"run": "{exec,true,$(echo\ntrue)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,$(echo`"]),
+    ({"run": "{exec,true,\"`echo \"a b\"`\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,…}`"]),
+    ({"run": "{exec,true,${ echo a;}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,${`"]),
+    ({"run": "{exec,true,\"a;b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,\"a`"]),
+    ({"run": "{exec,true,'a|b'}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,'a`"]),
+    ({"run": "{exec,true,\"a&&b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,\"a`"]),
+    ({"run": "{exec,true,$(:;:)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,$(:`"]),
+    ({"run": "{exec,true,a\\;b}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,a\\`"]),
+    ({"run": "{hash,-p,/bin/true,pip-audit,\"a;b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{hash,-p,/bin/true,pip-audit,\"a`"]),
+    ({"run": "{set,-n,\"a;b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{set,-n,\"a`"]),
+    ({"run": "true\nexit${010}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${010}`"]),
+    ({"run": "true\nexit${01}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${01}`"]),
+    ({"run": "true\n${0:+exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${0:+exit} 0`"]),
+    ({"run": "true\n${#:+exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${#:+exit} 0`"]),
+    ({"run": "true\n${?:+exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${?:+exit} 0`"]),
+    ({"run": "true\n${$:+exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${$:+exit} 0`"]),
+    ({"run": "true\n${-:+exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${-:+exit} 0`"]),
+    ({"run": "true\n${1-${2-exit}} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-${2-exit}} 0`"]),
+    ({"run": "true\n${1-$@exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-$@exit} 0`"]),
+    ({"run": "true\n${_:+exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${_:+exit} 0`"]),
+    ({"run": "set${010} +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "${1-${2-set}} +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "${0:+set} +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "{exec,true,${x:-{a b}}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,${x:-{a`"]),
+    ({"run": "{hash,-p,/bin/true,pip-audit,${x:-{a b}}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{hash,-p,/bin/true,pip-audit,${x:-{a`"]),
+    ({"run": "{exec,true,$(echo $(echo a b))}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,$(echo`"]),
+    ({"run": "{exec,true,$(case a in a) echo a b;; esac)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,$(case`"]),
+    ({"run": "{exec,true,<(echo a b)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,<(echo`"]),
+    ({"run": "{exec,true,$((1 + 2))}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["cannot read (`{exec,true,$((1`"]),
+    ({"run": "{exec,true,`echo a\\` b`}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,`echo a\\` b`}`"]),
+    ({"run": "true\n${100-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${100-exit} 0`"]),
+    ({"run": "true\nexit$x 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$x 0`"]),
+    ({"run": "true\nexit`:` 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit`:` 0`"]),
+    ({"run": "true\ne$(:)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `e$(:)xit 0`"]),
+    ({"run": "true\n`:`exit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with ``:`exit 0`"]),
+    ({"run": "true\n${x:-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${x:-exit} 0`"]),
+    ({"run": "true\nexit${0##*}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${0##*}`"]),
+    ({"run": "true\nexit${#%?}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${#%?}`"]),
+    ({"run": "true\nexit${?%?}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit${?%?}`"]),
+    ({"run": "true\nexit${$##*}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${$##*}`"]),
+    ({"run": "true\nexit${-##*}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${-##*}`"]),
+    ({"run": "set$x +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "set${0##*} +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "hash${x} -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "true\n${_-exit} 0\n" + _AUDIT, "shell": "sh"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${_-exit} 0`"]),
+    ({"run": "true\nexit$_ 0\n" + _AUDIT, "shell": "sh"}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit$_ 0`"]),
+    ({"run": "mkdir -p o/{\"a b\",c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "mkdir -p o/{'a b',c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "mkdir -p o/{a\\ b,c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "mkdir -p o/{${HOME:+h},c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "mkdir -p o/{$(echo a),c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "mkdir -p o/{`echo a`,c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "mkdir -p o/{${x:-${y}},c}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with a brace expansion the check cannot read (`{${x:-${y}},c}`"]),
+    ({"run": "echo \"{exec,true,${x:-${y}}}\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "echo \"${x:-a b}\" ${HOME:-none}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "{ echo a,b; echo c..d; }\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\n${*:-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${*:-exit} 0`"]),
+    ({"run": "true\n${!:-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${!:-exit} 0`"]),
+    ({"run": "true\n${1-${@}exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-${@}exit} 0`"]),
+    ({"run": "true\n${1-${*}exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-${*}exit} 0`"]),
+    ({"run": "true\n${1-${!}exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-${!}exit} 0`"]),
+    ({"run": "true\n${1-${010}exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-${010}exit} 0`"]),
+    ({"run": "true\n${1-${@%x}exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-${@%x}exit} 0`"]),
+    ({"run": "true\ne$(: $((1)))xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: $((1)))xit 0`"]),
+    ({"run": "true\nexit${x:-${y}} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${x:-${y}} 0`"]),
+    ({"run": "x=A; echo ${x,,}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -832,7 +956,52 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "exec-built-by-a-brace-list-around-a-brace-holding-an-escaped-comma",
         "exec-built-by-a-brace-list-around-a-brace-holding-a-substitution",
         "set-plus-e-built-by-a-brace-list-around-a-brace-holding-a-braced-parameter",
-        "exit-as-the-default-of-the-tenth-parameter", "substitution-holding-a-comma-inside-a-brace"])
+        "exit-as-the-default-of-the-tenth-parameter", "substitution-holding-a-comma-inside-a-brace",
+        "exec-built-by-a-brace-list-with-a-nested-default",
+        "exec-built-by-a-brace-list-with-a-nested-default-holding-a-space",
+        "exec-built-by-a-brace-list-with-a-default-holding-a-quoted-closing-brace",
+        "exec-built-by-a-brace-list-with-a-nested-substitution",
+        "exec-built-by-a-brace-list-with-a-subshell-in-a-substitution",
+        "exec-built-by-a-brace-list-with-a-process-substitution",
+        "exec-built-by-a-brace-list-with-an-output-process-substitution",
+        "exec-built-by-a-brace-list-with-a-quote-in-a-quoted-substitution",
+        "exec-built-by-a-brace-list-with-a-substitution-over-two-lines",
+        "exec-built-by-a-brace-list-with-quotes-in-a-quoted-backquoted-command",
+        "exec-built-by-a-brace-list-with-a-command-in-a-braced-substitution",
+        "exec-built-by-a-brace-list-with-a-quoted-semicolon", "exec-built-by-a-brace-list-with-a-single-quoted-pipe",
+        "exec-built-by-a-brace-list-with-a-quoted-and", "exec-built-by-a-brace-list-with-a-semicolon-in-a-substitution",
+        "exec-built-by-a-brace-list-with-an-escaped-semicolon", "hash-built-by-a-brace-list-with-a-quoted-semicolon",
+        "set-n-built-by-a-brace-list-with-a-quoted-semicolon", "exit-glued-to-the-tenth-parameter-with-a-leading-zero",
+        "exit-glued-to-the-first-parameter-with-a-leading-zero", "exit-as-the-alternative-of-the-shell-name",
+        "exit-as-the-alternative-of-the-parameter-count", "exit-as-the-alternative-of-the-last-status",
+        "exit-as-the-alternative-of-the-shell-pid", "exit-as-the-alternative-of-the-flags", "exit-as-a-nested-default",
+        "exit-glued-to-an-empty-parameter-in-a-default", "exit-as-the-alternative-of-the-last-argument",
+        "set-plus-e-glued-to-the-tenth-parameter-with-a-leading-zero", "set-plus-e-as-a-nested-default",
+        "set-plus-e-as-the-alternative-of-the-shell-name", "exec-built-by-a-brace-list-with-a-default-holding-a-brace",
+        "hash-built-by-a-brace-list-with-a-default-holding-a-brace",
+        "exec-built-by-a-brace-list-with-a-nested-substitution-holding-a-space",
+        "exec-built-by-a-brace-list-with-a-case-in-a-substitution",
+        "exec-built-by-a-brace-list-with-a-process-substitution-holding-a-space",
+        "exec-built-by-a-brace-list-with-an-arithmetic-substitution",
+        "exec-built-by-a-brace-list-with-an-escaped-backquote", "exit-as-the-default-of-the-hundredth-parameter",
+        "exit-glued-to-a-named-variable", "exit-glued-to-a-backquoted-command", "exit-split-by-a-substitution",
+        "backquoted-command-glued-before-exit", "exit-as-a-named-default", "exit-glued-to-a-stripped-shell-name",
+        "exit-glued-to-a-stripped-parameter-count", "exit-glued-to-a-stripped-last-status",
+        "exit-glued-to-a-stripped-shell-pid", "exit-glued-to-the-stripped-flags",
+        "set-plus-e-glued-to-a-named-variable", "set-plus-e-glued-to-a-stripped-shell-name",
+        "hash-glued-to-a-braced-variable", "exit-as-the-default-of-the-last-argument-under-sh",
+        "exit-glued-to-the-last-argument-under-sh", "brace-list-with-a-double-quoted-item",
+        "brace-list-with-a-single-quoted-item", "brace-list-with-an-escaped-space-item",
+        "brace-list-with-a-braced-parameter-item", "brace-list-with-a-substitution-item",
+        "brace-list-with-a-backquoted-item", "unreadable-brace-list-in-a-mkdir",
+        "unreadable-brace-list-in-a-quoted-message", "named-defaults-in-a-message", "commas-and-dots-in-a-brace-group",
+        "exit-as-the-default-of-the-star-parameter", "exit-as-the-default-of-the-last-background-pid",
+        "exit-glued-to-a-braced-empty-parameter-in-a-default", "exit-glued-to-a-braced-star-parameter-in-a-default",
+        "exit-glued-to-the-braced-last-background-pid-in-a-default",
+        "exit-glued-to-a-braced-parameter-with-a-leading-zero-in-a-default",
+        "exit-glued-to-a-stripped-empty-parameter-in-a-default",
+        "exit-split-by-a-substitution-holding-an-arithmetic-one",
+        "exit-glued-to-a-nested-named-default", "case-modification-in-a-message"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -912,16 +1081,39 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     (`{exec,true,{${x}}}`, `{hash,-p,/bin/true,pip-audit,{"a,b"}}`, `{exec,true,{\\,}}`, `{exec,true,{$(echo a)}}`, and
     `{set,+e,{${x}}}`, which bash expands to `set +e {}`), and the tenth parameter's default (`${10-exit} 0`); and it
     passes a substitution holding a comma inside a brace (`echo {x$(:,exit)}`: bash's brace_gobbler skips the whole
-    `$(…)`, so the brace holds no comma and is kept). Each row's job runs on ubuntu-latest unless the row names another.
-    Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its
-    fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if,
-    PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold
-    5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its
-    read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5; its read B, S1, S2,
-    N6; fold 8's read A, S1 to S5, N1: M1 to M13; its read B, S1 to S4, N2, N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's
-    mutant X9a; its read B, S1, S2, N1, N8; fold 10's mutant run: B9-control-class-nul-and-stx-only; its read A, S1, N1;
-    its read B, S1, S2, N1, N2; fold 11's mutant X11h; its read A, S1, S2, N1: A10; its read B, S1, S2, N6, N7; fold
-    12's mutant run: X12u, X12aa, X12ab)."""
+    `$(…)`, so the brace holds no comma and is kept). Fold 12's reads added: a command word a brace list builds from an
+    item the view reads one level deep only, refused as a brace the check cannot read (a `${…}` or `$(…)` nested in
+    another, `{exec,true,${x:-${y}}}`, `{exec,true,${x:-{a b}}}`, `{exec,true,$(echo $(echo a b))}`; a quoted `}` in a
+    default, `{exec,true,${x:-"}"}}`; a `$( (…) )`, a `<(…)` or `>(…)`, a `$((…))`, a `case` or a line break inside a
+    `$(…)`, quotes inside a quoted backquoted command, or bash 5.3's `${ cmd;}`), or from one an operator inside a quote
+    or a substitution cuts (`{exec,true,"a;b"}`, `{exec,true,'a|b'}`, `{exec,true,"a&&b"}`, `{exec,true,$(:;:)}`,
+    `{exec,true,a\\;b}`, and `hash` and `set -n` built so); a backquoted command holding an escaped backquote, which the
+    view now reads whole (`` {exec,true,`echo a\\` b`} ``); and a special parameter with a leading zero or past `$99`,
+    or given any operator (`exit${010}`, `exit${01}`, `${100-exit} 0`, `${0:+exit} 0`, `${#:+exit} 0`, `${?:+exit} 0`,
+    `${$:+exit} 0`, `${-:+exit} 0`, `${_:+exit} 0`, `${1-${2-exit}} 0`, `${1-$@exit} 0`, and `set` built the same ways
+    before `+e`). Fold 13 added: an expansion that can come out empty glued to a command word or splitting it (`exit$x
+    0`, `` exit`:` 0 ``, `e$(:)xit 0`, `` `:`exit 0 ``, `exit${0##*}`, `exit${#%?}`, `exit${?%?}`, `exit${$##*}`,
+    `exit${-##*}`, `set$x +e`, `set${0##*} +e`, `hash${x} -p …`), a named parameter's default (`${x:-exit} 0`), and,
+    under `shell: sh`, `$_`, which dash starts unset (`${_-exit} 0`, `exit$_ 0`). It passes each kind of piece a brace
+    list's item may hold (`mkdir -p o/{"a b",c}`, `o/{'a b',c}`, `o/{a\\ b,c}`, `o/{${HOME:+h},c}`, `o/{$(echo a),c}`,
+    `` o/{`echo a`,c} ``), a brace the check cannot read inside a quoted message, named defaults in a message (`echo
+    "${x:-a b}" ${HOME:-none}`), and commas and dots in a brace group (`{ echo a,b; echo c..d; }`); it refuses a brace
+    list it cannot read in a `mkdir` (`mkdir -p o/{${x:-${y}},c}`: sound, since bash builds no command word from it).
+    Fold 13's mutants added: `$*` and `$!` given a default (`${*:-exit} 0`, `${!:-exit} 0`), a braced special parameter
+    glued to the word of another's default (`${1-${@}exit} 0`, `${1-${*}exit} 0`, `${1-${!}exit} 0`, `${1-${010}exit}
+    0`, `${1-${@%x}exit} 0`), a substitution holding an arithmetic one (`e$(: $((1)))xit 0`) and a named default holding
+    another (`exit${x:-${y}} 0`); and it passes a case modification (`x=A; echo ${x,,}`). Each row's job runs on
+    ubuntu-latest unless the row names another. Guards a check that counts a dead audit as coverage (T29's fold-2 read,
+    S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body,
+    PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a;
+    N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read
+    B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold
+    7's read A, S1 to S5; its read B, S1, S2, N6; fold 8's read A, S1 to S5, N1: M1 to M13; its read B, S1 to S4, N2,
+    N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's mutant X9a; its read B, S1, S2, N1, N8; fold 10's mutant run:
+    B9-control-class-nul-and-stx-only; its read A, S1, N1; its read B, S1, S2, N1, N2; fold 11's mutant X11h; its read
+    A, S1, S2, N1: A10; its read B, S1, S2, N6, N7; fold 12's mutant run: X12u, X12aa; its read A (interim, no verdict):
+    b01 to b22, c01 to c09, s01 to s37; its read B, S1, S2; fold 13's mutant run: X12r to X12t, X12y, X13e, X13f, X13q,
+    X13t, X13y, X13G)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
@@ -932,13 +1124,14 @@ def test_the_pip_audit_check_reads_a_long_word_after_a_brace_at_once():
     comma or closing brace after them (`echo {$(a)$(a)…`) at once, in a fresh interpreter given a minute: each piece
     of a brace's item is read once, whole where it can be (tests/unit/_build_read.py, `_PIECE`). Guards a piece
     pattern that tries each way of cutting a `$(…)` (whole, or one character at a time) before it gives up, which
-    doubles its time with each one: twenty-four took five seconds, and forty would hang every suite that reads a
-    workflow or a Dockerfile (T29's fold-12 mutant run, X12ab)."""
+    doubles its time with each one, so forty would hang every suite that reads a workflow or a Dockerfile (T29's fold-12
+    mutant run, X12ab; its read B, N1, N2)."""
     step = {"run": "echo {" + "$(a)" * 40 + "\n" + _AUDIT}
     code = ("import sys; sys.path.insert(0, sys.argv[1]); import test_ci_workflows as t; "
             "print(t.pip_audit_faults({'jobs': {'a': {'runs-on': 'ubuntu-latest', 'steps': [%r]}}}))" % step)
-    r = subprocess.run([sys.executable, "-c", code, os.path.dirname(os.path.abspath(__file__))], capture_output=True,
-                       text=True, timeout=60)
+    here = os.path.dirname(os.path.abspath(__file__))
+    # `-B`: the child writes no bytecode beside the tests, which a mutant harness's copy would then reuse
+    r = subprocess.run([sys.executable, "-B", "-c", code, here], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and r.stdout.strip() == "({'docker/a/requirements.txt'}, [])", (r.stdout, r.stderr)
 
 

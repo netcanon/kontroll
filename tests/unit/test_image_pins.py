@@ -35,33 +35,39 @@ errexit`), it is inside no compound (a brace group, a subshell, an `if`, a loop)
 ends that list right after it. A download is checked by `echo "<digest>  <file>" | sha256sum -c -` in the same
 RUN (`sha256sum`, `/bin/sha256sum` or `/usr/bin/sha256sum` the first word of its command), its file written by name (one
 URL, one output), the digest an ARG or ENV whose every value in the file is 64 hex, or a shell variable the RUN sets
-only from one; a checksum file next to the download is not a check, since whoever swaps the file swaps it too. A SHELL
-other than Docker's default, an exec-form RUN (`RUN [...]` that parses as JSON), a heredoc (a `<<` that opens a word
-inside a `$((…))` is one to BuildKit: `$((1 << 2))` alone fails the build, unterminated heredoc), a comment inside a RUN
-(Docker joins its lines first, so the shell drops the rest), and an `# escape=` directive are refused, since these
-checks cannot read them; so is a build arg that names a digest ARG. What the checks still cannot see: a command built at
-run time (`$TOOL install`, `eval "$cmd"`), a package manager or downloader they do not name (`npm`, `gem`, `go install`,
-`git clone`, `python3 -c 'urllib…'`), the URLs and outputs a curl config file adds (`curl -K`, or with no option at all
-a `~/.curlrc` or one under `$CURL_HOME`) or a wget input file (`wget -i`), a second URL written without its scheme and
-sent to standard output, a later command that writes the checked file again, a file the RUN sources (`. /tmp/env`, which
-can set a digest name), a checked program that an earlier PATH entry shadows (a `sha256sum` an earlier step put in
-/usr/local/bin), a quote inside a `$(…)` that is itself inside double quotes (the reader pairs it with the outer one), a
-digest ARG one stage declares and another reads, and the apt packages, which float inside the pinned base (SECURITY.md
-R-IMG-2). Refused although sound (each fails loudly): a `pip check` in a later RUN than its install, a `pip install`
-option that takes a value and is not named here (its value reads as a package), a check written to a file and read by
-`sha256sum -c <file>`, a check line written with `printf`, a `;` inside a compound (under `set -e`, or the one before a
-brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`( install && check )`, behind `&&` or
-not: the `)` joins the check's command, which then reads as no `pip check`), a `;` inside a quoted string after a check
-(`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN (one a brace expansion
-builds too, `{exit,0}`: sh expands no brace, so it runs a command not found and goes on (or fails, behind `&&`), while
-these checks read it as bash would), the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on
-error"`), a function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`, in a quoted
-message too), the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or
-`(` (`echo "set up (once)"`), an ANSI-C `$'…'` before the check or later in its own list, a `sha256sum` that is not the
-first word of its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo $(true)#x`: one word to sh, a
-comment inside a RUN to these checks), a `#` after a space inside quotes (`echo "see #1"`), a SHELL such as hadolint's
-`["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two outputs, a trailing comment on a RUN's
-last line, and a digest ARG redeclared without its value in a later stage. """
+only from one (and no ARG or ENV gives another value or none, nor is it a build arg Docker predefines); a checksum file
+next to the download is not a check, since whoever swaps the file swaps it too. A SHELL other than Docker's default, an
+exec-form RUN (`RUN [...]` that parses as JSON), a heredoc (a `<<` that opens a word inside a `$((…))` is one to
+BuildKit: `$((1 << 2))` alone fails the build, unterminated heredoc), a comment inside a RUN (Docker joins its lines
+first, so the shell drops the rest), and an `# escape=` directive are refused, since these checks cannot read them; so
+is a build arg that names a digest ARG. What the checks still cannot see: a command built at run time (`$TOOL install`,
+`eval "$cmd"`, and a command word built from what a variable holds or a substitution prints, or by a glob: `x=ex; ${x}it
+0`, `exi$_ 0` after `: t`, `$(printf ex)it 0`, `` `echo exit` 0 ``, `ex?t 0`), a package manager or downloader they do
+not name (`npm`, `gem`, `go install`, `git clone`, `python3 -c 'urllib…'`), the URLs and outputs a curl config file adds
+(`curl -K`, or with no option at all a `~/.curlrc` or one under `$CURL_HOME`) or a wget input file (`wget -i`), a second
+URL written without its scheme and sent to standard output, a later command that writes the checked file again, a file
+the RUN sources (`. /tmp/env`, which can set a digest name), a checked program that an earlier PATH entry shadows (a
+`sha256sum` an earlier step put in /usr/local/bin), a quote inside a `$(…)` that is itself inside double quotes (the
+reader pairs it with the outer one), a digest ARG one stage declares and another reads, a digest name the base image's
+ENV sets that the RUN assigns a digest on only some paths (the check then reads the image's value), and the apt
+packages, which float inside the pinned base (SECURITY.md R-IMG-2). Refused although sound (each fails loudly): a `pip
+check` in a later RUN than its install, a `pip install` option that takes a value and is not named here (its value reads
+as a package), a check written to a file and read by `sha256sum -c <file>`, a check line written with `printf`, a `;`
+inside a compound (under `set -e`, or the one before a brace group's `}`: `{ a && check; }`), a check right before a
+subshell's `)` (`( install && check )`, behind `&&` or not: the `)` joins the check's command, which then reads as no
+`pip check`), a `;` inside a quoted string after a check (`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or
+`(exit 0)` anywhere in the RUN (one a brace expansion builds too, `{exit,0}`: sh expands no brace, so it runs a command
+not found and goes on (or fails, behind `&&`), while these checks read it as bash would), a brace list these checks
+cannot read (`{exec,true,${x:-${y}}}`: sh runs it as a command not found), an arithmetic expansion glued to `exit`
+(`exit$((0))`: sh runs `exit0`, a command not found), a digest name that an ARG or ENV gives another value or none,
+assigned in the RUN (`ENV X=$FOO`, then `X=<hex> && …`), the word `exit`, `return`, `trap` or `exec` in a message (`echo
+"will exit on error"`), a function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`,
+in a quoted message too), the word `set` or `shopt` in a message before a word holding `$`, a backquote, a glob
+character, `{` or `(` (`echo "set up (once)"`), an ANSI-C `$'…'` before the check or later in its own list, a
+`sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo
+$(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space inside quotes (`echo "see
+#1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two
+outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared without its value in a later stage."""
 import json
 import os
 import re
@@ -418,6 +424,11 @@ def tree_digests(text):
     """{the name of each ARG or ENV of a Dockerfile whose every value in the file is 64 hex}: a digest written in the
     tree. A name an ARG or ENV also sets to anything else (`ENV TOOL_SHA256=$X`), or declares with no value, is not
     one: its value is then not the tree's."""
+    return {name for name, seen in _tree_values(text).items() if all(re.fullmatch(r"[0-9a-f]{64}", v) for v in seen)}
+
+
+def _tree_values(text):
+    """{name: [each value an ARG or ENV of a Dockerfile gives it, '' for one declared with no value]}."""
     values = {}
     for keyword, args in instructions(text):
         if keyword not in ("ARG", "ENV"):
@@ -428,15 +439,23 @@ def tree_digests(text):
             pairs = [(tokens[0], " ".join(tokens[1:]))]           # the legacy `ENV NAME value`
         for name, value in pairs:
             values.setdefault(name, []).append(_unquote(value))
-    return {name for name, seen in values.items() if all(re.fullmatch(r"[0-9a-f]{64}", v) for v in seen)}
+    return values
 
 
-def _digest_names(commands, digests):
+# The build args Docker predefines: a RUN reads each with no ARG, and `--build-arg` sets it.
+_PREDEFINED_ARGS = {n for p in ("HTTP", "HTTPS", "FTP", "NO", "ALL") for n in (p + "_PROXY", p.lower() + "_proxy")}
+
+
+def _digest_names(commands, digests, others=frozenset()):
     """The names a RUN reads a digest from the tree through: each of `digests` the RUN does not assign, and each shell
-    variable whose every `name=value` assignment in the RUN is 64 hex or one of these names. A name `read`, `for`,
-    `getopts` or `unset` sets in the RUN is assigned too, with a value that is no digest. Either is read wherever a
-    word can start (after a space, `(`, `)`, `;`, `&`, `|` or a backquote), and an assignment also with its quotes
-    and backslashes removed (`export TOOL_'SHA256'=…`)."""
+    variable whose every `name=value` assignment in the RUN is 64 hex or one of these names, but none of `others`
+    (a name the Dockerfile's ARG or ENV gives another value, or no value, and a build arg Docker predefines). A name
+    `read`, `for`, `getopts` or `unset` sets in the RUN is assigned too, with a value that is no digest. Either is read
+    wherever a word can start (after a space, `(`, `)`, `;`, `&`, `|` or a backquote), and an assignment also with its
+    quotes and backslashes removed (`export TOOL_'SHA256'=…`). Such a word is not always one sh performs (`echo
+    X=<hex>`, `"X"=<hex>`, `X=<hex> true`, `(X=<hex>)`, `false && X=<hex>`), and where it is not, the name keeps the
+    value it had: none for a name the tree does not set, so the check fails loudly, but a build arg's for one of
+    `others`, which is why none of those is ever read as a digest name."""
     assigned = {}
     for command, _, _ in commands:
         plain = re.sub(r"""["'\\]""", "", command)
@@ -447,7 +466,8 @@ def _digest_names(commands, digests):
                 assigned.setdefault(name, []).append("<set by %s>" % m.group(1))
     names, grown = {n for n in digests if n not in assigned}, True
     while grown:
-        more = {n for n, values in assigned.items() if n not in names and all(_is_digest(v, names) for v in values)}
+        more = {n for n, values in assigned.items()
+                if n not in names and n not in others and all(_is_digest(v, names) for v in values)}
         names, grown = names | more, bool(more)
     return names
 
@@ -485,6 +505,7 @@ def download_faults(text):
     the same RUN checks against a digest from the tree (`echo "<digest>  <file>" | sha256sum -c -`); a
     `sha256sum -c` that does not stop the build is one too."""
     faults, digests = [], tree_digests(text)
+    others = (set(_tree_values(text)) - digests) | _PREDEFINED_ARGS
     for keyword, args in instructions(text):
         if keyword == "ADD":
             sources = [t for t in args.split() if not t.startswith("--")][:-1]
@@ -492,7 +513,7 @@ def download_faults(text):
                     r"--checksum=sha256:[0-9a-f]{64}(?:\s|$)", args):
                 faults.append("ADD from a URL with no --checksum=sha256: " + args)
     for commands in _runs(text):
-        names = _digest_names(commands, digests)
+        names = _digest_names(commands, digests, others)
         checked = [_checked_words(commands, j, names) if _SHA_CHECK.search(c) else None
                    for j, (c, _, _) in enumerate(commands)]
         for i, (command, _, _) in enumerate(commands):
@@ -1058,6 +1079,43 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
      ["pip install shares the RUN with `${1-exit} 0`", "pip check shares the RUN with `${1-exit} 0`"]),
     ("true; exit${10}; " + _INSTALL + " && python3 -m pip check",
      ["pip install shares the RUN with `exit${10}`", "pip check shares the RUN with `exit${10}`"]),
+    ("true; ${100-exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${100-exit} 0`", "pip check shares the RUN with `${100-exit} 0`"]),
+    ("true; exit${010}; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit${010}`", "pip check shares the RUN with `exit${010}`"]),
+    ("true; ${#:+exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${#:+exit} 0`", "pip check shares the RUN with `${#:+exit} 0`"]),
+    ("true; ${1-${2-exit}} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${1-${2-exit}} 0`", "pip check shares the RUN with `${1-${2-exit}} 0`"]),
+    ("true; ${-:-exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${-:-exit} 0`", "pip check shares the RUN with `${-:-exit} 0`"]),
+    ("true; exit$- 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit$- 0`", "pip check shares the RUN with `exit$- 0`"]),
+    ("true; ${_-exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${_-exit} 0`", "pip check shares the RUN with `${_-exit} 0`"]),
+    ("true; exit$_ 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit$_ 0`", "pip check shares the RUN with `exit$_ 0`"]),
+    ("true; exit$x 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit$x 0`", "pip check shares the RUN with `exit$x 0`"]),
+    ("true; ${x:-exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${x:-exit} 0`", "pip check shares the RUN with `${x:-exit} 0`"]),
+    ("true; exit${0##*}; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit${0##*}`", "pip check shares the RUN with `exit${0##*}`"]),
+    ("true; exit`:` 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exit`:` 0`", "pip check shares the RUN with `exit`:` 0`"]),
+    ("{exec,true,${x:-${y}}}; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with a brace expansion the check cannot read (`{exec,true,${x:-${y}}}`",
+      "pip check shares the RUN with a brace expansion the check cannot read (`{exec,true,${x:-${y}}}`"]),
+    ("set${010} -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `set${010} -n`", "pip check shares the RUN with `set${010} -n`"]),
+    ("${0:+set} -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${0:+set} -n`", "pip check shares the RUN with `${0:+set} -n`"]),
+    ("${1-${2-set}} -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${1-${2-set}} -n`", "pip check shares the RUN with `${1-${2-set}} -n`"]),
+    ("true; ${1-${-}exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${1-${-}exit} 0`", "pip check shares the RUN with `${1-${-}exit} 0`"]),
+    ("true; ${1-${_}exit} 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${1-${_}exit} 0`", "pip check shares the RUN with `${1-${_}exit} 0`"]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1097,7 +1155,15 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "ansi-c-quote-after-a-pipe", "subshell-after-a-pipe",
         "subshell-after-a-background", "subshell-after-one-closed-behind-or", "set-of-a-variable-flag",
         "set-of-a-glob", "exit-glued-to-an-empty-parameter", "exit-glued-to-an-empty-parameter-with-a-default",
-        "exit-as-the-default-of-an-empty-parameter", "exit-glued-to-the-tenth-parameter"])
+        "exit-as-the-default-of-an-empty-parameter", "exit-glued-to-the-tenth-parameter",
+        "exit-as-the-default-of-the-hundredth-parameter", "exit-glued-to-the-tenth-parameter-with-a-leading-zero",
+        "exit-as-the-alternative-of-the-parameter-count", "exit-as-a-nested-default",
+        "exit-as-the-colon-default-of-the-flags", "exit-glued-to-the-flags", "exit-as-the-default-of-the-last-argument",
+        "exit-glued-to-the-last-argument", "exit-glued-to-a-named-variable", "exit-as-a-named-default",
+        "exit-glued-to-a-stripped-shell-name", "exit-glued-to-a-backquoted-command",
+        "brace-list-the-check-cannot-read", "set-n-glued-to-the-tenth-parameter-with-a-leading-zero",
+        "set-n-as-the-alternative-of-the-shell-name", "set-n-as-a-nested-default",
+        "exit-glued-to-the-braced-flags-in-a-default", "exit-glued-to-the-braced-last-argument-in-a-default"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1144,15 +1210,23 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     -$x`, `` set `cat o` ``, `set +[e]`) shares the RUN as a `set -n` would, since it can be one, and switches errexit
     off. Fold 10's read B added: an `exit` glued to a special parameter the RUN starts with empty (`exit$@`: `sh -c` is
     given no arguments, so the RUN ends there, its status 0). Fold 11's read A added: one braced past `$9` or with a `-`
-    or `:-` default (`exit${10}`, `exit${@:-}`, `${1-exit} 0`: sh expands each as bash does). Guards a pin check that a
-    common install shape walks past, and a `pip check` that cannot fail the build — "make the cleanup tolerant" with a
-    trailing `|| true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4; its fold-3 read, S2,
-    N1, N2, N6: Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2, S4, S5, N1, N2, N6:
-    G-a, C-g, O-a to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to O14, O17, S5, C4;
-    fold 5's read A, S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7, D1, D2, D4, D8, E1,
-    E3, F1, G1, G2, I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants: Q7, QX1, QX2; its
+    or `:-` default (`exit${10}`, `exit${@:-}`, `${1-exit} 0`: sh expands each as bash does). Fold 12's reads added: one
+    with a leading zero or past `$99`, given any operator, or nested in another's default (`exit${010}`, `${100-exit}
+    0`, `${#:+exit} 0`, `${1-${2-exit}} 0`), and a `set` built so before `-n` (`set${010} -n`, `${0:+set} -n`,
+    `${1-${2-set}} -n`). Fold 13 added: `$-` and `$_`, which dash starts `sh -c` with empty and unset (`exit$- 0`,
+    `${-:-exit} 0`, `exit$_ 0`, `${_-exit} 0`), an expansion that can come out empty glued to `exit` (`exit$x 0`,
+    `exit${0##*}`, `` exit`:` 0 ``), a named parameter's default (`${x:-exit} 0`), and a brace list the check cannot
+    read (`{exec,true,${x:-${y}}}`: sound, since sh expands no brace, but refused). Fold 13's mutants added: `$-` and
+    `$_` braced and glued to the word of another's default (`${1-${-}exit} 0`, `${1-${_}exit} 0`). Guards a pin check
+    that a common install shape walks past, and a `pip check` that cannot fail the build — "make the cleanup tolerant"
+    with a trailing `|| true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4; its fold-3
+    read, S2, N1, N2, N6: Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2, S4, S5, N1,
+    N2, N6: G-a, C-g, O-a to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to O14, O17, S5,
+    C4; fold 5's read A, S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7, D1, D2, D4, D8,
+    E1, E3, F1, G1, G2, I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants: Q7, QX1, QX2; its
     read A, S3, S4, S5, S7; its read B, S3, N1, N4: R1, SK1, SK2, BK1; fold 7's read A, S2; fold 10's read B, S1; fold
-    11's read A, S2)."""
+    11's read A, S2; its read B, S1; fold 12's read A: r01, r04, r07, r09 to r11; its read B, S2; fold 13's mutant run:
+    X13o, X13p)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 
@@ -1481,6 +1555,24 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
      ["checks against a digest in the tree"]),
     ("ARG FOO\nENV X=$FOO\nRUN " + _GET + " && echo {X,Y}=" + "a" * 64 + " && " + _SUM.replace("TOOL_SHA256", "X"),
      ["checks against a digest in the tree"]),
+    ("ARG FOO\nENV X=$FOO\nRUN " + _GET + " && echo X=" + "a" * 64 + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["no later sha256sum"]),
+    ("ARG FOO\nENV X=$FOO\nRUN \"X\"=" + "a" * 64 + "; " + _GET + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["no later sha256sum"]),
+    ("ARG FOO\nENV X=$FOO\nRUN X=" + "a" * 64 + " true && " + _GET + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["no later sha256sum"]),
+    ("ARG FOO\nENV X=$FOO\nRUN false && X=" + "a" * 64 + "; " + _GET + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["no later sha256sum"]),
+    ("ARG FOO\nENV X=$FOO\nRUN ( X=" + "a" * 64 + " ) && " + _GET + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["no later sha256sum"]),
+    ("ARG X\nRUN X=" + "a" * 64 + " true && " + _GET + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["no later sha256sum"]),
+    ("RUN false && http_proxy=" + "a" * 64 + "; " + _GET + " && " + _SUM.replace("TOOL_SHA256", "http_proxy"),
+     ["no later sha256sum"]),
+    ("RUN TOOL_SHA256=" + "b" * 64 + " && " + _GET + " && " + _SUM, []),
+    ("ARG FOO\nENV X=$FOO\nRUN X=" + "a" * 64 + " && " + _GET + " && " + _SUM.replace("TOOL_SHA256", "X"),
+     ["no later sha256sum"]),
+    ("RUN false && X=" + "a" * 64 + "; " + _GET + " && " + _SUM.replace("TOOL_SHA256", "X"), []),
     ("RUN " + _GET + ' && case "$a" in x)TOOL_SHA256=$(sha256sum /usr/local/bin/tool | cut -c1-64);; esac && ' + _SUM,
      ["a download not followed", "no later sha256sum"]),
     ("RUN curl -fsSL -o /usr/local/bin/tool --remote-name-all https://x.test/tool && " + _SUM, ["more than one URL"]),
@@ -1521,8 +1613,14 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
         "add-after-a-double-backslash", "sh-c-after-an-apostrophe-and-a-backquote", "sha256sum-function",
         "output-dir", "digest-set-in-a-subshell", "digest-set-after-a-background", "digest-read-in-a-subshell",
         "digest-name-partly-quoted", "echo-of-a-digest-name-glued-to-a-parameter",
-        "echo-of-a-digest-name-in-a-brace-list", "digest-set-after-a-case-pattern", "remote-name-all",
-        "wget-two-outputs",
+        "echo-of-a-digest-name-in-a-brace-list", "echo-of-a-digest-name-the-tree-sets-from-a-build-arg",
+        "quoted-digest-name-sh-runs-as-a-command", "digest-name-assigned-before-a-command-word",
+        "digest-name-assigned-behind-a-failing-guard", "digest-name-assigned-in-a-subshell",
+        "digest-name-an-arg-declares-with-no-value", "digest-name-docker-predefines",
+        "digest-name-the-tree-sets-assigned-another-literal",
+        "digest-name-the-tree-sets-from-a-build-arg-reassigned",
+        "digest-name-the-tree-does-not-set-assigned-behind-a-guard", "digest-set-after-a-case-pattern",
+        "remote-name-all", "wget-two-outputs",
         "sha256sum-an-echo-argument", "sha256sum-a-colon-argument", "sha256sum-function-spaced",
         "ampersand-in-a-quoted-url", "add-after-a-tab", "ansi-c-quote-later-in-the-list",
         "set-of-a-variable-flag-before-a-download", "sha256sum-from-the-working-directory", "sha256sum-from-tmp",
@@ -1562,13 +1660,34 @@ def test_the_download_check_tells_a_checked_download_from_a_near_miss(text, expe
     directory or /tmp (any program can be put there); it passes `/usr/bin/sha256sum`. Fold 8's read B added: a `set`
     given a glob before the download; it passes `/bin/sha256sum`. Fold 11's read B added: an `echo` whose word only
     reads as a digest name's assignment once a parameter is dropped or a brace list expanded (`echo X$1=<hex>`, `echo
-    {X,Y}=<hex>`): an assignment is read as written, its quotes and backslashes removed, and in no other view. Guards a
-    check that finds "some checksum later" for a download it does not check, and a checksum fetched from where the file
-    came from — whoever swaps the file swaps it too (T29's read, S2 and S3: D1, D2, D3, D5, D6; its fold-2 read, S1 and
-    S2; the rules fold 3's mutants found no row for; its fold-3 read, S2, N2, N3, N4: Z2, Z8, Z9, Z11, D1, D2, D4, D5,
-    D6, G8; fold 4's mutants: O5, D1, D2, D3, T2; its read, S1, S4, S5, N3: G-b, G-c, O-j, D-a, D-c, D-e, D-f, Z22, Z26,
-    Z30, R3, R4, D6; fold 5's read A, S1 to S4, N1, N4, N5: A2, B2, B5, B9, C5, D3, D7, E2, K5, N1; its read B, N2, N8:
-    NM1, NM3, NM5; fold 6's read A, S1, S4, S6; its read B, S1, S3, N4: FA1, MA2; fold 7's read A, S2, N1; fold 8's read
-    B, N1, N4: SH1; fold 11's read B, S3)."""
+    {X,Y}=<hex>`): an assignment is read as written, its quotes and backslashes removed, and in no other view. Fold 13
+    added (fold 11's read A, N2): a word read as a digest name's assignment that sh does not perform (`echo X=<hex>`,
+    `"X"=<hex>`, `X=<hex> true`, `( X=<hex> )`, `false && X=<hex>`) when the name is one the tree sets from a build arg,
+    an ARG declared with no value, or a build arg Docker predefines (`http_proxy`): the name then keeps that value, so
+    none of these is read as a digest name, even where the RUN does assign it (sound, refused); it passes such a word
+    for a name the tree does not set, which is empty where it is not assigned (the check then fails loudly). Fold 13's
+    mutants added: it passes a name the tree sets to a digest that the RUN gives another literal (`TOOL_SHA256=<hex> &&
+    …`), every value of which is then in the tree. Guards a check that finds "some checksum later" for a download it
+    does not check, and a checksum fetched from where the file came from — whoever swaps the file swaps it too (T29's
+    read, S2 and S3: D1, D2, D3, D5, D6; its fold-2 read, S1 and S2; the rules fold 3's mutants found no row for; its
+    fold-3 read, S2, N2, N3, N4: Z2, Z8, Z9, Z11, D1, D2, D4, D5, D6, G8; fold 4's mutants: O5, D1, D2, D3, T2; its
+    read, S1, S4, S5, N3: G-b, G-c, O-j, D-a, D-c, D-e, D-f, Z22, Z26, Z30, R3, R4, D6; fold 5's read A, S1 to S4, N1,
+    N4, N5: A2, B2, B5, B9, C5, D3, D7, E2, K5, N1; its read B, N2, N8: NM1, NM3, NM5; fold 6's read A, S1, S4, S6; its
+    read B, S1, S3, N4: FA1, MA2; fold 7's read A, S2, N1; fold 8's read B, N1, N4: SH1; fold 11's read A, N2; its read
+    B, S3; fold 13's mutant run: X13O)."""
     faults = download_faults(_TREE + text + "\n")
     assert _found(faults, expected), faults
+
+
+@pytest.mark.parametrize("name", ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "FTP_PROXY", "ftp_proxy",
+                                  "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"])
+def test_a_build_arg_docker_predefines_is_never_read_as_a_digest_name(name):
+    """A check whose digest is read through one of the build args Docker predefines (each proxy name, upper and lower
+    case) fails the download check even where the RUN writes it a literal, behind a guard that skips the assignment
+    (`false && <name>=<hex>`): the name then keeps the value a `--build-arg <name>=…` gives it, with no `ARG` in the
+    Dockerfile to show it. The names are listed here, not read from the check's own set. Guards a checksum a build
+    command can replace: fold 13's mutants (X13Q, X13S to X13V) dropped the upper-case names or one of the proxy
+    kinds from the set, and only `http_proxy` had a row."""
+    text = "RUN false && %s=%s; %s && %s\n" % (name, "a" * 64, _GET, _SUM.replace("TOOL_SHA256", name))
+    faults = download_faults(_TREE + text)
+    assert _found(faults, ["no later sha256sum"]), faults
