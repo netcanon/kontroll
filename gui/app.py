@@ -94,14 +94,20 @@ _audit_logger = None
 
 class _AuditHandler(RotatingFileHandler):
     """The audit file's handler. A write that fails (a full disk, a rollover that cannot rename in the bind mount) is
-    reported as one stderr line naming the error's TYPE. logging's own report prints the failed call's exception
-    chain, and an audit row is often written while a route still handles the exception the row is about, so that
-    chain would print that exception's message (SECURITY.md C23; T20's read A, N1)."""
+    reported as one stderr line naming the error's TYPE, its errno and the lost row's action: logging's own report
+    prints the failed call's exception chain, and an audit row is often written while a route still handles the
+    exception the row is about, so that chain would print that exception's message (SECURITY.md C23; T20's read A,
+    N1). The action is the row's third cell, a name the code gives (`internal-error`, `homepage-result`), never a
+    request value or the detail; the errno tells a full disk from a rename the mount refuses (T20 fold 1's read A,
+    N2)."""
 
     def handleError(self, record):
-        kind = sys.exc_info()[0]
+        kind, err = sys.exc_info()[:2]
+        cells = str(record.msg).split("\t")
         try:
-            sys.stderr.write("audit-log write failed: %s\n" % (kind.__name__ if kind else "unknown"))
+            sys.stderr.write("audit-log write failed: %s errno=%s action=%s\n" % (
+                kind.__name__ if kind else "unknown", getattr(err, "errno", None) or "-",
+                cells[2] if len(cells) > 3 else "-"))
         except Exception:      # stderr itself gone: nothing left to report to
             pass
 
@@ -124,8 +130,14 @@ def _get_audit_logger():
                                     backupCount=positive_int("KONTROLL_AUDIT_MAX_FILES", 5), encoding="utf-8")
             h.setFormatter(logging.Formatter("%(message)s"))
             lg.addHandler(h)
-        except OSError:
-            pass
+        except OSError as e:
+            # Every audit row of this process is lost (the logger is cached): say so once, by type and errno only
+            # (T20 fold 1's read A, N1: an audit directory the GUI cannot write lost every row with no line).
+            try:
+                sys.stderr.write("audit-log open failed: %s errno=%s; no audit row is written until the GUI restarts\n"
+                                 % (type(e).__name__, e.errno))
+            except (OSError, ValueError):      # stderr itself gone
+                pass
         _audit_logger = lg
     return _audit_logger
 

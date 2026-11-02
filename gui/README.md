@@ -303,9 +303,12 @@ Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
   field (422 and its `code`), the repository's own data (409 `repository_data`), a write conflict (409), the backup
   store's fixed strings, the onboard planner's refusals (422 `invalid_request`). Anything else answers 500 with
   `<what> failed — internal error (ref <id>); the service log has the details`, the code `internal_error` and a
-  `run_id`. Look the id up with `docker logs onboard-gui 2>&1 | grep -A 20 'kontroll_run_id=<id>'` (the line names
-  the route and the exception's type; the frames follow it on lines of their own, which do not carry the id — never
-  its message) or in the audit log's `internal-error` row. A Homepage save whose write fails answers 500
+  `run_id`. Look the id up with `docker logs onboard-gui 2>&1 | sed -n '/kontroll_run_id=<id>/,/^[^ ]/p'` (the
+  line names the route and the exception's type; the frames follow it on indented lines of their own, which do not
+  carry the id — never its message) or in the audit log's `internal-error` row
+  ([troubleshooting.md](../docs/troubleshooting.md) §12). An audit row the GUI could not write is said on its stderr
+  by type, errno and action (`audit-log write failed: …`), and an audit file it could not open, once (`audit-log
+  open failed: …`). A Homepage save whose write fails answers 500
   `write_failed` with a `run_id` the audit row `homepage-result` and the service log's `homepage-write-failed` line
   carry; the service's own line just before it names the file, the exception's type and its errno.
 - **Foreign bytes render as TEXT, never markup** (SECURITY.md C19). The rule is an allow-list: only markup written

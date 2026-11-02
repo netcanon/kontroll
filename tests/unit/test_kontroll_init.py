@@ -1360,7 +1360,8 @@ def test_bootstrap_secrets_are_not_printed_when_output_is_not_a_terminal(fresh_r
     GUI/Grafana password printed into a log nobody chose to keep, the same rule the break-glass mint already follows;
     and a run that names no way back to a domain's values — the semaphore domain's command is the only way back to
     the Semaphore admin password (T20's read B, N2: the closing line alone met the check); and the command naming no
-    way to run it where the host has no sops (T20's read A, N4)."""
+    way to run it where the host has no sops (T20's read A, N4). Each domain's sentence says where to run it, and
+    the closing line names the dashboards command and where to run it (T20 fold 1's read B, N3; read A, N3)."""
     _bootstrap_writes(monkeypatch)
     monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: False)
     assert ki.main(_FRESH + ["--no-break-glass"]) == 0
@@ -1374,7 +1375,27 @@ def test_bootstrap_secrets_are_not_printed_when_output_is_not_a_terminal(fresh_r
                 in out), domain
     assert "semaphore" in ki.BOOTSTRAP_DOMAINS
     assert "no sops on this host? run it inside `scripts/kontroll-installer.sh shell`" in out
+    assert out.count("(from the repository's root; no sops on this host?") == len(ki.BOOTSTRAP_DOMAINS), out
+    assert ("    - Read the GUI/Grafana passwords (your onboard-GUI + Grafana logins) from a terminal at the"
+            " repository's root (no sops on this host? run it inside `scripts/kontroll-installer.sh shell`):"
+            " SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/dashboards.sops.yml\n") in out, out
     assert "SAVE the GUI/Grafana passwords above" not in out
+
+
+def test_the_read_back_names_another_key_file_absolute_and_quoted(tmp_path, monkeypatch):
+    """A key file other than the default is named in the read-back command by its absolute path, quoted for the
+    shell: the command is run from the repository's root, so a relative path given from another directory would name
+    another file there, and a path with a space would split into two words. The default key keeps its `~/…` form.
+    Guards the command kontroll-init prints in place of a password being one that cannot read it back (T20 fold 1's
+    read A, N3)."""
+    import shlex
+    monkeypatch.chdir(tmp_path)
+    cmd = ki._read_back("dashboards", os.path.join("my keys", "k.txt"))
+    words = shlex.split(cmd)
+    assert words[0] == "SOPS_AGE_KEY_FILE=%s" % os.path.join(str(tmp_path), "my keys", "k.txt"), cmd
+    assert words[1:] == ["sops", "-d", ki.paths.overlay_target("ansible/secrets/dashboards.sops.yml")], cmd
+    assert ki._read_back("dashboards", ki.AGE_KEY_FILE).startswith("SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt "), \
+        ki._read_back("dashboards", ki.AGE_KEY_FILE)
 
 
 def test_bootstrap_secrets_are_shown_once_on_a_terminal(fresh_repo, monkeypatch, capsys):

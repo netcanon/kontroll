@@ -362,13 +362,19 @@ holds the exception's text (SECURITY.md **C23**):
 
 | Where | How to read it |
 |---|---|
-| the GUI's service log | `docker logs onboard-gui 2>&1 \| grep -A 20 'kontroll_run_id=<id>'` — the line names the route, `what` and the exception's type; the frames follow it on lines of their own, which do not carry the id. Never the exception's message |
-| Loki | `{source="internal", run_id="<id>"}` finds that line (Vector labels its `kontroll_run_id`); the frames are the lines after it in the same container's stream |
-| the GUI audit log | the `internal-error` row with `run_id=<id>`, the route and the type |
+| the GUI's service log | `docker logs onboard-gui 2>&1 \| sed -n '/kontroll_run_id=<id>/,/^[^ ]/p'` — the line names the route, `what` and the exception's type; the frames follow it on indented lines of their own, which do not carry the id, and the range stops at the next line that is not indented (a parse error's frames can run past thirty lines). Never the exception's message |
+| Loki | `{source="internal", run_id="<id>"}` finds that line (Vector labels its `kontroll_run_id`); the frames carry no id, so no `run_id` label: read them with `{source="internal", service="onboard-gui"}` at the line's time |
+| the GUI audit log | the `internal-error` row with `run_id=<id>`, the route and the type: `{service="gui-audit"} \|= "run_id=<id>"` in Loki, or the file in `KONTROLL_GUI_AUDIT_DIR` |
 
 A Homepage save whose overlay write fails answers 500 `write_failed` with a `ref <id>` the same way: the service
 log's `homepage-write-failed kontroll_run_id=<id>` line follows the service's own `homepage write failed:
 file=<name> type=<type> errno=<n>` line, and the audit row is `homepage-result error=write_failed run_id=<id>`.
+
+No audit row where one should be? The GUI's service log says why, never with the row's detail: `audit-log write
+failed: <type> errno=<n> action=<action>` for each row it could not write (errno 28 is a full disk), and `audit-log
+open failed: <type> errno=<n>; no audit row is written until the GUI restarts` once when it could not open
+the file at all (the audit directory, `KONTROLL_GUI_AUDIT_DIR`, missing or not writable by the GUI). Fix the
+directory, then restart the GUI.
 
 ## See also
 - [../SECURITY.md](../SECURITY.md) **C23** — an error body carries no exception text; the id that finds the details

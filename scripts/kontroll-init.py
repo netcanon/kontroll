@@ -41,6 +41,7 @@ import argparse
 import os
 import re
 import secrets as _sysrandom
+import shlex
 import shutil
 import subprocess
 import sys
@@ -228,8 +229,12 @@ def _read_back(domain, key_file):
     """The command that prints `domain`'s secrets from the instance overlay with the control key: what a run whose
     output is not a terminal names in place of the values (docs/install-from-scratch.md gives the same one). The
     default key file is written `~/…`: the installer runs this as root in a container whose home holds the host
-    operator's key directory, so its own absolute path would name a directory the operator's shell does not have."""
-    key = "~/.config/sops/age/keys.txt" if os.path.abspath(key_file) == os.path.abspath(AGE_KEY_FILE) else key_file
+    operator's key directory, so its own absolute path would name a directory the operator's shell does not have.
+    Any other key file is written absolute and quoted for the shell: the command runs from the repository's root, so
+    a relative path given from elsewhere would name another file, and a space would split it (T20 fold 1's read A,
+    N3)."""
+    key = ("~/.config/sops/age/keys.txt" if os.path.abspath(key_file) == os.path.abspath(AGE_KEY_FILE)
+           else shlex.quote(os.path.abspath(key_file)))
     return "SOPS_AGE_KEY_FILE=%s sops -d %s" % (key, paths.overlay_target("ansible/secrets/%s.sops.yml" % domain))
 
 
@@ -750,7 +755,8 @@ def main(argv):
     if _stdout_is_terminal():
         print("    - SAVE the GUI/Grafana passwords above (your onboard-GUI + Grafana logins).")
     else:
-        print("    - Read the GUI/Grafana passwords (your onboard-GUI + Grafana logins) from a terminal: %s"
+        print("    - Read the GUI/Grafana passwords (your onboard-GUI + Grafana logins) from a terminal at the"
+              " repository's root (no sops on this host? run it inside `scripts/kontroll-installer.sh shell`): %s"
               % _read_back(BOOTSTRAP_DOMAINS[0], args.key_file))
     if bg_private:
         print("    - Store the break-glass key shown above OFFLINE, then prove it opens every domain from the machine")
