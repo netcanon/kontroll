@@ -2229,10 +2229,11 @@ def test_an_audit_file_that_cannot_open_with_no_stderr_leaves_audit_returning(tm
 
 def test_concurrent_first_audits_build_one_handler(tmp_path, monkeypatch):
     """Sixteen threads making the GUI's first audit call at once (concurrent first requests on Werkzeug's threaded
-    server) leave the cached logger with ONE handler, so each row is written once, and an audit file that cannot open
-    is said once. Guards the lazy build racing: each racing thread cleared and added a handler, so the logger kept
-    several and every later row was written several times (13 requests wrote 87 rows on the real server), and the
-    open-failure line printed once per racing thread (T20 fold 2's read A)."""
+    server) leave the cached logger with ONE handler, so each row is written once (the next test races a file that
+    cannot open). Guards the lazy build racing: each racing thread cleared and added a handler, so the logger kept
+    several and every later row was written several times (13 requests wrote 87 rows on the real server) (T20 fold 2's
+    read A). The barrier and the joins time out, so a thread that stalls fails the test rather than hanging the run (T20
+    fold 3's read B, N4)."""
     import threading
     monkeypatch.setattr(gui, "_audit_logger", None)
     for trial in range(20):
@@ -2241,7 +2242,7 @@ def test_concurrent_first_audits_build_one_handler(tmp_path, monkeypatch):
                 h.close()
         monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / ("audit-%d.log" % trial)))
         monkeypatch.setattr(gui, "_audit_logger", None)
-        gate = threading.Barrier(16)
+        gate = threading.Barrier(16, timeout=30)
 
         def first():
             with gui.app.test_request_context("/"):
@@ -2252,11 +2253,59 @@ def test_concurrent_first_audits_build_one_handler(tmp_path, monkeypatch):
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(30)
+        assert not any(t.is_alive() for t in threads), trial
         assert len(gui._audit_logger.handlers) == 1, (trial, gui._audit_logger.handlers)
         gui._audit_logger.handlers[0].flush()
         rows = (tmp_path / ("audit-%d.log" % trial)).read_text(encoding="utf-8").splitlines()
         assert len(rows) == 16, (trial, len(rows))
     for h in list(gui._audit_logger.handlers):
         h.close()
+    monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_concurrent_first_audits_of_a_file_that_cannot_open_say_it_once(tmp_path, monkeypatch):
+    """Sixteen threads making the GUI's first audit call at once against an audit file that cannot open (its
+    directory under a file) print the open-failure line ONCE, not once per racing request. Guards the line said
+    outside the lock while another first request builds, a lock that holds only the handler swap, and an unlocked
+    fast path whose build no longer re-checks under the lock: each lets racing first requests open the file and say
+    so, 2 to 16 lines a trial. The race test above races a file that opens, so it reads handlers and rows, not this
+    line; the barrier and the joins time out, so a stall fails rather than hangs (T20 fold 3's reads A and B, N1).
+    The stand-in stderr sleeps a millisecond on each write, so a line said outside the lock hands the other threads
+    the time to build again: without it the printing thread mostly took the lock back first, and the line said
+    outside it passed twenty trials in one run (T20 fold 4)."""
+    import sys
+    import threading
+    import time
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "a-file" / "sub" / "audit.log"))
+    said = []
+
+    class _Err:
+        def write(self, s):
+            said.append(s)
+            time.sleep(0.001)
+            return len(s)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stderr", _Err())
+    for trial in range(20):
+        monkeypatch.setattr(gui, "_audit_logger", None)
+        del said[:]
+        gate = threading.Barrier(16, timeout=30)
+
+        def first():
+            with gui.app.test_request_context("/"):
+                gate.wait()
+                gui._audit("probe", "detail=x")
+
+        threads = [threading.Thread(target=first) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert not any(t.is_alive() for t in threads), trial
+        assert sum("audit-log open failed" in s for s in said) == 1, (trial, said)
     monkeypatch.setattr(gui, "_audit_logger", None)

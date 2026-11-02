@@ -1383,12 +1383,14 @@ def test_bootstrap_secrets_are_not_printed_when_output_is_not_a_terminal(fresh_r
 
 
 def test_the_read_back_names_another_key_file_absolute_and_quoted(tmp_path, monkeypatch):
-    """A key file other than the default is named in the read-back command by its absolute path, quoted for the
-    shell: the command is run from the repository's root, so a relative path given from another directory would name
-    another file there, and a path with a space would split into two words. The default key keeps its `~/…` form.
-    Guards the command kontroll-init prints in place of a password being one that cannot read it back (T20 fold 1's
-    read A, N3). The key's name holds a space and a quote of each kind, which a path put in double or single quotes
-    by hand does not survive, so the shell's own quoting is told from a hand-rolled one (T20 fold 2's read B, N2)."""
+    """A key file other than the default is named in the read-back command by its absolute path, quoted for the shell:
+    the command is run from the repository's root, so a relative path given from another directory would name another
+    file there, and a path with a space would split into two words. The default key keeps its `~/…` form. Guards the
+    command kontroll-init prints in place of a password being one that cannot read it back (T20 fold 1's read A, N3).
+    The key's name holds a space and a quote of each kind, which a path put in double or single quotes by hand does not
+    survive, so the shell's own quoting is told from a hand quoting that escapes nothing (T20 fold 2's read B, N2); one
+    that escapes only `"` passes here, and `test_a_run_with_another_key_file_names_it_in_every_read_back` pins
+    `shlex.quote` itself (T20 fold 3's read B)."""
     import shlex
     monkeypatch.chdir(tmp_path)
     cmd = ki._read_back("dashboards", os.path.join("my keys", "it's \"k\".txt"))

@@ -2215,21 +2215,21 @@ not UTF-8, a JSON body that is not an object, and an onboard apply whose SOPS do
 age key, or another one) answer the GUI's 500 `internal_error` rather than a refusal of their own.
 
 **Covering checks:** `tests/integration/test_gui_api.py` (each read route with a broad `except`, with a `RuntimeError`
-carrying a path: the fixed sentence, the code, the id in the body, the stderr line and the audit row, the text in
-none of them — not in a record's message nor in a traceback printed with it — and that the list it runs over is
-every such route in `gui/app.py`, a bare `except:` or a tuple naming `Exception` counted; a route with no `try`; a
-404 and a malformed body's 400 kept; the designed refusals kept — a backup-store 400, a repository-data 409 and a
-boundary 422 raised under a broad `except`, a write conflict's 409; a stray `ValueError` under the onboard planner
-answered as the unexpected; the Homepage write failure, its id in the audit row and the service log line pinned
-whole; the text looked for at every log level and on stderr; an `async def` route walked; an audit write that fails,
-through the app's own logger, said by type, errno and action, and a file that cannot open said once, with no stderr too,
-and concurrent first audits building one handler), `tests/integration/test_api_onboard.py` (the planner's refusal still
-422; a stray `ValueError` a bare 500 with no text and no `onboard-refuse` line),
-`tests/unit/test_onboard_proxmox_auth.py` and `tests/unit/test_onboard_ssh_key.py` (the planner's guards raise
-`OnboardRefusal`, not a plain `ValueError`), `tests/unit/test_homepage.py` (the write failure's code and its log line),
-and `tests/unit/test_kontroll_init.py` (the values not printed off a terminal, with each domain's read-back command and
-where to run it, the closing line's too; another key file named absolute and quoted, in every read-back of a run;
-shown once per domain on one).
+carrying a path: the fixed sentence, the code, the id in the body, the stderr line and the audit row, the text in none
+of them — not in a record's message nor in a traceback printed with it — and that the list it runs over is every such
+route in `gui/app.py`, a bare `except:` or a tuple naming `Exception` counted; a route with no `try`; a 404 and a
+malformed body's 400 kept; the designed refusals kept — a backup-store 400, a repository-data 409 and a boundary 422
+raised under a broad `except`, a write conflict's 409; a stray `ValueError` under the onboard planner answered as the
+unexpected; the Homepage write failure, its id in the audit row and the service log line pinned whole; the text looked
+for at every log level, on stdout and stderr, and in the warnings raised; an `async def` route walked; an audit write
+that fails, through the app's own logger, said by type, errno and action, and a file that cannot open said once — with
+no stderr at all, the audit call still returning — and concurrent first audits building one handler and saying a file
+that cannot open once), `tests/integration/test_api_onboard.py` (the planner's refusal still 422; a stray `ValueError` a
+bare 500 with no text and no `onboard-refuse` line), `tests/unit/test_onboard_proxmox_auth.py` and
+`tests/unit/test_onboard_ssh_key.py` (the planner's guards raise `OnboardRefusal`, not a plain `ValueError`),
+`tests/unit/test_homepage.py` (the write failure's code and its log line), and `tests/unit/test_kontroll_init.py` (the
+values not printed off a terminal, with each domain's read-back command and where to run it, the closing line's too;
+another key file named absolute and quoted, in every read-back of a run; shown once per domain on one).
 
 ---
 ## Accepted risks / known limitations
