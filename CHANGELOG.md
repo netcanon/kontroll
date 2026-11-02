@@ -33,6 +33,8 @@ plan routes answered any `ValueError` 422 with its text, the Homepage editor sho
   failed: <type> errno=<n> action=<action>` to the GUI's stderr, not logging's own report, which printed the
   exception the route was handling. An audit file the GUI cannot open is said once, `audit-log open failed: <type>
   errno=<n>`, where every row was lost with no line.
+- **Fixed.** Concurrent first requests after a GUI start each built the audit logger, so it kept several
+  handlers and wrote every later row several times. One lock builds it once.
 - **Changed.** `kontroll-init` shows the bootstrap values only when standard output is a terminal. Otherwise it
   prints each written field's name, `(not shown)` and, for each domain, the `sops -d` command that reads it back,
   to run from the repository's root or inside `scripts/kontroll-installer.sh shell`; a key file other than the

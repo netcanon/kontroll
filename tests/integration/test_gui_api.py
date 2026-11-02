@@ -1954,15 +1954,18 @@ def _audit_text(audit_file):
     return audit_file.read_text(encoding="utf-8") if audit_file.exists() else ""
 
 
-def _internal_error_seen(r, caplog, audit_file, endpoint, kind, capfd=None):
+def _internal_error_seen(r, caplog, audit_file, endpoint, kind, capfd=None, recwarn=None):
     """The checks every answer to an unexpected exception must pass, shared by the tests below: a JSON 500 whose
     `code` is `internal_error` and whose `run_id` is twelve hex digits the sentence quotes; ONE service-log line naming
     that id as `kontroll_run_id=`, the endpoint and the exception's type, with no traceback attached; ONE
     `internal-error` audit row with the same id and endpoint; and the sentinel nowhere — not in the body, not in any
     log record or a traceback the log prints with one (`caplog.text`, not only each record's message), not in what
-    the process wrote to stderr itself (`capfd`, when the caller passes it), not in the audit file. The callers
-    capture every level: the GUI's service log prints WARNING and up, so a check of ERROR only would pass a warning
-    that carries the text (T20 fold 1's read B, S1)."""
+    the process wrote to stdout or stderr itself (`capfd`, when the caller passes it: the container's log, which
+    `docker logs` and Vector read, holds both), not in a warning the request raised (`recwarn`, when the caller
+    passes it: `warnings` prints one to stderr in production, and pytest records it instead), not in the audit file.
+    The callers capture every level: the GUI's service log prints WARNING and up, so a check of ERROR only would pass
+    a warning that carries the text (T20 fold 1's read B, S1); and a check of stderr alone passed a `print` of the
+    text and a `warnings.warn` of it (T20 fold 2's read B, S1)."""
     body = r.get_json()
     assert r.status_code == 500 and body is not None, r.get_data(as_text=True)[:200]
     assert body["code"] == "internal_error" and re.fullmatch("[0-9a-f]{12}", body["run_id"]), body
@@ -1976,7 +1979,10 @@ def _internal_error_seen(r, caplog, audit_file, endpoint, kind, capfd=None):
     # A record's message is not all a handler prints: an attached traceback (`exc_info`) is printed below it.
     assert _LEAK not in caplog.text
     if capfd is not None:      # a traceback printed straight to stderr is no log record
-        assert _LEAK not in capfd.readouterr().err
+        cap = capfd.readouterr()
+        assert _LEAK not in cap.err and _LEAK not in cap.out      # stdout is in `docker logs` too
+    if recwarn is not None:    # a warning is printed to stderr in production; pytest records it instead
+        assert all(_LEAK not in str(w.message) for w in recwarn)
     assert all(rec.exc_info is None for rec in caplog.records if "internal-error" in rec.getMessage())
     audit = _audit_text(audit_file)
     rows = [ln for ln in audit.splitlines() if "\tinternal-error\t" in ln]
@@ -1987,19 +1993,20 @@ def _internal_error_seen(r, caplog, audit_file, endpoint, kind, capfd=None):
 
 @pytest.mark.parametrize("url,seam,endpoint,opens", _READ_ROUTES, ids=[e for _u, _s, e, _o in _READ_ROUTES])
 def test_an_unexpected_exception_answers_a_fixed_sentence_and_an_id(client, monkeypatch, caplog, audit_file, url,
-                                                                     seam, endpoint, opens, capfd):
+                                                                     seam, endpoint, opens, capfd, recwarn):
     """Each read route whose service call raises an exception it did not design for (a RuntimeError carrying a path)
     answers 500 with its own opening words and a fixed sentence — `<what> failed — internal error (ref <id>)` — the
     code `internal_error` and a twelve-hex run id; the GUI's service log gets one line with `kontroll_run_id=<id>`, the
     endpoint and the exception's TYPE, and the audit log one `internal-error` row with the same id; the exception's
     text reaches none of the three. Guards the CodeQL `py/stack-trace-exposure` class (brief 16 §9.1, class A): before
     T20 each of these routes put `str(e)` in the body — an absolute path inside the container, a YAML error's excerpt
-    of the file it read — and left no id to find the failure by. The text is looked for at every log level and on
-    the process's stderr (T20 fold 1's read B, S1)."""
+    of the file it read — and left no id to find the failure by. The text is looked for at every log level, on the
+    process's stdout and stderr, and in the warnings the request raised (T20 fold 1's read B, S1; fold 2's read B,
+    S1)."""
     monkeypatch.setattr(seam, _boom)
     with caplog.at_level(logging.DEBUG):
         r = client.get(url, headers=_auth())
-    body = _internal_error_seen(r, caplog, audit_file, endpoint, "RuntimeError", capfd)
+    body = _internal_error_seen(r, caplog, audit_file, endpoint, "RuntimeError", capfd, recwarn)
     assert body["error"].startswith(opens + " — internal error"), body["error"]
 
 
@@ -2040,7 +2047,9 @@ def test_a_failed_audit_write_prints_its_type_not_the_exception_being_handled(mo
     the audit volume is full or a rollover cannot rename (T20's read A, N1: `GUI_AUDIT_LOG=/dev/full` printed the
     sentinel twice); a lost row that says neither which row nor why (T20 fold 1's read A, N2); and the app's own
     logger writing through another handler, or through its handler with the override undone: the row goes through
-    the app's logger, not a handler the test builds (T20 fold 1's read B, N1)."""
+    the app's logger, not a handler the test builds (T20 fold 1's read B, N1). And the row is written by
+    `gui._audit`, inside a request, not by the logger's `info()` called by hand, so an `_audit` that hands the logger
+    a format and its arguments, whose failed write would print `action=%s`, is read (T20 fold 2's read B, N1)."""
     lg = gui._get_audit_logger()
     assert len(lg.handlers) == 1 and isinstance(lg.handlers[0], gui._AuditHandler), lg.handlers
 
@@ -2051,7 +2060,8 @@ def test_a_failed_audit_write_prints_its_type_not_the_exception_being_handled(mo
     try:
         raise RuntimeError(_LEAK)
     except RuntimeError:
-        lg.info("2026-11-02T00:00:00Z\t192.0.2.10\tinternal-error\twhat=%s run_id=0123456789ab" % _LEAK)
+        with gui.app.test_request_context("/"):
+            gui._audit("internal-error", "what=%s run_id=0123456789ab" % _LEAK)
     lg.handlers[0].close()
     err = capsys.readouterr().err
     assert err == "audit-log write failed: OSError errno=28 action=internal-error\n", err
@@ -2075,17 +2085,18 @@ def test_an_audit_file_that_cannot_open_is_said_once_by_type_and_errno(tmp_path,
     monkeypatch.setattr(gui, "_audit_logger", None)
 
 
-def test_a_route_without_its_own_try_answers_json_not_an_html_500(client, monkeypatch, caplog, capfd, audit_file):
+def test_a_route_without_its_own_try_answers_json_not_an_html_500(client, monkeypatch, caplog, capfd, audit_file,
+                                                                   recwarn):
     """A route with no `try` of its own (a secret form's field list) whose service call raises answers the same JSON
     500 — `request failed — internal error (ref <id>)`, `internal_error`, the id in the service log and the audit log
     — instead of Flask's HTML 500, and none of them holds the exception's text. Guards the page showing a bare "request
     failed" with nothing to quote, and Flask's own exception log line, which carries the message and its traceback
     (brief 16 §9.3; T20's read B, S1: the check read each record's message, not the traceback printed with it; fold
-    1's read B, S1: nor a warning, nor stderr)."""
+    1's read B, S1: nor a warning, nor stderr; fold 2's read B, S1: nor stdout, nor a `warnings.warn`)."""
     monkeypatch.setattr(gui.secrets_service, "offerable_fields", _boom)
     with caplog.at_level(logging.DEBUG):
         r = client.get("/api/secrets/dashboards/fields", headers=_auth())
-    body = _internal_error_seen(r, caplog, audit_file, "api_secret_fields", "RuntimeError", capfd)
+    body = _internal_error_seen(r, caplog, audit_file, "api_secret_fields", "RuntimeError", capfd, recwarn)
     assert body["error"].startswith("request failed — internal error"), body["error"]
 
 
@@ -2156,21 +2167,21 @@ def test_a_write_conflict_keeps_its_409_and_its_sentence(client, onboard_env, mo
 
 
 def test_a_stray_value_error_under_the_onboard_planner_is_no_refusal(client, onboard_env, monkeypatch, caplog,
-                                                                    audit_file, capfd):
+                                                                    audit_file, capfd, recwarn):
     """A ValueError raised under the onboard planner that is not one of its refusals (a parse error, a library's) is
     answered as the unexpected — a JSON 500 with `internal_error` and an id, its text nowhere — and leaves no
     `onboard-refuse` row. Guards brief 16 §9.1's class C: the route caught every ValueError and answered it 422
     `invalid_request` with its text, so a `json.loads` failure on `ansible-doc` output read as the operator's mistake
     and showed what it was parsing. The planner's own refusals are a type of their own (OnboardRefusal), pinned by
-    test_onboard_partial_auth_set_is_a_422_not_a_500. The text is looked for at every log level and on stderr (T20
-    fold 1's read B, S1)."""
+    test_onboard_partial_auth_set_is_a_422_not_a_500. The text is looked for at every log level, on stdout and
+    stderr, and in the warnings raised (T20 fold 1's read B, S1; fold 2's read B, S1)."""
     def _stray(*a, **k):
         raise ValueError(_LEAK)
     monkeypatch.setattr(gui, "build_onboard_plan", _stray)
     with caplog.at_level(logging.DEBUG):
         r = client.post("/api/onboard", json={"collection": "community.proxmox", "key": "proxmox",
                                               "group": "hypervisors", "host": "192.0.2.40"}, headers=_auth())
-    body = _internal_error_seen(r, caplog, audit_file, "api_onboard", "ValueError", capfd)
+    body = _internal_error_seen(r, caplog, audit_file, "api_onboard", "ValueError", capfd, recwarn)
     assert body["error"].startswith("request failed — internal error"), body["error"]
     assert "onboard-refuse" not in _audit_text(audit_file)
 
@@ -2198,3 +2209,54 @@ def test_a_homepage_write_failure_is_a_fixed_500_with_an_id(client, monkeypatch,
     assert body["error"] == ("homepage write failed — nothing staged (ref %s); the service log has the details"
                              % body["run_id"])
     assert "homepage-result\terror=write_failed run_id=%s" % body["run_id"] in _audit_text(audit_file)
+
+
+def test_an_audit_file_that_cannot_open_with_no_stderr_leaves_audit_returning(tmp_path, monkeypatch):
+    """With no stderr at all (Python sets `sys.stderr` to None when fd 2 is closed at start), an audit file that cannot
+    open still leaves `_audit` returning and the logger cached: the report has nowhere to go and is dropped. Guards
+    every audited route answering an HTML 500 over the report itself: the open line's guard named OSError and
+    ValueError, and None's AttributeError escaped on every request (T20 fold 2's read A)."""
+    import sys
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "a-file" / "sub" / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    with gui.app.test_request_context("/"):
+        gui._audit("probe", "detail=x")
+    assert gui._audit_logger is not None and gui._audit_logger.handlers == [], gui._audit_logger
+    monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_concurrent_first_audits_build_one_handler(tmp_path, monkeypatch):
+    """Sixteen threads making the GUI's first audit call at once (concurrent first requests on Werkzeug's threaded
+    server) leave the cached logger with ONE handler, so each row is written once, and an audit file that cannot open
+    is said once. Guards the lazy build racing: each racing thread cleared and added a handler, so the logger kept
+    several and every later row was written several times (13 requests wrote 87 rows on the real server), and the
+    open-failure line printed once per racing thread (T20 fold 2's read A)."""
+    import threading
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    for trial in range(20):
+        if gui._audit_logger is not None:
+            for h in list(gui._audit_logger.handlers):
+                h.close()
+        monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / ("audit-%d.log" % trial)))
+        monkeypatch.setattr(gui, "_audit_logger", None)
+        gate = threading.Barrier(16)
+
+        def first():
+            with gui.app.test_request_context("/"):
+                gate.wait()
+                gui._audit("probe", "detail=x")
+
+        threads = [threading.Thread(target=first) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(gui._audit_logger.handlers) == 1, (trial, gui._audit_logger.handlers)
+        gui._audit_logger.handlers[0].flush()
+        rows = (tmp_path / ("audit-%d.log" % trial)).read_text(encoding="utf-8").splitlines()
+        assert len(rows) == 16, (trial, len(rows))
+    for h in list(gui._audit_logger.handlers):
+        h.close()
+    monkeypatch.setattr(gui, "_audit_logger", None)

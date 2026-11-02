@@ -24,6 +24,7 @@ import hmac
 import logging
 import os
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -90,6 +91,7 @@ AUDIT_LOG = os.environ.get("GUI_AUDIT_LOG", os.path.join(ROOT, "local", "onboard
 
 
 _audit_logger = None
+_audit_logger_lock = threading.Lock()   # concurrent first requests build it once
 
 
 class _AuditHandler(RotatingFileHandler):
@@ -115,7 +117,15 @@ class _AuditHandler(RotatingFileHandler):
 def _get_audit_logger():
     """Lazily build the rotating audit logger (size-bounded so it can't grow forever —
     Layer 0 logging foundation, docs/logging-architecture.md §3). The handler writes the
-    raw TSV line as-is (no logging prefix) to preserve the exact audit format."""
+    raw TSV line as-is (no logging prefix) to preserve the exact audit format. One lock
+    holds the build: Werkzeug's server is threaded, and racing first requests each added
+    a handler, so every row was written once per handler (T20 fold 2's read A, N3)."""
+    with _audit_logger_lock:
+        return _audit_logger or _build_audit_logger()
+
+
+def _build_audit_logger():
+    """Build and cache the audit logger; the caller holds the lock."""
     global _audit_logger
     if _audit_logger is None:
         lg = logging.getLogger("kontroll.onboard-gui.audit")
@@ -136,7 +146,7 @@ def _get_audit_logger():
             try:
                 sys.stderr.write("audit-log open failed: %s errno=%s; no audit row is written until the GUI restarts\n"
                                  % (type(e).__name__, e.errno))
-            except (OSError, ValueError):      # stderr itself gone
+            except (OSError, ValueError, AttributeError):      # stderr itself gone (None: fd 2 closed at start)
                 pass
         _audit_logger = lg
     return _audit_logger

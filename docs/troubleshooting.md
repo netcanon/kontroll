@@ -362,7 +362,7 @@ holds the exception's text (SECURITY.md **C23**):
 
 | Where | How to read it |
 |---|---|
-| the GUI's service log | `docker logs onboard-gui 2>&1 \| sed -n '/kontroll_run_id=<id>/,/^[^ ]/p'` — the line names the route, `what` and the exception's type; the frames follow it on indented lines of their own, which do not carry the id, and the range stops at the next line that is not indented (a parse error's frames can run past thirty lines). Never the exception's message |
+| the GUI's service log | `docker logs onboard-gui 2>&1 \| sed -n '/kontroll_run_id=<id>/,/^[^ ]/p'` — the line names the route, `what` and the exception's type; the frames follow it on indented lines of their own, which do not carry the id, and the range stops at the next line that is not indented (a parse error's frames run long). Never the exception's message |
 | Loki | `{source="internal", run_id="<id>"}` finds that line (Vector labels its `kontroll_run_id`); the frames carry no id, so no `run_id` label: read them with `{source="internal", service="onboard-gui"}` at the line's time |
 | the GUI audit log | the `internal-error` row with `run_id=<id>`, the route and the type: `{service="gui-audit"} \|= "run_id=<id>"` in Loki, or the file in `KONTROLL_GUI_AUDIT_DIR` |
 

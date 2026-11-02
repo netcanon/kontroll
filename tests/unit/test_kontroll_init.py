@@ -1387,12 +1387,13 @@ def test_the_read_back_names_another_key_file_absolute_and_quoted(tmp_path, monk
     shell: the command is run from the repository's root, so a relative path given from another directory would name
     another file there, and a path with a space would split into two words. The default key keeps its `~/…` form.
     Guards the command kontroll-init prints in place of a password being one that cannot read it back (T20 fold 1's
-    read A, N3)."""
+    read A, N3). The key's name holds a space and a quote of each kind, which a path put in double or single quotes
+    by hand does not survive, so the shell's own quoting is told from a hand-rolled one (T20 fold 2's read B, N2)."""
     import shlex
     monkeypatch.chdir(tmp_path)
-    cmd = ki._read_back("dashboards", os.path.join("my keys", "k.txt"))
+    cmd = ki._read_back("dashboards", os.path.join("my keys", "it's \"k\".txt"))
     words = shlex.split(cmd)
-    assert words[0] == "SOPS_AGE_KEY_FILE=%s" % os.path.join(str(tmp_path), "my keys", "k.txt"), cmd
+    assert words[0] == "SOPS_AGE_KEY_FILE=%s" % os.path.join(str(tmp_path), "my keys", "it's \"k\".txt"), cmd
     assert words[1:] == ["sops", "-d", ki.paths.overlay_target("ansible/secrets/dashboards.sops.yml")], cmd
     assert ki._read_back("dashboards", ki.AGE_KEY_FILE).startswith("SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt "), \
         ki._read_back("dashboards", ki.AGE_KEY_FILE)
@@ -1408,3 +1409,18 @@ def test_bootstrap_secrets_are_shown_once_on_a_terminal(fresh_repo, monkeypatch,
     out = capsys.readouterr().out
     assert out.count("SAVE these now:") == len(ki.BOOTSTRAP_DOMAINS)
     assert out.count(_MINTED_PW) == len(ki.BOOTSTRAP_DOMAINS) and "(not shown)" not in out
+
+
+def test_a_run_with_another_key_file_names_it_in_every_read_back(fresh_repo, monkeypatch, capsys, tmp_path):
+    """A --fresh run off a terminal with a key file other than the default names THAT key, absolute and quoted, in
+    each domain's read-back and in the closing line, and never the default `~/…` key. Guards the two call sites in
+    main() handing `_read_back` another key than the one the run wrote: the command printed in place of a password
+    would then open nothing (T20 fold 2's read A: a call site passing AGE_KEY_FILE survived the suite)."""
+    import shlex
+    _bootstrap_writes(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: False)
+    key = str(tmp_path / "my keys" / "ctl.txt")
+    assert ki.main(_FRESH + ["--no-break-glass", "--key-file", key]) == 0
+    out = capsys.readouterr().out
+    assert out.count("SOPS_AGE_KEY_FILE=%s sops -d " % shlex.quote(key)) == len(ki.BOOTSTRAP_DOMAINS) + 1, out
+    assert "SOPS_AGE_KEY_FILE=~/" not in out, out
