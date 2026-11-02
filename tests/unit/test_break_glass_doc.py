@@ -13,8 +13,10 @@ import importlib.util
 import io
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -130,6 +132,17 @@ _BASH = pytest.mark.skipif(os.name == "nt" or not shutil.which("bash"),
                            reason="runs the runbook's Verify block in bash")
 
 
+def _python3():
+    """The `python3` the stand-ins and shims run under: this interpreter, given back the library path it was started
+    with. The Verify block runs sops under `env -i`, which drops LD_LIBRARY_PATH, and setup-python's interpreter on a
+    self-hosted runner loads its libpython from that path: run as a plain `python3` there, the stand-in could not
+    start, and every row read `BROKEN: no sops runs here` (the private CI's py3.11, 3.13 and 3.14 jobs on the sync of
+    #100; 3.12 found the runner's own libpython). A stock sops is a static Go binary and needs no such path."""
+    lib = os.environ.get("LD_LIBRARY_PATH")
+    keep = "LD_LIBRARY_PATH=%s; export LD_LIBRARY_PATH\n" % shlex.quote(lib) if lib else ""
+    return '#!/bin/sh\n%sexec %s "$@"\n' % (keep, shlex.quote(sys.executable))
+
+
 def _verify_block(bgpub="age1breakglass"):
     """The bash block under docs/break-glass.md's "Verify" heading, with its `BGPUB` set to `bgpub` (None: left as
     the runbook writes it, a placeholder)."""
@@ -165,7 +178,8 @@ def _hostile_machine(tmp_path, bg_key=BREAK_GLASS):
     if bg_key is not None:
         (home / "kontroll-breakglass.key").write_text(bg_key, encoding="utf-8")
     stubs.mkdir()
-    for name, body in (("sops", _FAKE_SOPS % {"new_place": str(new_place)}), ("age-keygen", _FAKE_AGE_KEYGEN)):
+    for name, body in (("sops", _FAKE_SOPS % {"new_place": str(new_place)}), ("age-keygen", _FAKE_AGE_KEYGEN),
+                       ("python3", _python3())):
         (stubs / name).write_text(body, encoding="utf-8")
         (stubs / name).chmod(0o755)
     files.mkdir()
@@ -290,9 +304,10 @@ def test_the_verify_check_says_so_when_sops_is_missing(tmp_path, sops):
     env, files, _ = _hostile_machine(tmp_path)
     tools = tmp_path / "tools"
     tools.mkdir()
-    for name in ("bash", "env", "mktemp", "rm", "grep", "python3"):
+    for name in ("bash", "env", "mktemp", "rm", "grep"):
         os.symlink(shutil.which(name), str(tools / name))
-    shutil.copy(str(tmp_path / "bin" / "age-keygen"), str(tools / "age-keygen"))
+    for name in ("age-keygen", "python3"):
+        shutil.copy(str(tmp_path / "bin" / name), str(tools / name))
     env["PATH"] = str(tools)
     block = _verify_block()
     if sops == "a-shim-that-needs-home":
@@ -377,9 +392,9 @@ def test_the_verify_check_says_so_when_there_is_no_mktemp(tmp_path):
     env, files, _ = _hostile_machine(tmp_path)
     tools = tmp_path / "tools"
     tools.mkdir()
-    for name in ("bash", "env", "rm", "grep", "python3"):
+    for name in ("bash", "env", "rm", "grep"):
         os.symlink(shutil.which(name), str(tools / name))
-    for name in ("sops", "age-keygen"):
+    for name in ("sops", "age-keygen", "python3"):
         shutil.copy(str(tmp_path / "bin" / name), str(tools / name))
     env["PATH"] = str(tools)
     run = _bash(_verify_block(), env, files)
@@ -405,3 +420,21 @@ def test_the_verify_check_runs_without_age_keygen_under_errexit(tmp_path):
     run = _bash(_verify_block(), env, files, "-euo", "pipefail")
     assert run.returncode == 0, run.stdout + run.stderr
     assert "BROKEN: age-keygen could not read a key from" in run.stdout and "ok   " not in run.stdout
+
+
+@_BASH
+def test_the_stand_ins_run_under_env_i_with_the_library_path_their_interpreter_was_started_with(tmp_path, monkeypatch):
+    """Under `env -i PATH="$PATH"`, as the Verify block runs sops, the `python3` the stand-ins run under still has the
+    library path this test's interpreter was started with, and the stand-in sops runs (`--help`, exit 0). Guards the
+    rows reading `BROKEN: no sops runs here` wherever the interpreter loads its libpython from LD_LIBRARY_PATH, which
+    `env -i` drops: setup-python's builds on a self-hosted runner do, and 13 rows failed so on the private CI's
+    py3.11, 3.13 and 3.14 jobs while GitHub's hosted runners passed (the missing-sops rows passed there too, for the
+    wrong reason)."""
+    lib = str(tmp_path / "lib")
+    had = os.environ.get("LD_LIBRARY_PATH")
+    monkeypatch.setenv("LD_LIBRARY_PATH", had + ":" + lib if had else lib)
+    env, files, _ = _hostile_machine(tmp_path)
+    seen = _bash('env -i PATH="$PATH" python3 -c "import os; print(os.environ.get(\'LD_LIBRARY_PATH\', \'\'))"', env,
+                 files)
+    assert seen.returncode == 0 and lib in seen.stdout.strip().split(":"), seen.stdout + seen.stderr
+    assert _bash('env -i PATH="$PATH" HOME="$PWD" sops --help', env, files).returncode == 0
