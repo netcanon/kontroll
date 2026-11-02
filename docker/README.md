@@ -116,11 +116,11 @@ reads a Dockerfile's lines as BuildKit splits and joins them (on LF only, a byte
 joined with no space, a line ending in two backslashes continuing nothing), and refuses a whitespace character other
 than a space, a tab or a line feed (sh splits words on none of them; the test, and for VT, FF and CR BuildKit's keyword
 split, do). It also refuses what it cannot read (a `SHELL` other than Docker's default, an exec-form `RUN`, a heredoc, a
-comment inside a `RUN` — Docker joins the lines first, so the shell drops the rest — an `# escape=` directive, a
-Dockerfile outside this directory) and a `# syntax=` frontend not pinned by digest. What it still cannot see is listed
-in the test's docstring. The installer's and Vector's **apt** packages still float inside their pinned base; the
-published image's digest in [`images.lock.yml`](images.lock.yml) is the full pin ([SECURITY.md](../SECURITY.md) §
-Accepted risks, R-IMG-2).
+brace list it cannot read (sound under sh, which expands no brace, but refused), a comment inside a `RUN` — Docker joins
+the lines first, so the shell drops the rest — an `# escape=` directive, a Dockerfile outside this directory) and a `#
+syntax=` frontend not pinned by digest. What it still cannot see is listed in the test's docstring. The installer's and
+Vector's **apt** packages still float inside their pinned base; the published image's digest in
+[`images.lock.yml`](images.lock.yml) is the full pin ([SECURITY.md](../SECURITY.md) § Accepted risks, R-IMG-2).
 
 One procedure, the same for a Dependabot PR and a hand bump. It is an authoring-time act with network; nothing in
 it runs on a deploy path.

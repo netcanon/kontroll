@@ -55,23 +55,25 @@ were built from was not.
   string, an ANSI-C `$'…'` before it or in its list, a compound behind `||` or `!`, a function or alias (or a `hash` or
   `enable` entry) in the `RUN`, a `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt`
   given a variable, a backquoted command, a glob or a brace expansion), or a `trap`, `exec`, `return` or `exit 0` (one
-  glued to an expansion that can come out empty, `exit$@`, `exit${10}`, `exit$x`, or read as a parameter's default,
-  `${1-exit} 0`, `${x:-exit} 0`, too), or a brace list the check cannot read (an item holding a nested substitution or
-  parameter, or one an operator inside a quote or a substitution cuts) keeps from failing the build; a download naming
-  more than one URL or output; a comment inside a `RUN`; a `SHELL` other than Docker's default; a whitespace character
-  other than a space, a tab or a line feed; a `sha256sum` named by a path other than `/bin/` or `/usr/bin/`; or a
-  checksum not held in the tree, a variable holding one only where no `ARG` or `ENV` gives it another value or none and
-  it is no build arg Docker predefines, so a `--build-arg` cannot stand in for it), never because one is old. It reads a
-  Dockerfile's lines as BuildKit joins them. `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same
-  rules, reading its `run:` whole and as bash expands its braces (a command word `{exit,0}` or `{e..e}xit 0` builds, and
-  one left once every expansion that can come out empty is removed); the step must name its shell under any runner that
-  is not a named Linux or macOS one (a Windows image, a list with no OS label or an expression in it, no `runs-on`), may
-  hold no `${{` expression (in a comment too), no odd whitespace, no `#` right after a `)`, no newline inside a quoted
-  string and no C0 control character that is not whitespace, and run under no env key, in any case (a Windows runner
-  reads `Path` as `PATH`), that changes what it runs (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`,
-  `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) and no job
-  `container:`, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner. The
-  refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+  glued to an expansion, `exit$@`, `exit${10}`, `exit$x`, `exit$(:|:)`, `exit${IFS}0`, or read as a parameter's default,
+  alternative, assigned default or pattern replacement, `${1-exit} 0`, `${x:-exit} 0`, `${x:=exit} 0`, `${0/*/exit} 0`,
+  too), or a brace list the check cannot read (an item holding a nested substitution or parameter, or one an operator
+  inside a quote or a substitution cuts) keeps from failing the build; a download naming more than one URL or output; a
+  comment inside a `RUN`; a `SHELL` other than Docker's default; a whitespace character other than a space, a tab or a
+  line feed; a `sha256sum` named by a path other than `/bin/` or `/usr/bin/`; or a checksum not held in the tree, a
+  variable holding one only where no `ARG` or `ENV` (an `ONBUILD` one too) gives it another value or none, it is no
+  build arg Docker predefines and no secret mount sets it, so a `--build-arg` cannot stand in for it), never because one
+  is old. It reads a Dockerfile's lines as BuildKit joins them. `tests/unit/test_ci_workflows.py` holds the pip-audit
+  step to the same rules, reading its `run:` whole and as bash expands its braces (a command word `{exit,0}` or
+  `{e..e}xit 0` builds, and one left once every expansion is removed, or read as a space, all but `$#`, `$?` and `$$`);
+  the step must name its shell under any runner that is not a named Linux or macOS one (a Windows image, a list with no
+  OS label or an expression in it, no `runs-on`), may hold no `${{` expression (in a comment too), no odd whitespace, no
+  `#` right after a `)`, no newline inside a quoted string and no C0 control character that is not whitespace, and run
+  under no env key, in any case (a Windows runner reads `Path` as `PATH`), that changes what it runs (`BASH_ENV`, `ENV`,
+  `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`,
+  `LD_AUDIT`, `LD_LIBRARY_PATH`) and no job `container:`, and the pip-audit job now names its shell (`bash`), since a
+  repository variable picks its runner. The refresh procedure is `docker/README.md` § Refreshing a pin; what still
+  floats is SECURITY.md R-IMG-2.
 
 The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is
 in `docker/services/semaphore.yaml`, not the image lock). A box that builds locally also rebuilds the control image

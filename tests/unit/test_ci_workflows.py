@@ -351,19 +351,25 @@ def pip_audit_faults(workflow):
     a brace expansion where bash builds no command word from it (an assignment's value, a redirect's target, a quoted
     string: `TARGETS={exit,0}`, `x={exit,0} true`, `echo hi >{exit,}`, `echo "mode: {exec,dry-run}"`, `jq
     '{hash,set}'`), a brace expansion the reader cannot read where bash builds no command word from it (`mkdir -p
-    o/{${x:-${y}},c}`), an arithmetic expansion glued to a command word (`exit$((0))`, which bash runs as `exit0`, a
-    command not found: the reader removes it, as it removes every expansion, so that a substitution holding one is
-    read), and an audit that opens a subshell (`(pip-audit -r a)`), sits inside a function or is spelt other than
-    `pip-audit …` (`python -m pip_audit`, the pip-audit action): none of these is read as a run, so the coverage test
-    fails, or (a function over several lines) it is read and refused. It cannot see an earlier step that writes one of
-    those env keys through `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a later step runs under it; nor
-    another env key that leads the audit to a planted file; nor a `working-directory:` or a `cd` that moves the file a
-    `-r` names (a copy planted at `<dir>/docker/…` is then audited instead; with none, pip-audit fails on the missing
-    file); nor a command word built at run time from what a variable holds or a substitution prints, or by a glob
-    (`x=ex; ${x}it 0`, `exi$_ 0` after `: t`, `$(printf ex)it 0`, `` `echo exit` 0 ``, `$(echo hash) -p …`, `ex?t 0`).
-    An expansion that can come out empty, glued to a command word or splitting it, is read as empty (`exit$x 0`,
-    `` exit`:` 0 ``, `e$(:)xit 0`, `set$x +e`, `hash${x} -p …`), and one given a `-`, `:-`, `+` or `:+` operator as its
-    word (`${1-exit} 0`, `${x:-exit} 0`, `${0:+exit} 0`, `${1-${2-exit}} 0`): those are read."""
+    o/{${x:-${y}},c}`), an arithmetic expansion, `${#}`, `${#x}` or `$0` glued to a command word (`exit$((0))`, which
+    bash runs as `exit0`, a command not found: the reader removes each, so that a substitution holding one is read),
+    `$-` glued to one (`exit$- 0`: a step's shell runs with `-e`, so `$-` is never empty) and under bash `$_` (`exit$_
+    0` after `true` runs `exittrue`), a pattern replacement of an unset variable (`${x/#/exit} 0`), a `set --` given a
+    variable (`set -- $x`), a brace after an escaped `$` (`echo \\${a,b}`) or left open (`echo {a,b`), and an audit that
+    opens a subshell (`(pip-audit -r a)`), sits inside a function or is spelt other than `pip-audit …` (`python -m
+    pip_audit`, the pip-audit action): none of these is read as a run, so the coverage test fails, or (a function over
+    several lines) it is read and refused. It cannot see an earlier step that writes one of those env keys through
+    `$GITHUB_ENV`, or a PATH entry through `$GITHUB_PATH`: a later step runs under it; nor another env key that leads
+    the audit to a planted file; nor a `working-directory:` or a `cd` that moves the file a `-r` names (a copy planted
+    at `<dir>/docker/…` is then audited instead; with none, pip-audit fails on the missing file); nor a command word
+    built at run time from what a variable or a positional parameter holds or a substitution prints, or by a glob
+    (`x=ex; ${x}it 0`, `exi$_ 0` after `: t` (bash), `set -- ex; ${1}it 0`, `$(printf ex)it 0`, `` `echo exit` 0 ``,
+    `$(echo hash) -p …`, `ex?t 0`). An expansion glued to a command word or splitting it is read as empty and again as a
+    space, all but `$#`, `$?` and `$$`, which never come out empty (`exit$x 0`, `` exit`:` 0 ``, `e$(:)xit 0`, `set$x
+    +e`, `hash${x} -p …`, `exit${IFS}0`, `exit$*0` after `set -- ' '`, `exit$( (:) ) 0`, `exit$(:|:) 0`), and a
+    parameter, named, indirect or subscripted too, given a `-`, `:-`, `+`, `:+`, `=` or `:=` operator or a pattern
+    replacement as its word (`${1-exit} 0`, `${x:-exit} 0`, `${0:+exit} 0`, `${1-${2-exit}} 0`, `${x:=exit} 0`,
+    `${0/*/exit} 0`, `${!x:-exit} 0`, `${a[0]:-exit} 0`): those are read."""
     audited, faults = set(), []
     for name, job in (workflow.get("jobs") or {}).items():
         for step in job.get("steps") or []:
@@ -775,15 +781,16 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": "{exec,true,\"$(echo \" \")\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["cannot read (`{exec,true,…`"]),
     ({"run": "{exec,true,$(echo\ntrue)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
-     ["cannot read (`{exec,true,$(echo`"]),
+     ["shares the step with `{exec,true,$(echo ; true)}`", "cannot read (`{exec,true,$(echo`"]),
     ({"run": "{exec,true,\"`echo \"a b\"`\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
-     ["cannot read (`{exec,true,…}`"]),
+     ["shares the step with `{exec,true,\"`echo \"a b\"`\"}`", "cannot read (`{exec,true,…}`"]),
     ({"run": "{exec,true,${ echo a;}}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
-     ["cannot read (`{exec,true,${`"]),
+     ["shares the step with `{exec,true,${ echo a ; }}`", "cannot read (`{exec,true,${`"]),
     ({"run": "{exec,true,\"a;b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,\"a`"]),
     ({"run": "{exec,true,'a|b'}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,'a`"]),
     ({"run": "{exec,true,\"a&&b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,\"a`"]),
-    ({"run": "{exec,true,$(:;:)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,$(:`"]),
+    ({"run": "{exec,true,$(:;:)}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exec,true,$(: ; :)}`", "cannot read (`{exec,true,$(:`"]),
     ({"run": "{exec,true,a\\;b}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{exec,true,a\\`"]),
     ({"run": "{hash,-p,/bin/true,pip-audit,\"a;b\"}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["cannot read (`{hash,-p,/bin/true,pip-audit,\"a`"]),
@@ -877,6 +884,106 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": "true\nexit${x:-${y}} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `exit${x:-${y}} 0`"]),
     ({"run": "x=A; echo ${x,,}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\nexit$( (:) ) 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit$( (:) ) 0`"]),
+    ({"run": "true\nexit$(:|:) 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit$(: | :) 0`"]),
+    ({"run": "true\nexit$(:;:) 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit$(: ; :) 0`"]),
+    ({"run": "true\nexit$(: && :) 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit$(: && :) 0`"]),
+    ({"run": "true\nexit${x+;} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${x+ ; } 0`"]),
+    ({"run": "true\nexit${x+|} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${x+ | } 0`"]),
+    ({"run": "true\nexit`:;:` 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit`: ; :` 0`"]),
+    ({"run": "true\nexit`:\\`:\\`` 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit`:\\`:\\`` 0`"]),
+    ({"run": "true\nexit$( ( (:) ) ) 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit$( ( (:) ) ) 0`"]),
+    ({"run": "true\n\"exit$( (:) )\" 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `\"exit$( (:) )\" 0`"]),
+    ({"run": "true\nexit${ :;} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${ : ; } 0`"]),
+    ({"run": "true\nexit${| :;} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${ | : ; } 0`"]),
+    ({"run": "true\nexec$( (:) ) true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exec$( (:) ) true`"]),
+    ({"run": "set$( (:) ) +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "set$(:|:) -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `set$(: | :) -n`"]),
+    ({"run": "hash$( (:) ) -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "true\n${x:=exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${x:=exit} 0`"]),
+    ({"run": "true\n${x=exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${x=exit} 0`"]),
+    ({"run": "x=y\n${!x:-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${!x:-exit} 0`"]),
+    ({"run": "true\n${a[0]:-exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${a[0]:-exit} 0`"]),
+    ({"run": "true\n${0/*/exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${0/*/exit} 0`"]),
+    ({"run": "true\n${0//*/exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${0//*/exit} 0`"]),
+    ({"run": "${0/*/set} -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `${0/*/set} -n`"]),
+    ({"run": "${a[0]-set} -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${a[0]-set} -n`"]),
+    ({"run": "${x=set} +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "true\n${x/#/exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${x/#/exit} 0`"]),
+    ({"run": "true\nexit${IFS}0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${IFS}0`"]),
+    ({"run": "true\nexit$(echo \" \")0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit$(echo \" \")0`"]),
+    ({"run": "true\nexec${IFS}true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exec${IFS}true`"]),
+    ({"run": "set${IFS}+e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "hash${IFS}-p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "true\nexit$_x 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$_x 0`"]),
+    ({"run": "set$_x +e\n" + _AUDIT + "\necho done"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "true\ne\\xit$x 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `e\\xit$x 0`"]),
+    ({"run": "true\nex\"\"it$x 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ex\"\"it$x 0`"]),
+    ({"run": "true\n${1-exit$x} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-exit$x} 0`"]),
+    ({"run": "true\n{exit$x,} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `{exit$x,} 0`"]),
+    ({"run": "ha\\sh$x -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
+    ({"run": "true\n${1-${001}exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-${001}exit} 0`"]),
+    ({"run": "true\nexit$# 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\nexit$? 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\nexit$$ 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\nexit${x:+{}} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\n${x?exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\n${x:?exit} 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "echo -j$(nproc) $((1 + 2))\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "ls $HOME/x ${XDG:-/tmp}/y || true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "v=\"$(python3 -c 'import sys; print(1)' || echo 3)\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "mkdir -p o/{a,b}/c\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "set -- $x\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `set -- $x`"]),
+    ({"run": "echo \\${a,b}\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{a,b}`"]),
+    ({"run": "echo {a,b\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["cannot read (`{a,b`"]),
+    ({"run": "set -- ' '\nexit$*0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$*0`"]),
+    ({"run": "set -- ' '\nexit$@0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$@0`"]),
+    ({"run": "set -- ' '\nexit${*}0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${*}0`"]),
+    ({"run": "set -- ' '\nexit$10\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$10`"]),
+    ({"run": ": ' '\nexit$_0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["shares the step with `exit$_0`"]),
+    ({"run": "_x=' '\nexit${_x}0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${_x}0`"]),
+    ({"run": "true\n${1-exit}${IFS}0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${1-exit}${IFS}0`"]),
+    ({"run": "true\ne`:\\`:\\``xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e`:\\`:\\``xit 0`"]),
+    ({"run": "true\nset -- ' a' a; exit${*%${2}}0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit${*%${2}}0`"]),
+    ({"run": "set$(:|:) +e\n" + _AUDIT + "\ntrue"}, {}, {"docker/a/requirements.txt"}, ["not followed"]),
+    ({"run": "hash$(:|:) -p /bin/true pip-audit\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["a function or an alias"]),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -1001,7 +1108,40 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "exit-glued-to-a-braced-parameter-with-a-leading-zero-in-a-default",
         "exit-glued-to-a-stripped-empty-parameter-in-a-default",
         "exit-split-by-a-substitution-holding-an-arithmetic-one",
-        "exit-glued-to-a-nested-named-default", "case-modification-in-a-message"])
+        "exit-glued-to-a-nested-named-default", "case-modification-in-a-message",
+        "exit-glued-to-a-subshell-substitution", "exit-glued-to-a-piped-substitution",
+        "exit-glued-to-a-listed-substitution", "exit-glued-to-an-and-list-substitution",
+        "exit-glued-to-an-alternative-holding-a-semicolon", "exit-glued-to-an-alternative-holding-a-pipe",
+        "exit-glued-to-a-listed-backquoted-command", "exit-glued-to-a-nested-backquoted-command",
+        "exit-glued-to-a-doubly-nested-subshell-substitution", "exit-glued-to-a-quoted-subshell-substitution",
+        "exit-glued-to-a-current-shell-substitution", "exit-glued-to-a-value-substitution",
+        "exec-glued-to-a-subshell-substitution", "set-plus-e-glued-to-a-subshell-substitution",
+        "set-n-glued-to-a-piped-substitution", "hash-glued-to-a-subshell-substitution",
+        "exit-as-an-assigned-colon-default", "exit-as-an-assigned-default", "exit-as-an-indirect-colon-default",
+        "exit-as-a-subscripted-colon-default", "exit-as-a-pattern-replacement-of-the-shell-name",
+        "exit-as-a-global-pattern-replacement-of-the-shell-name", "set-n-as-a-pattern-replacement-of-the-shell-name",
+        "set-n-as-a-subscripted-default", "set-plus-e-as-an-assigned-default",
+        "exit-as-the-anchored-replacement-of-an-unset-variable", "exit-glued-to-the-field-separator",
+        "exit-glued-to-a-substitution-that-prints-a-space", "exec-glued-to-the-field-separator",
+        "set-plus-e-glued-to-the-field-separator", "hash-glued-to-the-field-separator",
+        "exit-glued-to-a-name-that-starts-with-an-underscore",
+        "set-plus-e-glued-to-a-name-that-starts-with-an-underscore", "exit-escaped-and-glued-to-a-named-variable",
+        "exit-split-by-a-quote-pair-and-glued-to-a-named-variable", "exit-glued-to-a-named-variable-in-a-default",
+        "exit-glued-to-a-named-variable-in-a-brace-list", "hash-escaped-and-glued-to-a-named-variable",
+        "exit-glued-to-a-braced-parameter-with-two-leading-zeros-in-a-default", "exit-glued-to-the-parameter-count",
+        "exit-glued-to-the-last-status", "exit-glued-to-the-shell-pid",
+        "exit-glued-to-an-alternative-holding-a-brace-pair", "exit-as-the-error-word-of-an-unset-variable",
+        "exit-as-the-colon-error-word-of-an-unset-variable", "substitution-and-arithmetic-in-arguments",
+        "variables-and-a-default-in-arguments", "substitution-holding-a-list-in-a-quoted-assignment",
+        "brace-list-in-a-path", "positional-parameters-set-from-a-variable", "escaped-dollar-before-a-brace-list",
+        "brace-list-left-open",
+        "exit-glued-to-the-arguments-a-set-gives-a-space", "exit-glued-to-the-argument-list-a-set-gives-a-space",
+        "exit-glued-to-the-braced-arguments-a-set-gives-a-space",
+        "exit-glued-to-a-positional-parameter-a-set-gives-a-space",
+        "exit-glued-to-the-last-argument-a-command-leaves-a-space",
+        "exit-glued-to-a-braced-name-that-starts-with-an-underscore", "exit-as-a-default-glued-to-the-field-separator",
+        "exit-split-by-a-backquoted-command-holding-escaped-ones", "exit-glued-to-the-arguments-stripped-by-another",
+        "set-plus-e-glued-to-a-piped-substitution", "hash-glued-to-a-piped-substitution"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -1040,11 +1180,11 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     expression in a comment, a `hash`, `BASH_CMDS`, `BASH_ALIASES` or `enable` entry for `pip-audit`, an `eval` that
     rejoins an `exit 0` split by a backslash-newline inside single quotes, a `set` given a variable flag or a glob (`set
     -$x`, `set +[e]`, `set +?`, `set +*`), an imported function, `SHELLOPTS`, `BASHOPTS`, `PATH` or `ENV` in the env,
-    and a `container:` on the job; it passes env keys that only look like those (`ENVIRONMENT`, `XBASH_ENV`). Fold
-    8's reads added: a `hash` after a `(` or glued to a redirect, an `alias` glued to one, a `BASH_CMDS` entry inside a
-    word (`: ${BASH_CMDS[…]:=…}`); a `set` given a brace expansion (inside a closed `if` too) or an extended glob, `set
-    -t`, `set -o onecmd`, `shopt -os noexec`, `shopt -so onecmd` and a `shopt` given a variable; an `eval` whose string
-    a backslash-newline inside double quotes or between juxtaposed quotes rejoins, and a comment in a quote nested in a
+    and a `container:` on the job; it passes env keys that only look like those (`ENVIRONMENT`, `XBASH_ENV`). Fold 8's
+    reads added: a `hash` after a `(` or glued to a redirect, an `alias` glued to one, a `BASH_CMDS` entry inside a word
+    (`: ${BASH_CMDS[…]:=…}`); a `set` given a brace expansion (inside a closed `if` too) or an extended glob, `set -t`,
+    `set -o onecmd`, `shopt -os noexec`, `shopt -so onecmd` and a `shopt` given a variable; an `eval` whose string a
+    backslash-newline inside double quotes or between juxtaposed quotes rejoins, and a comment in a quote nested in a
     `"$(…)"` (each a newline inside a quoted string, which replaces the single-quote rule fold 8 wrote); a NUL, or one
     of the check's own marks, in the script; a `PS4`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD` or
     `LD_LIBRARY_PATH` in the env; a `container:` that names only an image; and a `)#` a backslash-newline splits. It
@@ -1089,31 +1229,52 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     or a substitution cuts (`{exec,true,"a;b"}`, `{exec,true,'a|b'}`, `{exec,true,"a&&b"}`, `{exec,true,$(:;:)}`,
     `{exec,true,a\\;b}`, and `hash` and `set -n` built so); a backquoted command holding an escaped backquote, which the
     view now reads whole (`` {exec,true,`echo a\\` b`} ``); and a special parameter with a leading zero or past `$99`,
-    or given any operator (`exit${010}`, `exit${01}`, `${100-exit} 0`, `${0:+exit} 0`, `${#:+exit} 0`, `${?:+exit} 0`,
-    `${$:+exit} 0`, `${-:+exit} 0`, `${_:+exit} 0`, `${1-${2-exit}} 0`, `${1-$@exit} 0`, and `set` built the same ways
-    before `+e`). Fold 13 added: an expansion that can come out empty glued to a command word or splitting it (`exit$x
-    0`, `` exit`:` 0 ``, `e$(:)xit 0`, `` `:`exit 0 ``, `exit${0##*}`, `exit${#%?}`, `exit${?%?}`, `exit${$##*}`,
-    `exit${-##*}`, `set$x +e`, `set${0##*} +e`, `hash${x} -p …`), a named parameter's default (`${x:-exit} 0`), and,
-    under `shell: sh`, `$_`, which dash starts unset (`${_-exit} 0`, `exit$_ 0`). It passes each kind of piece a brace
-    list's item may hold (`mkdir -p o/{"a b",c}`, `o/{'a b',c}`, `o/{a\\ b,c}`, `o/{${HOME:+h},c}`, `o/{$(echo a),c}`,
-    `` o/{`echo a`,c} ``), a brace the check cannot read inside a quoted message, named defaults in a message (`echo
-    "${x:-a b}" ${HOME:-none}`), and commas and dots in a brace group (`{ echo a,b; echo c..d; }`); it refuses a brace
-    list it cannot read in a `mkdir` (`mkdir -p o/{${x:-${y}},c}`: sound, since bash builds no command word from it).
-    Fold 13's mutants added: `$*` and `$!` given a default (`${*:-exit} 0`, `${!:-exit} 0`), a braced special parameter
-    glued to the word of another's default (`${1-${@}exit} 0`, `${1-${*}exit} 0`, `${1-${!}exit} 0`, `${1-${010}exit}
-    0`, `${1-${@%x}exit} 0`), a substitution holding an arithmetic one (`e$(: $((1)))xit 0`) and a named default holding
-    another (`exit${x:-${y}} 0`); and it passes a case modification (`x=A; echo ${x,,}`). Each row's job runs on
-    ubuntu-latest unless the row names another. Guards a check that counts a dead audit as coverage (T29's fold-2 read,
-    S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body,
-    PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a;
-    N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read
-    B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold
-    7's read A, S1 to S5; its read B, S1, S2, N6; fold 8's read A, S1 to S5, N1: M1 to M13; its read B, S1 to S4, N2,
-    N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's mutant X9a; its read B, S1, S2, N1, N8; fold 10's mutant run:
-    B9-control-class-nul-and-stx-only; its read A, S1, N1; its read B, S1, S2, N1, N2; fold 11's mutant X11h; its read
-    A, S1, S2, N1: A10; its read B, S1, S2, N6, N7; fold 12's mutant run: X12u, X12aa; its read A (interim, no verdict):
-    b01 to b22, c01 to c09, s01 to s37; its read B, S1, S2; fold 13's mutant run: X12r to X12t, X12y, X13e, X13f, X13q,
-    X13t, X13y, X13G)."""
+    or given an operator, read as its word under `-`, `:-`, `+` or `:+` and removed under any other (`exit${010}`,
+    `exit${01}`, `${100-exit} 0`, `${0:+exit} 0`, `${#:+exit} 0`, `${?:+exit} 0`, `${$:+exit} 0`, `${-:+exit} 0`,
+    `${_:+exit} 0`, `${1-${2-exit}} 0`, `${1-$@exit} 0`, and `set` built the same ways before `+e`). Fold 13 added: an
+    expansion that can come out empty glued to a command word or splitting it (`exit$x 0`, `` exit`:` 0 ``, `e$(:)xit
+    0`, `` `:`exit 0 ``, `exit${0##*}`, `exit${#%?}`, `exit${?%?}`, `exit${$##*}`, `exit${-##*}`, `set$x +e`,
+    `set${0##*} +e`, `hash${x} -p …`), a named parameter's default (`${x:-exit} 0`), and, under `shell: sh`, `$_`, which
+    dash starts unset (`${_-exit} 0`, `exit$_ 0`). It passes each kind of piece a brace list's item may hold (`mkdir -p
+    o/{"a b",c}`, `o/{'a b',c}`, `o/{a\\ b,c}`, `o/{${HOME:+h},c}`, `o/{$(echo a),c}`, `` o/{`echo a`,c} ``), a brace
+    the check cannot read inside a quoted message, named defaults in a message (`echo "${x:-a b}" ${HOME:-none}`), and
+    commas and dots in a brace group (`{ echo a,b; echo c..d; }`); it refuses a brace list it cannot read in a `mkdir`
+    (`mkdir -p o/{${x:-${y}},c}`: sound, since bash builds no command word from it). Fold 13's mutants added: `$*` and
+    `$!` given a default (`${*:-exit} 0`, `${!:-exit} 0`), a braced special parameter glued to the word of another's
+    default (`${1-${@}exit} 0`, `${1-${*}exit} 0`, `${1-${!}exit} 0`, `${1-${010}exit} 0`, `${1-${@%x}exit} 0`), a
+    substitution holding an arithmetic one (`e$(: $((1)))xit 0`) and a named default holding another (`exit${x:-${y}}
+    0`); and it passes a case modification (`x=A; echo ${x,,}`). Fold 13's reads added: an expansion holding a `(`
+    (`exit$( (:) ) 0`, `exit$( ( (:) ) ) 0`, `"exit$( (:) )" 0`, `exec$( (:) ) true`, `set$( (:) ) +e`, `hash$( (:) ) -p
+    …`), one `commands` cuts at an operator inside it (`exit$(:|:) 0`, `exit$(:;:) 0`, `exit$(: && :) 0`, `exit${x+;}
+    0`, `exit${x+|} 0`, `` exit`:;:` 0 ``, `set$(:|:) -n`), a backquoted command holding an escaped one (``
+    exit`:\\`:\\`` 0 ``), and bash 5.3's `exit${ :;} 0` and `exit${| :;} 0`; a parameter's word under `=`, `:=` or a
+    pattern replacement, or of an indirect or subscripted one (`${x:=exit} 0`, `${x=exit} 0`, `${0/*/exit} 0`,
+    `${0//*/exit} 0`, `${!x:-exit} 0`, `${a[0]:-exit} 0`, `${0/*/set} -n`, `${a[0]-set} -n`, `${x=set} +e`, and
+    `${x/#/exit} 0`, sound with `x` unset but refused); an expansion that splits a word in two (`exit${IFS}0`,
+    `exit$(echo " ")0`, `exec${IFS}true`, `set${IFS}+e`, `hash${IFS}-p …`); `$_` glued to a name (`exit$_x 0`, `set$_x
+    +e`); a word that reads as a command word only in `_plain`'s view, glued to an expansion (`e\\xit$x 0`, `ex""it$x
+    0`, `${1-exit$x} 0`, `{exit$x,} 0`, `ha\\sh$x -p …`); a braced parameter with two leading zeros (`${1-${001}exit}
+    0`); and, refused although sound, `set -- $x`, `echo \\${a,b}` and `echo {a,b`. It passes `exit$# 0`, `exit$? 0` and
+    `exit$$ 0` (each a command not found), `exit${x:+{}} 0`, `${x?exit} 0` and `${x:?exit} 0` (each fails the step), and
+    arguments holding a substitution, an arithmetic expansion, a default or a brace list (`echo -j$(nproc) $((1 + 2))`,
+    `ls $HOME/x ${XDG:-/tmp}/y || true`, `v="$(python3 -c 'import sys; print(1)' || echo 3)"`, `mkdir -p o/{a,b}/c`).
+    Fold 14 added: a special parameter `_plain` removes as empty, read as a space too (`exit$*0`, `exit$@0`, `exit${*}0`
+    and `exit$10` after `set -- ' '`, `exit$_0` after `: ' '`, `exit${_x}0` after `_x=' '`), and a default glued to the
+    field separator (`${1-exit}${IFS}0`). Fold 14's mutants added: a command word a backquoted command holding escaped
+    ones splits (`` e`:\\`:\\``xit 0 ``), `$*` stripped of a pattern another parameter gives (`exit${*%${2}}0` after
+    `set -- ' a' a`, a space), and a `set +e` or a `hash` glued to a piped substitution (`set$(:|:) +e`, `hash$(:|:) -p
+    …`). Each row's job runs on ubuntu-latest unless the row names another. Guards a
+    check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its fold-3 read,
+    S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if, PA-quoted-hash-hides-or; fold
+    4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold 5's read A, S1, S2, S5, N2,
+    N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its read A, S2, S4, S5, S7, N3;
+    its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5; its read B, S1, S2, N6; fold 8's read A, S1 to
+    S5, N1: M1 to M13; its read B, S1 to S4, N2, N3, N6, N7: CT1, CT2, SI2, MK2; fold 9's mutant X9a; its read B, S1,
+    S2, N1, N8; fold 10's mutant run: B9-control-class-nul-and-stx-only; its read A, S1, N1; its read B, S1, S2, N1, N2;
+    fold 11's mutant X11h; its read A, S1, S2, N1: A10; its read B, S1, S2, N6, N7; fold 12's mutant run: X12u, X12aa;
+    its read A (interim, no verdict): b01 to b22, c01 to c09, s01 to s37; its read B, S1, S2; fold 13's mutant run: X12r
+    to X12t, X12y, X13e, X13f, X13q, X13t, X13y, X13G; its read A, S1 to S3, N1, N3: a01 to a28, j01 to j06, p01, k01 to
+    k05, q01, q02, t08 to t10; its read B, S1, S2, N1; fold 14's mutant run: X14b, X14e, X14m, X14o)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults

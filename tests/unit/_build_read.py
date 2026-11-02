@@ -29,14 +29,19 @@ Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the w
   …`): each can stand in for the checked program, or for `set`;
 - no `trap`, `exec`, `return` or `exit` shares the text, but `exit 1` to `exit 255` (`exit 256` is 0): each of the
   others can end the text with a status that is not the failure's. One is read as a word anywhere in a command, as
-  written or in a view of it: its brace expansions expanded, then the special parameters a shell may start with
-  empty removed (`$@`, `$*`, `$!`, a positional parameter, bare or braced, `$1`, `${10}`, `${010}`, and `$-` and `$_`,
-  which dash starts `sh -c` with empty and unset), and any parameter, named too, given a `-`, `:-`, `+` or `:+`
-  operator read as its word, innermost first, then its quotes, backslashes and a locale string's `$` removed
-  (`\\exit 0`, `"exit" 0`, `exit$""`, `exit$@`, `exit${10}`, `exit$_ 0`, `${1-exit} 0`, `${1-${2-exit}} 0`,
-  `${#:+exit} 0`, `${x:-exit} 0`, `{exit,0}`, `command exit 0`, `eval 'exit 0'`), or in a second view, that one with
-  every expansion left in it removed, as any can come out empty (`exit${0##*}`, `exit$x 0`, `` exit`:` 0 ``,
-  `e$(:)xit 0`); after an `&`, `|` or redirect and before a redirect too (`true&exit 0`, `exit>/dev/null`);
+  written or in a view of it: its brace expansions expanded, then the special parameters a shell may start with empty
+  removed (`$@`, `$*`, `$!`, a positional parameter, bare or braced, `$1`, `${10}`, `${010}`, and `$-` and `$_`, which
+  dash starts `sh -c` with empty and unset), and any parameter, named, indirect or subscripted too, given a `-`, `:-`,
+  `+`, `:+`, `=` or `:=` operator or a pattern replacement read as its word, innermost first, then its quotes,
+  backslashes and a locale string's `$` removed (`\\exit 0`, `"exit" 0`, `exit$""`, `exit$@`, `exit${10}`, `exit$_ 0`,
+  `${1-exit} 0`, `${1-${2-exit}} 0`, `${#:+exit} 0`, `${x:-exit} 0`, `${x:=exit} 0`, `${0/*/exit} 0`, `${!x:-exit} 0`,
+  `{exit,0}`, `command exit 0`, `eval 'exit 0'`); or in that view with every expansion left in it removed (each
+  backquoted command first), read once as empty and once as a space, as most can come out empty and some split a word in
+  two (`exit${0##*}`, `exit$x 0`, `` exit`:` 0 ``, `e$(:)xit 0`, `exit${IFS}0`, `exit$(echo " ")0`, and, read as a space
+  first, a special parameter `_plain` removes: `exit$*0` after `set -- ' '`, `exit$_0` after `: ' '`): all but `$#`,
+  `$?` and `$$`, which never come out empty; after an `&`, `|` or redirect and before a redirect too (`true&exit 0`,
+  `exit>/dev/null`). A command that opens a `$(…)`, `${…}` or backquoted command that `commands` cut at an operator
+  inside it is read with the pieces cut from it, rejoined (`exit$(:|:) 0`, `exit${x+;} 0`, `` exit`:;:` 0 ``);
 - no brace expansion the reader cannot read shares the text: a `{` outside quotes, not after a `$`, with a comma or a
   `..` after it in its word, that the view neither expands nor keeps, because an item holds a piece read only one
   level deep (a `${…}` or `$(…)` nested in another, a `<(…)`, a `$((…))`, a `case` inside a `$(…)`) or is cut by an
@@ -87,19 +92,22 @@ _STAND_IN = re.compile(r"(?:^|[\s(])(?:alias|hash|enable)(?=[\s<>])|\bBASH_(?:AL
 # `$(…)` nested in another, a `<(…)` or a `$((…))` is neither expanded nor kept, and `unread_brace` refuses it.
 # `_SPECIAL`: a special parameter a step's script or a RUN may start with empty (`_EMPTY`: `$@`, `$*`, `$!`, a
 # positional parameter, bare or braced, `${10}`, `${010}` the same one, and `$-` and `$_`, which dash starts `sh -c`
-# with empty and unset), removed under any operator; and any parameter, special, positional or named (`$0`, `${00}`,
-# `$#`, `$?`, `$$`, `${x}`), given a `-`, `:-`, `+` or `:+` operator, read as its word (`${1-exit}`, `${_:-exit}`,
-# `${#:+exit}` and `${x:-exit}` read `exit`). Which of a default and an alternative bash takes depends on the value;
-# the view reads the word either way, which only adds a refusal, as the text is read as written too. `_plain` reads
-# them innermost first, until none is left (`${1-${2-exit}}` and `${1-$@exit}` read `exit`).
+# with empty and unset), removed under any operator (`$_` only where no name character follows it: `$_x` is the variable
+# `_x`); and any parameter, special, positional, named, indirect or subscripted (`$0`, `${00}`, `$#`, `$?`, `$$`,
+# `${x}`, `${!x}`, `${a[0]}`), given a `-`, `:-`, `+`, `:+`, `=` or `:=` operator or a pattern replacement (`/`, `//`,
+# `/#`, `/%`), read as its word (`${1-exit}`, `${_:-exit}`, `${#:+exit}`, `${x:-exit}`, `${x:=exit}`, `${0/*/exit}` and
+# `${!x:-exit}` read `exit`). Which of a default, an alternative and a replacement bash takes depends on the value; the
+# view reads the word either way, which only adds a refusal, as the text is read as written too. `_plain` reads them
+# innermost first, until none is left (`${1-${2-exit}}` and `${1-$@exit}` read `exit`).
 _WHOLE = r"""\\.|"(?:[^"\\]|\\.)*"|'[^']*'|\$\{[^{}]*\}|\$\([^()]*\)|`(?:[^`\\]|\\.)*`"""
 _PIECE = r"""(?>%s|[^{}\s,"'\\`])""" % _WHOLE
 _BRACE = re.compile(r"(?<!\$)\{(?:(%s*(?:,%s*)+)" % (_PIECE, _PIECE)
                     + r"|([a-zA-Z]\.\.[a-zA-Z]|[-+]?\d+\.\.[-+]?\d+)(?:\.\.([-+]?\d+))?)\}")
 _WORD = re.compile(r"""(?:%s|[^\s"'\\`])+""" % _WHOLE)
 _EMPTY = r"[@*!_-]|0*[1-9]\d*"
-_SPECIAL = re.compile(r"\$(?:[@*!1-9-]|_(?!\w)|\{(?:[@*!#?$-]|\d+|[A-Za-z_]\w*):?[-+]([^{}]*)\}|\{(?:%s)[^{}]*\})"
-                      % _EMPTY)
+_SPECIAL = re.compile(r"\$(?:[@*!1-9-]|_(?!\w)"
+                      r"|\{(?:[@*!#?$-]|\d+|!?[A-Za-z_]\w*(?:\[[^]{}]*\])?)(?::?[-+=]|/[/#%%]?[^/{}]*/)([^{}]*)\}"
+                      r"|\{(?:%s)[^{}]*\})" % _EMPTY)
 
 def _braced(text, marked=False):
     """`text` with each brace expansion (`_BRACE`) expanded, in any word, the command's own too: a list (`{exit,0}` ->
@@ -108,9 +116,10 @@ def _braced(text, marked=False):
     pieces (`{}`, `{x}`, `{${x}}`, `{"a,b"}`, `{$(echo a)}`, nested to any depth) is kept as text once nothing else
     expands, so a list around it expands. It reads more than bash does: a quoted `{a,b}`, which bash leaves, is expanded
     too, a nested list innermost first (`{a,{b,c}}` -> `a b a c`, where bash gives `a b c`), and /bin/sh (a Dockerfile
-    RUN) expands none. The gate rules read `_plain`'s view beside the text as written, where each of these only adds a
-    refusal; the digest-name scan (tests/unit/test_image_pins.py) does not read it. `marked`: each kept brace is left
-    as `\\x05…\\x06`, so `unread_brace` tells a kept brace from one neither expanded nor kept."""
+    RUN) expands none. The gate rules read `_plain`'s view (and `_bare`'s, which starts from it) beside the text as
+    written, where each of these only adds a refusal; the digest-name scan (tests/unit/test_image_pins.py) does not read
+    it. `marked`: each kept brace is left as `\\x05…\\x06`, so `unread_brace` tells a kept brace from one neither
+    expanded nor kept."""
     def items(b):
         if b.group(1) is not None:
             out = [""]
@@ -157,39 +166,75 @@ def _plain(command):
     """`command` with its brace expansions expanded (`_braced`), then the special parameters a step's script and a RUN
     may start with empty removed (`_SPECIAL`: `$@`, `$*` and a positional parameter, bare or braced, `$1`, `${10}`:
     neither is given arguments; `$!`: no job is in the background yet; `$-` and `$_`: dash starts `sh -c` with them
-    empty and unset), and any parameter, named too, given a `-`, `:-`, `+` or `:+` operator read as its word,
-    innermost first until none is left, as bash expands a brace before a parameter, then its quotes, backslashes and
-    the `$` of a locale string (bash expands `$""` to nothing), so `{exit,0}`, `"set" +e`, `e\\xit 0`, `exit$""`,
-    `exit$@`, `exit${10}`, `${1-exit} 0`, `${1-${2-exit}} 0`, `${#:+exit} 0` and `${x:-exit} 0` read as written
-    plainly. One of these that is not empty (a `set --` before it, a job sent to the background) only adds a refusal
-    to the gate rules."""
+    empty and unset), and any parameter, named, indirect or subscripted too, given a `-`, `:-`, `+`, `:+`, `=` or `:=`
+    operator or a pattern replacement read as its word, innermost first until none is left, as bash expands a brace
+    before a parameter, then its quotes, backslashes and the `$` of a locale string (bash expands `$""` to nothing), so
+    `{exit,0}`, `"set" +e`, `e\\xit 0`, `exit$""`, `exit$@`, `exit${10}`, `${1-exit} 0`, `${1-${2-exit}} 0`, `${#:+exit}
+    0`, `${x:-exit} 0`, `${x:=exit} 0`, `${0/*/exit} 0` and `${a[0]:-exit} 0` read as written plainly. One of these that
+    is not empty (after a `set --` gives it a word, or a job sent to the background) is removed all the same: beside the
+    text as written that only adds a refusal; `_bare`'s space view reads it as a space too (`set -- ' '; exit$*0`); and
+    a command word it builds is one built from what a parameter holds, which the checks cannot see (`set -- ex; ${1}it
+    0`)."""
     command, prev = _braced(command), None
     while prev != command:
         prev, command = command, _SPECIAL.sub(lambda m: m.group(1) or "", command)
     return re.sub(r"""\$(?=["'])|["'\\]""", "", command)
 
 
-# An expansion `_bare` removes: a `${…}`, a `$((…))`, a `$(…)` or a backquoted command holding none of its own, a
-# `$name`, a special or a positional parameter. An arithmetic one never comes out empty, nor do `$#`, `$?` and `$$`;
-# each is removed so that a substitution holding one is read (`e$(: $((1)))xit 0`), which refuses `exit$((0))`,
-# a command not found, although sound.
-_EXPANSION = re.compile(r"\$\{[^{}]*\}|\$\(\([^()]*\)\)|\$\([^()]*\)|`[^`]*`|\$(?:\w+|[@*!#?$_-])")
+# An expansion `_bare` removes: a `${…}`, a `$(…)`, a `(…)` or a backquoted command holding none of its own (so a
+# `$((…))` and a `$( (…) )` go innermost first), a `$name`, `$@`, `$*`, `$!`, `$-`, `$_` or a positional parameter.
+# `$#`, `$?` and `$$` never come out empty and are kept (`exit$# 0` runs `exit0 0`, a command not found: read 131,
+# N1). An arithmetic expansion never comes out empty either, nor do `${#}`, `${#x}` and `$0`; each is removed so that
+# a substitution holding one is read (`e$(: $((1)))xit 0`), which refuses `exit$((0))`, `exit${#} 0` and `exit$0 0`,
+# each a command not found, although sound.
+_EXPANSION = re.compile(r"\$\{[^{}]*\}|\$?\([^()]*\)|`[^`]*`|\$(?:\w+|[@*!_-])")
 
 
-def _bare(command):
-    """`_plain`'s view of `command` with every expansion left in it removed (`_EXPANSION`), innermost first until none
-    is left: most of them can come out empty, a variable never set, a `$(true)`, `${0##*}`, `${#%?}`, and a word glued
-    to it is then read alone (`exit${0##*}`, `e$(true)xit 0`, `` `true`exit 0 ``, `set$x +e`, `hash${x} -p …`). Like
-    `_plain`'s view, it only adds a refusal to the gate rules, which read it beside the text as written."""
-    text, prev = _plain(command), None
+def _bare(command, sep=""):
+    """`_plain`'s view of `command` with every expansion left in it removed (`_EXPANSION`), each backquoted command
+    first (an escaped backquote inside it too: `` exit`:\\`:\\`` 0 ``), then innermost first until none is left: most of
+    them can come out empty, a variable never set, a `$(true)`, `${0##*}`, `${#%?}`, and a word glued to it is then read
+    alone (`exit${0##*}`, `e$(true)xit 0`, `` `true`exit 0 ``, `set$x +e`, `hash${x} -p …`). `sep` stands in for each:
+    `_views` reads it as empty and as a space, as an expansion can also split a word in two (`exit${IFS}0`, `exit$(echo
+    " ")0`, `set${IFS}+e`: read 130, S3). Where `sep` is a space, the special parameters `_plain` removes as empty
+    (`_SPECIAL`'s bare and removal arms: `$@`, `$*`, a positional parameter, `$_`, bare or braced) are read as a space
+    first, innermost first, and one given an operator or a pattern replacement is left for `_plain` to read its word, as
+    a `set --` can give one a space (`set -- ' '; exit$*0`) and a command can leave `$_` one where sh is bash (`: ' ';
+    exit$_0`). Like `_plain`'s view, it only adds a refusal to the gate rules, which read it beside the text as written.
+    """
+    text, prev = re.sub(r"`(?:[^`\\]|\\.)*`", sep, command), None
+    while sep and prev != text:
+        prev, text = text, _SPECIAL.sub(lambda m: m.group(0) if m.group(1) is not None else sep, text)
+    text, prev = _plain(text), None
     while prev != text:
-        prev, text = text, _EXPANSION.sub("", text)
+        prev, text = text, _EXPANSION.sub(sep, text)
     return text
 
 
 def _views(command):
-    """`command` as written, in `_plain`'s view and in `_bare`'s: the gate rules read a word in any of them."""
-    return command, _plain(command), _bare(command)
+    """`command` as written, in `_plain`'s view and in `_bare`'s, its expansions read as empty and as a space: the gate
+    rules read a word in any of them, so each view only adds a refusal."""
+    return command, _plain(command), _bare(command), _bare(command, " ")
+
+
+def _open_subst(text):
+    """True if `text` opens a `$(…)`, `${…}` or backquoted command it does not close."""
+    prev = None
+    while prev != text:
+        prev, text = text, re.sub(r"\$\{[^{}]*\}|\$?\([^()]*\)|`(?:[^`\\]|\\.)*`", "", text)
+    return bool(re.search(r"\$[({]|`", text))
+
+
+def _spans(cmds):
+    """[cmds[k] with the commands a `$(…)`, `${…}` or backquoted command it opens runs on into (`commands` cut it at an
+    operator inside: `exit$(:|:) 0`, `exit${x+;} 0`), rejoined with their operators]."""
+    out = []
+    for k in range(len(cmds)):
+        text, m = cmds[k][0], k
+        while _open_subst(text) and m + 1 < len(cmds):
+            text, m = text + " " + cmds[m][2] + " " + cmds[m + 1][0], m + 1
+        out.append(text)
+    return out
 
 
 def unquote(token):
@@ -287,14 +332,15 @@ def opened(cmds, i):
 
 
 def errexit(cmds, on=False):
-    """[whether errexit is on when cmds[k] runs]: `on` at the start, then switched off by any `set +e`/`set +o
-    errexit` anywhere (after a keyword, in a brace group, behind an assignment or `command`), and on by a `set -e`/
-    `set -o errexit` that is a whole command at the top of the text and runs whenever the text gets there (not
-    behind `&&` or `||`, not piped, nothing open)."""
-    out = []
+    """[whether errexit is on when cmds[k] runs]: `on` at the start, then switched off by any `set +e`/`set +o errexit`
+    anywhere (after a keyword, in a brace group, behind an assignment or `command`), and on by a `set -e`/ `set -o
+    errexit` that is a whole command at the top of the text and runs whenever the text gets there (not behind `&&` or
+    `||`, not piped, nothing open). A `set +e` is read in each view of the command (`_views`), with the pieces
+    `commands` cut from an expansion it opens (`_spans`: `set$(:|:) +e`)."""
+    out, spans = [], _spans(cmds)
     for k, (command, before, after) in enumerate(cmds):
         out.append(on)
-        if any(_SET_OFF.search(text) for text in _views(command)):
+        if any(_SET_OFF.search(text) for text in _views(spans[k])):
             on = False
             continue
         words = command.split()
@@ -334,19 +380,21 @@ def ender(cmds):
     """The first command of the text holding a `trap`, `exec`, `return` or `exit` that can end it with a status other
     than a failure's (each but `exit 1` to `exit 255`), as a word of its own anywhere in the command (after a keyword,
     an opening `(`, `{` or `!`, a case pattern, `command`, `eval`, an assignment, an `&`, `|` or redirect; or before a
-    redirect, `exit>/dev/null`), as written or in `_plain`'s view (its quotes, backslashes, a locale string's `$` and
-    the special parameters empty at the start removed, its brace expansions expanded); or a `set -n`, `set -t`, `set -o
-    noexec` or `set -o onecmd` (a flag cluster holding `n` or `t`), a `shopt` naming noexec or onecmd, or a `set` or
-    `shopt` that can be one (the module docstring's last rule: the shell then runs none of the rest of the text, or
-    stops after one command); or None."""
-    for command, _, _ in cmds:
-        for text in _views(command):
+    redirect, `exit>/dev/null`), as written or in a view of it (`_views`: `_plain`'s, its brace expansions expanded, its
+    quotes, backslashes, a locale string's `$` and the special parameters empty at the start removed, and a parameter's
+    word read; and `_bare`'s, every expansion left removed); or a `set -n`, `set -t`, `set -o noexec` or `set -o onecmd`
+    (a flag cluster holding `n` or `t`), a `shopt` naming noexec or onecmd, or a `set` or `shopt` that can be one (the
+    module docstring's last rule: the shell then runs none of the rest of the text, or stops after one command); or
+    None. A command that opens an expansion `commands` cut at an operator inside it is read, and named, with the pieces
+    cut from it (`_spans`: `exit$(: | :) 0`)."""
+    for span in _spans(cmds):
+        for text in _views(span):
             m = _ENDER.search(text)
             if _NOEXEC.search(text):
-                return command
+                return span
             if m and not (m.group(1) == "exit" and re.fullmatch(r"[1-9]\d?|1\d\d|2[0-4]\d|25[0-5]",
                                                                 (m.group(2) or "").strip())):
-                return command
+                return span
     return None
 
 
@@ -355,7 +403,7 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
     `on`: whether errexit is on at the start of the text."""
     command = cmds[i][0]
     if any(_FUNCTION.search(t) or _STAND_IN.search(t)
-           for c, _, _ in cmds for t in (_without_quotes(c),) + _views(c)[1:]):
+           for c in _spans(cmds) for t in (_without_quotes(c),) + _views(c)[1:]):
         return ["%s shares the %s with a function or an alias, or an entry in bash's command tables (`hash`, "
                 "`enable`, `BASH_CMDS`, `BASH_ALIASES`), which can stand in for it: %s"
                 % (what, unit, command)]

@@ -323,37 +323,39 @@ imports plainly, so it fails rather than skips where the package is missing.
 
 ## How a build's shell is read (`tests/unit/_build_read.py`)
 
-`test_image_pins.py` (a Dockerfile `RUN`) and `test_ci_workflows.py` (a workflow step's `run:`)
-both hold that a check the build runs — a `pip check`, a `sha256sum -c`, a `pip-audit` — can
-fail it. They share one reading of when it can: `commands()` splits the text on `&&`, `||`, `;`,
-`|` and a lone `&`, and `gate_faults()` names a check that a later `|| true` or `; cmd`, a pipe,
-a `&` (the background), an `if`/`elif`/`while`/`until` condition or a `!` keeps from failing it;
-that runs inside a `$(…)`, backquotes or a quoted string, after an ANSI-C `$'…'` or in a list
-holding one; that runs in a compound behind `||` or `!`; or that shares its text with a function
-or alias definition (or a `hash` or `enable` entry), a `trap`, `exec`, `return`, an `exit` that
-can be 0, or a `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt`
-that can be one). It reads each command as written and in the views bash's expansion can turn it
-into: its brace expansions expanded and a parameter's default read as its word, then every
-expansion that can come out empty removed (`exit$x 0` runs `exit 0` where `x` is unset); a brace
-list it cannot read (an item holding a nested substitution or parameter, or one an operator inside
-a quote or a substitution cuts) is refused. It reads errexit the way `/bin/sh` does: a `;` after
-`set -e` counts only for a check that starts its AND-OR list and is the whole of it (a guard
-before it can skip it), and never inside a compound (a brace group, a subshell, an `if` body, a
-loop); a `set -e` counts only as a whole top-level command, and a `set +e`, a `set` or `shopt`
-given a variable, a backquoted command, a glob or a brace expansion, or a `shopt` naming errexit,
-anywhere, switches errexit off. It removes quoted strings (escapes, a `'` or backquotes inside
-`"…"`) when it decides what a check runs inside, but it splits on `&&`, `||`, `;` and `|` inside
-quotes too (a lone `&` only outside them). A Dockerfile's lines reach it joined as BuildKit joins
-them (no space at a continuation, a double backslash continuing nothing, a byte-order mark
-dropped, a whitespace character other than a space, a tab or a line feed refused); a step's `run:`
-is read whole (a quote or a backquote spans a newline, and the step is refused when one does or is
-left open; a `#` cuts to the line end, and one right after a `)` is refused; a C0 control
+`test_image_pins.py` (a Dockerfile `RUN`) and `test_ci_workflows.py` (a workflow step's `run:`) both
+hold that a check the build runs — a `pip check`, a `sha256sum -c`, a `pip-audit` — can fail it.
+They share one reading of when it can: `commands()` splits the text on `&&`, `||`, `;`, `|` and a
+lone `&`, and `gate_faults()` names a check that a later `|| true` or `; cmd`, a pipe, a `&` (the
+background), an `if`/`elif`/`while`/`until` condition or a `!` keeps from failing it; that runs
+inside a `$(…)`, backquotes or a quoted string, after an ANSI-C `$'…'` or in a list holding one;
+that runs in a compound behind `||` or `!`; or that shares its text with a function or alias
+definition (or a `hash` or `enable` entry), a `trap`, `exec`, `return`, an `exit` that can be 0, or
+a `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt` that can be
+one). It reads each command as written and in the views bash's expansion can turn it into: its brace
+expansions expanded and a parameter's default, alternative, assigned default or pattern replacement
+read as its word (`${x:-exit} 0`, `${0:+exit} 0`, `${x:=exit} 0`, `${0/*/exit} 0`), then every
+expansion removed, read once as empty and once as a space, all but `$#`, `$?` and `$$`, which never
+come out empty (`exit$x 0` runs `exit 0` where `x` is unset, `exit${IFS}0` runs `exit 0`); a command
+that opens an expansion `commands()` cut at an operator inside it is read with the pieces cut from
+it (`exit$(:|:) 0`); a brace list it cannot read (an item holding a nested substitution or
+parameter, or one an operator inside a quote or a substitution cuts) is refused. It reads errexit
+the way `/bin/sh` does: a `;` after `set -e` counts only for a check that starts its AND-OR list and
+is the whole of it (a guard before it can skip it), and never inside a compound (a brace group, a
+subshell, an `if` body, a loop); a `set -e` counts only as a whole top-level command, and a `set
++e`, a `set` or `shopt` given a variable, a backquoted command, a glob or a brace expansion, or a
+`shopt` naming errexit, anywhere, switches errexit off. It removes quoted strings (escapes, a `'` or
+backquotes inside `"…"`) when it decides what a check runs inside, but it splits on `&&`, `||`, `;`
+and `|` inside quotes too (a lone `&` only outside them). A Dockerfile's lines reach it joined as
+BuildKit joins them (no space at a continuation, a double backslash continuing nothing, a byte-order
+mark dropped, a whitespace character other than a space, a tab or a line feed refused); a step's
+`run:` is read whole (a quote or a backquote spans a newline, and the step is refused when one does
+or is left open; a `#` cuts to the line end, and one right after a `)` is refused; a C0 control
 character that is not whitespace is refused) and its lines joined with `;`, or with a space after
 one that ends in `&&`, `||` or `|`. It refuses the shapes it knows it cannot read; the module's
-docstring gives the rules, and `test_image_pins.py`'s ("What the checks still cannot see") lists
-the shapes it cannot see and the sound shapes it refuses. A new check on a build's shell text
-calls `gate_faults()` rather than reading the operators itself, so the two tests cannot drift
-apart.
+docstring gives the rules, and `test_image_pins.py`'s ("What the checks still cannot see") lists the
+shapes it cannot see and the sound shapes it refuses. A new check on a build's shell text calls
+`gate_faults()` rather than reading the operators itself, so the two tests cannot drift apart.
 
 ## Playbook and role hygiene sweeps
 
