@@ -1905,7 +1905,7 @@ def test_gui_identity_on_a_module_file_that_is_not_a_mapping_is_a_409(client, ca
     assert "repository-refuse" in audit and "what=module file" in audit
 
 
-# --- T20: an error body never carries exception text (SECURITY.md C19) ------------------------------------------ #
+# --- T20: an error body never carries exception text (SECURITY.md C23) ------------------------------------------ #
 # The text an unexpected exception carries in these tests: a path inside the container, as an OSError or a YAML error
 # would quote one. No assertion may find it in a response, a log record or the audit file.
 _LEAK = "t20-leak-sentinel /opt/kontroll/instance/secrets/network.sops.yml"
@@ -1957,8 +1957,10 @@ def _audit_text(audit_file):
 def _internal_error_seen(r, caplog, audit_file, endpoint, kind):
     """The checks every answer to an unexpected exception must pass, shared by the tests below: a JSON 500 whose
     `code` is `internal_error` and whose `run_id` is twelve hex digits the sentence quotes; ONE service-log line naming
-    that id as `kontroll_run_id=`, the endpoint and the exception's type; ONE `internal-error` audit row with the same
-    id and endpoint; and the sentinel nowhere — not in the body, not in any log record, not in the audit file."""
+    that id as `kontroll_run_id=`, the endpoint and the exception's type, with no traceback attached; ONE
+    `internal-error` audit row with the same id and endpoint; and the sentinel nowhere — not in the body, not in any
+    log record or a traceback the log prints with one (`caplog.text`, not only each record's message), not in the
+    audit file."""
     body = r.get_json()
     assert r.status_code == 500 and body is not None, r.get_data(as_text=True)[:200]
     assert body["code"] == "internal_error" and re.fullmatch("[0-9a-f]{12}", body["run_id"]), body
@@ -1969,6 +1971,9 @@ def _internal_error_seen(r, caplog, audit_file, endpoint, kind):
     assert "kontroll_run_id=%s" % body["run_id"] in lines[0], lines[0]
     assert "route=%s " % endpoint in lines[0] and "type=%s" % kind in lines[0], lines[0]
     assert all(_LEAK not in rec.getMessage() for rec in caplog.records)
+    # A record's message is not all a handler prints: an attached traceback (`exc_info`) is printed below it.
+    assert _LEAK not in caplog.text
+    assert all(rec.exc_info is None for rec in caplog.records if "internal-error" in rec.getMessage())
     audit = _audit_text(audit_file)
     rows = [ln for ln in audit.splitlines() if "\tinternal-error\t" in ln]
     assert len(rows) == 1 and "run_id=%s" % body["run_id"] in rows[0] and "route=%s " % endpoint in rows[0], rows
@@ -1995,15 +2000,22 @@ def test_an_unexpected_exception_answers_a_fixed_sentence_and_an_id(client, monk
 
 def test_the_route_list_is_every_route_with_a_broad_except():
     """The list the test above runs over is exactly the GUI's functions that catch `Exception` themselves, and each
-    such handler's whole body is `return _internal_error(...)`. Guards a new read route written in the old shape — a
-    broad `except` that puts `str(e)` in its body — passing the suite because nobody added it to the list: the list
-    is checked against gui/app.py, not kept beside it (T20)."""
+    such handler's whole body is `return _internal_error(...)`; a bare `except:` and a tuple naming `Exception` or
+    `BaseException` (`except (OSError, Exception)`) count as broad. Guards a new read route written in the old shape —
+    a broad `except` that puts `str(e)` in its body — passing the suite because nobody added it to the list: the list
+    is checked against gui/app.py, not kept beside it (T20; T20's read B, N1: a tuple's `Exception` was not seen). An
+    alias of `Exception` (`Broad = Exception`) is not read."""
     import ast
     tree = ast.parse(open(gui.__file__, encoding="utf-8").read())
     broad, other_shape = set(), []
+
+    def _is_broad(kind):
+        names = kind.elts if isinstance(kind, ast.Tuple) else [kind]
+        return kind is None or any(getattr(n, "id", None) in ("Exception", "BaseException") for n in names)
+
     for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef)):
         for node in ast.walk(fn):
-            if isinstance(node, ast.ExceptHandler) and getattr(node.type, "id", None) in ("Exception", "BaseException"):
+            if isinstance(node, ast.ExceptHandler) and _is_broad(node.type):
                 broad.add(fn.name)
                 ret = node.body[0] if len(node.body) == 1 else None
                 if not (isinstance(ret, ast.Return) and isinstance(ret.value, ast.Call)
@@ -2013,11 +2025,39 @@ def test_the_route_list_is_every_route_with_a_broad_except():
     assert broad == listed, sorted(broad ^ listed)
     assert other_shape == [], other_shape
 
+
+def test_a_failed_audit_write_prints_its_type_not_the_exception_being_handled(tmp_path, monkeypatch, capsys,
+                                                                               audit_file):
+    """An audit write that fails while a route still handles an exception prints `audit-log write failed: <type>` to
+    stderr and nothing else: not logging's own `--- Logging error ---` report, which prints the failed call's
+    exception chain, and so the message of the exception the route was handling. Guards C23's "neither log holds the
+    exception's message" turning false while the audit volume is full or a rollover cannot rename (T20's read A, N1:
+    `GUI_AUDIT_LOG=/dev/full` printed the sentinel twice), and the app's audit logger built with another handler."""
+    h = gui._AuditHandler(str(tmp_path / "direct.log"), maxBytes=1024, backupCount=1, encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(message)s"))
+
+    def _full(record):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(h, "shouldRollover", _full)
+    try:
+        raise RuntimeError(_LEAK)
+    except RuntimeError:
+        h.emit(logging.LogRecord("kontroll.onboard-gui.audit", logging.INFO, __file__, 1, "row", None, None))
+    h.close()
+    err = capsys.readouterr().err
+    assert err == "audit-log write failed: OSError\n", err
+    handlers = gui._get_audit_logger().handlers          # the app's own audit logger uses it
+    assert len(handlers) == 1 and isinstance(handlers[0], gui._AuditHandler), handlers
+    handlers[0].close()
+
+
 def test_a_route_without_its_own_try_answers_json_not_an_html_500(client, monkeypatch, caplog, audit_file):
     """A route with no `try` of its own (a secret form's field list) whose service call raises answers the same JSON
     500 — `request failed — internal error (ref <id>)`, `internal_error`, the id in the service log and the audit log
     — instead of Flask's HTML 500, and none of them holds the exception's text. Guards the page showing a bare "request
-    failed" with nothing to quote, and Flask's own exception log line, which carries the message (brief 16 §9.3)."""
+    failed" with nothing to quote, and Flask's own exception log line, which carries the message and its traceback
+    (brief 16 §9.3; T20's read B, S1: the check read each record's message, not the traceback printed with it)."""
     monkeypatch.setattr(gui.secrets_service, "offerable_fields", _boom)
     with caplog.at_level(logging.ERROR):
         r = client.get("/api/secrets/dashboards/fields", headers=_auth())
@@ -2110,19 +2150,25 @@ def test_a_stray_value_error_under_the_onboard_planner_is_no_refusal(client, onb
     assert "onboard-refuse" not in _audit_text(audit_file)
 
 
-def test_a_homepage_write_failure_is_a_fixed_500_with_an_id(client, monkeypatch, audit_file):
+def test_a_homepage_write_failure_is_a_fixed_500_with_an_id(client, monkeypatch, caplog, audit_file):
     """An apply whose overlay write fails (the service's `write_failed`) answers 500 with a fixed sentence, the code
     `write_failed` and the run id the audit row `homepage-result error=write_failed` carries — not the 422 with the
-    OSError's text the route gave before. Guards brief 16 §9.1's class C at `/api/homepage` (apply): the service
-    returned `"write failed: %s" % e`, a path inside the container, and the route showed it."""
+    OSError's text the route gave before — and the service log gets one `homepage-write-failed` line with
+    `kontroll_run_id=<id>`, so the sentence's "the service log has the details" finds them. Guards brief 16 §9.1's
+    class C at `/api/homepage` (apply): the service returned `"write failed: %s" % e`, a path inside the container,
+    and the route showed it; and an id the service log does not carry (T20's read B, N7)."""
     from kontroll.service import homepage as hp
     monkeypatch.setattr(hp, "build_homepage_plan", lambda board: {
         "error": None, "paths": [], "diff": "", "summary": {"removed_tiles": []}, "plan_token": "t"})
     monkeypatch.setattr(hp, "promote_board", lambda board, token: {"error": "write_failed", "changed": False,
                                                                    "paths": []})
-    r = client.post("/api/homepage", json={"board": {"sections": []}, "apply": True, "token": "t"}, headers=_auth())
+    with caplog.at_level(logging.ERROR):
+        r = client.post("/api/homepage", json={"board": {"sections": []}, "apply": True, "token": "t"},
+                        headers=_auth())
     body = r.get_json()
     assert r.status_code == 500 and body["code"] == "write_failed" and re.fullmatch("[0-9a-f]{12}", body["run_id"])
+    lines = [rec.getMessage() for rec in caplog.records if "homepage-write-failed" in rec.getMessage()]
+    assert len(lines) == 1 and "kontroll_run_id=%s" % body["run_id"] in lines[0], lines
     assert body["error"] == ("homepage write failed — nothing staged (ref %s); the service log has the details"
                              % body["run_id"])
     assert "homepage-result\terror=write_failed run_id=%s" % body["run_id"] in _audit_text(audit_file)

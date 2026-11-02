@@ -66,11 +66,12 @@ def test_shared_creds_land_flat_under_the_exporter_names_not_host_keyed(monkeypa
 
 
 def test_partial_auth_set_is_refused_for_coherence(monkeypatch):
-    """A PARTIALLY-filled required auth_set (user only, token_id + secret missing) is refused with a clean, catchable
-    ValueError BEFORE any creds_to_set write — you can't half-authenticate a proxmox token (a broken cred → silently
-    empty Grafana). Guards a half credential being stored. Catchable (not SystemExit) so the route returns a clean
-    error, never crashing the worker."""
-    with pytest.raises(ValueError, match="incomplete credential set"):
+    """A PARTIALLY-filled required auth_set (user only, token_id + secret missing) is refused with the planner's
+    designed refusal, `OnboardRefusal`, BEFORE any creds_to_set write — you can't half-authenticate a proxmox token (a
+    broken cred → silently empty Grafana). Guards a half credential being stored, and the refusal's type: the API and
+    the GUI answer `OnboardRefusal` with a 422 and its sentence, while since T20 a plain ValueError is an unexpected
+    exception and answers a 500 `internal error` (T20's read B, S2: `pytest.raises(ValueError)` passed either)."""
+    with pytest.raises(onboard.OnboardRefusal, match="incomplete credential set"):
         _proxmox_plan(monkeypatch, creds={"api_user": "monitor@pve"})
 
 

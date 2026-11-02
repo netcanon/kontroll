@@ -28,9 +28,14 @@ plan routes answered any `ValueError` 422 with its text, the Homepage editor sho
   500), not as a 422 with its text. A request-boundary or repository-data refusal raised under a GUI read route's
   broad `except` now gets its own 422 or 409 instead of a 500.
 - **Changed.** A Homepage save whose overlay write fails answers 500 `write_failed` with a `run_id`; the service
-  logs the file, the exception's type and its errno.
+  logs the file, the exception's type and its errno, and a `homepage-write-failed kontroll_run_id=<id>` line.
+- **Changed.** An audit-log write that fails (a full disk, a rollover that cannot rename) prints `audit-log write
+  failed: <type>` to the GUI's stderr, not logging's own report, which printed the exception the route was handling.
 - **Changed.** `kontroll-init` shows the bootstrap values only when standard output is a terminal. Otherwise it
-  prints each written field's name, `(not shown)` and the `sops -d` command that reads them back.
+  prints each written field's name, `(not shown)` and, for each domain, the `sops -d` command that reads it back,
+  to run from the repository's root or inside `scripts/kontroll-installer.sh shell`.
+- **Docs.** docs/troubleshooting.md §12 reads an `internal error (ref <id>)` answer: `grep -A 20` for the frames,
+  Loki's `run_id` label, the audit row.
 
 ### fix(security): the leak guard no longer spells the maintainer's email, even as a character class (2026-11-01)
 

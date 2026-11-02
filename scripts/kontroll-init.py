@@ -236,8 +236,11 @@ def _read_back(domain, key_file):
 def _not_shown(domain, key_file):
     """The sentence a run whose standard output is not a terminal prints in place of "SAVE these now": a pipe, a
     file or a captured run (CI, `tee`, a scripted rebuild) would keep a login password in a log nobody chose to
-    keep. The values are stored encrypted, so the operator reads them back later, from a terminal (T20)."""
-    return ("Not shown: standard output is not a terminal. Read them from a terminal with: %s"
+    keep. The values are stored encrypted, so the operator reads them back later, from a terminal (T20). The command
+    names its file from the repository's root, and the documented host has no sops of its own: the installer's shell
+    has both (T20's read A, N3 and N4)."""
+    return ("Not shown: standard output is not a terminal. Read them from a terminal with: %s (from the repository's "
+            "root; no sops on this host? run it inside `scripts/kontroll-installer.sh shell`)"
             % _read_back(domain, key_file))
 
 

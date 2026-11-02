@@ -378,10 +378,10 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
     connecting module's argument_spec, when `deep` and the collection is installed). Values flow through
     creds_to_set in memory only."""
     # REQUEST BOUNDARY (2026-10-08 review, finding 1). Every field that becomes a path component, an inventory key
-    # or an argv word is a closed charset BEFORE anything is read, probed or written — the API and the GUI both map
-    # the ValueError to 422, pre-write. The planner used to validate only `collection`'s installed-ness;
-    # `key`, `group`, `host`, `host_name` and `secrets` were bare strings joined into modules/<key>/,
-    # onboarded-<key>.yml and ansible/secrets/<domain>.sops.yml.
+    # or an argv word is a closed charset BEFORE anything is read, probed or written — the API and the GUI both
+    # answer its refusal (`paths.RequestBoundaryError`) with a 422, pre-write. The planner used to validate only
+    # `collection`'s installed-ness; `key`, `group`, `host`, `host_name` and `secrets` were bare strings joined into
+    # modules/<key>/, onboarded-<key>.yml and ansible/secrets/<domain>.sops.yml.
     paths.collection_fqcn(collection)
     paths.component(key, "device-class key")
     # `null`, `true`, `123`, `2026-10-12`: inside the charset, and not a string once it stands unquoted in the

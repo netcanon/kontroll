@@ -2196,24 +2196,33 @@ twelve-hex run id; the GUI's stderr gets `internal-error kontroll_run_id=<id> ro
 type=<type>` and the frames; the audit log the action `internal-error` with the same id
 ([logging-architecture.md](docs/logging-architecture.md)). **Neither the body nor either log holds the exception's
 message**: the frames and the type locate the fault, and the cost — a `KeyError` logged without its key — is
-accepted. The Homepage editor's write failure is a code (`write_failed`, a 500 with a run id; the log line names the
-file, the exception's type and its errno). `kontroll-init` shows the bootstrap values only when standard output is
-a terminal, as the break-glass mint already does; otherwise it prints each written field's name, `(not shown)` and
-the `sops -d` command that reads them back.
+accepted. An audit write that fails reports its type only (`audit-log write failed: <type>`), since logging's own
+report would print the exception the route was handling. The Homepage editor's write failure is a code
+(`write_failed`, a 500 with a run id; the service's line names the file, the exception's type and its errno, and the
+route's `homepage-write-failed kontroll_run_id=<id>` line follows it). `kontroll-init` shows the bootstrap values
+only when standard output is a terminal, as the break-glass mint already does; otherwise it prints each written
+field's name, `(not shown)` and, for each domain, the `sops -d` command that reads them back.
 
-**Residual:** the API answers an unexpected exception with FastAPI's bare 500, which holds no text, and its server
-log still prints the exception's message (brief 16 §9.3 left it; the price of a message-free log there is the same
-type-and-frames handler).
+**Residual:** the API answers an unexpected exception with FastAPI's bare 500, which holds no text, no run id and
+no audit row, and its server log still prints the exception's message (brief 16 §9.3 left it; the price of a
+message-free log there is the same type-and-frames handler). Some service-layer warnings print an exception's
+message to the GUI's and the API's stderr (a settings identity read, the onboard planner's and the catalog's
+degrade paths); none reaches a body. A module file YAML cannot build, or that is not UTF-8, and a JSON body that is
+not an object, answer the GUI's 500 `internal_error` rather than a refusal of their own (T20's read A, N5 to N8:
+later rows).
 
 **Covering checks:** `tests/integration/test_gui_api.py` (each read route with a broad `except`, with a `RuntimeError`
-carrying a path — and that the list it runs over is every such route in `gui/app.py`: the fixed sentence, the code, the id in the body, the stderr line and the audit row, the text in
-none of them; a route with no `try`; a 404 and a malformed body's 400 kept; the designed refusals kept — a
-backup-store 400, a repository-data 409 and a boundary 422 raised under a broad `except`, a write conflict's 409; a
-stray `ValueError` under the onboard planner answered as the unexpected; the Homepage write failure),
+carrying a path: the fixed sentence, the code, the id in the body, the stderr line and the audit row, the text in
+none of them — not in a record's message nor in a traceback printed with it — and that the list it runs over is
+every such route in `gui/app.py`, a bare `except:` or a tuple naming `Exception` counted; a route with no `try`; a
+404 and a malformed body's 400 kept; the designed refusals kept — a backup-store 400, a repository-data 409 and a
+boundary 422 raised under a broad `except`, a write conflict's 409; a stray `ValueError` under the onboard planner
+answered as the unexpected; the Homepage write failure, its id in the audit row and the service log),
 `tests/integration/test_api_onboard.py` (the planner's refusal still 422; a stray `ValueError` a bare 500 with no
-text and no `onboard-refuse` line), `tests/unit/test_homepage.py` (the write failure's code and its log line), and
-`tests/unit/test_kontroll_init.py` (the values not printed off a terminal, with the read-back command; shown once
-per domain on one).
+text and no `onboard-refuse` line), `tests/unit/test_onboard_proxmox_auth.py` and `tests/unit/test_onboard_ssh_key.py`
+(the planner's guards raise `OnboardRefusal`, not a plain `ValueError`), `tests/unit/test_homepage.py` (the write
+failure's code and its log line), and `tests/unit/test_kontroll_init.py` (the values not printed off a terminal, with
+each domain's read-back command; shown once per domain on one).
 
 ---
 ## Accepted risks / known limitations

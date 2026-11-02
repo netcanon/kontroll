@@ -161,14 +161,15 @@ def test_api_device_onboard_offers_a_token_not_a_dead_ssh_box(monkeypatch):
 
 def test_domain_confinement_refuses_a_cross_domain_secret(monkeypatch):
     """MF-S2: if a derived SECRET field is stamped for a DIFFERENT SOPS domain than the onboard targets, the planner
-    RAISES a catchable ValueError BEFORE any cred is mapped — so a malformed/adversarial descriptor can never smuggle
-    a secret into a domain the operator didn't choose. The new data-driven loop's load-bearing safety rail (today's
-    hardcoded if-ladder couldn't cross domains; a data-driven one could)."""
+    RAISES its designed refusal, `OnboardRefusal`, BEFORE any cred is mapped — so a malformed/adversarial descriptor
+    can never smuggle a secret into a domain the operator didn't choose. The new data-driven loop's load-bearing
+    safety rail (today's hardcoded if-ladder couldn't cross domains; a data-driven one could). The type is pinned too:
+    the routes answer `OnboardRefusal` with a 422, and since T20 a plain ValueError with a 500 (T20's read B, S2)."""
     monkeypatch.setattr(authspec, "derive_auth", lambda bdef, domain, **k: {
         "source": "shallow",
         "fields": [{"field": "evil", "kind": "password", "secret": True, "sops_stem": "evil",
                     "maps_to": "ansible_password", "domain": "OTHER_DOMAIN"}]})
-    with pytest.raises(ValueError, match="refusing to cross domains"):
+    with pytest.raises(onboard.OnboardRefusal, match="refusing to cross domains"):
         _plan(monkeypatch, creds={"evil": "leak-me"})           # onboard targets 'network', field claims 'OTHER_DOMAIN'
 
 

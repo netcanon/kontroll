@@ -92,6 +92,20 @@ AUDIT_LOG = os.environ.get("GUI_AUDIT_LOG", os.path.join(ROOT, "local", "onboard
 _audit_logger = None
 
 
+class _AuditHandler(RotatingFileHandler):
+    """The audit file's handler. A write that fails (a full disk, a rollover that cannot rename in the bind mount) is
+    reported as one stderr line naming the error's TYPE. logging's own report prints the failed call's exception
+    chain, and an audit row is often written while a route still handles the exception the row is about, so that
+    chain would print that exception's message (SECURITY.md C23; T20's read A, N1)."""
+
+    def handleError(self, record):
+        kind = sys.exc_info()[0]
+        try:
+            sys.stderr.write("audit-log write failed: %s\n" % (kind.__name__ if kind else "unknown"))
+        except Exception:      # stderr itself gone: nothing left to report to
+            pass
+
+
 def _get_audit_logger():
     """Lazily build the rotating audit logger (size-bounded so it can't grow forever —
     Layer 0 logging foundation, docs/logging-architecture.md §3). The handler writes the
@@ -106,7 +120,7 @@ def _get_audit_logger():
             os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
             # FAIL-CLOSED rotation knobs (M-5): an empty/garbage env value falls to 5 MB x 5, NEVER to 0
             # (maxBytes=0 = no rotation = an unbounded GUI audit file, a C12 fail-open).
-            h = RotatingFileHandler(AUDIT_LOG, maxBytes=positive_int("KONTROLL_AUDIT_MAX_MB", 5) * 1024 * 1024,
+            h = _AuditHandler(AUDIT_LOG, maxBytes=positive_int("KONTROLL_AUDIT_MAX_MB", 5) * 1024 * 1024,
                                     backupCount=positive_int("KONTROLL_AUDIT_MAX_FILES", 5), encoding="utf-8")
             h.setFormatter(logging.Formatter("%(message)s"))
             lg.addHandler(h)
@@ -166,7 +180,7 @@ _DESIGNED = (paths.RequestBoundaryError, paths.RepositoryDataError)
 
 
 def _internal_error(what, exc):
-    """The one answer to an exception no route designed (SECURITY.md C19, T20). The client gets a fixed sentence,
+    """The one answer to an exception no route designed (SECURITY.md C23, T20). The client gets a fixed sentence,
     `internal_error` and a run id; the service log (stderr, through Flask's logger) gets a line with the same id as
     `kontroll_run_id=`, the endpoint, `what`, the exception's TYPE and its frames; the audit log gets the action
     `internal-error` with the same id, so what the operator saw joins what happened. Neither the body nor either log
@@ -479,6 +493,8 @@ def api_homepage_apply():
     if out.get("error") == "drift":
         return jsonify({"error": "homepage config drifted since propose; re-propose"}), 409
     if out.get("error") == "write_failed":       # the overlay could not be written: the service log has which file
+        # The id's line in the service log, beside the service's own line that names the file, its errno and type.
+        app.logger.error("homepage-write-failed kontroll_run_id=%s route=%s", run_id, request.endpoint or "-")
         _audit("homepage-result", "error=write_failed run_id=%s" % run_id)
         return jsonify({"error": "homepage write failed — nothing staged (ref %s); the service log has the details"
                                  % run_id, "code": "write_failed", "run_id": run_id}), 500

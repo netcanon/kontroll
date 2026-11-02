@@ -57,7 +57,7 @@ unless you pass `--no-break-glass`, the break-glass recipient you choose
 `instance/instance.yml`'s `mgmt_ip`/`domain` **and the Homepage portal tiles** (a fresh
 `:3000` shows your real control-plane services, not the shipped TEST-NET stubs), and mints
 the `dashboards` and `semaphore` bootstrap secrets, encrypted to every recipient (the
-passwords shown once — save them). The instance is the source of truth
+passwords shown once, on a terminal — save them). The instance is the source of truth
 ([docs/local-source-of-truth.md](local-source-of-truth.md)); git is used only locally.
 Continue at §3. The rest of this section is the **developer** path (a git-connected instance).
 

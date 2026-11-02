@@ -1354,18 +1354,27 @@ def _bootstrap_writes(monkeypatch):
 
 def test_bootstrap_secrets_are_not_printed_when_output_is_not_a_terminal(fresh_repo, monkeypatch, capsys):
     """With standard output not a terminal (a pipe, a `tee` file, a CI log), --fresh writes the bootstrap secrets but
-    prints none of their values: each written field's NAME with `(not shown)`, and the command that reads them back
-    from a terminal — the default key file written `~/…`, the overlay's path. Guards brief 16 §9.4's last row (T20): a
-    first-run GUI/Grafana password printed into a log nobody chose to keep, the same rule the break-glass mint
-    already follows."""
+    prints none of their values: each written field's NAME with `(not shown)`, and, once per domain, the command that
+    reads that domain back from a terminal — the default key file written `~/…`, the overlay's path; the closing lines
+    say to read the passwords back, not to save the ones "above". Guards brief 16 §9.4's last row (T20): a first-run
+    GUI/Grafana password printed into a log nobody chose to keep, the same rule the break-glass mint already follows;
+    and a run that names no way back to a domain's values — the semaphore domain's command is the only way back to
+    the Semaphore admin password (T20's read B, N2: the closing line alone met the check); and the command naming no
+    way to run it where the host has no sops (T20's read A, N4)."""
     _bootstrap_writes(monkeypatch)
     monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: False)
     assert ki.main(_FRESH + ["--no-break-glass"]) == 0
     out = capsys.readouterr().out
     assert _MINTED_PW not in out
     assert "gui_password:" in out and "(not shown)" in out and "SAVE these now" not in out
-    assert "Not shown: standard output is not a terminal." in out
-    assert "SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/dashboards.sops.yml" in out
+    assert (out.count("Not shown: standard output is not a terminal. Read them from a terminal with:")
+            == len(ki.BOOTSTRAP_DOMAINS)), out
+    for domain in ki.BOOTSTRAP_DOMAINS:
+        assert ("SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/%s.sops.yml" % domain
+                in out), domain
+    assert "semaphore" in ki.BOOTSTRAP_DOMAINS
+    assert "no sops on this host? run it inside `scripts/kontroll-installer.sh shell`" in out
+    assert "SAVE the GUI/Grafana passwords above" not in out
 
 
 def test_bootstrap_secrets_are_shown_once_on_a_terminal(fresh_repo, monkeypatch, capsys):

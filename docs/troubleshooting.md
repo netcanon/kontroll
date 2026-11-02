@@ -354,7 +354,24 @@ exit but 0 the worktree keeps its commit and the canonical is untouched.
 | `the break-glass key role (key-roles/break-glass.yml) is missing or names no recipient groups` | the shipped role file is gone or emptied, so kontroll-init cannot tell which anchors take the key | restore `key-roles/break-glass.yml` from the release |
 | `could not add the break-glass recipient to .sops.yaml: …` | `.sops.yaml` names the control key but not the break-glass key. On a fresh node no secret was written yet; on an existing instance the files are as they were | correct what the sentence names, then add the key with [break-glass.md](break-glass.md) (re-running `fresh-init` is refused once `.sops.yaml` names a key) |
 
+## 12. An answer that says `internal error (ref <id>)`
+
+The GUI answers an exception no route designed with **500**, `code: internal_error`, and the sentence
+`<what> failed — internal error (ref <id>); the service log has the details`. The id is the way in; the body never
+holds the exception's text (SECURITY.md **C23**):
+
+| Where | How to read it |
+|---|---|
+| the GUI's service log | `docker logs onboard-gui 2>&1 \| grep -A 20 'kontroll_run_id=<id>'` — the line names the route, `what` and the exception's type; the frames follow it on lines of their own, which do not carry the id. Never the exception's message |
+| Loki | `{source="internal", run_id="<id>"}` finds that line (Vector labels its `kontroll_run_id`); the frames are the lines after it in the same container's stream |
+| the GUI audit log | the `internal-error` row with `run_id=<id>`, the route and the type |
+
+A Homepage save whose overlay write fails answers 500 `write_failed` with a `ref <id>` the same way: the service
+log's `homepage-write-failed kontroll_run_id=<id>` line follows the service's own `homepage write failed:
+file=<name> type=<type> errno=<n>` line, and the audit row is `homepage-result error=write_failed run_id=<id>`.
+
 ## See also
+- [../SECURITY.md](../SECURITY.md) **C23** — an error body carries no exception text; the id that finds the details
 - [break-glass.md](break-glass.md) — the break-glass key: the choice at install and the runbook for an instance without one
 - [logging-architecture.md](logging-architecture.md) — the layered design + the degrade-path source of truth
 - [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, the refusal that is the repository's own, and a

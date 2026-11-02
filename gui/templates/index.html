@@ -138,8 +138,8 @@ async function search() {
   try { data = await (await fetch('/api/search?q='+encodeURIComponent(q)+deep)).json(); }
   catch(e){ box.innerHTML=''; box.appendChild(E('div','warn','search error','search-error')); return; }
   box.innerHTML='';
-  // ET, not E: api_search's error is "search failed: %s" % e — an exception string that can carry bytes from the
-  // remote Galaxy response, so it is third-party data on the same footing as a record field.
+  // ET, not E: api_search's error is an API string. Since T20 it is a fixed sentence, but the page paints every value
+  // the API hands back as text, never markup, so a later route that quotes what Galaxy sent stays inert too.
   if (data.error){ box.appendChild(ET('div','warn', data.error, 'search-api-error')); return; }
   if (!data.length){ box.appendChild(E('div','spin','no results','no-results')); return; }
   data.forEach(rec => box.appendChild(card(rec)));
