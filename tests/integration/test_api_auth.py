@@ -69,6 +69,15 @@ def test_bad_token_401_and_audited(priv):
     assert any(row["action"] == "auth-denied" for row in read_audit(priv.audit_log))
 
 
+def test_a_token_with_a_non_ascii_character_is_a_401_and_audited(priv):
+    """A Bearer token holding a non-ASCII character is a 401 with an `auth-denied` audit line, as any wrong token is.
+    Guards the compare: `hmac.compare_digest` raises TypeError on a non-ASCII str, so the request answered a bare 500
+    and left no audit line of the denied attempt."""
+    r = priv.client.post("/refresh", headers={"Authorization": "Bearer töken".encode("utf-8")})
+    assert r.status_code == 401
+    assert [row["action"] for row in read_audit(priv.audit_log)] == ["auth-denied"]
+
+
 # --- refresh (lowest blast radius) ------------------------------------------ #
 def test_refresh_ok_and_audited(priv):
     """A valid token admits POST /refresh: 200 + a run_id, and a `refresh` audit line carrying that

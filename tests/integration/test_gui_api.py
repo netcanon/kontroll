@@ -106,6 +106,28 @@ def test_wrong_password_is_401(client):
     assert client.get("/api/search?q=cisco", headers=_auth(pw="wrong")).status_code == 401
 
 
+def test_a_password_with_a_non_ascii_character_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch):
+    """The right user with a password holding a non-ASCII character is refused 401 and audited `auth-denied`, as any
+    wrong password is. Guards the compare: `hmac.compare_digest` raises TypeError on a non-ASCII str, so the request
+    answered the JSON 500, the audit log named an internal error instead of a denied login, and the browser did not
+    ask again (found by T23 fold 3's runtime read)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=cisco", headers=_auth(pw="pässwörd"))
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_configured_password_with_a_non_ascii_character_admits_its_owner(client, mock_services, monkeypatch):
+    """A GUI password holding a non-ASCII character admits the right user with it (a browser sends Basic credentials
+    as UTF-8) and refuses a wrong one 401. Guards the compare raising on every login, the right one included, once
+    the operator's password is not ASCII: the GUI could not be signed into at all."""
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "pässwörd")
+    assert client.get("/api/search?q=", headers=_auth(pw="pässwörd")).status_code == 200
+    assert client.get("/api/search?q=", headers=_auth(pw="passwörd")).status_code == 401
+
+
 def test_wrong_user_is_401(client):
     """Wrong username -> 401, even with a plausible password."""
     assert client.get("/api/search?q=cisco", headers=_auth(user="root")).status_code == 401

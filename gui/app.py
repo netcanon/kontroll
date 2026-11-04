@@ -233,12 +233,14 @@ def _unhandled(exc):
 
 
 def require_auth(fn):
-    """HTTP Basic auth on every route; constant-time compare; fail-closed."""
+    """HTTP Basic auth on every route; constant-time compare; fail-closed. The password is compared as UTF-8 bytes:
+    `hmac.compare_digest` raises on a str holding a non-ASCII character, which answered a 500 and an `internal-error`
+    audit row for a denied login, and refused every login once the configured password was not ASCII."""
     @functools.wraps(fn)
     def wrapper(*a, **kw):
         auth = request.authorization
         ok = (auth and auth.username == GUI_USER
-              and hmac.compare_digest(auth.password or "", GUI_PASSWORD))
+              and hmac.compare_digest((auth.password or "").encode("utf-8"), GUI_PASSWORD.encode("utf-8")))
         if not ok:
             _audit("auth-denied", request.path)
             return Response("authentication required", 401,

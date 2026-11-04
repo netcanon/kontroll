@@ -49,7 +49,7 @@ files:
   scripts/kontroll/service/openapi.py: "345795ca23869170811f2b51297096d7fde943f1dc53635d859bd1b959746300"
   scripts/kontroll/service/pending.py: "2102ce2ce696e0ce0ccfc196e7196d3976b29f3416604efd42edc7559d2234d7"
   scripts/kontroll/service/probe.py: "edf9d21c356285d99823b802e27fa8f761e7b481d154479e2e52fa2ee19a6c54"
-  scripts/kontroll/service/promote.py: "45dd76dfbea0bb4d8616df3e955d6e05c1a598ca94b62c2ec103bdbb2042d296"
+  scripts/kontroll/service/promote.py: "7d1f2d2b8fa0a49e1f5a04f2bbdee8bc53749a4a0a73f0780c9cdca05d7f07f1"
   scripts/kontroll/service/provenance.py: "36d8ba2f5a8784f01c1c700c8517b3eda87cbaee5d1d720f9cc1890f0ddc5822"
   scripts/kontroll/service/refresh.py: "3aef2ed12246e0001c3b2e4d9ef423adcd61a9432340cb7110f15a85951cdaf6"
   scripts/kontroll/service/scaffold.py: "2d5f2acdb96d0f8c1a1bf0d609dcdb3601049a97e0e95b4bbe1b1c441e23967f"

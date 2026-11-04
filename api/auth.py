@@ -34,14 +34,15 @@ def _client_ip(request: Request) -> str:
 def require_token(request: Request,
                   creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> Principal:
     """Authenticate a privileged request. No token configured ⇒ 503 (fail-closed; the surface is
-    disabled). Constant-time compare; a bad/absent token ⇒ 401 + a best-effort `auth-denied` audit.
+    disabled). Constant-time compare, of UTF-8 bytes (`hmac.compare_digest` raises on a non-ASCII str, which
+    answered a bare 500 with no audit line); a bad/absent token ⇒ 401 + a best-effort `auth-denied` audit.
     On success returns the Principal carrying the request's run_id."""
     settings = request.app.state.settings
     ip, run_id = _client_ip(request), mint_run_id()
     if not settings.api_token:
         raise HTTPException(status_code=503,
                             detail="privileged API disabled: KONTROLL_API_TOKEN is not configured")
-    if not (creds and hmac.compare_digest(creds.credentials, settings.api_token)):
+    if not (creds and hmac.compare_digest(creds.credentials.encode("utf-8"), settings.api_token.encode("utf-8"))):
         try:
             write_audit(settings.audit_log, "anonymous", ip, "auth-denied", run_id, request.url.path)
         except OSError:

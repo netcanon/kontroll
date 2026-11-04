@@ -11,6 +11,21 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(security): a credential holding a non-ASCII character is refused, not a 500 (2026-11-04)
+
+`hmac.compare_digest` raises `TypeError` on a str that holds a non-ASCII character, and the GUI's Basic-auth check,
+the API's Bearer check and the promote route's plan-token check each handed it the strings as received. Each now
+compares their UTF-8 bytes.
+
+- **Fixed.** The GUI answers the right user with a non-ASCII password 401 and audits `auth-denied`; it answered the
+  JSON 500 and audited an `internal-error`, and the browser did not ask again. A configured GUI password holding a
+  non-ASCII character admits its owner; before, every login with the right user raised.
+- **Fixed.** The API answers a Bearer token holding a non-ASCII character 401 with an `auth-denied` audit line; it
+  answered a bare 500 and audited nothing.
+- **Fixed.** `verify_token` answers a non-ASCII plan token `False`, as its docstring promised; it raised.
+- **Added.** A test for each, in `tests/integration/test_gui_api.py`, `tests/integration/test_api_auth.py` and
+  `tests/unit/test_promote_token.py`.
+
 ### fix(security): an error body never carries exception text (T20, 2026-11-02)
 
 An exception's message can quote a request value, a path inside the container or a line of a file being parsed.

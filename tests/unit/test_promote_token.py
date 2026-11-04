@@ -54,12 +54,14 @@ def test_any_drift_fails_verification():
 
 
 def test_malformed_token_is_a_clean_mismatch():
-    """An empty, None, or non-string token verifies as False rather than raising — a malformed promote
-    request is REFUSED, never a 500. Guards the route from an attacker/bug sending a junk token."""
+    """An empty, None, non-string or non-ASCII token verifies as False rather than raising — a malformed promote
+    request is REFUSED, never a 500. Guards the route from an attacker/bug sending a junk token (`hmac.compare_digest`
+    raises TypeError on a non-ASCII str)."""
     assert promote.verify_token("", "a") is False
     assert promote.verify_token(None, "a") is False
     assert promote.verify_token(12345, "a") is False
     assert promote.verify_token("not-the-hash", "a") is False
+    assert promote.verify_token("töken", "a") is False
 
 
 def test_none_part_is_well_defined_not_a_crash():
