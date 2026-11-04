@@ -116,17 +116,24 @@ _STATIC_CSP = ("object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'")
 
 
 def _csp(resp):
-    """The response's policy as {directive name: its whole text}, for one assertion per directive."""
+    """The response's policy as {directive name: its whole text}, for one assertion per directive. A name written
+    twice fails here: the browser obeys the FIRST and ignores the rest, while a dict would keep the last, so a test
+    reading it could pass a policy the browser does not enforce. Names compare lower-cased, as the browser's do."""
     policy = resp.headers.get("Content-Security-Policy", "")
-    return {part.split()[0]: part for part in (p.strip() for p in policy.split(";")) if part}
+    parts = [p.strip() for p in policy.split(";") if p.strip()]
+    names = [p.split()[0].lower() for p in parts]
+    assert len(names) == len(set(names)), "a directive named twice (the browser obeys the first): %r" % policy
+    return {p.split()[0].lower(): p for p in parts}
 
 
 def test_the_page_and_its_header_carry_the_same_fresh_nonce(client, monkeypatch):
     """`GET /` twice: each response's `script-src` is one `'nonce-…'` source, the page's one script element carries
-    the same value, the two values differ, the page is `no-store`, and the three static directives are there too.
-    Guards a page whose script the browser refuses — a header and a tag that disagree, or a render path that sets
-    no nonce, leaves the whole GUI blank — and a nonce reused across responses (or kept in a cache), which a value
-    that reached the page's markup could copy onto a script of its own."""
+    the same value, the two values differ, the page is `no-store`, and the policy is exactly `script-src` and the
+    three static directives. Guards a page whose script the browser refuses — a header and a tag that disagree, or
+    a render path that sets no nonce, leaves the whole GUI blank — a nonce reused across responses (or kept in a
+    cache), which a value that reached the page's markup could copy onto a script of its own, and a directive
+    beside the nonce that re-opens what it closes (`script-src-elem 'unsafe-inline'` runs an injected element; a
+    `default-src` or `style-src` breaks the page's style block)."""
     monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
     seen = []
     for _ in range(2):
@@ -142,15 +149,16 @@ def test_the_page_and_its_header_carry_the_same_fresh_nonce(client, monkeypatch)
         assert r.headers.get("Cache-Control") == "no-store"
         for directive in _STATIC_CSP:
             assert directive in csp.values(), "missing %s" % directive
-        assert "default-src" not in csp and "style-src" not in csp
+        assert sorted(csp) == ["base-uri", "frame-ancestors", "object-src", "script-src"], sorted(csp)
         seen.append(nonce)
     assert seen[0] != seen[1], "the same nonce was served twice"
 
 
 def test_a_response_that_is_not_the_page_forbids_script(client, mock_services):
-    """A JSON route, the 401 and a 404 each answer `script-src 'none'` beside the three static directives, and none
-    is marked `no-store` by the policy hook. Guards a response that rendered no page becoming a place script can run
-    (an error body a browser opens as HTML), and a nonce leaking into a response that has no script to authorise."""
+    """A JSON route, the 401 and a 404 each answer `script-src 'none'` beside the three static directives. Guards a
+    response that rendered no page becoming a place script can run (an error body a browser opens as HTML), and a
+    nonce leaking into a response that has no script to authorise. Whether such a response is `no-store` is not
+    this test's business: no nonce is cached with it."""
     responses = {"json": client.get("/api/search?q=", headers=_auth()), "401": client.get("/"),
                  "404": client.get("/no-such-route", headers=_auth())}
     assert [r.status_code for r in responses.values()] == [200, 401, 404]
@@ -159,7 +167,58 @@ def test_a_response_that_is_not_the_page_forbids_script(client, mock_services):
         assert csp.get("script-src") == "script-src 'none'", (what, r.headers.get("Content-Security-Policy"))
         for directive in _STATIC_CSP:
             assert directive in csp.values(), (what, directive)
-        assert r.headers.get("Cache-Control") != "no-store", what
+
+
+def test_an_error_raised_while_the_page_renders_forbids_script(client, monkeypatch, tmp_path):
+    """A `GET /` whose template fails after the render drew its nonce answers the fixed JSON 500 (`internal_error`,
+    with a run id the audit log carries too) under `script-src 'none'`, with no nonce anywhere in its policy. Guards
+    a nonce outliving the page it was drawn for: the 500 is JSON with no script in it, and the docs promise an error
+    `'none'` (SECURITY.md C19). The value the template cannot serialise stands for any fault inside a render."""
+    class _Unrenderable:                                    # `has_remote | tojson` cannot write it: the render fails
+        pass
+    monkeypatch.setattr(gitio, "offsite_remote_exists", _Unrenderable)
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/", headers=_auth())
+    assert r.status_code == 500 and r.get_json()["code"] == "internal_error", r.get_data(as_text=True)[:200]
+    assert _csp(r).get("script-src") == "script-src 'none'", r.headers.get("Content-Security-Policy")
+    assert "nonce-" not in r.headers.get("Content-Security-Policy", "")
+    assert "run_id=%s" % r.get_json()["run_id"] in logpath.read_text(encoding="utf-8")
+
+
+def test_a_nonce_reaches_one_response_only(client, mock_services, monkeypatch):
+    """The page, then a 404, the 401 and a JSON route, served inside one pushed app context: the page has its nonce
+    and each response after it answers `script-src 'none'`. Guards a nonce left on `g`, which belongs to the app
+    context, not the request: whatever pushes one context around several requests (a test harness, a WSGI wrapper,
+    a CLI command) would hand the next response a nonce an earlier page printed. The 404 and the 401 are HTML, so
+    only taking the nonce off `g` keeps it out of them; the JSON check alone would not."""
+    monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
+    with gui.app.app_context():
+        page = client.get("/", headers=_auth())
+        after = {"404": client.get("/no-such-route", headers=_auth()), "401": client.get("/"),
+                 "json": client.get("/api/search?q=", headers=_auth())}
+    assert "'nonce-" in _csp(page).get("script-src", ""), page.headers.get("Content-Security-Policy")
+    assert [r.status_code for r in after.values()] == [404, 401, 200]
+    for what, r in after.items():
+        assert r.mimetype == ("application/json" if what == "json" else "text/html"), (what, r.mimetype)
+        assert _csp(r).get("script-src") == "script-src 'none'", (what, r.headers.get("Content-Security-Policy"))
+
+
+def test_the_nonce_is_long_and_spelled_from_the_whole_alphabet(client, monkeypatch):
+    """Six page loads: six different nonces, each at least 22 base64url characters (128 bits), between them
+    spelling more than the 22 characters hex has in either case. Guards a nonce weaker than the page test's format
+    check — a 96-bit hex string (`uuid4().hex[:24]`) matches its 24-character pattern — and one drawn from a short
+    or repeating source. Six random 18-byte draws spell about 57 distinct characters."""
+    monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
+    nonces = []
+    for _ in range(6):
+        policy = _csp(client.get("/", headers=_auth())).get("script-src", "")
+        m = re.fullmatch(r"script-src 'nonce-([A-Za-z0-9_-]+)'", policy)
+        assert m, "the page has no nonce source: %r" % policy
+        nonces.append(m.group(1))
+    assert len(set(nonces)) == 6, nonces
+    assert all(len(n) >= 22 for n in nonces), nonces
+    assert len(set("".join(nonces))) > 22, "the nonces use %d characters: %s" % (len(set("".join(nonces))), nonces)
 
 
 # --- the read API surface (in-process over the service layer) ---------------- #

@@ -326,13 +326,16 @@ Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
   through `innerHTML`, and until 2026-10-12 the Pending panel painted a staged proposal's ref name, subject and
   paths the same way. Add a value to the page ⇒ paint it with `ET()`/`T()`, or leave an empty element in the
   literal and fill its `textContent`; add a link ⇒ `LINK(url, text)`.
-- **CSP**: `object-src`/`base-uri`/`frame-ancestors` (each `'none'`) are set on every response, plus `nosniff`.
-  The page adds `script-src 'nonce-<n>'`, a fresh nonce per response that `index()` also renders into the one
-  `<script>` tag, and `Cache-Control: no-store`; every other response gets `script-src 'none'`. A nonce authorises
-  no handler attribute, so the template has none: a button is bound from the script
-  (`document.querySelector('[data-testid=…]').onclick = () => f();`), and the paint gate refuses an `on…=`
-  attribute in the static markup. There is no `default-src` or `style-src` — the `<style>` block and the `style`
-  attributes carry no nonce. CSP is the second layer; the paint rule above is the actual control.
+- **CSP**: `object-src`/`base-uri`/`frame-ancestors` (each `'none'`) are set on every response, plus `nosniff`. The
+  page adds `script-src 'nonce-<n>'`, a fresh nonce per response that a template context processor also renders into
+  the one `<script>` tag (a route passes no nonce), and `Cache-Control: no-store`; every other response gets
+  `script-src 'none'`, an error raised during the page's render included. A nonce authorises no handler attribute, so
+  the template has none: a button is bound from the script
+  (`document.querySelector('[data-testid=…]').onclick = () => f();`), and the paint gate refuses an `on…=` attribute in the static markup and in a tag of the literal markup the
+  script writes. A reverse proxy that adds its own policy or rewrites the HTML can blank the page
+  ([../docs/frontend-exposure.md](../docs/frontend-exposure.md)). There is no `default-src` or `style-src` — the
+  `<style>` block and the `style` attributes carry no nonce. CSP is the second layer; the paint rule above is the
+  actual control.
 - **Still: bind to the mgmt network only; never expose it publicly.**
 
 **Pre-beta remaining:** a real CA-signed cert (vs self-signed) and SSO (Authelia) if it's

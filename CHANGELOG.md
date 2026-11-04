@@ -17,17 +17,23 @@ The page's policy had no `script-src`, so markup that got past the paint rule co
 
 - **Changed.** `GET /` answers `Content-Security-Policy: script-src 'nonce-<n>'; object-src 'none'; base-uri 'none';
   frame-ancestors 'none'` with a fresh nonce per response, rendered into the page's one `<script>` tag, and
-  `Cache-Control: no-store`. Every other response (each JSON route, the 401, an error) answers `script-src 'none'`
-  with the same three directives. There is no `default-src` and no `style-src`.
+  `Cache-Control: no-store`. Every other response (each JSON route, the 401, an error — also one raised while the
+  page renders) answers `script-src 'none'` with the same three directives. There is no `default-src` and no
+  `style-src`. The nonce is drawn by a template context processor (no route passes it) and reaches one response.
 - **Changed.** The header buttons (search, Index, Pending, Discovery, Backups, Secrets, Keys, Settings, Homepage)
   are bound from the script instead of `onclick` attributes, which a nonce does not authorise. No `data-testid`
   moved.
 - **Changed.** The paint gate (`tests/unit/test_card_paint_gate.py`) refuses any handler attribute in the static
-  markup (a bare call was tolerated) and a script element opened with anything but the nonce tag, and the security
-  header test reads the static directives only (`_CSP_STATIC`), refusing a `default-src` or `style-src` there.
-- **Added.** `tests/integration/test_gui_api.py`: the page's header and script tag carry the same fresh nonce;
-  every other response forbids script. `tests/e2e/test_script_policy.py`: an injected handler attribute does not
-  run (with a control that runs it once the header is dropped), and every header button still opens its panel.
+  markup (a bare call was tolerated), a handler attribute or a `javascript:` URL in a tag of the literal markup the
+  script writes, the nonce's expression anywhere in the static markup but the script's tag, and a script element
+  opened with anything but the nonce tag, and the security header test reads the static directives only
+  (`_CSP_STATIC`), refusing a `default-src` or `style-src` there.
+- **Added.** `tests/integration/test_gui_api.py`: the page's header and script tag carry the same fresh nonce and
+  the policy is exactly its four directives, each named once; every other response forbids script, an error raised
+  during the render and a response after the page in one app context included; the nonce is 128 bits or more of
+  base64url. `tests/e2e/test_script_policy.py`: neither an injected handler attribute nor an injected script
+  element runs (each with a control that runs it once the header is dropped), and every header button still opens
+  its panel with no policy violation from the page's first byte on.
 
 ### fix(security): an error body never carries exception text (T20, 2026-11-02)
 

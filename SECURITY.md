@@ -1728,16 +1728,20 @@ from server strings. All were rewritten on 2026-10-12, and the gate became the a
 Defence in depth: an `after_request` hook sets `Content-Security-Policy` on every response, plus
 `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. Every response carries `object-src 'none';
 base-uri 'none'; frame-ancestors 'none'`. The page (`GET /`) adds `script-src 'nonce-<n>'`, where `<n>` is 18 fresh
-random bytes per response, rendered into the page's one `<script>` tag as well, and is `Cache-Control: no-store`
-so a cached copy cannot outlive its nonce; every other response (each JSON route, the 401, an error) gets
-`script-src 'none'`. A nonce authorises a script element, never a handler attribute, so markup that reaches the
-page past the paint (an `<img onerror=…>`) runs nothing, and the header buttons are bound from the script instead
-of `onclick` attributes (since 2026-11-04, T23). **`default-src` and `style-src` are deliberately absent:**
-`default-src` would become the fallback for `style-src`, `connect-src` (every `fetch()`) and `img-src`, and the
-page's `<style>` block and its few `style` attributes carry no nonce; a `style-src` would need the nonce on the
-block and the attributes made classes first. A reverse proxy in front that rewrites the page's HTML would have to
-keep the tag and the header together. CSP is *not* a substitute for the paint: the paint is the control, CSP the
-second layer.
+random bytes per response, rendered into the page's one `<script>` tag as well, and is `Cache-Control: no-store` so
+a cached copy cannot outlive its nonce; every other response (each JSON route, the 401, an error) gets
+`script-src 'none'` — also an error raised after a render drew its nonce, which answers JSON. The nonce comes from a template
+context processor, so every render carries it and no route passes it, and the hook takes it off `g`, so it reaches
+one response even where one app context serves several requests. A nonce authorises a script element, never a
+handler attribute, so markup that reaches the page past the paint (an `<img onerror=…>`) runs nothing, and the
+header buttons are bound from the script instead of `onclick` attributes (since 2026-11-04, T23). **`default-src`
+and `style-src` are deliberately absent:** `default-src` would become the fallback for `style-src`, `connect-src`
+(every `fetch()`) and `img-src`, and the page's `<style>` block and its few `style` attributes carry no nonce; a
+`style-src` would need the nonce on the block and the attributes made classes first. A reverse proxy in front that
+rewrites the page's HTML would have to keep the tag and the header together, and one that adds a policy of its own
+blanks the page unless the page passes both (a browser enforces every policy a response carries) — see
+[docs/frontend-exposure.md](docs/frontend-exposure.md) `byo_proxy`. CSP is *not* a substitute for the paint: the
+paint is the control, CSP the second layer.
 
 Covering checks: [tests/unit/test_card_paint_gate.py](tests/unit/test_card_paint_gate.py) — a source scan of the
 template that understands string literals, comments and regular-expression literals. It fails on an `E()` markup
@@ -1748,7 +1752,8 @@ attribute or property whose name is not spelled in the source; on an element cre
 literal tag name; on a request that is not a direct `fetch()`, and on a request path that carries anything
 unencoded except the few names pinned to the one place their value comes from; and on code the script scan does not
 read (a second script element, the script element opened with anything but the nonce tag, any handler attribute
-in the static markup, a template expression in the static markup other than that nonce or one in the script that
+in the static markup or in a tag of the literal markup the script writes, a `javascript:` URL in such a tag, a
+template expression in the static markup other than that nonce or one in the script that
 is not `| tojson`, a hidden line-break or display-reordering character). It proves
 it can fail by planting each shape a review found into the real template, and it pins the helpers by their exact
 definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not

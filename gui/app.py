@@ -71,17 +71,30 @@ def _script_nonce():
     return g.csp_nonce
 
 
+@app.context_processor
+def _csp_nonce_context():
+    """Every template render gets the response's nonce as `csp_nonce`, drawn here on first use. A route therefore
+    renders the page with no nonce argument of its own, and no render path (a second page, a fork's own `index()`)
+    can serve `<script nonce="">` under a `script-src 'none'` header — a page that shows and does nothing."""
+    return {"csp_nonce": g.get("csp_nonce") or _script_nonce()}
+
+
 @app.after_request
 def _security_headers(resp):
     """Defence-in-depth headers on every response. The REAL fix for third-party bytes on the page is painting them
     with ET()/textContent (see index.html's card()) — this is the second layer, not the first. The page's
     `script-src` is the nonce its one inline <script> carries, so markup a value smuggles past the paint rule (an
     `<img onerror=…>`, a `<script>`) does not run: a nonce authorises a script element, never a handler attribute,
-    and index.html binds its buttons from the script. A response that rendered no page (every JSON route, the 401,
-    an error) gets `script-src 'none'`. The page is `no-store`: a cached copy must not outlive its nonce. There is no
-    `default-src` and no `style-src` on purpose — `default-src` would become the fallback for `style-src`,
-    `connect-src` and `img-src`, and the page's `<style>` block and `style` attributes carry no nonce."""
-    nonce = g.get("csp_nonce")
+    and index.html binds its buttons from the script. A response that is not a rendered page gets `script-src
+    'none'`: every JSON route, the 401, and an error — also one raised after a render drew a nonce, which answers
+    the JSON 500 below, a body with no script to authorise. The nonce is taken off `g` here, so it reaches one
+    response: `g` belongs to the app context, and one app context can serve more than one request. The page is
+    `no-store`: a cached copy must not outlive its nonce. There is no `default-src` and no `style-src` on purpose —
+    `default-src` would become the fallback for `style-src`, `connect-src` and `img-src`, and the page's `<style>`
+    block and `style` attributes carry no nonce."""
+    nonce = g.pop("csp_nonce", None)
+    if resp.mimetype != "text/html":
+        nonce = None
     script = ("script-src 'nonce-%s'" % nonce) if nonce else "script-src 'none'"
     resp.headers.setdefault("Content-Security-Policy", "%s; %s" % (script, _CSP_STATIC))
     if nonce:
@@ -272,7 +285,7 @@ def require_auth(fn):
 def index():
     # has_remote gates the onboard form's "also push origin (offsite backup)" checkbox — hidden on a fresh node
     # with no offsite remote (the push would just no-op/fail there).
-    return render_template("index.html", has_remote=gitio.offsite_remote_exists(), csp_nonce=_script_nonce())
+    return render_template("index.html", has_remote=gitio.offsite_remote_exists())
 
 
 @app.route("/api/search")

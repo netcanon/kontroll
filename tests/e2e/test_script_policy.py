@@ -22,15 +22,37 @@ _INJECT = """() => new Promise(done => {
   document.body.appendChild(box);
 })"""
 
+# Inserts a frame whose inline script (an element, not an attribute) would set a marker on the page, and resolves
+# once the frame has loaded (its script, if it were allowed, has run by then). A `srcdoc` frame inherits the
+# page's policy.
+_INJECT_ELEMENT = """() => new Promise(done => {
+  const box = document.createElement('div');
+  box.innerHTML = '<iframe srcdoc="<script>parent.__kontroll_csp_element = 1</script>"></iframe>';
+  box.firstChild.addEventListener('load', () => setTimeout(done, 0));
+  document.body.appendChild(box);
+})"""
+
+# Records every policy violation from the first byte of the page on: installed before `goto`, so a refusal while
+# the page loads (its own script refused) is seen too.
+_LISTEN = ("window.__kontroll_violations = []; document.addEventListener('securitypolicyviolation',"
+           " e => window.__kontroll_violations.push(e.effectiveDirective));")
+
+
+def _without_the_policy(page):
+    """Serve every page response with its Content-Security-Policy header dropped — the real response otherwise."""
+    def drop_policy(route):
+        response = route.fetch()
+        headers = {k: v for k, v in response.headers.items() if k.lower() != "content-security-policy"}
+        route.fulfill(response=response, headers=headers)
+    page.route("**/", drop_policy)
+
 
 def test_an_injected_handler_attribute_does_not_run(page):
     """An `<img onerror=…>` inserted into the live page fails to load and its handler never runs, and the browser
     reports the refusal as a policy violation. Guards the policy being present in the header and absent in effect —
     a nonce that also matched attributes, an `'unsafe-inline'`, a header the page never got."""
+    page.add_init_script(_LISTEN)
     page.goto("/")
-    page.evaluate("() => { window.__kontroll_violations = [];"
-                  " document.addEventListener('securitypolicyviolation',"
-                  " e => window.__kontroll_violations.push(e.effectiveDirective)); }")
     page.evaluate(_INJECT)
     assert page.evaluate("window.__kontroll_csp === undefined"), "an injected handler attribute RAN"
     page.wait_for_function("window.__kontroll_violations.length > 0")
@@ -42,14 +64,30 @@ def test_without_the_policy_the_same_handler_runs(page):
     """The control for the test above: the same page served WITHOUT its Content-Security-Policy header (the real
     response, the header dropped) runs the injected handler. Without this, a test harness in which no handler ever
     ran (a blocked image load, an event that never fired) would pass the test above for the wrong reason."""
-    def drop_policy(route):
-        response = route.fetch()
-        headers = {k: v for k, v in response.headers.items() if k.lower() != "content-security-policy"}
-        route.fulfill(response=response, headers=headers)
-    page.route("**/", drop_policy)
+    _without_the_policy(page)
     page.goto("/")
     page.evaluate(_INJECT)
     assert page.evaluate("window.__kontroll_csp === 1"), "the control's handler did not run — the test above proves nothing"
+
+
+def test_an_injected_script_element_does_not_run(page):
+    """A frame whose inline `<script>` would set a marker on the page, inserted into the live page, runs nothing.
+    Guards a directive beside the nonce that re-opens script ELEMENTS while handler attributes stay refused — a
+    `script-src-elem 'unsafe-inline'`, which the handler test above cannot see, runs this one."""
+    page.goto("/")
+    page.evaluate(_INJECT_ELEMENT)
+    assert page.evaluate("window.__kontroll_csp_element === undefined"), "an injected script element RAN"
+
+
+def test_without_the_policy_the_same_script_element_runs(page):
+    """The control for the element test: with the header dropped, the same frame's script runs and sets the marker.
+    Without it, a frame that never loaded or a script that never ran would pass the test above for the wrong
+    reason."""
+    _without_the_policy(page)
+    page.goto("/")
+    page.evaluate(_INJECT_ELEMENT)
+    assert page.evaluate("window.__kontroll_csp_element === 1"), \
+        "the control's script did not run — the test above proves nothing"
 
 
 @pytest.mark.parametrize("button, opened", [
@@ -65,11 +103,10 @@ def test_without_the_policy_the_same_handler_runs(page):
 def test_every_header_button_still_opens_its_panel(page, button, opened):
     """A click on each header button opens its panel, and the page's script ran without a policy violation. Guards
     a binding lost when the handler attributes moved into the script (a button that does nothing), a script the
-    policy refused (every button dead, the page blank), and a button bound to a bare function reference."""
+    policy refused (every button dead, the page blank), and a button bound to a bare function reference. The
+    listener is installed before the page loads, so a violation while it loads counts too."""
+    page.add_init_script(_LISTEN)
     page.goto("/")
-    page.evaluate("() => { window.__kontroll_violations = [];"
-                  " document.addEventListener('securitypolicyviolation',"
-                  " e => window.__kontroll_violations.push(e.effectiveDirective)); }")
     page.get_by_test_id(button).click()
     expect(page.get_by_test_id(opened)).to_be_visible()
     assert page.evaluate("window.__kontroll_violations") == []

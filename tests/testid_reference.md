@@ -165,6 +165,7 @@ per-domain testid (the secret analogue of the capability dialog). Opened by `sec
 |---|---|---|
 | `secrets-open` | the header "Secrets" button | opens the domain picker |
 | `secret-overlay` | the modal overlay (picker + dialog share it) | one at a time; reopening removes the prior |
+| `secret-picker` | the domain-picker dialog root | what `secrets-open` opens (`tests/e2e/test_script_policy.py`) |
 | `secret-picker-body` | the domain-picker body | lists one `secret-domain` button per registered domain |
 | `secret-domain` | a domain choice button | `data-domain` discriminates; opens the dialog for that domain |
 | `secret-dialog` | the per-domain dialog root | `data-domain` = the SOPS domain |
@@ -191,6 +192,7 @@ response) and is never stored, logged, or committed; only the public recipient i
 |---|---|---|
 | `keygen-open` | the header "Keys" button | opens the role picker |
 | `keygen-overlay` | the modal overlay (picker + dialog share it) | one at a time; reopening removes the prior |
+| `keygen-picker` | the role-picker dialog root | what `keygen-open` opens (`tests/e2e/test_script_policy.py`) |
 | `keygen-picker-body` | the role-picker body | lists one `keygen-role` button per registered role |
 | `keygen-role` | a role choice button | `data-role` discriminates; opens the dialog for that role |
 | `keygen-dialog` | the per-role dialog root | `data-role` = the key role |

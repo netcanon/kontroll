@@ -54,9 +54,11 @@ the link rule (`safeHref`) and the request-path encoding. The source gate
 shows the consequence.
 
 `test_script_policy.py` is the browser proof of the page's `script-src` nonce (C19's second layer): an
-`<img onerror=…>` inserted into the live page runs nothing and the browser reports a policy violation, the same
-insertion runs once the response's policy header is dropped (the control), and every header button, bound from the
-script since handler attributes cannot run, still opens its panel. Nothing in the suite sets `bypass_csp`.
+`<img onerror=…>` inserted into the live page runs nothing and the browser reports a policy violation, a frame's
+inline `<script>` inserted the same way runs nothing either, each insertion runs once the response's policy header
+is dropped (the controls), and every header button, bound from the script since handler attributes cannot run,
+still opens its panel with no violation from the first byte of the page on. Nothing in the suite sets
+`bypass_csp`.
 
 ```bash
 pip install -r tests/requirements-dev.txt        # includes pytest-playwright
