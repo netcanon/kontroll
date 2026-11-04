@@ -109,17 +109,21 @@ defined anywhere in the `RUN`, or a `hash` or `enable` entry (each can stand in 
 stops after one command), and a `trap`, an `exec`, a `return` or an `exit` other than `exit 1` to `exit 255` in the same
 `RUN`: each can end it with a status that is not the check's. A download names one URL and one output. A checksum
 fetched beside the file is no pin either — whoever swaps the file swaps it too — so the digest must be one the tree
-holds: an `ARG` or `ENV` whose every value is the 64 hex, on one `echo "$<ARG>  <file>" | sha256sum -c -` line, and no
-build passes that `ARG` in. The rules are in [`tests/unit/_build_read.py`](../tests/unit/_build_read.py), and the
-pip-audit step is held to them too (and must name its shell unless its runner is a named Linux or macOS one). The test
-reads a Dockerfile's lines as BuildKit splits and joins them (on LF only, a byte-order mark dropped, a continuation
-joined with no space, a line ending in two backslashes continuing nothing), and refuses a whitespace character other
-than a space, a tab or a line feed (sh splits words on none of them; the test, and for VT, FF and CR BuildKit's keyword
-split, do). It also refuses what it cannot read (a `SHELL` other than Docker's default, an exec-form `RUN`, a heredoc, a
-brace list it cannot read (sound under sh, which expands no brace, but refused), a comment inside a `RUN` — Docker joins
-the lines first, so the shell drops the rest — an `# escape=` directive, a Dockerfile outside this directory) and a `#
-syntax=` frontend not pinned by digest. What it still cannot see is listed in the test's docstring. The installer's and
-Vector's **apt** packages still float inside their pinned base; the published image's digest in
+holds: an `ARG` or `ENV` whose every value is the 64 hex, on one `echo "$<ARG>  <file>" | sha256sum -c -` line, no build
+passes that `ARG` in, it is no build arg Docker predefines (a proxy name, which a build sets with no `ARG`), and no
+`--mount=` option's `env=` sets it, however the option is written (BuildKit sets that variable from a secret). An
+install's `RUN` may start with cache mounts at a cache directory (`--mount=type=cache,target=/root/.cache/pip`, under
+`/root/.cache`, `/var/cache` or `/var/lib/apt`); any other flag there is refused, since a mount can put a `pip.conf`,
+code or a wheel in front of the install. The rules are in [`tests/unit/_build_read.py`](../tests/unit/_build_read.py),
+and the pip-audit step is held to them too (and must name its shell unless its runner is a named Linux or macOS one).
+The test reads a Dockerfile's lines as BuildKit splits and joins them (on LF only, a byte-order mark dropped, a
+continuation joined with no space, a line ending in two backslashes continuing nothing), and refuses a whitespace
+character other than a space, a tab or a line feed (sh splits words on none of them; the test, and for VT, FF and CR
+BuildKit's keyword split, do). It also refuses what it cannot read (a `SHELL` other than Docker's default, an exec-form
+`RUN`, a heredoc, a brace list it cannot read (sound under sh, which expands no brace, but refused), a comment inside a
+`RUN` — Docker joins the lines first, so the shell drops the rest — an `# escape=` directive, a Dockerfile outside this
+directory) and a `# syntax=` frontend not pinned by digest. What it still cannot see is listed in the test's docstring.
+The installer's and Vector's **apt** packages still float inside their pinned base; the published image's digest in
 [`images.lock.yml`](images.lock.yml) is the full pin ([SECURITY.md](../SECURITY.md) § Accepted risks, R-IMG-2).
 
 One procedure, the same for a Dependabot PR and a hand bump. It is an authoring-time act with network; nothing in

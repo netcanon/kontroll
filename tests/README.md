@@ -336,26 +336,37 @@ one). It reads each command as written and in the views bash's expansion can tur
 expansions expanded and a parameter's default, alternative, assigned default or pattern replacement
 read as its word (`${x:-exit} 0`, `${0:+exit} 0`, `${x:=exit} 0`, `${0/*/exit} 0`), then every
 expansion removed, read once as empty and once as a space, all but `$#`, `$?` and `$$`, which never
-come out empty (`exit$x 0` runs `exit 0` where `x` is unset, `exit${IFS}0` runs `exit 0`); a command
-that opens an expansion `commands()` cut at an operator inside it is read with the pieces cut from
-it (`exit$(:|:) 0`); a brace list it cannot read (an item holding a nested substitution or
-parameter, or one an operator inside a quote or a substitution cuts) is refused. It reads errexit
-the way `/bin/sh` does: a `;` after `set -e` counts only for a check that starts its AND-OR list and
-is the whole of it (a guard before it can skip it), and never inside a compound (a brace group, a
-subshell, an `if` body, a loop); a `set -e` counts only as a whole top-level command, and a `set
-+e`, a `set` or `shopt` given a variable, a backquoted command, a glob or a brace expansion, or a
-`shopt` naming errexit, anywhere, switches errexit off. It removes quoted strings (escapes, a `'` or
-backquotes inside `"…"`) when it decides what a check runs inside, but it splits on `&&`, `||`, `;`
-and `|` inside quotes too (a lone `&` only outside them). A Dockerfile's lines reach it joined as
-BuildKit joins them (no space at a continuation, a double backslash continuing nothing, a byte-order
-mark dropped, a whitespace character other than a space, a tab or a line feed refused); a step's
-`run:` is read whole (a quote or a backquote spans a newline, and the step is refused when one does
-or is left open; a `#` cuts to the line end, and one right after a `)` is refused; a C0 control
-character that is not whitespace is refused) and its lines joined with `;`, or with a space after
-one that ends in `&&`, `||` or `|`. It refuses the shapes it knows it cannot read; the module's
-docstring gives the rules, and `test_image_pins.py`'s ("What the checks still cannot see") lists the
-shapes it cannot see and the sound shapes it refuses. A new check on a build's shell text calls
-`gate_faults()` rather than reading the operators itself, so the two tests cannot drift apart.
+come out empty (`exit$x 0` runs `exit 0` where `x` is unset, `exit${IFS}0` runs `exit 0`), each
+parameter given an operator read unset and set empty in every combination (`_choices`, at most
+`_CHOICES` readings, past which the command is refused: `exit${x:+foo} 0`, `${y-ex}${x:+foo}it 0`),
+a replacement's word also read beside a space (`se${IFS/#/t}-n`), each gap an expansion leaves glued
+to a word on both sides read as empty and as a space apart from the others (`ex${x}it${IFS}0`), and
+a `$-` anywhere read as the option letters it holds (`set -e; $-xit 0`); expansions are paired as sh
+pairs them, so a `)` or `}` that a quote, an escape, a case pattern (its words quoted or escaped
+too) or an inner substitution holds closes nothing (`e${x:+$(echo })}xit 0`), a bare `{` inside a
+`${…}` is a character, and a `'` inside a double-quoted `${…}` is read both as a quote and as a
+character (POSIX sh reads it as one); a command that opens an expansion `commands()` cut at an
+operator inside it is read with the pieces cut from it (`exit$(:|:) 0`); a brace list it cannot read
+(an item holding a nested substitution or parameter, or one an operator inside a quote or a
+substitution cuts) is refused. It reads errexit the way `/bin/sh` does: a `;` after `set -e` counts
+only for a check that starts its AND-OR list and is the whole of it (a guard before it can skip it),
+and never inside a compound (a brace group, a subshell, an `if` body, a loop); a `set -e` counts
+only as a whole top-level command, and a `set +e`, a `set` or `shopt` given a variable, a backquoted
+command, a glob or a brace expansion, or a `shopt` naming errexit, anywhere, switches errexit off.
+It removes quoted strings (escapes, a `'` or backquotes inside `"…"`) when it decides what a check
+runs inside, but it splits on `&&`, `||`, `;` and `|` inside quotes too (a lone `&` only outside
+them). A Dockerfile's lines reach it joined as BuildKit joins them, a `RUN`'s leading cache mounts
+at a cache directory dropped (`--mount=type=cache,target=/root/.cache/pip`; any other flag stays
+part of its first command) (no space at a continuation, a double backslash continuing nothing, a
+byte-order mark dropped, a whitespace character other than a space, a tab or a line feed refused); a
+step's `run:` is read whole (a quote or a backquote spans a newline, and the step is refused when
+one does or is left open; a `#` that opens a word outside a `${…}` cuts to the line end, and one
+right after a `)` is refused; a C0 control character that is not whitespace is refused) and its
+lines joined with `;`, or with a space after one that ends in `&&`, `||` or `|`. It refuses the
+shapes it knows it cannot read; the module's docstring gives the rules, and `test_image_pins.py`'s
+("What the checks still cannot see") lists the shapes it cannot see and the sound shapes it refuses.
+A new check on a build's shell text calls `gate_faults()` rather than reading the operators itself,
+so the two tests cannot drift apart.
 
 ## Playbook and role hygiene sweeps
 

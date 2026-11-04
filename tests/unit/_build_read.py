@@ -43,13 +43,17 @@ Under /bin/sh (POSIX 2.9.3, and `set -e` in 2.14), a failing command fails the w
   as its word and once as empty, in every combination, and every other expansion as empty, as each parameter may be
   unset or set empty, so the empty branch of an alternative or a replacement is read, and one beside another's word
   (`exit${x:+foo} 0`, `exit${x/a/b} 0`, `x=; exit${x-foo} 0`, `${y-ex}${x:+foo}it 0`; a command read more ways than
-  `_CHOICES` is read as `exit`); or with each operator's word read once an expansion inside it is gone (`${x:-${y}exit}
-  0`, `${1-exit${y}} 0`, `${0/\\/*/exit} 0`). These last two views read a quoted or escaped `}`, `)` or `/` as text, and
-  a case pattern's `)` as closing nothing (`exit${x:+"}"} 0`, `exit$(echo "(" >/dev/null) 0`, `exit$(case a in b) 1;;
-  esac) 0`), and read an expansion that holds the opening of another after it, so a `}` inside a `$(…)` closes no `${…}`
-  around it (`e${x:+$(echo })}xit 0`). A word is read after an `&`, `|` or redirect and before a redirect too
-  (`true&exit 0`, `exit>/dev/null`). A command that opens a `$(…)`, `${…}` or backquoted command that `commands` cut at
-  an operator inside it is read with the pieces cut from it, rejoined (`exit$(:|:) 0`, `exit${x+;} 0`, `` exit`:;:` 0
+  `_CHOICES` is read as `exit`), each gap it leaves where it removed an expansion glued to a word on both sides read as
+  empty and as a space apart from the others (`ex${x}it${IFS}0`), and the command read again with every `'` removed, as
+  POSIX sh reads one inside a double-quoted `${…}` as a character (`ex"${x:+y'}"''it 0`); or with each operator's word
+  read once an expansion inside it is gone (`${x:-${y}exit} 0`, `${1-exit${y}} 0`, `${0/\\/*/exit} 0`). These last two
+  views read a quoted or escaped `}`, `)` or `/` as text, and a case pattern's `)`, its words read with their quotes and
+  escapes, as closing nothing (`exit${x:+"}"} 0`, `exit$(echo "(" >/dev/null) 0`, `exit$(case a in b) 1;; esac) 0`,
+  `ex$(case a in ")") 1;; esac)it 0`), and read an expansion that holds the opening of another after it, so a `}` inside
+  a `$(…)` closes no `${…}` around it (`e${x:+$(echo })}xit 0`), and a bare `{` inside a `${…}` as a character, as sh
+  pairs `${x+{}` at its first `}` (`ex${x+{}it 0`). A word is read after an `&`, `|` or redirect and before a redirect
+  too (`true&exit 0`, `exit>/dev/null`). A command that opens a `$(…)`, `${…}` or backquoted command that `commands` cut
+  at an operator inside it is read with the pieces cut from it, rejoined (`exit$(:|:) 0`, `exit${x+;} 0`, `` exit`:;:` 0
   ``, `exit$(: ")1"; :) 0`), the opening read both blind to quotes and quote-aware. A `$-` or `${-…}` anywhere is read
   as one: it holds the shell's option letters, `e` once a `set -e` runs and `ehB` in a step's bash, which can build
   `exit` or `set` (`set -e; $-xit 0`, `${-%hB}xit 0`, `s$-t -o noexec`);
@@ -235,19 +239,22 @@ def _bare(command, sep="", braces=True):
 # pieces, and `_REPLACE_Q` the start of one that is a pattern replacement (`${x/a/b}`, `${x//a/b}`, `${x/#a/b}`,
 # `${x/%a/b}`: the name, then a `/`); `_EXPANSION_Q`: an expansion, as `_EXPANSION` reads one, made of them, holding the
 # opening of no other (a `$(`, a `${` or a backquote: the inner one is read first, so a `}` inside a `$(…)` closes no
-# `${…}` around it, `e${x:+$(echo })}xit 0`: fold 15's fuzz), a name as sh reads it (a positional parameter is one
-# digit: `exit$1xit` is `exit`, `$1` and `xit`, which `_EXPANSION`'s `\w+` reads as one name, `$1xit`; `_bare` meets
-# none there, as `_plain` removes a `$1` first); `_CASE_PAT`: a case pattern's `)` (`in b)`, `;; b)`, `in (b|c)`), which
-# closes nothing, and one after a lone `;`, as `commands` drops the empty command between the two of a `;;` and `_spans`
-# rejoins the rest with one (`set$(case a in b) +x;; c) +x;; esac) -n`; stricter only elsewhere).
+# `${…}` around it, `e${x:+$(echo })}xit 0`: fold 15's fuzz; a bare `{` is a character of a `${…}`, as sh pairs `${x+{}`
+# at its first `}`, `ex${x+{}it 0`: read 151, S3), a name as sh reads it (a positional parameter is one digit:
+# `exit$1xit` is `exit`, `$1` and `xit`, which `_EXPANSION`'s `\w+` reads as one name, `$1xit`; `_bare` meets none
+# there, as `_plain` removes a `$1` first); `_CASE_PAT`: a case pattern's `)` (`in b)`, `;; b)`, `in (b|c)`), its words
+# read quote-aware (`_CASE_PIECE`: `in b\))`, `in ")")`: read 150, S2; read 151, S2), which closes nothing, and one
+# after a lone `;`, as `commands` drops the empty command between the two of a `;;` and `_spans` rejoins the rest with
+# one (`set$(case a in b) +x;; c) +x;; esac) -n`; stricter only elsewhere).
 _QPIECE = r"""\\.|"(?:[^"\\]|\\.)*"|'[^']*'"""
 _SPECIAL_Q = re.compile(r"\$\{(?:[@*!#?$-]|\d+|!?[A-Za-z_]\w*(?:\[[^]{}]*\])?)(?::?[-+=]|/[/#%%]?(?:%s|[^/{}\\\"'])*/)"
                         r"((?:%s|[^{}\\\"'])*)\}" % (_QPIECE, _QPIECE))
 _REPLACE_Q = re.compile(r"\$\{(?:[@*!#?$-]|\d+|!?[A-Za-z_]\w*(?:\[[^]{}]*\])?)/")
-_EXPANSION_Q = re.compile(r"\$\{(?:%s|\$(?![({])|[^{}\\\"'`$])*\}"
+_EXPANSION_Q = re.compile(r"\$\{(?:%s|\$(?![({])|[^}\\\"'`$])*\}"
                           r"|\$?\((?:%s|\$(?![({])|[^()\\\"'`$])*\)|`(?:[^`\\]|\\.)*`"
                           r"|\$(?:[A-Za-z_]\w*|\d|[@*!-])" % (_QPIECE, _QPIECE))
-_CASE_PAT = re.compile(r"((?:\bin|;\s*;?&?)\s+)\(?((?!esac\b)[^()\s;|]+(?:\s*\|\s*[^()\s;|]+)*)\)")
+_CASE_PIECE = r"""(?:%s|[^()\s;|\\"'])+""" % _QPIECE
+_CASE_PAT = re.compile(r"((?:\bin|;\s*;?&?)\s+)\(?((?!esac\b)%s(?:\s*\|\s*%s)*)\)" % (_CASE_PIECE, _CASE_PIECE))
 
 
 def _decase(text):
@@ -257,38 +264,57 @@ def _decase(text):
     return _CASE_PAT.sub(r"\1\2 ", text) if re.search(r"\bcase\s", text) else text
 
 
-# The most readings `_choices` makes of one command: each parameter given an operator doubles them, and a replacement
-# with a word makes five of each. A command it would read more ways is read as `exit`, which refuses it.
+# The most readings `_choices` makes of one command, and the most ways `_fills` fills one text's gaps: each parameter
+# given an operator doubles the readings, a replacement with a word makes five of each, and each gap glued to a word on
+# both sides doubles the fills. A command it would read more ways is read as `exit`, which refuses it.
 _CHOICES = 64
-_GAP = chr(7)  # where `_choices` removed an expansion, read at the end as empty and as a space
+_GAP = chr(7)  # where `_choices` removed an expansion, read at the end as empty and as a space (`_fills`)
 
 
 def _choices(command):
-    """`command` read each way sh may expand it where each parameter is unset, set empty or, as IFS is, set to a
-    space: its brace expansions expanded and a case pattern's `)` removed (`_decase`), then, leftmost first, each
-    expansion read quote-aware that holds none of its own, nor the opening of one (`_EXPANSION_Q`: `e${x:+$(echo
-    })}xit 0`, fold 15's fuzz), a parameter given an operator or a pattern replacement (`_SPECIAL_Q`) read once as its
-    word and once as empty, a replacement with a word (`_REPLACE_Q`) also as that word with a gap after it, before it
-    and on each side, as the value it does not replace is kept and can split the word (sh sets IFS to a space, a tab
-    and a newline, so `se${IFS/#/t}-n` runs `set -n`: fold 15's fuzz), and any other as empty, until none is left;
-    then `_bare`'s view of each, the expansions it removed read as empty and as a space.
-    Which branch an operator takes turns on its parameter: `${x-foo}` and `${x=foo}` give `foo` where x is unset and
-    nothing where it is set empty, `${x+foo}` the reverse, `${x:-foo}` and `${x:=foo}` give `foo` either way,
-    `${x:+foo}` and a replacement nothing; and each parameter is one or the other, so every combination is read.
-    `_plain` reads every operator's word and `_bare` starts from it, so neither reads the empty branch of an alternative
-    (`exit${x:+foo} 0`), of a replacement (`exit${x/a/b} 0`) or of a default of a parameter set empty (`x=; exit${x-foo}
-    0`: read 140, S2), nor one beside another's word (`${y-ex}${x:+foo}it 0`, `${1-s}${x/a/b}e''t +e`: fold 15's fuzz,
-    which a view that read each default or assignment one way alone passed). A branch no state gives (`${x:-foo}` read
-    as empty) only adds a refusal, as each view does. Its quote-aware pairing reads a quoted or escaped `}` or `)`
-    inside an expansion as text (`exit${x:+"}"} 0`, `exit$(echo "(" >/dev/null) 0`, `exit$(: ")1"; :) 0`: read 140, S4).
-    A command read more than `_CHOICES` ways is read as `exit`, so the ender refuses it."""
-    texts, out = {_decase(_braced(command))}, set()
+    """`command` read each way sh may expand it where each parameter is unset, set empty or, as IFS is, set to a space:
+    its brace expansions expanded and a case pattern's `)` removed (`_decase`), then, leftmost first, each expansion
+    read quote-aware that holds none of its own, nor the opening of one (`_EXPANSION_Q`: `e${x:+$(echo })}xit 0`, fold
+    15's fuzz), a parameter given an operator or a pattern replacement (`_SPECIAL_Q`) read once as its word and once as
+    empty, a replacement with a word (`_REPLACE_Q`) also as that word with a gap after it, before it and on each side,
+    as the value it does not replace is kept and can split the word (sh sets IFS to a space, a tab and a newline, so
+    `se${IFS/#/t}-n` runs `set -n`: fold 15's fuzz), and any other as empty, until none is left; then `_bare`'s view of
+    each, the expansions it removed read as empty and as a space, each gap glued to a word on both sides apart from the
+    others (`_fills`: `ex${x}it${IFS}0`, read 150, S1). Which branch an operator takes turns on its parameter:
+    `${x-foo}` and `${x=foo}` give `foo` where x is unset and nothing where it is set empty, `${x+foo}` the reverse,
+    `${x:-foo}` and `${x:=foo}` give `foo` either way, `${x:+foo}` and a replacement nothing; and each parameter is one
+    or the other, so every combination is read. `_plain` reads every operator's word and `_bare` starts from it, so
+    neither reads the empty branch of an alternative (`exit${x:+foo} 0`), of a replacement (`exit${x/a/b} 0`) or of a
+    default of a parameter set empty (`x=; exit${x-foo} 0`: read 140, S2), nor one beside another's word
+    (`${y-ex}${x:+foo}it 0`, `${1-s}${x/a/b}e''t +e`: fold 15's fuzz, which a view that read each default or assignment
+    one way alone passed). A branch no state gives (`${x:-foo}` read as empty) only adds a refusal, as each view does.
+    Its quote-aware pairing reads a quoted or escaped `}` or `)` inside an expansion as text (`exit${x:+"}"} 0`,
+    `exit$(echo "(" >/dev/null) 0`, `exit$(: ")1"; :) 0`: read 140, S4). It reads the command twice, as written and with
+    every `'` removed: POSIX sh reads a `'` inside a double-quoted `${…}` as a character, so `ex"${x:+y'}"''it 0` runs
+    `exit 0` where x is unset, and the pairing reads that `'` as opening a quote (read 150, S3). A bare `{` inside a
+    `${…}` is a character, as sh pairs `${x+{}` at its first `}` (`ex${x+{}it 0`: read 151, S3). A command read more
+    than `_CHOICES` ways, either time, is read as `exit`, so the ender refuses it."""
+    first, out = _decase(_braced(command)), set()
+    for start in (first, first.replace("'", "")):
+        got = _readings(start)
+        if got is None:
+            return ("exit",)
+        out |= got
+    return tuple(sorted(out))
+
+
+def _readings(start):
+    """{`_bare`'s view of each way `_choices` reads `start`}, or None if it reads it more than `_CHOICES` ways."""
+    texts, out = {start}, set()
     while texts:
         later = set()
         for text in texts:
             m = _EXPANSION_Q.search(text)
             if m is None:
-                out.update(_bare(text.replace(_GAP, sep), sep, braces=False) for sep in ("", " "))
+                fills = _fills(text)
+                if fills is None:
+                    return None
+                out.update(_bare(f, sep, braces=False) for f in fills for sep in ("", " "))
                 continue
             word = _SPECIAL_Q.fullmatch(m.group(0))
             later.update(text[:m.start()] + x + text[m.end():] for x in ([word.group(1)] if word else []) + [_GAP])
@@ -296,9 +322,43 @@ def _choices(command):
                 w, head, tail = word.group(1), text[:m.start()], text[m.end():]
                 later.update(head + x + tail for x in (w + _GAP, _GAP + w, _GAP + w + _GAP))
         if len(later) > _CHOICES:
-            return ("exit",)
+            return None
         texts = later
-    return tuple(sorted(out))
+    return out
+
+
+def _fills(text):
+    """{`text` with its gaps filled each way they can split a word}, or None past `_CHOICES` ways: every gap empty, and
+    every gap a space, and each gap glued to a word on both sides (neither neighbour a blank or one of `;&|()<>`, and
+    not inside double quotes, where an expansion never splits a word) empty and a space in every combination, the
+    others all empty or all a space. A run of gaps is one: empty, or a space somewhere in it. One value for every gap
+    never reads `ex${x}it${IFS}0`, which runs `exit 0` where x is unset, nor `"ex"${x}"it"${IFS}0` (read 150, S1)."""
+    text = re.sub(_GAP + "+", _GAP, text)
+    parts, quoted, q, k = text.split(_GAP), [], None, 0
+    while k < len(text):  # whether each gap sits inside double quotes; a backslash before a gap leaves it a gap
+        ch = text[k]
+        if ch == _GAP:
+            quoted.append(q == '"')
+        elif ch == "\\" and q != "'" and text[k + 1:k + 2] != _GAP:
+            k += 1
+        elif ch == '"' and q != "'":
+            q = None if q else '"'
+        elif ch == "'" and q != '"':
+            q = None if q else "'"
+        k += 1
+    edge = r"[^\s;&|()<>]"
+    glued = [g for g in range(len(parts) - 1)
+             if not quoted[g] and re.match(edge, parts[g][-1:]) and re.match(edge, parts[g + 1][:1])]
+    if 2 ** len(glued) > _CHOICES:
+        return None
+    out = set()
+    for other in ("", " "):
+        for mask in range(2 ** len(glued)):
+            seps = [other] * (len(parts) - 1)
+            for b, g in enumerate(glued):
+                seps[g] = " " if mask >> b & 1 else ""
+            out.add(parts[0] + "".join(sep + part for sep, part in zip(seps, parts[1:])))
+    return out
 
 
 def _word(command):
@@ -307,7 +367,9 @@ def _word(command):
     operator whose word or pattern holds an expansion, or a quoted or escaped `/`, which `_SPECIAL` does not read, is
     read once that expansion is gone (`${x:-${y}exit} 0`, `${1-exit${y}} 0`, `${x:-${y%z}exit} 0`, `${a[${i}]:-exit}
     0`, `${0/*/${y}exit} 0`, `${0/\\/*/exit} 0`, `${0/"/"*/exit} 0`: read 140, S3). Its brace expansions are expanded
-    once, on the text as written, as in `_plain`."""
+    once, on the text as written, as in `_plain`. `_choices` reads each of these too (an operator's word once an
+    expansion inside it is a gap), so no row tells `_word` apart from it: a mutant that drops it survives (read 151,
+    N3)."""
     text, prev = _braced(command), None
     while prev != text:
         prev, q = text, None
@@ -325,12 +387,12 @@ def _views(command):
 
 
 def _open_subst(text):
-    """True if `text` opens a `$(…)`, `${…}` or backquoted command it does not close, read two ways, and True if
-    either says so: with each escaped character removed and quotes not read (an escaped backquote opens nothing:
-    `echo "see \\`x\\`"`, read 140, N4), and quote-aware (`_EXPANSION_Q`), a case pattern's `)` removed first
-    (`_decase`), so a `)` or `}` a quote, an escape or a case pattern holds closes nothing (`exit$(echo ")" ; :) 0`,
-    `exit$(case a in b) 1;; esac) 0`: read 140, S4). Reading it both ways joins more of the commands `commands` cut,
-    never fewer, so a span that either reading leaves open is read whole."""
+    """True if `text` opens a `$(…)`, `${…}` or backquoted command it does not close, read two ways, and True if either
+    says so: with each escaped character removed and quotes not read (an escaped backquote opens nothing: `echo "see
+    \\`x\\`"`, read 140, N4), and quote-aware (`_EXPANSION_Q`), a case pattern's `)` removed first (`_decase`), so a `)`
+    or `}` a quote, an escape or a case pattern holds closes nothing (`exit$(echo ")" ; :) 0`, `exit$(case a in b) 1;;
+    esac) 0`: read 140, S4; `ex$(case a in \\)) 1;; esac)it 0`: read 150, S2). Reading it both ways joins more of the
+    commands `commands` cut, never fewer, so a span that either reading leaves open is read whole."""
     blind, prev = re.sub(r"\\.", "", text, flags=re.S), None
     while prev != blind:
         prev, blind = blind, re.sub(r"\$\{[^{}]*\}|\$?\([^()]*\)|`(?:[^`\\]|\\.)*`", "", blind)
