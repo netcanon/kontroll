@@ -173,10 +173,15 @@ def test_an_error_raised_while_the_page_renders_forbids_script(client, monkeypat
     """A `GET /` whose template fails after the render drew its nonce answers the fixed JSON 500 (`internal_error`,
     with a run id the audit log carries too) under `script-src 'none'`, with no nonce anywhere in its policy. Guards
     a nonce outliving the page it was drawn for: the 500 is JSON with no script in it, and the docs promise an error
-    `'none'` (SECURITY.md C19). The value the template cannot serialise stands for any fault inside a render."""
+    `'none'` (SECURITY.md C19). The value the template cannot serialise stands for any fault inside a render. It
+    checks its own premise, that a nonce was drawn before the fault (a fault before the draw leaves none to drop).
+    The error handler drops the nonce and the hook's mimetype check would too: the hook's own test below holds the
+    mimetype check alone."""
     class _Unrenderable:                                    # `has_remote | tojson` cannot write it: the render fails
         pass
     monkeypatch.setattr(gitio, "offsite_remote_exists", _Unrenderable)
+    drawn, draw = [], gui._script_nonce
+    monkeypatch.setattr(gui, "_script_nonce", lambda: drawn.append(1) or draw())
     logpath = tmp_path / "audit.log"
     monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.get("/", headers=_auth())
@@ -184,20 +189,55 @@ def test_an_error_raised_while_the_page_renders_forbids_script(client, monkeypat
     assert _csp(r).get("script-src") == "script-src 'none'", r.headers.get("Content-Security-Policy")
     assert "nonce-" not in r.headers.get("Content-Security-Policy", "")
     assert "run_id=%s" % r.get_json()["run_id"] in logpath.read_text(encoding="utf-8")
+    assert drawn, "no nonce was drawn before the fault, so there was none to drop"
+
+
+def test_an_http_error_raised_while_the_page_renders_forbids_script(client, monkeypatch):
+    """A `GET /` whose render raises an HTTP error (a 404) after it drew its nonce answers Werkzeug's HTML error page
+    under `script-src 'none'`, not `no-store`. Guards the case the previous test cannot reach: that answer is
+    `text/html`, so the hook's mimetype check keeps whatever nonce `g` still holds, and only the error handler
+    dropping it keeps a nonce off a page that printed none (the docs promise an error `'none'`, SECURITY.md C19)."""
+    from werkzeug.exceptions import NotFound
+
+    class _AbortsInRender:                                  # `tojson` calls `__html__`: the render aborts mid-way
+        def __html__(self):
+            raise NotFound()
+    monkeypatch.setattr(gitio, "offsite_remote_exists", _AbortsInRender)
+    r = client.get("/", headers=_auth())
+    assert r.status_code == 404 and r.mimetype == "text/html", r.get_data(as_text=True)[:200]
+    assert b"<script" not in r.data
+    assert _csp(r).get("script-src") == "script-src 'none'", r.headers.get("Content-Security-Policy")
+    assert r.headers.get("Cache-Control") is None
+
+
+def test_a_body_that_is_not_a_page_gets_no_nonce_whatever_g_holds():
+    """The hook alone, on a JSON body with a nonce left on `g`: it answers `script-src 'none'`, not `no-store`.
+    Guards the mimetype check, which no route decides today: every error reaches `_unhandled`, which drops the nonce
+    first, so the error tests pass without it. It stays the guard for a render whose answer is not a page (a
+    template rendered into a JSON or text body), which would otherwise hand that body a nonce it has no script for."""
+    with gui.app.test_request_context("/"):
+        gui.g.csp_nonce = "n" * 24
+        resp = gui._security_headers(gui.app.response_class("{}", mimetype="application/json"))
+    assert _csp(resp).get("script-src") == "script-src 'none'", resp.headers.get("Content-Security-Policy")
+    assert resp.headers.get("Cache-Control") is None
 
 
 def test_a_nonce_reaches_one_response_only(client, mock_services, monkeypatch):
-    """The page, then a 404, the 401 and a JSON route, served inside one pushed app context: the page has its nonce
-    and each response after it answers `script-src 'none'`. Guards a nonce left on `g`, which belongs to the app
-    context, not the request: whatever pushes one context around several requests (a test harness, a WSGI wrapper,
-    a CLI command) would hand the next response a nonce an earlier page printed. The 404 and the 401 are HTML, so
-    only taking the nonce off `g` keeps it out of them; the JSON check alone would not."""
+    """A 404, the 401 and a JSON route, each served right after the page inside one pushed app context: each page
+    has its nonce and each response after one answers `script-src 'none'`. Guards a nonce left on `g`, which belongs
+    to the app context, not the request: whatever pushes one context around several requests (a test harness, a
+    WSGI wrapper, a CLI command) would hand the next response a nonce an earlier page printed. The 401 is HTML and
+    no error, so only taking the nonce off `g` keeps it out; the 404 is an error too (`_unhandled` drops the nonce)
+    and the JSON one is not HTML (the mimetype check), and each follows its own page, so neither clears the 401's."""
     monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
+    nexts = {"404": lambda: client.get("/no-such-route", headers=_auth()), "401": lambda: client.get("/"),
+             "json": lambda: client.get("/api/search?q=", headers=_auth())}
+    pages, after = {}, {}
     with gui.app.app_context():
-        page = client.get("/", headers=_auth())
-        after = {"404": client.get("/no-such-route", headers=_auth()), "401": client.get("/"),
-                 "json": client.get("/api/search?q=", headers=_auth())}
-    assert "'nonce-" in _csp(page).get("script-src", ""), page.headers.get("Content-Security-Policy")
+        for what, get in nexts.items():
+            pages[what], after[what] = client.get("/", headers=_auth()), get()
+    for what, page in pages.items():
+        assert "'nonce-" in _csp(page).get("script-src", ""), (what, page.headers.get("Content-Security-Policy"))
     assert [r.status_code for r in after.values()] == [404, 401, 200]
     for what, r in after.items():
         assert r.mimetype == ("application/json" if what == "json" else "text/html"), (what, r.mimetype)

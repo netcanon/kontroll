@@ -332,7 +332,8 @@ Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
   `script-src 'none'`, an error raised during the page's render included. A nonce authorises no handler attribute, so
   the template has none: a button is bound from the script
   (`document.querySelector('[data-testid=…]').onclick = () => f();`), and the paint gate refuses an `on…=` attribute in the static markup and in a tag of the literal markup the
-  script writes. A reverse proxy that adds its own policy or rewrites the HTML can blank the page
+  script writes. A reverse proxy that adds its own policy or rewrites the HTML can blank the page, and one that
+  replaces or removes the header leaves it working with no script policy
   ([../docs/frontend-exposure.md](../docs/frontend-exposure.md)). There is no `default-src` or `style-src` — the
   `<style>` block and the `style` attributes carry no nonce. CSP is the second layer; the paint rule above is the
   actual control.

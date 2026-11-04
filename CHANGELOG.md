@@ -23,11 +23,12 @@ The page's policy had no `script-src`, so markup that got past the paint rule co
 - **Changed.** The header buttons (search, Index, Pending, Discovery, Backups, Secrets, Keys, Settings, Homepage)
   are bound from the script instead of `onclick` attributes, which a nonce does not authorise. No `data-testid`
   moved.
-- **Changed.** The paint gate (`tests/unit/test_card_paint_gate.py`) refuses any handler attribute in the static
-  markup (a bare call was tolerated), a handler attribute or a `javascript:` URL in a tag of the literal markup the
-  script writes, the nonce's expression anywhere in the static markup but the script's tag, and a script element
-  opened with anything but the nonce tag, and the security header test reads the static directives only
-  (`_CSP_STATIC`), refusing a `default-src` or `style-src` there.
+- **Changed.** The paint gate (`tests/unit/test_card_paint_gate.py`) refuses any handler attribute (a bare call was
+  tolerated) or `javascript:` URL in the static markup, a handler attribute or a `javascript:` URL in a tag of the
+  literal markup the script writes (read as the joined literals spell it, quote-aware), the nonce's expression
+  anywhere in the static markup but the script's tag, and a script element opened with anything but the nonce tag,
+  and the security header test reads the static directives only (`_CSP_STATIC`), refusing a `default-src` or
+  `style-src` there.
 - **Added.** `tests/integration/test_gui_api.py`: the page's header and script tag carry the same fresh nonce and
   the policy is exactly its four directives, each named once; every other response forbids script, an error raised
   during the render and a response after the page in one app context included; the nonce is 128 bits or more of

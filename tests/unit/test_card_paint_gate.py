@@ -9,10 +9,11 @@ exactly one helper and only from `safeHref()`, no attribute or property that exe
 script, every element is created from one literal, inert tag name, every request is a direct `fetch()` whose path
 carries each dynamic segment encoded (and the few names that stand in a path unencoded are pinned to where their
 value comes from), and the parts of the file the script scan does not read are pinned: one script element, opened
-with exactly the nonce tag the page's `script-src` authorises, no handler attribute at all — in the static markup
-or in a tag of the literal markup the script writes — and no `javascript:` URL in such a tag (a nonce authorises a
-script element, never an attribute or a URL, so one there could not run, and the buttons are bound from the
-script), and no template expression anywhere but the nonce in that tag and `| tojson` inside the script.
+with exactly the nonce tag the page's `script-src` authorises, no handler attribute and no `javascript:` URL at
+all — in the static markup, or in a tag of the literal markup the script writes, read as the joined literals spell
+it, a `>` inside a quoted value ending no tag (a nonce authorises a script element, never an attribute or a URL, so
+one there could not run, and the buttons are bound from the script) — and no template expression anywhere but the
+nonce in that tag and `| tojson` inside the script.
 
 WHY (the failure it guards against): the GUI paints values it did not author — a staged proposal's ref name, commit
 subject and path names; an API error string, which can quote request input or a remote response; a third-party
@@ -34,7 +35,8 @@ literals, comments and regular-expression literals, not the whole language, and 
     string or a regex is invisible to every rule, and two constructs are known to be misread: a division written
     right after a `}` that ends an expression, and a regex written right after `if (…)`;
   * a property reached through a COMPUTED name (`x[k] = v`, `x['inner' + 'HTML'] = v`) is not a token it can see;
-  * literal markup is read as written: an escape sequence spelling a handler's name or its separator is not decoded.
+  * literal markup is read as written: an escape sequence (a JS escape or an HTML character reference) is not
+    decoded, so one spelling a tag's `<`, a handler's name, its separator or a `javascript:` scheme is not seen.
 
 Those are shapes somebody writes on purpose. What this gate stops is the sink coming back through an ordinary edit,
 under whatever name the value has. It reads source, so it binds what is spelled in this file; it is not a claim
@@ -76,11 +78,15 @@ HELPERS = {"E": E_DEF, "ET": ET_DEF, "T": T_DEF, "safeHref": SAFEHREF_DEF, "LINK
 # is a non-literal part.
 _LITERAL_CHARS = frozenset("'\"`+() \t\n")
 
-# Tag names that execute, load or restyle by merely existing: never created from script.
 # Inside a tag of the literal markup the script writes: a handler attribute, or a `javascript:` URL. Neither can run
-# under the page's nonce, so either is a control that does nothing; a tag spans the literals a `+` joins.
-_LITERAL_ACTIVE = re.compile(r"""<[A-Za-z][^<>]*?(?:[\s/"']on[a-z]+\s*=|javascript\s*:)""", re.I)
+# under the page's nonce, so either is a control that does nothing. Read in the value the joined literals spell (a
+# tag, or a handler's name, spans the literals a `+` joins), each tag quote-aware (a `>` inside a quoted value ends
+# no tag): a handler is a name outside the quoted values, a `javascript:` URL is one anywhere in the tag.
+_LITERAL_TAG = re.compile(r"""<[A-Za-z](?:[^<>"']|"[^"]*"|'[^']*')*""")
+_LITERAL_HANDLER = re.compile(r"""[\s/"']on[a-z]+\s*=""", re.I)
+_LITERAL_JS_URL = re.compile(r"javascript\s*:", re.I)
 
+# Tag names that execute, load or restyle by merely existing: never created from script.
 _ACTIVE_TAGS = frozenset({"script", "iframe", "object", "embed", "link", "style", "base", "meta", "frame", "frameset"})
 
 # Attributes whose VALUE is code or a navigation target: never set with setAttribute (a link is built by LINK(), a
@@ -264,6 +270,18 @@ def _is_literal(masked_expr):
     return bool(masked_expr.strip()) and set(masked_expr) <= _LITERAL_CHARS and any(q in masked_expr for q in "'\"`")
 
 
+def _literal_active(expr, masked_expr):
+    """Each tag of the markup a literal-only expression spells that carries a handler attribute (a name: its quoted
+    values blanked first) or a `javascript:` URL (anywhere in the tag). The literals' bodies are joined first, so a
+    tag or a name split across a `+` is read whole, and a tag is read quote-aware, so a `>` inside a quoted value does
+    not end it."""
+    spelt = "".join(expr[q.start() + 1:q.end() - 1] for q in re.finditer(r"(['\"`])[ \n]*\1", masked_expr))
+    for t in _LITERAL_TAG.finditer(spelt):
+        tag = t.group(0)
+        if _LITERAL_HANDLER.search(re.sub(r""""[^"]*"|'[^']*'""", '""', tag)) or _LITERAL_JS_URL.search(tag):
+            yield tag
+
+
 def _one_literal(js, masked, span):
     """The body of the ONE string literal a span consists of, else None. A concatenation is not one literal:
     `'scr'+'ipt'` must not pass as a tag name."""
@@ -373,6 +391,9 @@ def violations(html):
     for m in re.finditer(r"""[\s/"']on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", outside, re.I):
         found.append("index.html:%d  handler-attribute  ->  %s (the page's script-src nonce authorises no attribute: "
                      "bind it from the script)" % (at(m.start()), m.group(0).strip()[:120]))
+    for m in re.finditer(r"javascript\s*:", outside, re.I):
+        found.append("index.html:%d  javascript-url  ->  a `javascript:` URL in the static markup (the page's "
+                     "script-src nonce authorises no URL: bind it from the script)" % at(m.start()))
     for m in re.finditer(r"\{\{|\{%", outside):
         found.append("index.html:%d  template-expression  ->  a template expression in the static markup (hand the "
                      "value to the script as `{{ x | tojson }}` and paint it with ET())" % at(m.start()))
@@ -429,10 +450,10 @@ def violations(html):
     for off, kind, expr, masked_expr in sinks:
         text = expr.strip()
         if _is_literal(masked_expr) or (kind.startswith("E()") and text in ("null", "undefined")):
-            for m in _LITERAL_ACTIVE.finditer(text):
+            for tag in _literal_active(expr, masked_expr):
                 bad(off, "active-markup-in-a-literal", "%s … in the %s (the page's script-src nonce authorises no "
                                                        "attribute and no URL: bind it from the script)" % (
-                    m.group(0)[-60:], kind))
+                    tag[-60:], kind))
             continue
         if kind == "innerHTML assignment" and text == "h" and in_helper(off):
             continue                                            # the one assignment that must exist: E's own
@@ -685,6 +706,10 @@ def test_the_scanner_sees_the_real_sinks():
     "x.innerHTML = '<img src=x onerror=\"search()\">';",
     "x.innerHTML = '<a href=\"javascript:search()\">x</a>';",
     "x.innerHTML = '<button class=\"b\" ' +\n  'onclick=\"search()\">x</button>';",
+    "x.innerHTML = '<IMG SRC=x ONERROR=\"search()\">';",
+    "x.innerHTML = '<img/onerror=\"search()\">';",
+    "x.innerHTML = '<button title=\"Next >\" onclick=\"search()\">x</button>';",
+    "x.innerHTML = '<img src=x on' + 'error=\"search()\">';",
     # the template engine writing into the script
     "x.innerHTML = '{{ banner | safe }}';",
     "x.appendChild(E('div', null, '<b>{{ title }}</b>'));",
@@ -723,6 +748,8 @@ def test_a_planted_breach_is_reported(line):
     ("a handler attribute with code in it", lambda h: h.replace(' data-testid="search-btn"', ' onclick="results.innerHTML = q.value" data-testid="search-btn"', 1)),
     ("a handler attribute in another case", lambda h: h.replace(' data-testid="search-btn"', ' onClick="search()" data-testid="search-btn"', 1)),
     ("a handler attribute after a slash", lambda h: h.replace(' data-testid="search-btn"', '/onclick="search()" data-testid="search-btn"', 1)),
+    ("a javascript: URL in the static markup",
+     lambda h: h.replace("<header>", '<header><a href="javascript:openFleetPanel()">x</a>', 1)),
     ("a handler attribute that is not onclick", lambda h: h.replace("<header>", '<header><img src="x" onerror="search()">', 1)),
     ("the nonce a second time in the static markup", lambda h: h.replace("<header>", '<header><svg><script nonce="{{ csp_nonce }}" href="/x.js"/></svg>', 1)),
     ("a template expression in the static markup", lambda h: h.replace("<header>", "<header>{{ banner | safe }}", 1)),
@@ -758,6 +785,8 @@ def test_a_planted_structural_bypass_is_reported(change):
     "x.appendChild(E('div','spin','Searching…','search-loading'));",
     "x.appendChild(E('div', 'meta', 'Reorder <b>sections</b>; '+\n  '<b>Save</b> stages a proposal.'));",
     "x.appendChild(E('div', 'meta', 'state: online = reachable; <b>on</b> = enabled'));",
+    "x.innerHTML = '<span title=\"turn online = up\">x</span>';",
+    "x.innerHTML = '<b>x</b>' + // names <i onclick=f()>\n  '<i>y</i>';",
     "const row9 = E('div', 'row', null, 'unit-row');",
     "const c9 = E('div','card');",
     "const d9 = E(`div`);",
@@ -785,7 +814,8 @@ def test_a_planted_structural_bypass_is_reported(change):
 ])
 def test_legitimate_code_is_not_reported(line):
     """The other half of the proof: authored markup (single literals, concatenations across lines, an
-    interpolation-free template, a clear with no semicolon, prose that reads like a handler outside a tag), the text
+    interpolation-free template, a clear with no semicolon, prose that reads like a handler outside a tag or in a
+    quoted attribute value, a comment naming a handler inside a markup expression), the text
     helper, the link helper, an encoded request
     path (with a name used only as a ternary's condition, and with a request body that carries anything), a
     reconfigure dialog opened on an encoded route, `Object.assign` onto a new object, a local called `open`, an

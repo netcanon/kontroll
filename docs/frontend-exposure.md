@@ -26,7 +26,9 @@ Caveat: with a remote proxy, auth creds traverse the mgmt VLAN in cleartext — 
 single-operator mgmt-only VLAN (SECURITY C3), or co-locate the proxy (loopback) / keep self-signed upstream.
 Pass the onboard GUI's responses through unchanged: its page runs only the script its response's
 `Content-Security-Policy` nonce names (SECURITY C19), so a proxy that adds a policy of its own (the browser enforces
-both) or rewrites the page's HTML (the tag's nonce must match the header's) can leave the GUI blank.
+both) or rewrites the page's HTML (the tag's nonce must match the header's) can leave the GUI blank, and one
+that replaces or removes the header leaves it working with no script policy, so nothing shows the layer is gone. A
+second policy that names no script or style directive (a `frame-ancestors` of its own) is harmless.
 
 ## `self_signed` (the zero-config default)
 deploy-stack generates a per-service self-signed cert (the API's uvicorn `--ssl-*`). Working HTTPS with

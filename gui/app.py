@@ -87,7 +87,8 @@ def _security_headers(resp):
     `<img onerror=…>`, a `<script>`) does not run: a nonce authorises a script element, never a handler attribute,
     and index.html binds its buttons from the script. A response that is not a rendered page gets `script-src
     'none'`: every JSON route, the 401, and an error — also one raised after a render drew a nonce, which answers
-    the JSON 500 below, a body with no script to authorise. The nonce is taken off `g` here, so it reaches one
+    the JSON 500 below, a body with no script to authorise, or an HTTP error's page (`_unhandled` drops the nonce:
+    an error replaces whatever the request rendered). The nonce is taken off `g` here, so it reaches one
     response: `g` belongs to the app context, and one app context can serve more than one request. The page is
     `no-store`: a cached copy must not outlive its nonce. There is no `default-src` and no `style-src` on purpose —
     `default-src` would become the fallback for `style-src`, `connect-src` and `img-src`, and the page's `<style>`
@@ -259,7 +260,10 @@ def _unhandled(exc):
     """An exception a route did not catch ends here, not in Flask's HTML 500 (which the page can only show as
     "request failed", and which Flask logs with the exception's message): the same fixed answer and id as a route's
     own broad `except`. An HTTP error (404, 405, a malformed JSON body's 400) keeps its own response; the two
-    refusals above keep theirs, since Flask picks the most specific handler."""
+    refusals above keep theirs, since Flask picks the most specific handler. An error replaces whatever the request
+    rendered, so the nonce a render drew before it is dropped: an HTTP error raised during the page's render answers
+    Werkzeug's HTML page, which the hook's mimetype check alone would let keep the nonce."""
+    g.pop("csp_nonce", None)
     if isinstance(exc, HTTPException):
         return exc
     return _internal_error("request", exc)
