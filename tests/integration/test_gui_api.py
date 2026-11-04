@@ -196,28 +196,36 @@ def test_an_http_error_raised_while_the_page_renders_forbids_script(client, monk
     """A `GET /` whose render raises an HTTP error (a 404) after it drew its nonce answers Werkzeug's HTML error page
     under `script-src 'none'`, not `no-store`. Guards the case the previous test cannot reach: that answer is
     `text/html`, so the hook's mimetype check keeps whatever nonce `g` still holds, and only the error handler
-    dropping it keeps a nonce off a page that printed none (the docs promise an error `'none'`, SECURITY.md C19)."""
+    dropping it keeps a nonce off a page that printed none (the docs promise an error `'none'`, SECURITY.md C19).
+    It checks its own premise, that a nonce was drawn before the fault (a fault before the draw leaves none to
+    drop)."""
     from werkzeug.exceptions import NotFound
 
     class _AbortsInRender:                                  # `tojson` calls `__html__`: the render aborts mid-way
         def __html__(self):
             raise NotFound()
     monkeypatch.setattr(gitio, "offsite_remote_exists", _AbortsInRender)
+    drawn, draw = [], gui._script_nonce
+    monkeypatch.setattr(gui, "_script_nonce", lambda: drawn.append(1) or draw())
     r = client.get("/", headers=_auth())
     assert r.status_code == 404 and r.mimetype == "text/html", r.get_data(as_text=True)[:200]
     assert b"<script" not in r.data
     assert _csp(r).get("script-src") == "script-src 'none'", r.headers.get("Content-Security-Policy")
     assert r.headers.get("Cache-Control") is None
+    assert drawn, "no nonce was drawn before the fault, so there was none to drop"
 
 
-def test_a_body_that_is_not_a_page_gets_no_nonce_whatever_g_holds():
-    """The hook alone, on a JSON body with a nonce left on `g`: it answers `script-src 'none'`, not `no-store`.
-    Guards the mimetype check, which no route decides today: every error reaches `_unhandled`, which drops the nonce
-    first, so the error tests pass without it. It stays the guard for a render whose answer is not a page (a
+@pytest.mark.parametrize("mimetype", ["application/json", "text/plain"])
+def test_a_body_that_is_not_a_page_gets_no_nonce_whatever_g_holds(mimetype):
+    """The hook alone, on a JSON and on a text body, with a nonce left on `g`: each answers `script-src 'none'`, not
+    `no-store`. Guards the mimetype check, which no route decides today: every error a handler sees reaches
+    `_unhandled`, which drops the nonce first, so the error tests pass without it (Flask hands an `abort(response)` and
+    a routing redirect back with no handler: raised during the render, those keep the nonce on a body that prints none,
+    and no template expression here can raise them). It stays the guard for a render whose answer is not a page (a
     template rendered into a JSON or text body), which would otherwise hand that body a nonce it has no script for."""
     with gui.app.test_request_context("/"):
         gui.g.csp_nonce = "n" * 24
-        resp = gui._security_headers(gui.app.response_class("{}", mimetype="application/json"))
+        resp = gui._security_headers(gui.app.response_class("{}", mimetype=mimetype))
     assert _csp(resp).get("script-src") == "script-src 'none'", resp.headers.get("Content-Security-Policy")
     assert resp.headers.get("Cache-Control") is None
 

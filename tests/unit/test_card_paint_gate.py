@@ -11,9 +11,10 @@ carries each dynamic segment encoded (and the few names that stand in a path une
 value comes from), and the parts of the file the script scan does not read are pinned: one script element, opened
 with exactly the nonce tag the page's `script-src` authorises, no handler attribute and no `javascript:` URL at
 all — in the static markup, or in a tag of the literal markup the script writes, read as the joined literals spell
-it, a `>` inside a quoted value ending no tag (a nonce authorises a script element, never an attribute or a URL, so
-one there could not run, and the buttons are bound from the script) — and no template expression anywhere but the
-nonce in that tag and `| tojson` inside the script.
+it and as HTML reads a tag, where a quote opens a value only right after `=` and a `>` inside a quoted value ends no
+tag (a nonce authorises a script element, never an attribute or a URL, so one there could not run, and the buttons
+are bound from the script) — and no template expression anywhere but the nonce in that tag and `| tojson` inside
+the script.
 
 WHY (the failure it guards against): the GUI paints values it did not author — a staged proposal's ref name, commit
 subject and path names; an API error string, which can quote request input or a remote response; a third-party
@@ -35,8 +36,10 @@ literals, comments and regular-expression literals, not the whole language, and 
     string or a regex is invisible to every rule, and two constructs are known to be misread: a division written
     right after a `}` that ends an expression, and a regex written right after `if (…)`;
   * a property reached through a COMPUTED name (`x[k] = v`, `x['inner' + 'HTML'] = v`) is not a token it can see;
-  * literal markup is read as written: an escape sequence (a JS escape or an HTML character reference) is not
-    decoded, so one spelling a tag's `<`, a handler's name, its separator or a `javascript:` scheme is not seen.
+  * markup is read as written: an escape sequence in the static or the literal markup (a JS escape or an HTML
+    character reference) is not decoded, so one spelling a tag's `<`, a handler's name, its separator or a
+    `javascript:` scheme is not seen, nor is a tab or a line break inside the scheme (`java<TAB>script:`), which a
+    browser's URL parser drops.
 
 Those are shapes somebody writes on purpose. What this gate stops is the sink coming back through an ordinary edit,
 under whatever name the value has. It reads source, so it binds what is spelled in this file; it is not a claim
@@ -80,9 +83,10 @@ _LITERAL_CHARS = frozenset("'\"`+() \t\n")
 
 # Inside a tag of the literal markup the script writes: a handler attribute, or a `javascript:` URL. Neither can run
 # under the page's nonce, so either is a control that does nothing. Read in the value the joined literals spell (a
-# tag, or a handler's name, spans the literals a `+` joins), each tag quote-aware (a `>` inside a quoted value ends
-# no tag): a handler is a name outside the quoted values, a `javascript:` URL is one anywhere in the tag.
-_LITERAL_TAG = re.compile(r"""<[A-Za-z](?:[^<>"']|"[^"]*"|'[^']*')*""")
+# tag, or a handler's name, spans the literals a `+` joins), each tag as HTML reads it: a quote opens a value only
+# right after `=` (elsewhere it is part of a name or an unquoted value), and a `>` inside a quoted value ends no tag.
+# A handler is a name outside the quoted values; a `javascript:` URL is one anywhere in the tag.
+_LITERAL_TAG = re.compile(r"""<[A-Za-z](?:=\s*"[^"]*"|=\s*'[^']*'|[^>])*""")
 _LITERAL_HANDLER = re.compile(r"""[\s/"']on[a-z]+\s*=""", re.I)
 _LITERAL_JS_URL = re.compile(r"javascript\s*:", re.I)
 
@@ -273,12 +277,12 @@ def _is_literal(masked_expr):
 def _literal_active(expr, masked_expr):
     """Each tag of the markup a literal-only expression spells that carries a handler attribute (a name: its quoted
     values blanked first) or a `javascript:` URL (anywhere in the tag). The literals' bodies are joined first, so a
-    tag or a name split across a `+` is read whole, and a tag is read quote-aware, so a `>` inside a quoted value does
-    not end it."""
+    tag or a name split across a `+` is read whole, and a tag is read as HTML reads it: a quote opens a value only
+    right after `=`, and a `>` inside a quoted value does not end the tag."""
     spelt = "".join(expr[q.start() + 1:q.end() - 1] for q in re.finditer(r"(['\"`])[ \n]*\1", masked_expr))
     for t in _LITERAL_TAG.finditer(spelt):
         tag = t.group(0)
-        if _LITERAL_HANDLER.search(re.sub(r""""[^"]*"|'[^']*'""", '""', tag)) or _LITERAL_JS_URL.search(tag):
+        if _LITERAL_HANDLER.search(re.sub(r"""=\s*(?:"[^"]*"|'[^']*')""", '=""', tag)) or _LITERAL_JS_URL.search(tag):
             yield tag
 
 
@@ -707,9 +711,18 @@ def test_the_scanner_sees_the_real_sinks():
     "x.innerHTML = '<a href=\"javascript:search()\">x</a>';",
     "x.innerHTML = '<button class=\"b\" ' +\n  'onclick=\"search()\">x</button>';",
     "x.innerHTML = '<IMG SRC=x ONERROR=\"search()\">';",
-    "x.innerHTML = '<img/onerror=\"search()\">';",
+    "x.innerHTML = '<button/onclick=\"search()\">x</button>';",
     "x.innerHTML = '<button title=\"Next >\" onclick=\"search()\">x</button>';",
     "x.innerHTML = '<img src=x on' + 'error=\"search()\">';",
+    "x.innerHTML = \"<button title='Next >' onclick='search()'>x</button>\";",
+    "x.innerHTML = '<a href=\"JavaScript:search()\">x</a>';",
+    "x.innerHTML = '<img src=x onerror = \"search()\">';",
+    "x.innerHTML = '<a href=\"javascript\t:search()\">x</a>';",
+    "x.innerHTML = `<div>\n  <input name=\"k\" onchange=\"search()\">\n</div>`;",
+    "x.innerHTML = \"<button title=it's onclick=search()>x</button>\";",
+    "x.innerHTML = '<img src=x alt=5\" onerror=\"search()\">';",
+    "x.innerHTML = '<img src=x \" onerror=search()>';",
+    "x.innerHTML = '<img src=x alt=a<1 onerror=\"search()\">';",
     # the template engine writing into the script
     "x.innerHTML = '{{ banner | safe }}';",
     "x.appendChild(E('div', null, '<b>{{ title }}</b>'));",
@@ -731,8 +744,9 @@ def test_a_planted_breach_is_reported(line):
     expression inside the script, and a hidden line break. Most of these were run in a browser by the reviews of
     this gate, where they painted, executed or retargeted a request while an earlier version of it passed; the rest
     are the same sinks one token away. And a handler attribute or a `javascript:` URL in a tag of the literal markup
-    the script writes, also in a tag split across two joined literals: the nonce authorises neither, so each is a
-    control that would do nothing."""
+    the script writes, also in a tag split across two joined literals or over the lines of a template literal, in
+    any letter case, after a `/` or with space around its `=` or colon, past a `>` in a quoted value and past a quote
+    HTML does not read as one: the nonce authorises neither, so each is a control that would do nothing."""
     assert violations(_planted(line)), "the gate missed: %s" % line
 
 
@@ -748,6 +762,8 @@ def test_a_planted_breach_is_reported(line):
     ("a handler attribute with code in it", lambda h: h.replace(' data-testid="search-btn"', ' onclick="results.innerHTML = q.value" data-testid="search-btn"', 1)),
     ("a handler attribute in another case", lambda h: h.replace(' data-testid="search-btn"', ' onClick="search()" data-testid="search-btn"', 1)),
     ("a handler attribute after a slash", lambda h: h.replace(' data-testid="search-btn"', '/onclick="search()" data-testid="search-btn"', 1)),
+    ("a javascript: URL in another case",
+     lambda h: h.replace("<header>", '<header><a href="JAVASCRIPT:openFleetPanel()">x</a>', 1)),
     ("a javascript: URL in the static markup",
      lambda h: h.replace("<header>", '<header><a href="javascript:openFleetPanel()">x</a>', 1)),
     ("a handler attribute that is not onclick", lambda h: h.replace("<header>", '<header><img src="x" onerror="search()">', 1)),
@@ -763,17 +779,17 @@ def test_a_planted_breach_is_reported(line):
     ("a route set from something other than the parameter", lambda h: h.replace(ROUTE_SET, "dlg.dataset.route = id;", 1)),
 ], ids=lambda c: c[0] if isinstance(c, tuple) else None)
 def test_a_planted_structural_bypass_is_reported(change):
-    """The script scan reads one inline script. Everything it does not read must not be able to carry a sink: a
-    second, module or external script element (one that carries the nonce too), the script element opened with
-    anything but the nonce tag (none at all, an attribute beside it, a nonce piped through another filter), a static
-    handler attribute of any kind (one that only names a function, since the nonce authorises no attribute and such a
-    button would do nothing; code; another letter case; after another separator; another event than a click), the
-    nonce a second time in the static markup (an SVG `<script …/>` closes itself, so the closing-tag count misses
-    it, and with the nonce it runs), a template expression or statement in the static markup, a sink smuggled onto
-    a helper's exempt
-    line, a helper redefined to assign innerHTML. And the three places a request path gets an unencoded name from
-    are pinned: a raw segment in the assembled cred-fields path, another value for `deep`, a route that is not the
-    dialog's parameter. Each is applied to the real template and must be reported."""
+    """The script scan reads one inline script. Everything it does not read must not be able to carry a sink: a second,
+    module or external script element (one that carries the nonce too), the script element opened with anything but the
+    nonce tag (none at all, an attribute beside it, a nonce piped through another filter), a static handler attribute of
+    any kind (one that only names a function, since the nonce authorises no attribute and such a button would do
+    nothing; code; another letter case; after another separator; another event than a click), a `javascript:` URL in the
+    static markup in any letter case (the nonce authorises no URL either), the nonce a second time in the static markup
+    (an SVG `<script …/>` closes itself, so the closing-tag count misses it, and with the nonce it runs), a template
+    expression or statement in the static markup, a sink smuggled onto a helper's exempt line, a helper redefined to
+    assign innerHTML. And the three places a request path gets an unencoded name from are pinned: a raw segment in the
+    assembled cred-fields path, another value for `deep`, a route that is not the dialog's parameter. Each is applied to
+    the real template and must be reported."""
     name, edit = change
     html = _template()
     changed = edit(html)
@@ -786,6 +802,7 @@ def test_a_planted_structural_bypass_is_reported(change):
     "x.appendChild(E('div', 'meta', 'Reorder <b>sections</b>; '+\n  '<b>Save</b> stages a proposal.'));",
     "x.appendChild(E('div', 'meta', 'state: online = reachable; <b>on</b> = enabled'));",
     "x.innerHTML = '<span title=\"turn online = up\">x</span>';",
+    "x.innerHTML = \"<span title='turn online = up'>x</span>\";",
     "x.innerHTML = '<b>x</b>' + // names <i onclick=f()>\n  '<i>y</i>';",
     "const row9 = E('div', 'row', null, 'unit-row');",
     "const c9 = E('div','card');",

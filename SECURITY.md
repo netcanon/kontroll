@@ -1731,7 +1731,9 @@ base-uri 'none'; frame-ancestors 'none'`. The page (`GET /`) adds `script-src 'n
 random bytes per response, rendered into the page's one `<script>` tag as well, and is `Cache-Control: no-store` so
 a cached copy cannot outlive its nonce; every other response (each JSON route, the 401, an error) gets
 `script-src 'none'` — also an error raised after a render drew its nonce: the error handler drops it, so the
-JSON 500 and an HTTP error's HTML page answer `'none'` alike. The nonce comes from a template
+JSON 500 and an HTTP error's HTML page answer `'none'` alike (an error the handler sees: Flask hands an
+`abort(response)` and a routing redirect back with no handler, so one raised during the render would keep the nonce
+on a body that prints none, and no template expression can raise either). The nonce comes from a template
 context processor, so every render carries it and no route passes it, and the hook takes it off `g`, so it reaches
 one response even where one app context serves several requests. A nonce authorises a script element, never a
 handler attribute, so markup that reaches the page past the paint (an `<img onerror=…>`) runs nothing, and the
@@ -1754,16 +1756,17 @@ API); on an `href` outside `LINK()`; on an executing attribute or a navigating p
 attribute or property whose name is not spelled in the source; on an element created from anything but one inert
 literal tag name; on a request that is not a direct `fetch()`, and on a request path that carries anything
 unencoded except the few names pinned to the one place their value comes from; and on code the script scan does not
-read (a second script element, the script element opened with anything but the nonce tag, any handler attribute
-or `javascript:` URL in the static markup or in a tag of the literal markup the script writes, read as the joined
-literals spell it, a template expression in the static markup other than that nonce or one in the script that
-is not `| tojson`, a hidden line-break or display-reordering character). It proves
+read (a second script element, the script element opened with anything but the nonce tag, any handler attribute or
+`javascript:` URL in the static markup or in a tag of the literal markup the script writes, read as the joined
+literals spell it and as HTML reads a tag, a template expression in the static markup other than that nonce or one in
+the script that is not `| tojson`, a hidden line-break or display-reordering character). It proves
 it can fail by planting each shape a review found into the real template, and it pins the helpers by their exact
 definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not
-close is refused; a span it misreads as a string or a regex, a property reached through a computed name
-(`x[k] = v`), and an escape sequence in literal markup (a JS escape or an HTML character reference, which it does
-not decode) are beyond it. Those are shapes written on purpose — the gate stops the sink coming back through an
-ordinary edit, and the paint and the browser proof are what answer the rest.
+close is refused; a span it misreads as a string or a regex, a property reached through a computed name (`x[k] = v`),
+an escape sequence in the static or the literal markup (a JS escape or an HTML character reference, which it does not
+decode), and a tab or a line break inside a `javascript:` scheme are beyond it. Those are shapes written on purpose —
+the gate stops the sink coming back through an ordinary edit, and the paint and the browser proof are what answer the
+rest.
 [tests/e2e/test_paint_rule.py](tests/e2e/test_paint_rule.py) is the browser proof for the Pending, Index,
 Settings, Homepage and Discovery panels and the capability, reconfigure, secret and keygen dialogs: each is served
 a payload in the fields it paints and must show it as text, create no element and run nothing. There is no list to

@@ -86,9 +86,11 @@ def _security_headers(resp):
     `script-src` is the nonce its one inline <script> carries, so markup a value smuggles past the paint rule (an
     `<img onerror=…>`, a `<script>`) does not run: a nonce authorises a script element, never a handler attribute,
     and index.html binds its buttons from the script. A response that is not a rendered page gets `script-src
-    'none'`: every JSON route, the 401, and an error — also one raised after a render drew a nonce, which answers
-    the JSON 500 below, a body with no script to authorise, or an HTTP error's page (`_unhandled` drops the nonce:
-    an error replaces whatever the request rendered). The nonce is taken off `g` here, so it reaches one
+    'none'`: every JSON route, the 401, and an error a handler sees — also one raised after a render drew a nonce,
+    which answers the JSON 500 below, a body with no script to authorise, or an HTTP error's page (`_unhandled`
+    drops the nonce: an error replaces whatever the request rendered). Flask hands an `abort(response)` and a
+    routing redirect back with no handler, so one raised during a render keeps the nonce on a body that prints
+    none; no template expression here can raise either. The nonce is taken off `g` here, so it reaches one
     response: `g` belongs to the app context, and one app context can serve more than one request. The page is
     `no-store`: a cached copy must not outlive its nonce. There is no `default-src` and no `style-src` on purpose —
     `default-src` would become the fallback for `style-src`, `connect-src` and `img-src`, and the page's `<style>`

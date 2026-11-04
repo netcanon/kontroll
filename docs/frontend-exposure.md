@@ -28,7 +28,8 @@ Pass the onboard GUI's responses through unchanged: its page runs only the scrip
 `Content-Security-Policy` nonce names (SECURITY C19), so a proxy that adds a policy of its own (the browser enforces
 both) or rewrites the page's HTML (the tag's nonce must match the header's) can leave the GUI blank, and one
 that replaces or removes the header leaves it working with no script policy, so nothing shows the layer is gone. A
-second policy that names no script or style directive (a `frame-ancestors` of its own) is harmless.
+second policy that only restricts framing (a `frame-ancestors` of its own) is harmless; one with a `default-src`,
+a `connect-src` or a `sandbox` breaks the GUI as surely as a script directive does.
 
 ## `self_signed` (the zero-config default)
 deploy-stack generates a per-service self-signed cert (the API's uvicorn `--ssl-*`). Working HTTPS with

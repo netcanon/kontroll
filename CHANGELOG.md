@@ -25,16 +25,16 @@ The page's policy had no `script-src`, so markup that got past the paint rule co
   moved.
 - **Changed.** The paint gate (`tests/unit/test_card_paint_gate.py`) refuses any handler attribute (a bare call was
   tolerated) or `javascript:` URL in the static markup, a handler attribute or a `javascript:` URL in a tag of the
-  literal markup the script writes (read as the joined literals spell it, quote-aware), the nonce's expression
-  anywhere in the static markup but the script's tag, and a script element opened with anything but the nonce tag,
-  and the security header test reads the static directives only (`_CSP_STATIC`), refusing a `default-src` or
-  `style-src` there.
-- **Added.** `tests/integration/test_gui_api.py`: the page's header and script tag carry the same fresh nonce and
-  the policy is exactly its four directives, each named once; every other response forbids script, an error raised
-  during the render and a response after the page in one app context included; the nonce is 128 bits or more of
-  base64url. `tests/e2e/test_script_policy.py`: neither an injected handler attribute nor an injected script
-  element runs (each with a control that runs it once the header is dropped), and every header button still opens
-  its panel with no policy violation from the page's first byte on.
+  literal markup the script writes (read as the joined literals spell it, each tag as HTML reads it), the nonce's
+  expression anywhere in the static markup but the script's tag, and a script element opened with anything but the
+  nonce tag, and the security header test reads the static directives only (`_CSP_STATIC`), refusing a `default-src`
+  or `style-src` there.
+- **Added.** `tests/integration/test_gui_api.py`: the page's header and script tag carry the same fresh nonce and the
+  policy is exactly its four directives, each named once; every other response forbids script, an error the handler
+  sees raised during the render and a response after the page in one app context included; the nonce is 128 bits or
+  more of base64url. `tests/e2e/test_script_policy.py`: neither an injected handler attribute nor an injected script
+  element runs (each with a control that runs it once the header is dropped), and every header button still opens its
+  panel with no policy violation from the page's first byte on.
 
 ### fix(security): an error body never carries exception text (T20, 2026-11-02)
 
