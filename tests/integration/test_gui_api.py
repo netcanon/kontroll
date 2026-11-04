@@ -111,6 +111,57 @@ def test_wrong_user_is_401(client):
     assert client.get("/api/search?q=cisco", headers=_auth(user="root")).status_code == 401
 
 
+# --- the content security policy (SECURITY.md C19, T23) ---------------------- #
+_STATIC_CSP = ("object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'")
+
+
+def _csp(resp):
+    """The response's policy as {directive name: its whole text}, for one assertion per directive."""
+    policy = resp.headers.get("Content-Security-Policy", "")
+    return {part.split()[0]: part for part in (p.strip() for p in policy.split(";")) if part}
+
+
+def test_the_page_and_its_header_carry_the_same_fresh_nonce(client, monkeypatch):
+    """`GET /` twice: each response's `script-src` is one `'nonce-…'` source, the page's one script element carries
+    the same value, the two values differ, the page is `no-store`, and the three static directives are there too.
+    Guards a page whose script the browser refuses — a header and a tag that disagree, or a render path that sets
+    no nonce, leaves the whole GUI blank — and a nonce reused across responses (or kept in a cache), which a value
+    that reached the page's markup could copy onto a script of its own."""
+    monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
+    seen = []
+    for _ in range(2):
+        r = client.get("/", headers=_auth())
+        assert r.status_code == 200
+        csp = _csp(r)
+        m = re.fullmatch(r"script-src 'nonce-([A-Za-z0-9_-]{24})'", csp.get("script-src", ""))
+        assert m, "script-src is not one nonce source: %r" % r.headers.get("Content-Security-Policy")
+        nonce = m.group(1)
+        body = r.get_data(as_text=True)
+        tags = re.findall(r"^[ \t]*<script\b[^>]*>", body, re.M | re.I)   # an element starts a line, as in the gate
+        assert tags == ['<script nonce="%s">' % nonce], "the script tag does not carry the header's nonce: %s" % tags
+        assert r.headers.get("Cache-Control") == "no-store"
+        for directive in _STATIC_CSP:
+            assert directive in csp.values(), "missing %s" % directive
+        assert "default-src" not in csp and "style-src" not in csp
+        seen.append(nonce)
+    assert seen[0] != seen[1], "the same nonce was served twice"
+
+
+def test_a_response_that_is_not_the_page_forbids_script(client, mock_services):
+    """A JSON route, the 401 and a 404 each answer `script-src 'none'` beside the three static directives, and none
+    is marked `no-store` by the policy hook. Guards a response that rendered no page becoming a place script can run
+    (an error body a browser opens as HTML), and a nonce leaking into a response that has no script to authorise."""
+    responses = {"json": client.get("/api/search?q=", headers=_auth()), "401": client.get("/"),
+                 "404": client.get("/no-such-route", headers=_auth())}
+    assert [r.status_code for r in responses.values()] == [200, 401, 404]
+    for what, r in responses.items():
+        csp = _csp(r)
+        assert csp.get("script-src") == "script-src 'none'", (what, r.headers.get("Content-Security-Policy"))
+        for directive in _STATIC_CSP:
+            assert directive in csp.values(), (what, directive)
+        assert r.headers.get("Cache-Control") != "no-store", what
+
+
 # --- the read API surface (in-process over the service layer) ---------------- #
 def test_search_returns_records(client, mock_services):
     """/api/search runs the service layer in-process and returns the record list (cisco.ios, origin local,

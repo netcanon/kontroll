@@ -326,10 +326,13 @@ Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
   through `innerHTML`, and until 2026-10-12 the Pending panel painted a staged proposal's ref name, subject and
   paths the same way. Add a value to the page ⇒ paint it with `ET()`/`T()`, or leave an empty element in the
   literal and fill its `textContent`; add a link ⇒ `LINK(url, text)`.
-- **CSP**: `object-src`/`base-uri`/`frame-ancestors` are set on every response, plus `nosniff`. `script-src` is
-  *not* set — the page carries a large inline `<script>` and inline `onclick` attributes on its header buttons;
-  a per-response nonce with those handlers rebound is the prerequisite, and CSP is the second layer regardless.
-  The paint rule above is the actual control.
+- **CSP**: `object-src`/`base-uri`/`frame-ancestors` (each `'none'`) are set on every response, plus `nosniff`.
+  The page adds `script-src 'nonce-<n>'`, a fresh nonce per response that `index()` also renders into the one
+  `<script>` tag, and `Cache-Control: no-store`; every other response gets `script-src 'none'`. A nonce authorises
+  no handler attribute, so the template has none: a button is bound from the script
+  (`document.querySelector('[data-testid=…]').onclick = () => f();`), and the paint gate refuses an `on…=`
+  attribute in the static markup. There is no `default-src` or `style-src` — the `<style>` block and the `style`
+  attributes carry no nonce. CSP is the second layer; the paint rule above is the actual control.
 - **Still: bind to the mgmt network only; never expose it publicly.**
 
 **Pre-beta remaining:** a real CA-signed cert (vs self-signed) and SSO (Authelia) if it's

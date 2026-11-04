@@ -1725,11 +1725,19 @@ census found fifty-nine sinks painting a non-literal, none of which the gate cou
 of every panel not yet converted, written with a direct `.innerHTML =` the gate never read, and two `href`s built
 from server strings. All were rewritten on 2026-10-12, and the gate became the allow-list above.
 
-Defence in depth: an `after_request` hook sets `Content-Security-Policy: object-src 'none'; base-uri 'none';
-frame-ancestors 'none'` plus `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. **`script-src`
-is deliberately absent** — `index.html` carries one large inline `<script>` and inline `onclick` attributes on its
-header buttons, so a `script-src` policy needs a per-response nonce and those handlers rebound first; that is a
-named follow-up and is *not* a substitute for the paint. The paint is the control; CSP is the second layer.
+Defence in depth: an `after_request` hook sets `Content-Security-Policy` on every response, plus
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. Every response carries `object-src 'none';
+base-uri 'none'; frame-ancestors 'none'`. The page (`GET /`) adds `script-src 'nonce-<n>'`, where `<n>` is 18 fresh
+random bytes per response, rendered into the page's one `<script>` tag as well, and is `Cache-Control: no-store`
+so a cached copy cannot outlive its nonce; every other response (each JSON route, the 401, an error) gets
+`script-src 'none'`. A nonce authorises a script element, never a handler attribute, so markup that reaches the
+page past the paint (an `<img onerror=…>`) runs nothing, and the header buttons are bound from the script instead
+of `onclick` attributes (since 2026-11-04, T23). **`default-src` and `style-src` are deliberately absent:**
+`default-src` would become the fallback for `style-src`, `connect-src` (every `fetch()`) and `img-src`, and the
+page's `<style>` block and its few `style` attributes carry no nonce; a `style-src` would need the nonce on the
+block and the attributes made classes first. A reverse proxy in front that rewrites the page's HTML would have to
+keep the tag and the header together. CSP is *not* a substitute for the paint: the paint is the control, CSP the
+second layer.
 
 Covering checks: [tests/unit/test_card_paint_gate.py](tests/unit/test_card_paint_gate.py) — a source scan of the
 template that understands string literals, comments and regular-expression literals. It fails on an `E()` markup
@@ -1739,8 +1747,9 @@ API); on an `href` outside `LINK()`; on an executing attribute or a navigating p
 attribute or property whose name is not spelled in the source; on an element created from anything but one inert
 literal tag name; on a request that is not a direct `fetch()`, and on a request path that carries anything
 unencoded except the few names pinned to the one place their value comes from; and on code the script scan does not
-read (a second script element, a handler attribute that is not a bare call, a template expression in the static
-markup or one in the script that is not `| tojson`, a hidden line-break or display-reordering character). It proves
+read (a second script element, the script element opened with anything but the nonce tag, any handler attribute
+in the static markup, a template expression in the static markup other than that nonce or one in the script that
+is not `| tojson`, a hidden line-break or display-reordering character). It proves
 it can fail by planting each shape a review found into the real template, and it pins the helpers by their exact
 definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not
 close is refused; a span it misreads as a string or a regex, and a property reached through a computed name
@@ -1749,7 +1758,12 @@ ordinary edit, and the paint and the browser proof are what answer the rest.
 [tests/e2e/test_paint_rule.py](tests/e2e/test_paint_rule.py) is the browser proof for the Pending, Index,
 Settings, Homepage and Discovery panels and the capability, reconfigure, secret and keygen dialogs: each is served
 a payload in the fields it paints and must show it as text, create no element and run nothing. There is no list to
-extend — a new value on the page is either a literal or painted as text.
+extend — a new value on the page is either a literal or painted as text. The policy's own checks:
+[tests/integration/test_gui_api.py](tests/integration/test_gui_api.py) proves on real responses that the page's
+header and its script tag carry the same nonce, a new one each time, that the page is `no-store`, and that every
+other response forbids script; [tests/e2e/test_script_policy.py](tests/e2e/test_script_policy.py) proves in a
+browser that an injected handler attribute does not run (and does, as a control, with the header dropped) and that
+every header button still opens its panel.
 
 
 ### C21 — The shippable tree carries no identifier of a real deployment  ✔ implemented (2026-10-08, the public split)
