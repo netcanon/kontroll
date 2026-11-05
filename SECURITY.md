@@ -290,7 +290,8 @@ crown jewel — protect it where it lives, not at a remote.
 
 The **onboarding GUI is privileged** (writes the working tree, encrypts secrets, runs
 Ansible) and is now guarded: **HTTP Basic auth, fail-closed** (refuses to start without
-`GUI_PASSWORD`, constant-time compare, password from SOPS), **TLS** (`GUI_TLS_CERT/KEY`),
+`GUI_PASSWORD`, constant-time compare, password from SOPS; a credential under any other
+scheme is refused), **TLS** (`GUI_TLS_CERT/KEY`),
 and an **audit log** of every action + auth-denial (no creds). Verified: no-auth → 401,
 HTTP→HTTPS-port refused, wrong password → 401, denials logged.
 
@@ -407,8 +408,10 @@ the operator, and the honest `capability_gap` names an unresolved selector.
 **Implements:**
 - **Bearer-token auth, fail-closed.** Privileged routes require `KONTROLL_API_TOKEN`
   (SOPS-backed at deploy, like `GUI_PASSWORD`); **unset ⇒ the privileged routes are disabled
-  (503)**, never open. The token is compared **constant-time** (`hmac.compare_digest`); a
-  bad/absent token is a 401. Read-only inquiry (search/probe/units/classify/health) needs no token.
+  (503)**, never open. The token is compared **constant-time** (`hmac.compare_digest`), as the
+  bytes the client sent; a bad/absent token is a 401 (one holding a non-ASCII character too,
+  never a 500), and a configured non-ASCII token admits its UTF-8 bytes.
+  Read-only inquiry (search/probe/units/classify/health) needs no token.
 - **A collection path param is resolved against the installed set or checked against `namespace.name` before
   it is used (SEC-3), never joined raw.** The
   collection-keyed read routes (`/probe`, `/units`, `/classify`) take a `{collection}` from the
