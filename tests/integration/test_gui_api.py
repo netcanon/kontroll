@@ -2386,3 +2386,16 @@ def test_concurrent_first_audits_of_a_file_that_cannot_open_say_it_once(tmp_path
         assert not any(t.is_alive() for t in threads), trial
         assert sum("audit-log open failed" in s for s in said) == 1, (trial, said)
     monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_a_non_utf8_configured_password_is_compared_as_its_own_bytes(client, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 ('p\\udce4ss', as the environment decodes b'p\\xe4ss')
+    is compared as those bytes. Guards the configured side's error handler past the spellings a test can name: no
+    request can admit such a password (a Basic credential reaches the compare as valid UTF-8), so a lossy handler
+    shows only in what the compare is handed, and `backslashreplace` or `xmlcharrefreplace` never raise either but
+    admit an ASCII spelling of the escape (AUTH-NA read B)."""
+    seen, real = [], gui.hmac.compare_digest
+    monkeypatch.setattr(gui.hmac, "compare_digest", lambda a, b: seen.append(b) or real(a, b))
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    assert client.get("/api/search?q=", headers=_auth(pw="p\u00e4ss")).status_code == 401
+    assert seen == [b"p\xe4ss"], seen

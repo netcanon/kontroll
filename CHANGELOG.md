@@ -27,10 +27,11 @@ secret's own (as the environment decoded them, so one that is not valid UTF-8 ne
 - **Fixed.** The API answers a Bearer token holding a non-ASCII character 401 with an `auth-denied` audit line; it
   answered a bare 500 and audited nothing. A configured token holding one admits its UTF-8 bytes, as the GUI does:
   the token is read from the header with only spaces and tabs trimmed, since FastAPI's parse strips U+0085 and
-  U+00A0 too (the last byte of `à` or `Å`, as Starlette decodes it), and a byte after the token that is not its own
+  U+00A0 too (the last byte of `à` or `Å`, as Starlette decodes it), and a byte beside the token that is not its own
   is refused.
 - **Fixed.** A configured GUI password or API token that is not valid UTF-8 (a hand-written `.env`) answers a 401;
-  every right-user login, and every Bearer request, answered a 500.
+  every right-user login, and every Bearer request, answered a 500. At the GUI no login can match such a
+  password (a browser sends UTF-8): write the `.env` as UTF-8, as deploy-stack does.
 - **Fixed.** `verify_token` answers a non-ASCII plan token `False`, as its docstring promised, a lone surrogate
   (a JSON escape) too; it raised, and each promote route answered a 500.
 - **Added.** A test for each, in `tests/integration/test_gui_api.py`, `tests/integration/test_api_auth.py` and

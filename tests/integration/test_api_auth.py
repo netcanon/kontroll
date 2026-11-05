@@ -140,13 +140,14 @@ def test_a_configured_token_ending_in_a_strip_byte_admits_its_utf8_bytes(priv, m
 def test_the_bearer_token_is_read_with_only_ows_trimmed_and_under_bearer_alone(priv):
     """The Bearer token is compared as sent with only spaces and tabs trimmed around it (RFC 9110's separator and
     OWS), and only under the Bearer scheme (in any case). Guards the read of the header itself: trimming as
-    `str.strip()` does admits the token with a stray 0xA0 or 0x85 after it, bytes that are not the token's; trimming
-    one end only refuses a header RFC 9110 allows; and reading the header without FastAPI's scheme check admits the
-    token sent under another scheme (AUTH-NA read A2, N1)."""
+    `str.strip()` does admits the token with a stray 0xA0 or 0x85 after it, and reading it with `split()` admits one
+    before it, bytes that are not the token's; trimming one end only refuses a header RFC 9110 allows; and reading the
+    header without FastAPI's scheme check admits the token sent under another scheme (read A2 N1, read B N3)."""
     tok = TOKEN.encode()
     for sent, want in ((b"Bearer " + tok, 200), (b"Bearer  " + tok, 200), (b"Bearer " + tok + b" \t", 200),
                        (b"bearer " + tok, 200), (b"Bearer " + tok + b"\xa0", 401),
-                       (b"Bearer " + tok + b"\x85", 401), (b"Basic " + tok, 401), (b"Token " + tok, 401)):
+                       (b"Bearer " + tok + b"\x85", 401), (b"Bearer \xa0" + tok, 401), (b"Bearer \x85" + tok, 401),
+                       (b"Basic " + tok, 401), (b"Token " + tok, 401)):
         r = _post_raw(priv.client.app, "/refresh", sent)
         assert r.status_code == want, (sent, r.status_code)
 

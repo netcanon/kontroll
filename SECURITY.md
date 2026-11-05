@@ -409,7 +409,8 @@ the operator, and the honest `capability_gap` names an unresolved selector.
 - **Bearer-token auth, fail-closed.** Privileged routes require `KONTROLL_API_TOKEN`
   (SOPS-backed at deploy, like `GUI_PASSWORD`); **unset ⇒ the privileged routes are disabled
   (503)**, never open. The token is compared **constant-time** (`hmac.compare_digest`), as the
-  bytes the client sent; a bad/absent token is a 401, a non-ASCII one too.
+  bytes the client sent; a bad/absent token is a 401 (one holding a non-ASCII character too,
+  never a 500), and a configured non-ASCII token admits its UTF-8 bytes.
   Read-only inquiry (search/probe/units/classify/health) needs no token.
 - **A collection path param is resolved against the installed set or checked against `namespace.name` before
   it is used (SEC-3), never joined raw.** The

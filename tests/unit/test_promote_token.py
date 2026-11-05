@@ -72,3 +72,13 @@ def test_none_part_is_well_defined_not_a_crash():
     with "" (both length-0), which is the intended equivalence (absent == empty for hashing)."""
     assert promote.plan_token("a", None, "b") == promote.plan_token("a", "", "b")
     assert promote.plan_token(None) == promote.plan_token("")
+
+
+def test_the_right_token_with_a_character_added_is_a_mismatch():
+    """The right plan token with a lone surrogate or a non-ASCII character added, at either end, verifies as False.
+    Guards the token's encode: a lossy handler (`ignore`, or an `ascii` encode with `ignore`) never raises either,
+    but drops the added character and admits a token that is not the plan's (AUTH-NA read B)."""
+    right = promote.plan_token("a")
+    for junk in ("\ud800", "\udcff", "\u00f6"):
+        assert promote.verify_token(right + junk, "a") is False, junk
+        assert promote.verify_token(junk + right, "a") is False, junk
