@@ -128,6 +128,34 @@ def test_a_configured_password_with_a_non_ascii_character_admits_its_owner(clien
     assert client.get("/api/search?q=", headers=_auth(pw="passwörd")).status_code == 401
 
 
+@pytest.mark.parametrize("header", ["Basic päss", "Basic ä"])
+def test_a_basic_header_not_in_base64_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch, header):
+    """A Basic header whose credential holds a non-ASCII character as it is, not base64'd, is refused 401 and audited
+    `auth-denied`. Guards the header's parse: Werkzeug's base64 decode raises ValueError on a non-ASCII str, before
+    any compare, so the request answered the JSON 500 and an `internal-error` row (AUTH-NA read A, S1). No browser
+    sends it; a scripted client or a scanner can."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=", headers={"Authorization": header})
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_configured_password_that_is_not_utf8_is_a_401_for_the_right_user(client, tmp_path, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 (a hand-written .env holding a Latin-1 byte, which the
+    environment decodes `surrogateescape`) answers the right user 401 and audits `auth-denied`. Guards the configured
+    side's encode: a strict UTF-8 encode raised on the escaped byte, so every right-user login answered a 500 while a
+    wrong user got a 401 (AUTH-NA read A, N2)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    r = client.get("/api/search?q=", headers=_auth(pw="päss"))
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
 def test_wrong_user_is_401(client):
     """Wrong username -> 401, even with a plausible password."""
     assert client.get("/api/search?q=cisco", headers=_auth(user="root")).status_code == 401

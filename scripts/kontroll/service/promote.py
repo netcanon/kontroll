@@ -40,7 +40,9 @@ def verify_token(token, *parts):
     The promote route calls this and returns 409 on False (the data changed under the operator; re-propose).
     Constant-time compare (defensive hygiene, though this is a consistency gate, not a secret), of UTF-8 bytes. A
     missing, empty, non-string or non-ASCII token is simply a mismatch (False), never an exception — a malformed
-    promote is refused, never crashes the route (`hmac.compare_digest` raises on a non-ASCII str)."""
+    promote is refused, never crashes the route (`hmac.compare_digest` raises on a non-ASCII str). The token is
+    encoded `surrogatepass`: a JSON string can carry a lone surrogate (U+D800, as an escape), which a strict UTF-8
+    encode refuses; the plan token is a hex digest, so such a token is always a mismatch."""
     if not isinstance(token, str) or not token:
         return False
-    return hmac.compare_digest(token.encode("utf-8"), plan_token(*parts).encode("utf-8"))
+    return hmac.compare_digest(token.encode("utf-8", "surrogatepass"), plan_token(*parts).encode("utf-8"))
