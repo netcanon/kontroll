@@ -355,12 +355,13 @@ only as a whole top-level command, and a `set +e`, a `set` or `shopt` given a va
 command, a glob or a brace expansion, or a `shopt` naming errexit, anywhere, switches errexit off.
 It removes quoted strings (escapes, a `'` or backquotes inside `"…"`) when it decides what a check
 runs inside, but it splits on `&&`, `||`, `;` and `|` inside quotes too (a lone `&` only outside
-them). A Dockerfile's lines reach it joined as BuildKit joins them, a `RUN`'s leading cache mounts
-at a cache directory dropped (`--mount=type=cache,target=/root/.cache/pip`; any other flag stays
-part of its first command) (no space at a continuation, a double backslash continuing nothing, a
-byte-order mark dropped, a whitespace character other than a space, a tab or a line feed refused); a
-step's `run:` is read whole (a quote or a backquote spans a newline, and the step is refused when
-one does or is left open; a `#` that opens a word outside a `${…}` cuts to the line end, and one
+them). A Dockerfile's lines reach it joined as BuildKit joins them (no space at a continuation, a
+double backslash continuing nothing, a byte-order mark dropped, a whitespace character other than a
+space, a tab or a line feed refused), a `RUN` flag read as part of its first command (and refused in
+a Dockerfile that installs with pip, a cache mount at pip's cache too: a mount can put a `pip.conf`
+or a planted wheel in front of the install, and the check reads none); a step's `run:` is read whole
+(a quote or a backquote spans a newline, and the step is refused when one does or is left open; a
+`#` that opens a word outside a `${…}`, or inside a `$(…)` one holds, cuts to the line end, and one
 right after a `)` is refused; a C0 control character that is not whitespace is refused) and its
 lines joined with `;`, or with a space after one that ends in `&&`, `||` or `|`. It refuses the
 shapes it knows it cannot read; the module's docstring gives the rules, and `test_image_pins.py`'s

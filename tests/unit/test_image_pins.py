@@ -20,76 +20,75 @@ comment line inside a continued instruction skipped, an instruction's keyword en
 whitespace character other than a space, a tab or a line feed (a carriage return inside a line, VT, FF, U+001C to
 U+001F, NEL, a no-break space, LS, PS, any other Unicode space) is refused: sh splits words on none of them, while these
 checks (and, for VT, FF and CR, BuildKit's keyword split) do. A RUN is read in shell form by tests/unit/_build_read.py
-(its docstring gives the rules), its leading cache mounts at a cache directory dropped first
-(`--mount=type=cache,target=/root/.cache/pip`; any other flag is read as the start of its first command): split into
-commands on `&&`, `||`, `;`, `|` and a lone `&`, a command found by its words anywhere in it (`pip … install`, `apk …
-add`, `curl`, `wget`, `sha256sum … -c`), so a path before the program, an option before the subcommand, a shell keyword
-(`then`) or a `$(…)` does not hide it from being found; a `curl` or `wget` that an `apt-get install` or `apk add` names
-is a package, not a download. A command that must stop the build (a `pip install`, a `pip check`, an `apk add`, a
-download, a `sha256sum -c`) must fail the RUN when it fails: nothing is piped after it, no `||` follows it, it is no
-condition, it does not run inside a `$(…)` or a quoted string (`sh -c '…'`), after an ANSI-C `$'…'` or in a list holding
-one, nor in a compound behind `||` or `!`, no function or alias is defined in the RUN (nor a `hash`, `enable`,
-`BASH_CMDS` or `BASH_ALIASES` entry), no `trap`, `exec`, `return` or `exit` (but `exit 1` to `exit 255`) and no `set -n`
-or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt` given a variable, a backquoted command, a glob
-or a brace expansion, which can be one) shares the RUN, and every operator after it to the end of the RUN is `&&` (a
-lone `&` sends the list to the background) — or errexit is on (`set -e`, `set -o errexit`), it is inside no compound (a
-brace group, a subshell, an `if`, a loop), it starts its AND-OR list, and `;` ends that list right after it. A download
-is checked by `echo "<digest>  <file>" | sha256sum -c -` in the same RUN (`sha256sum`, `/bin/sha256sum` or
-`/usr/bin/sha256sum` the first word of its command), its file written by name (one URL, one output), the digest an ARG
-or ENV whose every value in the file (an ONBUILD one's too) is 64 hex, or a shell variable the RUN sets only from one
-(and no ARG or ENV gives another value or none, nor is it a build arg Docker predefines), and no `--mount=` option in
-the file sets it (`--mount=type=secret,id=…,env=<name>`, the option read from the joined instruction with its
-backslashes removed, so a continuation, a comment line or an escape inside it hides no key, its `env=` key in any case,
-quoted or not, its value read with its quotes and backslashes removed, and one that is not then a name, such as
-`env=$X`, read as setting every digest name); a checksum file next to the download is not a check, since whoever swaps
-the file swaps it too. A SHELL other than Docker's default, an exec-form RUN (`RUN [...]` that parses as JSON), a
-heredoc (a `<<` that opens a word inside a `$((…))` is one to BuildKit: `$((1 << 2))` alone fails the build,
-unterminated heredoc), a comment inside a RUN (Docker joins its lines first, so the shell drops the rest), and an `#
-escape=` directive are refused, since these checks cannot read them; so is a build arg that names a digest ARG. What the
-checks still cannot see: a command built at run time (`$TOOL install`, `eval "$cmd"`, and a command word built from what
-a parameter holds or a substitution prints, or by a glob: `x=ex; ${x}it 0`, `exi$_ 0` after `: t` where sh is bash, `set
--- ex; ${1}it 0`, `$(printf ex)it 0`, `` `echo exit` 0 ``, `ex?t 0`; or from variables' names where sh is bash (`exit=1;
-${!exi*} 0`), from `$#` or `$?` where IFS holds a digit (`IFS=0; exit$#0`), from a word the reader keeps whole where IFS
-holds one of its characters (`IFS=_; true; ${y:-exit_0}`), or by bash 5.3's `${ …;}` holding a brace group (`exit${ {
-:;};} 0`); or read past a case pattern holding an escaped `;`, `&` or `|`, where the reader cuts the command (`e$(case a
-in b\\;) :;; esac)xit 0`, `e$(case a in \\|) :;; esac)xit 0`), or a brace list inside a `${…}` (`e${x+{a,b}xit 0`: sh
-runs `exit 0`)), a package manager or downloader they do not name (`npm`, `gem`, `go install`, `git clone`, `python3 -c
-'urllib…'`), the URLs and outputs a curl config file adds (`curl -K`, or with no option at all a `~/.curlrc` or one
-under `$CURL_HOME`) or a wget input file
-(`wget -i`), a second URL written without its scheme and sent to standard output, a later command that writes the
-checked file again, a file the RUN sources (`. /tmp/env`, which can set a digest name), a checked program that an
-earlier PATH entry shadows (a `sha256sum` an earlier step put in /usr/local/bin), a quote inside a `$(…)` that is itself
-inside double quotes (the reader pairs it with the outer one), a digest ARG one stage declares and another reads, a
-digest name the base image's ENV sets that the RUN assigns a digest on only some paths (the check then reads the image's
-value), and the apt packages, which float inside the pinned base (SECURITY.md R-IMG-2). Refused although sound (each
-fails loudly): a `pip check` in a later RUN than its install, a `pip install` option that takes a value and is not named
-here (its value reads as a package), a check written to a file and read by `sha256sum -c <file>`, a check line written
-with `printf`, a `;` inside a compound (under `set -e`, or the one before a brace group's `}`: `{ a && check; }`), a
-check right before a subshell's `)` (`( install && check )`, behind `&&` or not: the `)` joins the check's command,
-which then reads as no `pip check`), a `;` inside a quoted string after a check (`&& python3 -c "import yaml; …"`), an
-`exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN (one a brace expansion builds too, `{exit,0}`: sh expands no
-brace, so it runs a command not found and goes on (or fails, behind `&&`), while these checks read it as bash would), a
-brace list these checks cannot read (`{exec,true,${x:-${y}}}`: sh runs it as a command not found), a `$-` anywhere in
-the RUN (`echo "$-"`: it holds the option letters a `set` gives, which can build `exit` or `set`), a command these
-checks would read more ways than they try (`_CHOICES`: seven parameters given an operator, `true${x:+a}…${x:+g} 0`,
-three replacements with a word, or seven expansions each glued to a word on both sides, `echo a${x}b…h`), an arithmetic
-expansion, `${#}`, `${#x}` or `$0` glued to `exit` (`exit$((0))`: sh runs `exit0`, a command not found), a pattern
-replacement of an unset variable (`${x/#/exit} 0`: a bad substitution to dash, `0` to busybox ash), another operator's
-word where sh runs no command word from it (`${x/a/exit} 0`, `${x:+exit} 0` and `${x+exit} 0` with `x` unset,
-`${1:+exit} 0` with no arguments, and `${1=exit} 0`, which sh refuses to assign), an expansion inside double quotes
-glued to `exit` (`exit"$x"0`, `exit"${IFS}"0`: quoted, it never splits the word), a bare `{` in an expansion glued to
-`exit` (`exit${x:+{}} 0`: sh runs `exit}`, a command not found, but the expansion is read as a space too, as any is), a
-RUN flag other than a cache mount at a cache directory (`--network=none`, a bind mount of the requirements file: the
-flag reads as part of the install's command, so no `pip check` of the same pip follows it), a `set --` given a variable
-(`set -- $x`), a digest name that an ARG or ENV gives another value or none, assigned in the RUN (`ENV X=$FOO`, then
-`X=<hex> && …`), the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), a function or
-an alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too), the word
-`set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set up
-(once)"`), an ANSI-C `$'…'` before the check or later in its own list, a `sha256sum` that is not the first word of its
-command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo $(true)#x`: one word to sh, a comment inside a RUN
-to these checks), a `#` after a space inside quotes (`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash", "-o",
-"pipefail", "-c"]`, a curl or wget naming two URLs or two outputs, a trailing comment on a RUN's last line, and a digest
-ARG redeclared without its value in a later stage."""
+(its docstring gives the rules), a RUN flag read as the start of its first command (and refused before an install, a
+cache mount too: `pip_install_faults`): split into commands on `&&`, `||`, `;`, `|` and a lone `&`, a command found by
+its words anywhere in it (`pip … install`, `apk … add`, `curl`, `wget`, `sha256sum … -c`), so a path before the program,
+an option before the subcommand, a shell keyword (`then`) or a `$(…)` does not hide it from being found; a `curl` or
+`wget` that an `apt-get install` or `apk add` names is a package, not a download. A command that must stop the build (a
+`pip install`, a `pip check`, an `apk add`, a download, a `sha256sum -c`) must fail the RUN when it fails: nothing is
+piped after it, no `||` follows it, it is no condition, it does not run inside a `$(…)` or a quoted string (`sh -c
+'…'`), after an ANSI-C `$'…'` or in a list holding one, nor in a compound behind `||` or `!`, no function or alias is
+defined in the RUN (nor a `hash`, `enable`, `BASH_CMDS` or `BASH_ALIASES` entry), no `trap`, `exec`, `return` or `exit`
+(but `exit 1` to `exit 255`) and no `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt`
+given a variable, a backquoted command, a glob or a brace expansion, which can be one) shares the RUN, and every
+operator after it to the end of the RUN is `&&` (a lone `&` sends the list to the background) — or errexit is on (`set
+-e`, `set -o errexit`), it is inside no compound (a brace group, a subshell, an `if`, a loop), it starts its AND-OR
+list, and `;` ends that list right after it. A download is checked by `echo "<digest> <file>" | sha256sum -c -` in the
+same RUN (`sha256sum`, `/bin/sha256sum` or `/usr/bin/sha256sum` the first word of its command), its file written by name
+(one URL, one output), the digest an ARG or ENV whose every value in the file (an ONBUILD one's too) is 64 hex, or a
+shell variable the RUN sets only from one (and no ARG or ENV gives another value or none, nor is it a build arg Docker
+predefines), and no `--mount=` option in the file sets it (`--mount=type=secret,id=…,env=<name>`, the option read from
+the joined instruction with its backslashes removed, so a continuation, a comment line or an escape inside it hides no
+key, its `env=` key in any case, quoted or not, its value read with its quotes and backslashes removed, and one that is
+not then a name, such as `env=$X`, read as setting every digest name); a checksum file next to the download is not a
+check, since whoever swaps the file swaps it too. A SHELL other than Docker's default, an exec-form RUN (`RUN [...]`
+that parses as JSON), a heredoc (a `<<` that opens a word inside a `$((…))` is one to BuildKit: `$((1 << 2))` alone
+fails the build, unterminated heredoc), a comment inside a RUN (Docker joins its lines first, so the shell drops the
+rest), and an `# escape=` directive are refused, since these checks cannot read them; so is a build arg that names a
+digest ARG. What the checks still cannot see: a command built at run time (`$TOOL install`, `eval "$cmd"`, and a command
+word built from what a parameter holds or a substitution prints, or by a glob: `x=ex; ${x}it 0`, `exi$_ 0` after `: t`
+where sh is bash, `set -- ex; ${1}it 0`, `$(printf ex)it 0`, `` `echo exit` 0 ``, `ex?t 0`; or from variables' names
+where sh is bash (`exit=1; ${!exi*} 0`), from `$#` or `$?` where IFS holds a digit (`IFS=0; exit$#0`), from a word the
+reader keeps whole where IFS holds one of its characters (`IFS=_; true; ${y:-exit_0}`); or read past a brace list inside
+a `${…}` (`e${x+{a,b}xit 0`: sh runs `exit 0`)), a package manager or downloader they do not name (`npm`, `gem`, `go
+install`, `git clone`, `python3 -c 'urllib…'`), the URLs and outputs a curl config file adds (`curl -K`, or with no
+option at all a `~/.curlrc` or one under `$CURL_HOME`) or a wget input file (`wget -i`), a second URL written without
+its scheme and sent to standard output, a later command that writes the checked file again, a file the RUN sources (`.
+/tmp/env`, which can set a digest name), a checked program that an earlier PATH entry shadows (a `sha256sum` an earlier
+step put in /usr/local/bin), a quote inside a `$(…)` that is itself inside double quotes (the reader pairs it with the
+outer one), a digest ARG one stage declares and another reads, a digest name the base image's ENV sets that the RUN
+assigns a digest on only some paths (the check then reads the image's value), and the apt packages, which float inside
+the pinned base (SECURITY.md R-IMG-2). Refused although sound (each fails loudly): a `pip check` in a later RUN than its
+install, a `pip install` option that takes a value and is not named here (its value reads as a package), a check written
+to a file and read by `sha256sum -c <file>`, a check line written with `printf`, a `;` inside a compound (under `set
+-e`, or the one before a brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`( install &&
+check )`, behind `&&` or not: the `)` joins the check's command, which then reads as no `pip check`), a `;` inside a
+quoted string after a check (`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the
+RUN (one a brace expansion builds too, `{exit,0}`: sh expands no brace, so it runs a command not found and goes on (or
+fails, behind `&&`), while these checks read it as bash would), a brace list these checks cannot read
+(`{exec,true,${x:-${y}}}`: sh runs it as a command not found), a `$-` anywhere in the RUN (`echo "$-"`: it holds the
+option letters a `set` gives, which can build `exit` or `set`), a command these checks would read more ways than they
+try (`_CHOICES`: seven parameters given an operator, `true${x:+a}…${x:+g} 0`, three replacements with a word, or seven
+expansions each glued to a word on both sides, `echo a${x}b…h`), an arithmetic expansion, `${#}`, `${#x}` or `$0` glued
+to `exit` (`exit$((0))`: sh runs `exit0`, a command not found), a pattern replacement of an unset variable (`${x/#/exit}
+0`: a bad substitution to dash, `0` to busybox ash), another operator's word where sh runs no command word from it
+(`${x/a/exit} 0`, `${x:+exit} 0` and `${x+exit} 0` with `x` unset, `${1:+exit} 0` with no arguments, and `${1=exit} 0`,
+which sh refuses to assign), an expansion inside double quotes glued to `exit` (`exit"$x"0`, `exit"${IFS}"0`: quoted, an
+expansion splits no word, but for a `$@` between two of its arguments), a gap inside double quotes in a command holding
+the word `eval` (`eval "export X=${HOME}"`: eval reads the string again, where the gap can be a space or a newline), a
+bare `{` in an expansion glued to `exit` (`exit${x:+{}} 0`: sh runs `exit}`, a command not found, but the expansion is
+read as a space too, as any is), any RUN flag in a Dockerfile that installs with pip, a cache mount at pip's own cache
+too (`--mount=type=cache,target=/root/.cache/pip`, `--network=none`, a bind mount of the requirements file: these checks
+do not read what a mount puts in front of the install, a pip.conf, a planted wheel in a shared cache, or a target an
+earlier RUN made a link), a `set --` given a variable (`set -- $x`), a digest name that an ARG or ENV gives another
+value or none, assigned in the RUN (`ENV X=$FOO`, then `X=<hex> && …`), the word `exit`, `return`, `trap` or `exec` in a
+message (`echo "will exit on error"`), a function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`,
+or a `name()`, in a quoted message too), the word `set` or `shopt` in a message before a word holding `$`, a backquote,
+a glob character, `{` or `(` (`echo "set up (once)"`), an ANSI-C `$'…'` before the check or later in its own list, a
+`sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo
+$(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space inside quotes (`echo "see
+#1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two
+outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared without its value in a later stage."""
 import json
 import os
 import re
@@ -191,36 +190,9 @@ def instructions(text):
 
 
 def _runs(text):
-    """[the commands of each RUN] of a Dockerfile, as tests/unit/_build_read.py splits them, its leading cache mounts
-    at a cache directory dropped first (`_without_cache_mounts`)."""
-    return [_commands(_without_cache_mounts(args)) for keyword, args in instructions(text) if keyword == "RUN"]
-
-
-# The keys a cache mount `_without_cache_mounts` drops may carry, and the directories it may mount at: pip, apk and
-# apt read no config or code there, only caches they fill and check themselves.
-_CACHE_KEYS = {"type", "target", "dst", "destination", "id", "sharing", "mode", "uid", "gid", "ro", "readonly"}
-_CACHE_DIR = re.compile(r"/(?:root/\.cache|var/cache|var/lib/apt)(?:/|$)")
-
-
-def _without_cache_mounts(args):
-    """A RUN's args without its leading cache mounts at a cache directory (`--mount=type=cache,target=/root/.cache/pip`:
-    each key one of `_CACHE_KEYS` and given once, one target, under `_CACHE_DIR`, with no `..`). Any other flag is kept,
-    and the checks read it as the start of the RUN's first command, so they refuse the RUN: a mount can put a pip.conf,
-    a sitecustomize, a planted wheel or an env in front of the install, as a bind mount of the requirements file, which
-    is sound, is refused too (read 150, N2: a cache mount was refused, and a flag dropped whole would pass
-    `--mount=type=cache,target=/root/.config/pip`)."""
-    while True:
-        m = re.match(r"--mount=([\w=,./-]+)\s+", args)
-        if not m:
-            return args
-        items = [item.partition("=") for item in m.group(1).split(",")]
-        keys = [key.lower() for key, _, _ in items]
-        given = {key.lower(): value for key, _, value in items}
-        targets = [given[key] for key in ("target", "dst", "destination") if key in given]
-        if (len(keys) != len(set(keys)) or not set(keys) <= _CACHE_KEYS or given.get("type", "").lower() != "cache"
-                or len(targets) != 1 or ".." in targets[0] or not _CACHE_DIR.match(targets[0])):
-            return args
-        args = args[m.end():]
+    """[the commands of each RUN] of a Dockerfile, as tests/unit/_build_read.py splits them. A RUN flag is read as the
+    start of its first command; `pip_install_faults` refuses it in a Dockerfile that installs with pip."""
+    return [_commands(args) for keyword, args in instructions(text) if keyword == "RUN"]
 
 
 def _tag(ref):
@@ -392,7 +364,12 @@ def pip_install_faults(text):
     """["<reason>: <command>"] for each `pip install` in a Dockerfile that names a package itself, names an index,
     lacks `--no-deps`, does not stop the build, or is not followed in the same RUN by a `pip check` of the same pip
     that stops the build; and for an index named in pip's environment or config (`PIP_INDEX_URL`, a `pip.conf`,
-    `pip config`) by a Dockerfile that runs one."""
+    `pip config`), and for each RUN flag (`--mount`, `--network`, `--security`), in a Dockerfile that runs one. These
+    checks do not read a flag, and a mount can put a pip.conf in front of the install: a bind mount at `/etc/xdg/pip`
+    before a first command that is not the install (read 160, B1), a cache mount whose target an earlier RUN made a link
+    to pip's config directory, or any cache mount, as the builder's cache is shared with every build that names its id
+    and can hold a planted wheel or index page (read 160, S5, N3). So a cache mount, which is sound on a builder whose
+    cache is trusted, is refused too (read 150, N2 had cache mounts at a cache directory read through)."""
     faults = []
     installs = pip_installs(text)
     for command, files, bare, flags, commands, i in installs:
@@ -412,6 +389,8 @@ def pip_install_faults(text):
     if installs:
         faults += ["names an index in pip's environment or config: " + args
                    for _, args in instructions(text) if _PIP_SETTINGS.search(args)]
+        faults += ["a RUN flag these checks do not read (a mount can put a pip.conf in front of the install): " + args
+                   for keyword, args in instructions(text) if keyword == "RUN" and args.startswith("--")]
     return faults
 
 
@@ -1357,27 +1336,45 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
      ["pip install shares the RUN with `ex$(case a in b | \")\") 1 ; esac)it 0`",
       "pip check shares the RUN with `ex$(case a in b | \")\") 1 ; esac)it 0`"]),
     ("se$(case a in (c\\)|\\|) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
-     ["pip install shares the RUN with `se$(case a in (c\\) | \\ | ) 1 ; esac)t -n`",
-      "pip check shares the RUN with `se$(case a in (c\\) | \\ | ) 1 ; esac)t -n`"]),
-    ("--mount=type=cache,target=/root/.cache/pip " + _INSTALL + " && python3 -m pip check", []),
+     ["pip install shares the RUN with `se$(case a in (c\\) | \\|) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(case a in (c\\) | \\|) 1 ; esac)t -n`"]),
+    ("--mount=type=cache,target=/root/.cache/pip " + _INSTALL + " && python3 -m pip check",
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=cache,target=/root/.cache/pip --mount=type=cache,id=apk,target=/var/cache/apk,sharing=locked "
-     + _INSTALL + " && python3 -m pip check", []),
+     + _INSTALL + " && python3 -m pip check",
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=cache,target=/root/.config/pip " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --mount"]),
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=cache,target=/root/.cache/../.config/pip " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --mount"]),
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=cache,target=/root/.cache/pip,from=build " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --mount"]),
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=cache,target=/root/.cache/pip,dst=/root/.config/pip " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --mount"]),
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=cache,target=/root/.config/pip,target=/root/.cache/pip " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --mount"]),
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=bind,target=/root/.cache/pip " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --mount"]),
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--mount=type=bind,source=r.txt,target=/tmp/r.txt " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --mount"]),
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
     ("--network=none --mount=type=cache,target=/root/.cache/pip " + _INSTALL + " && python3 -m pip check",
-     ["no `pip check` of the same pip after it: --netwo"]),
+     ["no `pip check` of the same pip after it: --netwo", "a RUN flag these checks do not read"]),
+    ("ln -s /etc/xdg /root/.cache\nRUN --mount=type=cache,target=/root/.cache/pip " + _INSTALL + " && python3 -m pip check",
+     ["no `pip check` of the same pip after it: --mount", "a RUN flag these checks do not read"]),
+    ("--mount=type=bind,source=x,target=/etc/xdg/pip true; " + _INSTALL + " && python3 -m pip check",
+     ["a RUN flag these checks do not read"]),
+    ("set -- '' ''; \"e${x}xit$@0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `\"e${x}xit$@0\"`", "pip check shares the RUN with `\"e${x}xit$@0\"`"]),
+    ("set -- '' ''; exi${x:+foo}t\"$@\"0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `exi${x:+foo}t\"$@\"0`", "pip check shares the RUN with `exi${x:+foo}t\"$@\"0`"]),
+    ("set -- '' ''; \"ex${x}it${@}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `\"ex${x}it${@}0\"`", "pip check shares the RUN with `\"ex${x}it${@}0\"`"]),
+    ("true; z='`' e\"${x+'}`:`\"xit 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `z='`' e\"${x+'}`:`\"xit 0 ; python3", "pip check shares the RUN with `z='`' e\"${x+'}`:`\"xit 0 ; python3"]),
+    ("true; z='`' echo ex\"`:`\"it \"${x#\"\\\"}\"'\"'\"'\"}\"; " + _INSTALL + " && python3 -m pip check",
+     []),
+    ("true; \"e${x:+'$( echo '}' \" ; : \" ; : )'}\"xit 0; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `\"e${x:+'$( echo '}' \" ; : \" ; : )'}\"xit 0`", "pip check shares the RUN with `\"e${x:+'$( echo '}' \" ; : \" ; : )'}\"xit 0`"]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1479,7 +1476,13 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "two-cache-mounts-before-the-install", "cache-mount-at-pips-config-directory",
         "cache-mount-climbing-out-of-the-cache", "cache-mount-seeded-from-a-stage", "cache-mount-with-two-targets",
         "cache-mount-with-a-repeated-target", "bind-mount-at-the-cache", "bind-mount-of-the-requirements-file",
-        "cache-mount-after-another-flag"])
+        "cache-mount-after-another-flag",
+        "cache-mount-at-a-target-an-earlier-run-made-a-symlink",
+        "a-pip-config-mount-on-a-run-whose-install-is-not-its-first-command", "exit-split-by-a-quoted-at",
+        "exit-split-by-a-quoted-at-beside-an-alternative", "exit-split-by-a-quoted-braced-at",
+        "exit-glued-to-a-quoted-alternative-holding-a-single-quote-before-a-backquoted-command",
+        "a-message-holding-a-quoted-strip-the-scan-leaves-open",
+        "exit-glued-to-a-quoted-alternative-whose-single-quote-opens-a-substitution-cut-by-a-semicolon"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1562,21 +1565,30 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     a character (`ex${x+{}it 0`, `e${x#{}xit 0`); the step table's six texts that a mutant dropping one part of the
     pairing passes; four of its texts that fold 16's mutant run found a mutant passes (`a='"' ex${x}it${IFS}0`, `e$(case
     a in b|c\\)) :;; esac)xit 0`, `ex$(case a in b|")") 1;; esac)it 0`, `se$(case a in (c\\)|\\|) 1;; esac)t -n`); and a
-    RUN's leading cache mounts at a cache directory dropped
-    (`--mount=type=cache,target=/root/.cache/pip`, and two such: each passes), while a cache mount elsewhere
-    (`/root/.config/pip`), one climbing out with `..`, one seeded `from=` a stage, one given two targets or one twice, a
-    bind mount at the cache, a cache mount after another flag and, although sound, a bind mount of the requirements file
-    are refused. Guards a pin check that a common install shape walks past, and a `pip check` that cannot fail the build
-    — "make the cleanup tolerant" with a trailing `|| true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2
-    read, S1, N3, N4; its fold-3 read, S2, N1, N2, N6: Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5;
-    its read, S1, S2, S4, S5, N1, N2, N6: G-a, C-g, O-a to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25,
-    Z32, Z33, O10 to O14, O17, S5, C4; fold 5's read A, S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1
-    to C4, C6, C7, D1, D2, D4, D8, E1, E3, F1, G1, G2, I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold
-    6's mutants: Q7, QX1, QX2; its read A, S3, S4, S5, S7; its read B, S3, N1, N4: R1, SK1, SK2, BK1; fold 7's read A,
-    S2; fold 10's read B, S1; fold 11's read A, S2; its read B, S1; fold 12's read A: r01, r04, r07, r09 to r11; its
-    read B, S2; fold 13's mutant run: X13o, X13p; its read A, S1 to S3: r01 to r16; its read B, S1, S2; fold 14's read
-    A, S2 to S4; its read B, S1, N6; fold 15's fuzz; fold 15's read A, S1 to S3, N2; its read B, S1 to S3: F8c, X15D,
-    XQ2, XQ4, XQ5, XQ6; fold 16's mutant run: FL6, CP2, CP3)."""
+    RUN's leading cache mounts at a cache directory dropped (`--mount=type=cache,target=/root/.cache/pip`, and two such:
+    each passed until fold 17), while a cache mount elsewhere (`/root/.config/pip`), one climbing out with `..`, one
+    seeded `from=` a stage, one given two targets or one twice, a bind mount at the cache, a cache mount after another
+    flag and, although sound, a bind mount of the requirements file were refused. Fold 17 added (fold 16's reads): every
+    RUN flag in a Dockerfile that installs with pip, those cache mounts too (a target an earlier RUN linked to pip's
+    config directory, `ln -s /etc/xdg /root/.cache`, or a shared cache holding a planted wheel), and a bind mount at
+    `/etc/xdg/pip` before a first command that is not the install (`--mount=type=bind,source=x,target=/etc/xdg/pip true;
+    pip install …`); and a `$@`'s gap, which splits a word inside double quotes too (`"e${x}xit$@0"`,
+    `exi${x:+foo}t"$@"0` and `"ex${x}it${@}0"`, each after `set -- '' ''`). Fold 17's mutant run added two texts a
+    mutant passes, each dead under dash, which reads a `'` inside a quoted `${…}` as a character: one before a
+    backquoted command, after a single-quoted backquote (`` z='`' e"${x+'}`:`"xit 0 ``), and one that opens a
+    substitution a `;` cuts (`"e${x:+'$( echo '}' " ; : " ; : )'}"xit 0`); and it passes a message whose quoted strip
+    the scan leaves open (`` z='`' echo ex"`:`"it "${x#"\\"}"'"'"'"}" ``). Guards a pin check that a common install
+    shape walks past, and a `pip check` that cannot fail the build — "make the cleanup tolerant" with a trailing `||
+    true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4; its fold-3 read, S2, N1, N2, N6:
+    Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2, S4, S5, N1, N2, N6: G-a, C-g, O-a
+    to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to O14, O17, S5, C4; fold 5's read A,
+    S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7, D1, D2, D4, D8, E1, E3, F1, G1, G2,
+    I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants: Q7, QX1, QX2; its read A, S3, S4, S5,
+    S7; its read B, S3, N1, N4: R1, SK1, SK2, BK1; fold 7's read A, S2; fold 10's read B, S1; fold 11's read A, S2; its
+    read B, S1; fold 12's read A: r01, r04, r07, r09 to r11; its read B, S2; fold 13's mutant run: X13o, X13p; its read
+    A, S1 to S3: r01 to r16; its read B, S1, S2; fold 14's read A, S2 to S4; its read B, S1, N6; fold 15's fuzz; fold
+    15's read A, S1 to S3, N2; its read B, S1 to S3: F8c, X15D, XQ2, XQ4, XQ5, XQ6; fold 16's mutant run: FL6, CP2, CP3;
+    fold 16's read A, B1, S5, N3; its read B, S1; fold 17's mutant run: SG2, SG7, SO4)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 
@@ -1587,12 +1599,15 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     ("ARG PIP_EXTRA_INDEX_URL=https://x.test\n", ["environment or config: PIP_EXTRA_INDEX_URL"]),
     ("COPY docker/x/pip.conf /etc/pip.conf\n", ["environment or config: docker/x/pip.conf"]),
     ("RUN python3 -m pip config set global.index-url https://x.test\n", ["environment or config: python3 -m pip"]),
-], ids=["none", "env-index", "arg-extra-index", "pip-conf", "pip-config-set"])
+    ("COPY --from=build /w /w\n", []),
+], ids=["none", "env-index", "arg-extra-index", "pip-conf", "pip-config-set", "copy-from-a-stage"])
 def test_the_pip_check_reads_pips_environment_and_config(text, expected):
     """An index named in pip's environment (`ENV`/`ARG PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, …), a copied
     `pip.conf`, or a `pip config set` is flagged in a Dockerfile that runs a `pip install`: pip reads each before its
-    command line, so the install's own words name no index while one is used. Guards an index the per-command read
-    cannot see (T29's fold-2 read, N4: `ENV PIP_INDEX_URL` passed)."""
+    command line, so the install's own words name no index while one is used. A `COPY --from=` a build stage passes:
+    `--from` is COPY's flag, and only a RUN's flags can put a config in front of the install. Guards an index the
+    per-command read cannot see (T29's fold-2 read, N4: `ENV PIP_INDEX_URL` passed), and a flag of another
+    instruction refused as a RUN's (fold 17's mutant run: RF3)."""
     faults = pip_install_faults(text + "RUN " + _INSTALL + " && python3 -m pip check\n")
     assert _found(faults, expected), faults
 

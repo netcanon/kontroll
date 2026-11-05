@@ -71,18 +71,19 @@ were built from was not.
   than `/bin/` or `/usr/bin/`; or a checksum not held in the tree, a variable holding one only where no `ARG` or `ENV`
   (an `ONBUILD` one too) gives it another value or none, it is no build arg Docker predefines and no `--mount=` option's
   `env=` sets it, however it is cased, quoted, escaped or continued, so a `--build-arg` cannot stand in for it), never
-  because one is old. It reads a Dockerfile's lines as BuildKit joins them, and drops a `RUN`'s leading cache mounts at
-  a cache directory (`--mount=type=cache,target=/root/.cache/pip`), refusing any other flag before an install.
-  `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same rules, reading its `run:` whole (a `#` inside a
-  `${…}` cuts no line) and as bash expands its braces (a command word `{exit,0}` or `{e..e}xit 0` builds, and one left
-  once every expansion is removed, or read as a space, all but `$#`, `$?` and `$$`); the step must name its shell under
-  any runner that is not a named Linux or macOS one (a Windows image, a list with no OS label or an expression in it, no
-  `runs-on`), may hold no `${{` expression (in a comment too), no odd whitespace, no `#` right after a `)`, no newline
-  inside a quoted string and no C0 control character that is not whitespace, and run under no env key, in any case (a
-  Windows runner reads `Path` as `PATH`), that changes what it runs (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`,
-  `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) and
-  no job `container:`, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner.
-  The refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+  because one is old. It reads a Dockerfile's lines as BuildKit joins them, and refuses every `RUN` flag in a Dockerfile
+  that installs with pip, a cache mount (`--mount=type=cache,target=/root/.cache/pip`) too, since a mount can put a
+  `pip.conf` or a planted wheel in front of the install. `tests/unit/test_ci_workflows.py` holds the pip-audit step to
+  the same rules, reading its `run:` whole (a `#` inside a `${…}` cuts no line, but for one inside a `$(…)` there) and
+  as bash expands its braces (a command word `{exit,0}` or `{e..e}xit 0` builds, and one left once every expansion is
+  removed, or read as a space, all but `$#`, `$?` and `$$`); the step must name its shell under any runner that is not a
+  named Linux or macOS one (a Windows image, a list with no OS label or an expression in it, no `runs-on`), may hold no
+  `${{` expression (in a comment too), no odd whitespace, no `#` right after a `)`, no newline inside a quoted string
+  and no C0 control character that is not whitespace, and run under no env key, in any case (a Windows runner reads
+  `Path` as `PATH`), that changes what it runs (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`,
+  `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) and no job
+  `container:`, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner. The
+  refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
 The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is
 in `docker/services/semaphore.yaml`, not the image lock). A box that builds locally also rebuilds the control image

@@ -256,42 +256,65 @@ def _script(run):
     """A `run:` script as one line of shell text, read whole as bash reads it: a quote stays open across a newline (the
     newline is then a character of the string, marked, as a quote still open at the end is, and `pip_audit_faults`
     refuses the step), a backslash and newline outside single quotes are removed, a backslash inside single quotes is
-    literal, a backquoted command is read as a quote, a `#` that opens a word outside quotes and outside a `${…}` cuts
-    the rest of its line (`e${x:+ #}xit 0` keeps it: there the `#` is a character, read 151, S4; the braces are counted,
-    not paired, so a `}` that a `$(…)` inside the `${…}` holds ends it early) (one right after a `)` is marked, and
-    `pip_audit_faults` refuses the step: bash opens a comment after a subshell's `)` and not after a `$(…)`'s), and the
-    lines are joined with `;` (a newline ends a command list as `;` does), but a line ending in `&&`, `||` or `|` with a
-    space (the list goes on to the next line)."""
-    lines, buf, quote, k, text, depth = [], "", None, 0, str(run or ""), 0
+    literal, a backquoted command is read as a quote, each quote, `${…}`, `$(…)` and paren inside a `$(…)` is paired
+    with a stack as bash nests them (a `}` or `)` that a quote or an inner `$(…)` holds closes nothing: fold 16 counted
+    the braces, read 160, S2), a `#` that opens a word outside quotes and outside a `${…}`, or inside a `$(…)` (one a
+    `${…}` holds too: `e${x:-$(: #)}` cuts its line), cuts the rest of its line (`e${x:+ #}xit 0` keeps it: there the
+    `#` is a character, read 151, S4) (one right after a `)` is marked, and `pip_audit_faults` refuses the step: bash
+    opens a comment after a subshell's `)` and not after a `$(…)`'s), and the lines are joined with `;` (a newline ends
+    a command list as `;` does), but a line ending in `&&`, `||` or `|` with a space (the list goes on to the next
+    line)."""
+    lines, buf, k, text, stack = [], "", 0, str(run or ""), []
     while k < len(text):
-        ch = text[k]
+        ch, top = text[k], (stack[-1] if stack else None)
+        quote = top if top in ("'", '"', "`") else None
         if ch == "\\" and quote != "'":
             if text[k + 1:k + 2] != "\n":
                 buf += text[k:k + 2]
             k += 2
             continue
-        if quote:
-            quote = None if ch == quote else quote
+        if quote and ch == quote:
+            stack.pop()
+            buf += ch
+        elif quote in ("'", "`"):
             buf += " \x04" if ch == "\n" else ch
-        elif ch in "'\"`":
-            quote, buf = ch, buf + ch
-        elif ch == "$" and text[k + 1:k + 2] == "{":
-            depth, buf, k = depth + 1, buf + "${", k + 2
+        elif ch == "$" and text[k + 1:k + 2] in ("{", "("):
+            stack.append(text[k + 1])
+            buf, k = buf + "$" + text[k + 1], k + 2
             continue
-        elif ch == "}" and depth:
-            depth, buf = depth - 1, buf + ch
-        elif ch == "#" and not depth and (not buf or buf[-1].isspace() or buf[-1] in ";&|("):
+        elif quote == '"':
+            buf += " \x04" if ch == "\n" else ch
+        elif ch == "'" and next((s for s in reversed(stack) if s in ('"', "(", "p")), None) == '"':
+            buf += ch
+        elif ch in "'\"`":
+            stack.append(ch)
+            buf += ch
+        elif ch == "}" and top == "{":
+            stack.pop()
+            buf += ch
+        elif ch == "(" and top in ("(", "p"):
+            stack.append("p")
+            buf += ch
+        elif ch == ")" and top in ("(", "p"):
+            stack.pop()
+            buf += ch
+        elif ch == "#" and top in (None, "(", "p") and (not buf or buf[-1].isspace() or buf[-1] in ";&|("):
             while k < len(text) and text[k] != "\n":
                 k += 1
             continue
-        elif ch == "#" and buf.endswith(")"):
+        elif ch == "#" and top is None and buf.endswith(")"):
             buf += "\x03#"
-        elif ch == "\n":
+        elif ch == "\n" and any(s in ("'", '"', "`") for s in stack):
+            buf += " \x04"
+        elif ch == "\n" and top is None:
             lines.append(buf.strip())
             buf = ""
+        elif ch == "\n":
+            buf += "; "
         else:
             buf += ch
         k += 1
+    quote = any(s in ("'", '"', "`") for s in stack)
     out = ""
     for ln in [ln for ln in lines + [buf.strip()] if ln]:
         out += (" " if re.search(r"(?:&&|\|\||\|)$", out) else "; " if out else "") + ln
@@ -366,9 +389,11 @@ def pip_audit_faults(workflow):
     an operator's word where sh runs no command word from it (`${x/#/exit} 0`, `${x/a/exit} 0`, `${x:+exit} 0` and
     `${x+exit} 0` with `x` unset, `${1:+exit} 0` with no arguments, and `${1=exit} 0`, which sh refuses to assign: the
     reader reads each word as if the parameter held one), an expansion inside double quotes glued to a command word
-    (`exit"$x"0`, `exit"${IFS}"0`, `exit"$@"0` after `set -- " "`: a quoted expansion never splits the word), a `$(` a
-    single-quoted message holds before a later line holding an `exit` (`echo '$('`), a `set --` given a variable (`set
-    -- $x`), a brace after an escaped `$` (`echo \\${a,b}`) or left open (`echo {a,b`), a bare `{` in an expansion glued
+    (`exit"$x"0`, `exit"${IFS}"0`, `exit"$@"0` after `set -- " "`: a quoted expansion splits no word, but for a `$@`
+    between two of its arguments), a gap inside double quotes in a command holding the word `eval` (`eval "export
+    X=${HOME}"`: eval reads the string again, where the gap can be a space or a newline), a `$(` a single-quoted message
+    holds before a later line holding an `exit` (`echo '$('`), a `set --` given a variable (`set -- $x`), a brace after
+    an escaped `$` (`echo \\${a,b}`) or left open (`echo {a,b`), a bare `{` in an expansion glued
     to a command word (`exit${x:+{}} 0`, which sh runs as `exit}`, a command not found: the reader reads the expansion
     as a space too, as it reads any), and an audit that opens a subshell (`(pip-audit -r a)`), sits inside a function or
     is spelt other than `pip-audit …` (`python -m pip_audit`, the pip-audit action): none of these is read as a run, so
@@ -381,14 +406,10 @@ def pip_audit_faults(workflow):
     0 ``, `$(echo hash) -p …`, `ex?t 0`); nor one built from variables' names or an array's keys (`exit=1; ${!exi*} 0`,
     `${!a[@]} 0` of an array keyed `exit`), from `$#`, `$?` or `$[…]` where IFS holds a digit (`IFS=0; exit$#0`, `IFS=0;
     true; exit$?0`, `IFS=0; exit$[0]0`) or from a word the reader keeps whole where IFS holds one of its characters
-    (`IFS=_; true; ${y:-exit_0}`), or by bash 5.3's `${ …;}` holding a brace group (`exit${ { :;};} 0`; ubuntu-latest
-    runs bash 5.2); nor a case pattern holding an escaped `;`, `&` or `|`, where `commands` cuts the command (`e$(case a
-    in b\\;) :;; esac)xit 0`, `e$(case a in \\|) :;; esac)xit 0`), a brace list inside a `${…}` (`e${x+{a,b}xit 0`,
-    which dash runs as `exit 0`), or a `#`
-    inside a `${…}` after a `}` that a `$(…)` inside it holds (`e${x:+$(echo }) #}xit 0`: `_script` counts braces, it
-    does not pair them). An expansion glued to a command word or splitting it is read as empty and again as a space, all
-    but `$#`, `$?` and `$$`, which never come out empty (`exit$x 0`, `` exit`:` 0 ``, `e$(:)xit 0`, `set$x +e`,
-    `hash${x} -p …`, `exit${IFS}0`, `exit$*0` after `set -- ' '`, `exit$( (:) ) 0`, `exit$(:|:) 0`), and a parameter,
+    (`IFS=_; true; ${y:-exit_0}`); nor a brace list inside a `${…}` (`e${x+{a,b}xit 0`, which dash runs as `exit 0`).
+    An expansion glued to a command word or splitting it is read as empty and again as a space, all but `$#`, `$?` and
+    `$$`, which never come out empty (`exit$x 0`, `` exit`:` 0 ``, `e$(:)xit 0`, `set$x +e`, `hash${x} -p …`,
+    `exit${IFS}0`, `exit$*0` after `set -- ' '`, `exit$( (:) ) 0`, `exit$(:|:) 0`), and a parameter,
     named, indirect or subscripted too, given a `-`, `:-`, `+`, `:+`, `=` or `:=` operator or a pattern replacement as
     its word (`${1-exit} 0`, `${x:-exit} 0`, `${0:+exit} 0`, `${1-${2-exit}} 0`, `${x:=exit} 0`, `${0/*/exit} 0`,
     `${!x:-exit} 0`, `${a[0]:-exit} 0`), each operator's branch, its parameter unset or set empty, in every combination
@@ -646,8 +667,7 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
      ["a newline inside a quoted string"]),
     ({"run": "eval 'ex\\'\"\n\"'it 0'\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["a newline inside a quoted string"]),
-    ({"run": 'x="$(echo "a"; # )"; ' + _AUDIT + '; echo "\n)"'}, {}, {"docker/a/requirements.txt"},
-     ["a newline inside a quoted string"]),
+    ({"run": 'x="$(echo "a"; # )"; ' + _AUDIT + '; echo "\n)"'}, {}, set(), []),
     ({"run": 'echo "it\'s" \\\n&& echo \'x\'\n' + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
     ({"run": "true\ne\x00xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a C0 control character"]),
     ({"run": "true\ne\x01xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, ["a C0 control character"]),
@@ -1239,8 +1259,66 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
     ({"run": "true\nex$(case a in b|\")\") 1;; esac)it 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `ex$(case a in b | \")\") 1 ; esac)it 0`"]),
     ({"run": "se$(case a in (c\\)|\\|) 1;; esac)t -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
-     ["shares the step with `se$(case a in (c\\) | \\ | ) 1 ; esac)t -n`"]),
+     ["shares the step with `se$(case a in (c\\) | \\|) 1 ; esac)t -n`"]),
     ({"run": _AUDIT + " --desc ${x} # || true"}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\ne$(case a in b ) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in b ) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(case a in $(echo b)) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in $(echo b)) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(case a in `echo b`) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in `echo b`) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(case a in b\\;) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in b\\;) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(case a in \\|) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in \\|) : ; esac)xit 0`"]),
+    ({"run": "true\neval \"ex${x}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `eval \"ex${x}it${IFS}0\"`"]),
+    ({"run": "true\ne${x:-$(: #)}\n)}xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e${x:-$(: ; )}xit 0`"]),
+    ({"run": "true\necho \"${x:-\"a #b\"}\"; exit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit 0`"]),
+    ({"run": "true\ns${x+\"(\"${x:+$\"\"${x/a/'}'`: )`$\"\"}}`: $\"\": }\")\"``: )`}et -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `s${x+\"(\"${x:+$\"\"${x/a/'}'`: )`$\"\"}}`: $\"\": }\")\"``: )`}et -n ; pip-au"]),
+    ({"run": "true\nse$(: ${x/a/${x#${x:+)}${x:+}}}\"(\"\"\\\\\"}$(case a in b) '}'\"\\\"\"$(case a in b) \"\\\\\"}\")\";; esac);; esac))t -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `se$(: ${x/a/${x#${x:+)}${x:+}}}\"(\"\"\\\\\"}$(case a in b) '}'\"\\\"\"$(case "]),
+    ({"run": "true\neval \"$(ssh-agent -s)\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\ngrep -q '^ok$' docker/a/requirements.txt || true\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     []),
+    ({"run": "true\nx=$(cd /tmp; pwd ); case \"$x\" in /tmp ) echo t ;; esac\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     []),
+    ({"run": "true\nv=$(echo a\\|b); echo \"$v\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\nset -- '' ''\n\"e${x}xit$@0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `\"e${x}xit$@0\"`"]),
+    ({"run": "true\nset -- '' ''\nexi${x:+foo}t\"$@\"0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exi${x:+foo}t\"$@\"0`"]),
+    ({"run": "true\nset -- '' ''\n\"ex${x}it${@}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `\"ex${x}it${@}0\"`"]),
+    ({"run": "true\ne$(case a in b) : \\\\;; a) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in b) : \\\\ ; a) : ; esac)xit 0`"]),
+    ({"run": "true\na[1]= a[2]=; \"ex${x}it${a[@]}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `\"ex${x}it${a[@]}0\"`"]),
+    ({"run": "true\nx=\"$( (:); : \" #\" )\"; exit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `exit 0`"]),
+    ({"run": "true\ne$(case a in $(echo $(echo a))) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in $(echo $(echo a))) : ; esac)xit 0`"]),
+    ({"run": "true\nz='`' e\"`:`\"xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `z='`' e\"`:`\"xit 0 ; pip-au"]),
+    ({"run": "true\nz='`' e$( (: \"`:`\") )xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `z='`' e$( (: \"`:`\") )xit 0 ; pip-au"]),
+    ({"run": "true\nse$(case a in (c\\)$(echo ')')) :;; esac)t -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `se$(case a in (c\\)$(echo ')')) : ; esac)t -n`"]),
+    ({"run": "true\nse$(case a in (`echo )`$(echo ')')) :;; esac)t -n\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `se$(case a in (`echo )`$(echo ')')) : ; esac)t -n`"]),
+    ({"run": "true\n\"exi${x/'}'/\"\\\"\"}\"t 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `\"exi${x/'}'/\"\\\"\"}\"t 0`"]),
+    ({"run": "true\n\"e${x+${y-'}'}}\"xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `\"e${x+${y-'}'}}\"xit 0`"]),
+    ({"run": "true\n\"e${x+{${y-'}'}}\"xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `\"e${x+{${y-'}'}}\"xit 0 ; pip-au"]),
+    ({"run": "true\n" + _AUDIT + " && grep -q '^ok$' docker/a/requirements.txt"}, {}, {"docker/a/requirements.txt"},
+     []),
+    ({"run": "true\nz='`' e$(: '`' $((1)) | :)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `z='`' e$(: '`' $((1)) | :)xit 0`"]),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -1480,7 +1558,32 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "exit-split-by-a-case-whose-second-pattern-ends-in-an-escaped-paren",
         "exit-split-by-a-case-whose-second-pattern-is-a-quoted-paren",
         "set-n-split-by-a-case-whose-patterns-are-an-escaped-paren-and-an-escaped-pipe",
-        "or-true-in-a-comment-after-a-braced-parameter"])
+        "or-true-in-a-comment-after-a-braced-parameter",
+        "exit-split-by-a-case-whose-pattern-has-a-blank-before-its-paren",
+        "exit-split-by-a-case-whose-pattern-is-a-substitution",
+        "exit-split-by-a-case-whose-pattern-is-a-backquoted-command",
+        "exit-split-by-a-case-whose-pattern-ends-in-an-escaped-semicolon",
+        "exit-split-by-a-case-whose-pattern-is-an-escaped-pipe", "exit-glued-in-an-eval-string-and-split-by-ifs",
+        "exit-glued-to-a-default-holding-a-substitution-holding-a-comment",
+        "exit-after-a-hash-in-a-quote-nested-in-a-quoted-default",
+        "set-n-glued-to-an-alternative-holding-a-quoted-paren-the-pairing-starts-inside",
+        "set-n-glued-to-a-substitution-whose-quoted-parens-the-pairing-misreads", "eval-of-a-whole-substitution",
+        "a-dollar-ending-a-single-quoted-string-opens-no-ansi-c-string",
+        "a-case-after-a-substitution-closed-after-a-blank", "an-escaped-pipe-in-a-substitution",
+        "exit-split-by-a-quoted-at", "exit-split-by-a-quoted-at-beside-an-alternative",
+        "exit-split-by-a-quoted-braced-at", "exit-split-by-a-case-whose-first-branch-ends-in-two-backslashes",
+        "exit-split-by-a-quoted-array-at-of-two-empty-items",
+        "exit-after-a-quoted-hash-in-a-substitution-holding-a-subshell",
+        "exit-split-by-a-case-whose-pattern-is-a-substitution-holding-a-substitution",
+        "exit-glued-to-a-quoted-backquoted-command-after-a-single-quoted-backquote",
+        "exit-glued-to-a-substitution-whose-subshell-holds-a-quoted-backquoted-command",
+        "set-n-split-by-an-opened-case-pattern-of-an-escaped-paren-and-a-substitution-of-a-quoted-paren",
+        "set-n-split-by-an-opened-case-pattern-of-a-backquoted-paren-and-a-substitution-of-a-quoted-paren",
+        "exit-glued-to-a-quoted-replacement-of-a-single-quoted-brace-by-an-escaped-quote",
+        "exit-glued-to-a-quoted-alternative-holding-a-default-of-a-single-quoted-brace",
+        "exit-glued-to-a-quoted-alternative-holding-a-bare-brace-and-a-default-of-a-single-quoted-brace",
+        "a-dollar-ending-a-single-quoted-string-in-the-audits-list-opens-no-ansi-c-string",
+        "exit-glued-to-a-piped-substitution-holding-a-single-quoted-backquote-and-an-arithmetic-expansion"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -1619,48 +1722,72 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     substitution, escaped backquotes in a message (before a guard too) and an alternative in a message (`echo
     "build${CI:+ on ci}"`), and six parameters given an operator; and it refuses, although sound, `echo "$-"`, seven
     (more ways than `_CHOICES`), and `${x:+exit} 0` and `${x/a/exit} 0` with `x` unset, and a `$(` a single-quoted
-    message holds before a later line (`echo '$('`). Fold 15's mutants added, each the shortest line its fuzz found that
-    a mutant dropping one part of the reader passes, or gives one fault of two: a `set +e` built from a quoted word, an
-    empty `${@}` and a name (`"set"${@} ${x}+e`), glued across quotes to a case substitution (`"s"$(case a in
-    b);;esac)"e"t +e`), glued to a name and an escaped letter (`se$x\\t +e`) or to a positional parameter (`s$1et
-    +e$x`), from a replacement of `$?` (`${?/*/set} +e$x`) or from an unset element's default (`${a[0]-s}et +e$x`); a
-    `set -n` glued to `${*}` (`s${*}et -n$x`); under `shell: sh`, a `set -o noexec` from `$_`'s default (`${_:-set} -o
-    noexec$x`); a `+o` holding `e` across an empty replacement (`"set" +o${x//}ex"i"t`); and the option letters sent to
-    the background before an `exit` (`${-=set} $x&exit`): dash or bash runs each past the check's failure. Its later
-    mutants added, the same way: a `set +e` glued to an unset default and a name (`set${x-} +e$x`), from the default of
-    an empty `$!` (`${!-set} +e$x`) or an indirect one (`${!x-set} +e$z` after `x=y`), or after a quoted brace sent to
-    the background (`` '|`"{,(}'&${1-s}e${x+z}"t" +e ``, `` '|`"{,${?//\\}}}'&${1-s}${x-}e${x+}"t" +e ``); a `set -n`
-    from an unset element's assigned default (`${a[0]=set} -n$x`); a `set -o noexec` from an empty `$@`'s default
-    (`s${@-et} -o noexec$()`); and a `hash` built from a replacement whose pattern is quoted and an alternative holding
-    a quoted brace (`${-/'/'/ha}${x+'}'}sh`), after a `set +e`. Fold 15's fuzz then found a replacement's word split by
-    the rest of its parameter's value, which sh sets, for IFS, to a space, a tab and a newline (`i||se${IFS/#/t}-n` runs
-    `set -n`), so the check reads that word with a space after it, before it and on each side (`command${IFS/%/se}t -n`,
-    `command${IFS/[[:cntrl:]]/set}-n`), and of a special, positional, indirect or subscripted parameter too
-    (`se${*/#/t}-n` and `se${1/#/t}-n` after `set -- ' '`, `se${!x/#/t}-n` after `x=IFS`, `se${a[0]/#/t}-n` after
-    `a[0]=' '`); it passes six replacements without a word and refuses, although sound, three with one (more ways than
-    `_CHOICES`). Its every-sample fuzz of the mutants left found six that drop a refusal of a text dash or bash runs
-    past the check's failure, each now a row: a `set +e` from an empty `$*`'s default (`${*-set} +e$x`), from an unset
-    element's assigned default beside a default of `$0` (`${a[0]=set}$() +e ${0-s}et $t`) or from defaults before a
-    substitution holding a quoted paren (`${x-s}${y-${x}}et +e$('(')`, `${x-s}et +e$('+('${})`); and an `exit` after an
-    assigned default of `$#` sent to the background (`${#=set} $e&exit`). Fold 16 added (fold 15's reads): each gap an
-    expansion leaves glued to a word on both sides read as empty and as a space apart from the others
-    (`ex${x}it${IFS}0`, `se${x}t${IFS}-n`, `"ex"${x}"it"${IFS}0`, `ex${x}${y}it${z}${IFS}0`, and `a=\\"
+    message holds before a later line holding an `exit` (`echo '$('`). Fold 15's mutants added, each the shortest line
+    its fuzz found that a mutant dropping one part of the reader passes, or gives one fault of two: a `set +e` built
+    from a quoted word, an empty `${@}` and a name (`"set"${@} ${x}+e`), glued across quotes to a case substitution
+    (`"s"$(case a in b);;esac)"e"t +e`), glued to a name and an escaped letter (`se$x\\t +e`) or to a positional
+    parameter (`s$1et +e$x`), from a replacement of `$?` (`${?/*/set} +e$x`) or from an unset element's default
+    (`${a[0]-s}et +e$x`); a `set -n` glued to `${*}` (`s${*}et -n$x`); under `shell: sh`, a `set -o noexec` from `$_`'s
+    default (`${_:-set} -o noexec$x`); a `+o` holding `e` across an empty replacement (`"set" +o${x//}ex"i"t`); and the
+    option letters sent to the background before an `exit` (`${-=set} $x&exit`): dash or bash runs each past the check's
+    failure. Its later mutants added, the same way: a `set +e` glued to an unset default and a name (`set${x-} +e$x`),
+    from the default of an empty `$!` (`${!-set} +e$x`) or an indirect one (`${!x-set} +e$z` after `x=y`), or after a
+    quoted brace sent to the background (`` '|`"{,(}'&${1-s}e${x+z}"t" +e ``, `` '|`"{,${?//\\}}}'&${1-s}${x-}e${x+}"t"
+    +e ``); a `set -n` from an unset element's assigned default (`${a[0]=set} -n$x`); a `set -o noexec` from an empty
+    `$@`'s default (`s${@-et} -o noexec$()`); and a `hash` built from a replacement whose pattern is quoted and an
+    alternative holding a quoted brace (`${-/'/'/ha}${x+'}'}sh`), after a `set +e`. Fold 15's fuzz then found a
+    replacement's word split by the rest of its parameter's value, which sh sets, for IFS, to a space, a tab and a
+    newline (`i||se${IFS/#/t}-n` runs `set -n`), so the check reads that word with a space after it, before it and on
+    each side (`command${IFS/%/se}t -n`, `command${IFS/[[:cntrl:]]/set}-n`), and of a special, positional, indirect or
+    subscripted parameter too (`se${*/#/t}-n` and `se${1/#/t}-n` after `set -- ' '`, `se${!x/#/t}-n` after `x=IFS`,
+    `se${a[0]/#/t}-n` after `a[0]=' '`); it passes six replacements without a word and refuses, although sound, three
+    with one (more ways than `_CHOICES`). Its every-sample fuzz of the mutants left found six that drop a refusal of a
+    text dash or bash runs past the check's failure, each now a row: a `set +e` from an empty `$*`'s default (`${*-set}
+    +e$x`), from an unset element's assigned default beside a default of `$0` (`${a[0]=set}$() +e ${0-s}et $t`) or from
+    defaults before a substitution holding a quoted paren (`${x-s}${y-${x}}et +e$('(')`, `${x-s}et +e$('+('${})`); and
+    an `exit` after an assigned default of `$#` sent to the background (`${#=set} $e&exit`). Fold 16 added (fold 15's
+    reads): each gap an expansion leaves glued to a word on both sides read as empty and as a space apart from the
+    others (`ex${x}it${IFS}0`, `se${x}t${IFS}-n`, `"ex"${x}"it"${IFS}0`, `ex${x}${y}it${z}${IFS}0`, and `a=\\"
     ex${x}it${IFS}0`, whose escaped quote opens none), passing the gaps of a quoted word (`"ex${x}it${y}0"`: a quoted
-    expansion never splits it) and six glued gaps, and refusing, although sound, seven (`echo a${x}b…h`: more fills than
-    `_CHOICES`); a case pattern read with its quotes and escapes (`ex$(case a in ")") 1;; esac)it 0`, `ex$(case a in
-    \\)) 1;; esac)it 0`, `e$(case a in b\\)) :;; esac)xit 0`, `e$(case a in "b)") :;; esac)xit 0`); under `shell: sh`, a
-    `'` inside a double-quoted `${…}` read as a character (`ex"${x:+y'}"''it 0`); a bare `{` inside a `${…}` read as a
-    character (`ex${x+{}it 0`, `e${x#{}xit 0`), so that it refuses, although sound, `exit${x:+{}} 0`; a `#` inside a
-    `${…}`, which cuts no line (`e${x:+ #}xit 0`); and six texts a mutant dropping one part of the pairing passes
-    (`e$(echo ${x:+)})xit 0`, `e$(: $ ")")xit 0`, `e${x:+"\\"}"}xit 0`, `case a in b|a)exit 0;; esac`, `` e${x:+"}"`echo
-    }`}xit 0 ``, `` e$(: ")" `: #)`)xit 0 ``). Fold 16's mutant run added five texts a mutant passes: a `"` inside
-    single quotes, which opens no double quotes (`a='"' ex${x}it${IFS}0`); a case's second pattern read with its escape
-    and its quotes (`e$(case a in b|c\\)) :;; esac)xit 0`, `ex$(case a in b|")") 1;; esac)it 0`); a case whose patterns
-    are an escaped paren and an escaped pipe, which `commands` cuts (`se$(case a in (c\\)|\\|) 1;; esac)t -n`: refused
-    all the same); and, passed, a `# || true` after a closed `${…}`, which is a comment (`… --desc ${x} # || true`).
-    Each row's job runs on ubuntu-latest unless the row names another.
-    Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3; its
-    fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if,
+    expansion other than a `$@` splits no word) and six glued gaps, and refusing, although sound, seven (`echo
+    a${x}b…h`: more fills than `_CHOICES`); a case pattern read with its quotes and escapes (`ex$(case a in ")") 1;;
+    esac)it 0`, `ex$(case a in \\)) 1;; esac)it 0`, `e$(case a in b\\)) :;; esac)xit 0`, `e$(case a in "b)") :;;
+    esac)xit 0`); under `shell: sh`, a `'` inside a double-quoted `${…}` read as a character (`ex"${x:+y'}"''it 0`); a
+    bare `{` inside a `${…}` read as a character (`ex${x+{}it 0`, `e${x#{}xit 0`), so that it refuses, although sound,
+    `exit${x:+{}} 0`; a `#` inside a `${…}`, which cuts no line (`e${x:+ #}xit 0`); and six texts a mutant dropping one
+    part of the pairing passes (`e$(echo ${x:+)})xit 0`, `e$(: $ ")")xit 0`, `e${x:+"\\"}"}xit 0`, `case a in b|a)exit
+    0;; esac`, `` e${x:+"}"`echo }`}xit 0 ``, `` e$(: ")" `: #)`)xit 0 ``). Fold 16's mutant run added five texts a
+    mutant passes: a `"` inside single quotes, which opens no double quotes (`a='"' ex${x}it${IFS}0`); a case's second
+    pattern read with its escape and its quotes (`e$(case a in b|c\\)) :;; esac)xit 0`, `ex$(case a in b|")") 1;;
+    esac)it 0`); a case whose patterns are an escaped paren and an escaped pipe (`se$(case a in (c\\)|\\|) 1;; esac)t
+    -n`, which `commands` cut until fold 17: refused all the same); and, passed, a `# || true` after a closed `${…}`,
+    which is a comment (`… --desc ${x} # || true`). Fold 17 added (fold 16's reads): a case pattern with a blank before
+    its `)`, a substitution or a backquoted command as the pattern, and an escaped `;` or `|` in it (`e$(case a in b )
+    :;; esac)xit 0`, `e$(case a in $(echo b)) :;; esac)xit 0`, `` e$(case a in `echo b`) :;; esac)xit 0 ``, `e$(case a
+    in b\\;) :;; esac)xit 0`, `e$(case a in \\|) :;; esac)xit 0`); a `#` inside a substitution inside a `${…}`, which
+    opens a comment there (`e${x:-$(: #)}`, then `)}xit 0` on the next line), and one inside a quote nested in a quoted
+    default, which opens none (`echo "${x:-"a #b"}"; exit 0`); a gap inside double quotes in a command holding the word
+    `eval`, which reads the string again (`eval "ex${x}it${IFS}0"`); a `$@`'s gap, which splits a word inside double
+    quotes too (`"e${x}xit$@0"`, `exi${x:+foo}t"$@"0` and `"ex${x}it${@}0"`, each after `set -- '' ''`); and two of fold
+    15's read B texts, one whose pairing started inside a quote (`s${x+"("${x:+$""${x/a/'}'…}et -n`) and one whose
+    quoted parens it misread (`se$(: ${x/a/${x#${x:+)}…))t -n`). It passes a whole quoted substitution under `eval`
+    (`eval "$(ssh-agent -s)"`), a `$` that ends a single-quoted string, which opens no ANSI-C string (`grep -q '^ok$'
+    …`), a case after a substitution closed after a blank and an escaped pipe in a substitution; and it reads the audit
+    inside fold 8's comment in a quote nested in a `"$(…)"` as comment, no run (`x="$(echo "a"; # )"; pip-audit …; echo
+    "`, then `)"`: the coverage test fails such a step). Fold 17's mutant run added twelve texts a mutant passes, each
+    dead in the shell that runs the step: a `'` inside a quoted `${…}` beside an escaped quote, a nested default or a
+    bare `{` (`"exi${x/'}'/"\\""}"t 0`, `"e${x+${y-'}'}}"xit 0`, `"e${x+{${y-'}'}}"xit 0`); a case whose pattern is a
+    nested substitution, or one opened with `(` and made of an escaped or a backquoted paren and a substitution of a
+    quoted paren (`e$(case a in $(echo $(echo a))) :;; esac)xit 0`, `se$(case a in (c\\)$(echo ')')) :;; esac)t -n`, ``
+    se$(case a in (`echo )`$(echo ')')) :;; esac)t -n ``); a branch that ends in two backslashes (`e$(case a in b) :
+    \\\\;; a) :;; esac)xit 0`); a quoted `${a[@]}` of two empty items (`a[1]= a[2]=; "ex${x}it${a[@]}0"`); a
+    single-quoted backquote before a quoted backquoted command, before a subshell holding one, or before a piped
+    substitution holding one and an arithmetic expansion (`` z='`' e"`:`"xit 0 ``, `` z='`' e$( (: "`:`") )xit 0 ``, ``
+    z='`' e$(: '`' $((1)) | :)xit 0 ``); and a quoted `#` in a substitution holding a subshell (`x="$( (:); : " #" )";
+    exit 0`). It passes a `$` that ends a single-quoted string in the audit's own list. Each row's job runs on
+    ubuntu-latest unless the row names another.
+    Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3;
+    its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if,
     PA-quoted-hash-hides-or; fold 4's mutants: W58, Q2, H2; its read, S1: A-a; N1: E-a; N5: A-b, A-c, A-d; N6: A-f; fold
     5's read A, S1, S2, S5, N2, N4: A7, B7, F2, F3, H1 to H5, K7, K8; its read B, N8: UC1, RN8; fold 6's mutant W56; its
     read A, S2, S4, S5, S7, N3; its read B, S2 to S5, N4: H1 to H5, FA2; fold 7's read A, S1 to S5; its read B, S1, S2,
@@ -1674,7 +1801,8 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     X11o, X11q, X11r, X12r, X12s, X12v, X12w, X12x, X13d, X13f, X13h, X13j, X13l, X13n, X14z, X14A, X14B, X14C, CH1,
     CH2, CH5, CH7, X15F, X15J; fold 15's own: CH19 to CH28; fold 15's every-sample fuzz: X13e, X13g, X13k, X13s, X13t,
     X13u; fold 15's read A, S1 to S3; its read B, S1 to S4: F8c, X15D, XQ2, XQ4, XQ5, XQ6; fold 16's mutant run: FL6,
-    CP2, CP3, SD2)."""
+    CP2, CP3, SD2; fold 16's read A, S1 to S4, N1; its read B, S1; fold 17's mutant run: X15D, XQ7, CP2, EB1, CB4, CB5,
+    SP2, AT4, SG3, SG5, SO5, AC2, SS4)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults

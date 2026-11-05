@@ -253,8 +253,8 @@ _REPLACE_Q = re.compile(r"\$\{(?:[@*!#?$-]|\d+|!?[A-Za-z_]\w*(?:\[[^]{}]*\])?)/"
 _EXPANSION_Q = re.compile(r"\$\{(?:%s|\$(?![({])|[^}\\\"'`$])*\}"
                           r"|\$?\((?:%s|\$(?![({])|[^()\\\"'`$])*\)|`(?:[^`\\]|\\.)*`"
                           r"|\$(?:[A-Za-z_]\w*|\d|[@*!-])" % (_QPIECE, _QPIECE))
-_CASE_PIECE = r"""(?:%s|[^()\s;|\\"'])+""" % _QPIECE
-_CASE_PAT = re.compile(r"((?:\bin|;\s*;?&?)\s+)\(?((?!esac\b)%s(?:\s*\|\s*%s)*)\)" % (_CASE_PIECE, _CASE_PIECE))
+_CASE_PIECE = r"""(?:%s|\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`|[^()\s;|\\"'`])+""" % _QPIECE
+_CASE_PAT = re.compile(r"((?:\bin|;\s*;?&?)\s+)\(?((?!esac\b)%s(?:\s*\|\s*%s)*)\s*\)" % (_CASE_PIECE, _CASE_PIECE))
 
 
 def _decase(text):
@@ -269,6 +269,9 @@ def _decase(text):
 # both sides doubles the fills. A command it would read more ways is read as `exit`, which refuses it.
 _CHOICES = 64
 _GAP = chr(7)  # where `_choices` removed an expansion, read at the end as empty and as a space (`_fills`)
+_GAP_AT = chr(8)  # where it removed a `$@`-like expansion, which splits a word inside double quotes too
+_AT = re.compile(r"\$(?:@|\{!?(?:@|[A-Za-z_]\w*(?:\[@\]|@)))")  # `$@`, `${@…}`, `${!p@}`, `${a[@]…}`
+_EVAL = re.compile(r"(?:^|[\s;&|()`])eval(?=\s|$)")
 
 
 def _choices(command):
@@ -295,12 +298,62 @@ def _choices(command):
     `${…}` is a character, as sh pairs `${x+{}` at its first `}` (`ex${x+{}it 0`: read 151, S3). A command read more
     than `_CHOICES` ways, either time, is read as `exit`, so the ender refuses it."""
     first, out = _decase(_braced(command)), set()
-    for start in (first, first.replace("'", "")):
+    for start in (first, first.replace("'", ""), _scan_gaps(first)):
         got = _readings(start)
         if got is None:
             return ("exit",)
         out |= got
     return tuple(sorted(out))
+
+
+def _scan_gaps(text):
+    """`text` with each outermost `$(…)`, `${…}` and backquoted command, as a stack pairs them left to right (quotes
+    nest inside each; `_scan_open`), replaced by a gap; `text` itself if one is left open: a third reading for
+    `_choices`, which a quoted `(` or `}` the regex pairing starts inside cannot move (read 160)."""
+    spans, stack, k, start = [], [], 0, None
+    while k < len(text):
+        ch, top = text[k], (stack[-1] if stack else None)
+        opener, step = None, 1
+        if top == "'":
+            if ch == "'":
+                stack.pop()
+        elif ch == "\\":
+            step = 2
+        elif top == "`":
+            if ch == "`":
+                stack.pop()
+        elif ch == "$" and text[k + 1:k + 2] in ("{", "("):
+            opener, step = text[k + 1], 2
+        elif top == '"':
+            if ch == '"':
+                stack.pop()
+            elif ch == "`":
+                opener = "`"
+        elif ch == "'" and next((s for s in reversed(stack) if s in ('"', "(", "p")), None) == '"':
+            pass
+        elif ch in "'\"":
+            stack.append(ch)
+        elif ch == "`":
+            opener = "`"
+        elif ch == "}" and top == "{":
+            stack.pop()
+        elif ch == "(" and top in ("(", "p"):
+            stack.append("p")
+        elif ch == ")" and top in ("(", "p"):
+            stack.pop()
+        if opener:
+            if start is None:
+                start = k
+            stack.append(opener)
+        k += step
+        if start is not None and not any(s in ("(", "{", "`", "p") for s in stack):
+            spans.append((start, k))
+            start = None
+    if start is not None:
+        return text
+    for a, b in reversed(spans):
+        text = text[:a] + _GAP + text[b:]
+    return text
 
 
 def _readings(start):
@@ -317,7 +370,8 @@ def _readings(start):
                 out.update(_bare(f, sep, braces=False) for f in fills for sep in ("", " "))
                 continue
             word = _SPECIAL_Q.fullmatch(m.group(0))
-            later.update(text[:m.start()] + x + text[m.end():] for x in ([word.group(1)] if word else []) + [_GAP])
+            gap = _GAP_AT if _AT.match(m.group(0)) else _GAP
+            later.update(text[:m.start()] + x + text[m.end():] for x in ([word.group(1)] if word else []) + [gap])
             if word and word.group(1) and _REPLACE_Q.match(m.group(0)):
                 w, head, tail = word.group(1), text[:m.start()], text[m.end():]
                 later.update(head + x + tail for x in (w + _GAP, _GAP + w, _GAP + w + _GAP))
@@ -330,16 +384,22 @@ def _readings(start):
 def _fills(text):
     """{`text` with its gaps filled each way they can split a word}, or None past `_CHOICES` ways: every gap empty, and
     every gap a space, and each gap glued to a word on both sides (neither neighbour a blank or one of `;&|()<>`, and
-    not inside double quotes, where an expansion never splits a word) empty and a space in every combination, the
-    others all empty or all a space. A run of gaps is one: empty, or a space somewhere in it. One value for every gap
-    never reads `ex${x}it${IFS}0`, which runs `exit 0` where x is unset, nor `"ex"${x}"it"${IFS}0` (read 150, S1)."""
-    text = re.sub(_GAP + "+", _GAP, text)
-    parts, quoted, q, k = text.split(_GAP), [], None, 0
+    not inside double quotes, where an expansion other than a `$@`'s never splits a word: `"e${x}xit$@0"` runs `exit
+    0` after `set -- '' ''`, read 161, S1) empty and a space in every combination, the others all empty or all a space.
+    A run of gaps is one: empty, or a space somewhere in it, and a `$@`'s if it holds one. One value for every gap
+    never reads `ex${x}it${IFS}0`, which runs `exit 0` where x is unset, nor `"ex"${x}"it"${IFS}0` (read 150, S1). A
+    command holding the word `eval` with a gap inside double quotes, but for one that is a whole quoted word, is read
+    past `_CHOICES` ways: eval reads the string again, so the gap can be a space or a newline (`eval
+    "ex${x}it${IFS}0"`, read 160, S3)."""
+    text = re.sub("[" + _GAP + _GAP_AT + "]+", lambda r: _GAP_AT if _GAP_AT in r.group(0) else _GAP, text)
+    parts, quoted, q, k = re.split("[" + _GAP + _GAP_AT + "]", text), [], None, 0
     while k < len(text):  # whether each gap sits inside double quotes; a backslash before a gap leaves it a gap
         ch = text[k]
-        if ch == _GAP:
-            quoted.append(q == '"')
-        elif ch == "\\" and q != "'" and text[k + 1:k + 2] != _GAP:
+        if ch in (_GAP, _GAP_AT):
+            quoted.append(q == '"' and ch == _GAP)
+            if q == '"' and _EVAL.search(text) and not (text[k - 1:k] == '"' and text[k + 1:k + 2] == '"'):
+                return None
+        elif ch == "\\" and q != "'" and text[k + 1:k + 2] not in (_GAP, _GAP_AT):
             k += 1
         elif ch == '"' and q != "'":
             q = None if q else '"'
@@ -399,7 +459,44 @@ def _open_subst(text):
     quoted, prev = _decase(text), None
     while prev != quoted:
         prev, quoted = quoted, _EXPANSION_Q.sub("", quoted)
-    return bool(re.search(r"\$[({]|`", blind) or re.search(r"\$[({]|`", re.sub(r"\\.", "", quoted, flags=re.S)))
+    return bool(re.search(r"\$[({]|`", blind) or re.search(r"\$[({]|`", re.sub(r"\\.", "", quoted, flags=re.S))
+                or _scan_open(_decase(text)))
+
+
+def _scan_open(text):
+    """True if `text` leaves a `$(…)`, `${…}` or backquote open, read left to right with a stack as sh nests them:
+    quotes nest inside each, a `(` inside a `$(…)` is paired, a `}` or `)` a quote holds closes nothing (read 160)."""
+    stack, k = [], 0
+    while k < len(text):
+        ch, top = text[k], (stack[-1] if stack else None)
+        if top == "'":
+            if ch == "'":
+                stack.pop()
+        elif ch == "\\":
+            k += 1
+        elif top == "`":
+            if ch == "`":
+                stack.pop()
+        elif ch == "$" and text[k + 1:k + 2] in ("{", "("):
+            stack.append(text[k + 1])
+            k += 1
+        elif top == '"':
+            if ch == '"':
+                stack.pop()
+            elif ch == "`":
+                stack.append(ch)
+        elif ch == "'" and next((s for s in reversed(stack) if s in ('"', "(", "p")), None) == '"':
+            pass
+        elif ch in "'\"`":
+            stack.append(ch)
+        elif ch == "}" and top == "{":
+            stack.pop()
+        elif ch == "(" and top in ("(", "p"):
+            stack.append("p")
+        elif ch == ")" and top in ("(", "p"):
+            stack.pop()
+        k += 1
+    return any(s in ("(", "{", "`") for s in stack)
 
 
 def _spans(cmds):
@@ -409,7 +506,8 @@ def _spans(cmds):
     for k in range(len(cmds)):
         text, m = cmds[k][0], k
         while _open_subst(text) and m + 1 < len(cmds):
-            text, m = text + " " + cmds[m][2] + " " + cmds[m + 1][0], m + 1
+            odd = (len(text) - len(text.rstrip("\\"))) % 2
+            text, m = text + ("" if odd else " ") + cmds[m][2] + ("" if odd else " ") + cmds[m + 1][0], m + 1
         out.append(text)
     return out
 
@@ -466,10 +564,30 @@ def _without_quotes(text):
     return text
 
 
+def _ansi_c(text):
+    """True if `text` holds a `$'` that is not inside a single-quoted string nor escaped: `grep -q '^ok$' f` opens no
+    ANSI-C string (read 160); one inside double quotes still counts."""
+    q, k = None, 0
+    while k < len(text):
+        ch = text[k]
+        if q == "'":
+            q = None if ch == "'" else q
+        elif ch == "\\":
+            k += 1
+        elif ch == "$" and text[k + 1:k + 2] == "'":
+            return True
+        elif q == '"':
+            q = None if ch == '"' else q
+        elif ch in "'\"":
+            q = ch
+        k += 1
+    return False
+
+
 def _left_open(text):
     """What `text` leaves open once each quoted string, then each construct closed in it, is removed: 'text',
     'compound' or ''."""
-    if "$'" in text:
+    if _ansi_c(text):
         return "text"
     text, prev = _without_quotes(text), None
     while prev != text:
@@ -594,7 +712,7 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
     end = i
     while end + 1 < len(cmds) and cmds[end][2] in ("&&", "|"):
         end += 1
-    faults, open_ = [], "text" if any("$'" in c for c, _, _ in cmds[i:end + 1]) else opened(cmds, i)
+    faults, open_ = [], "text" if any(_ansi_c(c) for c, _, _ in cmds[i:end + 1]) else opened(cmds, i)
     if open_ == "text":
         faults.append("%s runs inside a `$(…)`, backquotes or a quoted string, or after an ANSI-C `$'…'` or in a "
                       "list holding one (its failure would not fail the %s): %s" % (what, unit, command))
