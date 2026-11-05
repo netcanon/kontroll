@@ -88,7 +88,9 @@ a glob character, `{` or `(` (`echo "set up (once)"`), an ANSI-C `$'…'` before
 `sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo
 $(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space inside quotes (`echo "see
 #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two
-outputs, a trailing comment on a RUN's last line, and a digest ARG redeclared without its value in a later stage."""
+outputs, a trailing comment on a RUN's last line, a digest ARG redeclared without its value in a later stage, and an
+unquoted `case` followed by a blank inside a `$(…)` that opens no case (`$(echo case x)`: these checks refuse a case
+pattern they cannot read, whatever it holds, and read such a word as a case whose `esac` has not come)."""
 import json
 import os
 import re
@@ -1375,6 +1377,9 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
      []),
     ("true; \"e${x:+'$( echo '}' \" ; : \" ; : )'}\"xit 0; " + _INSTALL + " && python3 -m pip check",
      ["pip install shares the RUN with `\"e${x:+'$( echo '}' \" ; : \" ; : )'}\"xit 0`", "pip check shares the RUN with `\"e${x:+'$( echo '}' \" ; : \" ; : )'}\"xit 0`"]),
+    ("true; se$(case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(case a in $(echo ')')) 1 ; esac)t -n`"]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1482,7 +1487,8 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "exit-split-by-a-quoted-at-beside-an-alternative", "exit-split-by-a-quoted-braced-at",
         "exit-glued-to-a-quoted-alternative-holding-a-single-quote-before-a-backquoted-command",
         "a-message-holding-a-quoted-strip-the-scan-leaves-open",
-        "exit-glued-to-a-quoted-alternative-whose-single-quote-opens-a-substitution-cut-by-a-semicolon"])
+        "exit-glued-to-a-quoted-alternative-whose-single-quote-opens-a-substitution-cut-by-a-semicolon",
+        "set-n-split-by-a-case-whose-pattern-is-a-substitution-holding-a-quoted-paren"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1577,18 +1583,21 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     mutant passes, each dead under dash, which reads a `'` inside a quoted `${…}` as a character: one before a
     backquoted command, after a single-quoted backquote (`` z='`' e"${x+'}`:`"xit 0 ``), and one that opens a
     substitution a `;` cuts (`"e${x:+'$( echo '}' " ; : " ; : )'}"xit 0`); and it passes a message whose quoted strip
-    the scan leaves open (`` z='`' echo ex"`:`"it "${x#"\\"}"'"'"'"}" ``). Guards a pin check that a common install
-    shape walks past, and a `pip check` that cannot fail the build — "make the cleanup tolerant" with a trailing `||
-    true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4; its fold-3 read, S2, N1, N2, N6:
-    Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2, S4, S5, N1, N2, N6: G-a, C-g, O-a
-    to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to O14, O17, S5, C4; fold 5's read A,
-    S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7, D1, D2, D4, D8, E1, E3, F1, G1, G2,
-    I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants: Q7, QX1, QX2; its read A, S3, S4, S5,
-    S7; its read B, S3, N1, N4: R1, SK1, SK2, BK1; fold 7's read A, S2; fold 10's read B, S1; fold 11's read A, S2; its
-    read B, S1; fold 12's read A: r01, r04, r07, r09 to r11; its read B, S2; fold 13's mutant run: X13o, X13p; its read
-    A, S1 to S3: r01 to r16; its read B, S1, S2; fold 14's read A, S2 to S4; its read B, S1, N6; fold 15's fuzz; fold
-    15's read A, S1 to S3, N2; its read B, S1 to S3: F8c, X15D, XQ2, XQ4, XQ5, XQ6; fold 16's mutant run: FL6, CP2, CP3;
-    fold 16's read A, B1, S5, N3; its read B, S1; fold 17's mutant run: SG2, SG7, SO4)."""
+    the scan leaves open (`` z='`' echo ex"`:`"it "${x#"\\"}"'"'"'"}" ``). Fold 18 added (fold 17's settle read): a
+    case whose pattern these checks cannot read, which leaves its `)` to close the substitution before the `esac`, so
+    sh runs `set -n` (`se$(case a in $(echo ')')) 1;; esac)t -n`): refused whatever the pattern holds. Guards a pin
+    check that a common install shape walks past, and a `pip check` that cannot fail the build — "make the cleanup
+    tolerant" with a trailing `|| true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4;
+    its fold-3 read, S2, N1, N2, N6: Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2,
+    S4, S5, N1, N2, N6: G-a, C-g, O-a to O-d, O-i, E-a to E-d, N-a to N-j, OR-a, OR-b, Z20, Z24, Z25, Z32, Z33, O10 to
+    O14, O17, S5, C4; fold 5's read A, S1 to S4, S6, N1 to N4, N7: A1, A3 to A6, B1, B3, B4, B6, B8, C1 to C4, C6, C7,
+    D1, D2, D4, D8, E1, E3, F1, G1, G2, I1, K1, K4; its read B, N1, N3, N8: ZB2, ZB3, ZB4, QX1, QX2; fold 6's mutants:
+    Q7, QX1, QX2; its read A, S3, S4, S5, S7; its read B, S3, N1, N4: R1, SK1, SK2, BK1; fold 7's read A, S2; fold
+    10's read B, S1; fold 11's read A, S2; its read B, S1; fold 12's read A: r01, r04, r07, r09 to r11; its read B,
+    S2; fold 13's mutant run: X13o, X13p; its read A, S1 to S3: r01 to r16; its read B, S1, S2; fold 14's read A, S2
+    to S4; its read B, S1, N6; fold 15's fuzz; fold 15's read A, S1 to S3, N2; its read B, S1 to S3: F8c, X15D, XQ2,
+    XQ4, XQ5, XQ6; fold 16's mutant run: FL6, CP2, CP3; fold 16's read A, B1, S5, N3; its read B, S1; fold 17's mutant
+    run: SG2, SG7, SO4; fold 17's settle read, the case pattern it cannot read)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 

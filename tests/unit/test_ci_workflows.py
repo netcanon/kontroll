@@ -1319,6 +1319,35 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
      []),
     ({"run": "true\nz='`' e$(: '`' $((1)) | :)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `z='`' e$(: '`' $((1)) | :)xit 0`"]),
+    ({"run": "true\ne$(case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(case a in ${x:-)}) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in ${x:-)}) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(case a in `: \\`:\\``) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in `: \\`:\\``) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(case a in $( ( (echo b) ) )) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in $( ( (echo b) ) )) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(: esac; (case a in $(echo ')')) :;; esac))xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: esac ; (case a in $(echo ')')) : ; esac))xit 0`"]),
+    ({"run": "true\ne$(case a in $(echo ')')) echo 'a esac b';; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in $(echo ')')) echo 'a esac b' ; esac)xit 0`"]),
+    ({"run": "true\necho \"$(echo 'a case b')\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     []),
+    ({"run": "true\n" + _AUDIT + "\necho $(echo case)"}, {}, {"docker/a/requirements.txt"},
+     []),
+    ({"run": "true\ne$(case a in (\"a b\" | ${x:-)} ) echo x;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(case a in (\"a b\" | ${x:-)} ) echo x ; esac)xit 0`"]),
+    ({"run": "true\n" + _AUDIT + "\necho \"$(case \"$1\" in a) echo x;; b) echo y;; esac)\""},
+     {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\n" + _AUDIT + "\necho \"$(case \"$1\" in a | \"b c\") echo x;; esac)\""},
+     {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\n" + _AUDIT + "\necho \"$(case \"$1\" in a ) echo x;; esac)\""},
+     {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\n" + _AUDIT + "\necho \"$(case \"$1\" in $(echo $(echo a))) echo x;; esac)\""},
+     {}, {"docker/a/requirements.txt"}, []),
+    ({"run": "true\n" + _AUDIT + "\necho \"$(case \"$1\" in `echo a`) echo x;; esac)\""},
+     {}, {"docker/a/requirements.txt"}, []),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -1583,7 +1612,21 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "exit-glued-to-a-quoted-alternative-holding-a-default-of-a-single-quoted-brace",
         "exit-glued-to-a-quoted-alternative-holding-a-bare-brace-and-a-default-of-a-single-quoted-brace",
         "a-dollar-ending-a-single-quoted-string-in-the-audits-list-opens-no-ansi-c-string",
-        "exit-glued-to-a-piped-substitution-holding-a-single-quoted-backquote-and-an-arithmetic-expansion"])
+        "exit-glued-to-a-piped-substitution-holding-a-single-quoted-backquote-and-an-arithmetic-expansion",
+        "exit-split-by-a-case-whose-pattern-is-a-substitution-holding-a-quoted-paren",
+        "exit-split-by-a-case-whose-pattern-is-a-default-holding-a-paren",
+        "exit-split-by-a-case-whose-pattern-is-a-backquoted-command-holding-an-escaped-backquote",
+        "exit-split-by-a-case-whose-pattern-is-a-substitution-holding-two-nested-subshells",
+        "exit-split-by-a-case-in-a-subshell-after-an-esac-word",
+        "exit-split-by-a-case-whose-branch-quotes-an-esac",
+        "a-quoted-case-word-in-a-substitution",
+        "a-case-word-with-no-blank-after-it-in-a-substitution-after-the-audit",
+        "exit-split-by-a-case-whose-quoted-alternative-sits-beside-a-default-holding-a-paren",
+        "a-case-of-two-branches-in-a-substitution-after-the-audit",
+        "a-case-alternative-quoting-a-blank-in-a-substitution-after-the-audit",
+        "a-case-pattern-with-a-blank-before-its-paren-in-a-substitution-after-the-audit",
+        "a-case-pattern-of-a-nested-substitution-in-a-substitution-after-the-audit",
+        "a-case-pattern-of-a-backquoted-command-in-a-substitution-after-the-audit"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -1784,7 +1827,21 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     single-quoted backquote before a quoted backquoted command, before a subshell holding one, or before a piped
     substitution holding one and an arithmetic expansion (`` z='`' e"`:`"xit 0 ``, `` z='`' e$( (: "`:`") )xit 0 ``, ``
     z='`' e$(: '`' $((1)) | :)xit 0 ``); and a quoted `#` in a substitution holding a subshell (`x="$( (:); : " #" )";
-    exit 0`). It passes a `$` that ends a single-quoted string in the audit's own list. Each row's job runs on
+    exit 0`). It passes a `$` that ends a single-quoted string in the audit's own list. Fold 18 added (fold 17's
+    settle read): a case whose pattern these checks cannot read, which leaves its `)` to close the substitution before
+    the `esac`, so sh runs `exit 0`: refused whatever the pattern holds, a substitution holding a quoted paren, a
+    default holding a paren, a backquoted command holding an escaped backquote, or a substitution nesting two
+    subshells (`e$(case a in $(echo ')')) :;; esac)xit 0`, `e$(case a in ${x:-)}) :;; esac)xit 0`,
+    `e$(case a in $( ( (echo b) ) )) :;; esac)xit 0`), also in a subshell after an `esac` word
+    (`e$(: esac; (case a in $(echo ')')) :;; esac))xit 0`); the step's commands are joined up to the `esac` only, so
+    the audit stays its own, and a quoted word does not end the join
+    (`e$(case a in $(echo ')')) echo 'a esac b';; esac)xit 0`). It passes a quoted `case` word in a substitution
+    (`echo "$(echo 'a case b')"`) and, after the audit, a `case` with no blank after it (`echo $(echo case)`). Fold
+    18's mutant run added, after the audit, five sound cases in a substitution, which fold 18's rule would refuse if
+    the checks lost a pattern's shape: two branches, an alternative quoting a blank, a blank before the `)`, and a
+    nested substitution or a backquoted command as the pattern (`echo "$(case "$1" in a) echo x;; b) echo y;; esac)"`,
+    `echo "$(case "$1" in a | "b c") echo x;; esac)"`); and a case whose quoted alternative sits beside a default
+    holding a paren, named whole (`e$(case a in ("a b" | ${x:-)} ) echo x;; esac)xit 0`). Each row's job runs on
     ubuntu-latest unless the row names another.
     Guards a check that counts a dead audit as coverage (T29's fold-2 read, S1: PA1, PA2, PA4, PA5, Y7, Y8; N3;
     its fold-3 read, S2: Z7; N2 and N5: PA-trap, PA-heredoc-body, PA-windows-default-shell, PA-set+e-in-if,
@@ -1801,8 +1858,9 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     X11o, X11q, X11r, X12r, X12s, X12v, X12w, X12x, X13d, X13f, X13h, X13j, X13l, X13n, X14z, X14A, X14B, X14C, CH1,
     CH2, CH5, CH7, X15F, X15J; fold 15's own: CH19 to CH28; fold 15's every-sample fuzz: X13e, X13g, X13k, X13s, X13t,
     X13u; fold 15's read A, S1 to S3; its read B, S1 to S4: F8c, X15D, XQ2, XQ4, XQ5, XQ6; fold 16's mutant run: FL6,
-    CP2, CP3, SD2; fold 16's read A, S1 to S4, N1; its read B, S1; fold 17's mutant run: X15D, XQ7, CP2, EB1, CB4, CB5,
-    SP2, AT4, SG3, SG5, SO5, AC2, SS4)."""
+    CP2, CP3, SD2; fold 16's read A, S1 to S4, N1; its read B, S1; fold 17's mutant run: X15D, XQ7, CP2, EB1, CB4,
+    CB5, SP2, AT4, SG3, SG5, SO5, AC2, SS4; fold 17's settle read, the case pattern it cannot read; fold 18's mutant
+    run: X15d, X15e, X15h, CP1, CP3, CB1 to CB4, CU15)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults

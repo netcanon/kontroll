@@ -343,7 +343,9 @@ a replacement's word also read beside a space (`se${IFS/#/t}-n`), each gap an ex
 to a word on both sides read as empty and as a space apart from the others (`ex${x}it${IFS}0`), and
 a `$-` anywhere read as the option letters it holds (`set -e; $-xit 0`); expansions are paired as sh
 pairs them, so a `)` or `}` that a quote, an escape, a case pattern (its words quoted or escaped
-too) or an inner substitution holds closes nothing (`e${x:+$(echo })}xit 0`), a bare `{` inside a
+too) or an inner substitution holds closes nothing (`e${x:+$(echo })}xit 0`), a case pattern it
+cannot read refuses the command whatever the pattern holds (`e$(case a in $(echo ')')) :;; esac)xit
+0`: the readers fail closed), a bare `{` inside a
 `${…}` is a character, and a `'` inside a double-quoted `${…}` is read both as a quote and as a
 character (POSIX sh reads it as one); a command that opens an expansion `commands()` cut at an
 operator inside it is read with the pieces cut from it (`exit$(:|:) 0`); a brace list it cannot read

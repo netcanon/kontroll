@@ -245,7 +245,8 @@ def _bare(command, sep="", braces=True):
 # there, as `_plain` removes a `$1` first); `_CASE_PAT`: a case pattern's `)` (`in b)`, `;; b)`, `in (b|c)`), its words
 # read quote-aware (`_CASE_PIECE`: `in b\))`, `in ")")`: read 150, S2; read 151, S2), which closes nothing, and one
 # after a lone `;`, as `commands` drops the empty command between the two of a `;;` and `_spans` rejoins the rest with
-# one (`set$(case a in b) +x;; c) +x;; esac) -n`; stricter only elsewhere).
+# one (`set$(case a in b) +x;; c) +x;; esac) -n`; stricter only elsewhere). A pattern it cannot read (`$(echo ')')`,
+# `${x:-)}`) keeps its `)`, which `_case_unread` finds (fold 17's settle read).
 _QPIECE = r"""\\.|"(?:[^"\\]|\\.)*"|'[^']*'"""
 _SPECIAL_Q = re.compile(r"\$\{(?:[@*!#?$-]|\d+|!?[A-Za-z_]\w*(?:\[[^]{}]*\])?)(?::?[-+=]|/[/#%%]?(?:%s|[^/{}\\\"'])*/)"
                         r"((?:%s|[^{}\\\"'])*)\}" % (_QPIECE, _QPIECE))
@@ -260,8 +261,60 @@ _CASE_PAT = re.compile(r"((?:\bin|;\s*;?&?)\s+)\(?((?!esac\b)%s(?:\s*\|\s*%s)*)\
 def _decase(text):
     """`text` with each case pattern's closing `)` removed (`_CASE_PAT`; `esac)` is kept, as it closes the `$(…)`
     around it), where `text` holds a `case`: the pattern's `)` closes no `$(…)`, so `exit$(case a in b) 1;; esac) 0`
-    is one expansion glued to `exit` (read 140, S4)."""
+    is one expansion glued to `exit` (read 140, S4). A pattern `_CASE_PIECE` cannot read keeps its `)`
+    (`$(echo ')')`, `${x:-)}`); `_case_unread` finds it, and the readers fail closed (fold 17's settle read)."""
     return _CASE_PAT.sub(r"\1\2 ", text) if re.search(r"\bcase\s", text) else text
+
+
+_CASE_WORD = re.compile(r"(?<![^\s;&|(`])case(?=\s)")
+_ESAC_WORD = re.compile(r"(?<![^\s;&|(`])esac(?=[\s;&|)`]|$)")
+
+
+def _case_unread(text):
+    """True if `text` (as `_decase` leaves it) holds a case pattern `_decase` did not read: its `)` is left, and closes
+    the `$(…)` or the paren around the case before the `esac`, so every reading ends the substitution there and glues
+    nothing (`e$(case a in $(echo ')')) :;; esac)xit 0` runs `exit 0`; so do a pattern `${x:-)}`, one in backquotes
+    holding an escaped backquote, and one a `$(…)` nesting two parens: the settle read of fold 17). Read with
+    `_scan_open`'s stack, each paren's start kept: a `$(…)`, or a paren inside one, whose text holds more unquoted
+    `case` words than `esac` ones closed early. It fails closed: `_open_subst` reads such a text as open until the
+    case's `esac` is joined (so `_spans` joins the commands up to it, and the audit after it stays its own command) and
+    `_choices` reads it as `exit`, so a pattern `_CASE_PIECE` cannot read is refused, whatever it holds. Refused
+    although sound: an unquoted `case` word followed by a blank inside a `$(…)` that opens no case (`$(echo case x)`),
+    after the check too (`$(echo case)` is passed there, as no blank follows the word; before it, `_left_open`
+    refuses a `$(…)` holding any `case` word, as it did before)."""
+    stack, k = [], 0
+    while k < len(text):
+        ch, top = text[k], (stack[-1][0] if stack else None)
+        if top == "'":
+            if ch == "'":
+                stack.pop()
+        elif ch == "\\":
+            k += 1
+        elif top == "`":
+            if ch == "`":
+                stack.pop()
+        elif ch == "$" and text[k + 1:k + 2] in ("{", "("):
+            stack.append((text[k + 1], k))
+            k += 1
+        elif top == '"':
+            if ch == '"':
+                stack.pop()
+            elif ch == "`":
+                stack.append((ch, k))
+        elif ch == "'" and next((s for s, _ in reversed(stack) if s in ('"', "(", "p")), None) == '"':
+            pass
+        elif ch in "'\"`":
+            stack.append((ch, k))
+        elif ch == "}" and top == "{":
+            stack.pop()
+        elif ch == "(" and top in ("(", "p"):
+            stack.append(("p", k))
+        elif ch == ")" and top in ("(", "p"):
+            inner = _without_quotes(text[stack.pop()[1]:k])
+            if len(_CASE_WORD.findall(inner)) > len(_ESAC_WORD.findall(inner)):
+                return True
+        k += 1
+    return False
 
 
 # The most readings `_choices` makes of one command, and the most ways `_fills` fills one text's gaps: each parameter
@@ -296,8 +349,11 @@ def _choices(command):
     every `'` removed: POSIX sh reads a `'` inside a double-quoted `${…}` as a character, so `ex"${x:+y'}"''it 0` runs
     `exit 0` where x is unset, and the pairing reads that `'` as opening a quote (read 150, S3). A bare `{` inside a
     `${…}` is a character, as sh pairs `${x+{}` at its first `}` (`ex${x+{}it 0`: read 151, S3). A command read more
-    than `_CHOICES` ways, either time, is read as `exit`, so the ender refuses it."""
+    than `_CHOICES` ways, either time, is read as `exit`, so the ender refuses it; so is one holding a case pattern
+    `_decase` cannot read (`_case_unread`: `e$(case a in $(echo ')')) :;; esac)xit 0`, fold 17's settle read)."""
     first, out = _decase(_braced(command)), set()
+    if _case_unread(first):
+        return ("exit",)
     for start in (first, first.replace("'", ""), _scan_gaps(first)):
         got = _readings(start)
         if got is None:
@@ -452,15 +508,19 @@ def _open_subst(text):
     \\`x\\`"`, read 140, N4), and quote-aware (`_EXPANSION_Q`), a case pattern's `)` removed first (`_decase`), so a `)`
     or `}` a quote, an escape or a case pattern holds closes nothing (`exit$(echo ")" ; :) 0`, `exit$(case a in b) 1;;
     esac) 0`: read 140, S4; `ex$(case a in \\)) 1;; esac)it 0`: read 150, S2). Reading it both ways joins more of the
-    commands `commands` cut, never fewer, so a span that either reading leaves open is read whole."""
+    commands `commands` cut, never fewer, so a span that either reading leaves open is read whole. And True while a
+    case pattern `_decase` cannot read has closed the `$(…)` around it early (`_case_unread`) and the text holds more
+    unquoted `case` words than `esac` ones, so the commands are joined up to the case's `esac` and no further (fold
+    17's settle read)."""
     blind, prev = re.sub(r"\\.", "", text, flags=re.S), None
     while prev != blind:
         prev, blind = blind, re.sub(r"\$\{[^{}]*\}|\$?\([^()]*\)|`(?:[^`\\]|\\.)*`", "", blind)
-    quoted, prev = _decase(text), None
+    quoted, prev, bare = _decase(text), None, _without_quotes(_decase(text))
     while prev != quoted:
         prev, quoted = quoted, _EXPANSION_Q.sub("", quoted)
     return bool(re.search(r"\$[({]|`", blind) or re.search(r"\$[({]|`", re.sub(r"\\.", "", quoted, flags=re.S))
-                or _scan_open(_decase(text)))
+                or _scan_open(_decase(text))
+                or _case_unread(_decase(text)) and len(_CASE_WORD.findall(bare)) > len(_ESAC_WORD.findall(bare)))
 
 
 def _scan_open(text):

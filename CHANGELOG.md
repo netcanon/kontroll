@@ -62,7 +62,8 @@ were built from was not.
   word beside the space the rest of its parameter's value can hold, `ex${IFS/#/it}0`, each gap an expansion leaves glued
   to a word on both sides read as empty and as a space apart from the others, `ex${x}it${IFS}0`, a `)` or `}` that a
   quote, an escape, a case pattern, quoted or escaped itself, or an inner substitution holds closing nothing,
-  `e${x:+$(echo })}xit 0`, `ex$(case a in ")") 1;; esac)it 0`, a bare `{` inside a `${…}` read as a character,
+  `e${x:+$(echo })}xit 0`, `ex$(case a in ")") 1;; esac)it 0`, a case pattern the check cannot read refusing the
+  command whatever it holds, `e$(case a in $(echo ')')) :;; esac)xit 0`, a bare `{` inside a `${…}` read as a character,
   `ex${x+{}it 0`, and a `'` inside a double-quoted `${…}` read as POSIX sh reads it, `ex"${x:+y'}"''it 0`; and any `$-`,
   whose option letters can spell `exit` or `set`, `set -e; $-xit 0`), or a brace list the check cannot read (an item
   holding a nested substitution or parameter, or one an operator inside a quote or a substitution cuts) keeps from
