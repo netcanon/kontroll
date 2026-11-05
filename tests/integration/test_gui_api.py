@@ -218,11 +218,12 @@ def test_an_http_error_raised_while_the_page_renders_forbids_script(client, monk
 @pytest.mark.parametrize("mimetype", ["application/json", "text/plain"])
 def test_a_body_that_is_not_a_page_gets_no_nonce_whatever_g_holds(mimetype):
     """The hook alone, on a JSON and on a text body, with a nonce left on `g`: each answers `script-src 'none'`, not
-    `no-store`. Guards the mimetype check, which no route decides today: every error a handler sees reaches
-    `_unhandled`, which drops the nonce first, so the error tests pass without it (Flask hands an `abort(response)` and
-    a routing redirect back with no handler: raised during the render, those keep the nonce on a body that prints none,
-    and no template expression here can raise them). It stays the guard for a render whose answer is not a page (a
-    template rendered into a JSON or text body), which would otherwise hand that body a nonce it has no script for."""
+    `no-store`. Guards the mimetype check, which no route decides today: the two designed refusals (C22) answer JSON,
+    and every other error a handler sees reaches `_unhandled`, which drops the nonce first, so the error tests pass
+    without it (Flask hands an `abort(response)` and a routing redirect back with no handler: raised during the
+    render, those keep the nonce on a body that prints none, and no template expression here can raise them). It stays
+    the guard for a render whose answer is not a page (a template rendered into a JSON or text body), which would
+    otherwise hand that body a nonce it has no script for."""
     with gui.app.test_request_context("/"):
         gui.g.csp_nonce = "n" * 24
         resp = gui._security_headers(gui.app.response_class("{}", mimetype=mimetype))

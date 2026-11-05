@@ -1758,26 +1758,27 @@ literal tag name; on a request that is not a direct `fetch()`, and on a request 
 unencoded except the few names pinned to the one place their value comes from; and on code the script scan does not
 read (a second script element, the script element opened with anything but the nonce tag, any handler attribute or
 `javascript:` URL in the static markup or in a tag of the literal markup the script writes, read as the joined
-literals spell it and as HTML reads a tag, a template expression in the static markup other than that nonce or one in
-the script that is not `| tojson`, a hidden line-break or display-reordering character). It proves
-it can fail by planting each shape a review found into the real template, and it pins the helpers by their exact
-definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not
+literals spell it, a quote opening a value only right after `=`, a template expression in the static markup other than
+that nonce or one in the script that is not `| tojson`, a hidden line-break or display-reordering character). It
+proves it can fail by planting each shape a review found into the real template, and it pins the helpers by their
+exact definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not
 close is refused; a span it misreads as a string or a regex, a property reached through a computed name (`x[k] = v`),
 an escape sequence in the static or the literal markup (a JS escape or an HTML character reference, which it does not
-decode), and a tab or a line break inside a `javascript:` scheme are beyond it. Those are shapes written on purpose —
-the gate stops the sink coming back through an ordinary edit, and the paint and the browser proof are what answer the
-rest.
+decode), a tab or a line break inside a `javascript:` scheme, and a handler written after an `=` HTML does not read as
+a value's (one inside an unquoted value, a second `=`, one that starts a name) or a space HTML does not count (a
+no-break space, a vertical tab) before a quote are beyond it. Those are shapes written on purpose — the gate stops the
+sink coming back through an ordinary edit, and the paint and the browser proof are what answer the rest.
 [tests/e2e/test_paint_rule.py](tests/e2e/test_paint_rule.py) is the browser proof for the Pending, Index,
 Settings, Homepage and Discovery panels and the capability, reconfigure, secret and keygen dialogs: each is served
 a payload in the fields it paints and must show it as text, create no element and run nothing. There is no list to
 extend — a new value on the page is either a literal or painted as text. The policy's own checks:
-[tests/integration/test_gui_api.py](tests/integration/test_gui_api.py) proves on real responses that the page's
-header and its script tag carry the same nonce, a new one each time and at least 128 bits of base64url, that the
-page is `no-store`, that the policy is exactly its four directives, each named once, and that every other response
-forbids script (an error raised while the page renders, and a response after the page in one app context,
-included); [tests/e2e/test_script_policy.py](tests/e2e/test_script_policy.py) proves in a browser that neither an
-injected handler attribute nor an injected script element runs (each does, as a control, with the header dropped)
-and that every header button still opens its panel.
+[tests/integration/test_gui_api.py](tests/integration/test_gui_api.py) proves on real responses that the page's header
+and its script tag carry the same nonce, a new one each time and at least 128 bits of base64url, that the page is
+`no-store`, that the policy is exactly its four directives, each named once, and that every other response forbids
+script (an error the handler sees, also one raised while the page renders, and a response after the page in one app
+context, included); [tests/e2e/test_script_policy.py](tests/e2e/test_script_policy.py) proves in a browser that
+neither an injected handler attribute nor an injected script element runs (each does, as a control, with the header
+dropped) and that every header button still opens its panel.
 
 
 ### C21 — The shippable tree carries no identifier of a real deployment  ✔ implemented (2026-10-08, the public split)

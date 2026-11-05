@@ -10,11 +10,10 @@ script, every element is created from one literal, inert tag name, every request
 carries each dynamic segment encoded (and the few names that stand in a path unencoded are pinned to where their
 value comes from), and the parts of the file the script scan does not read are pinned: one script element, opened
 with exactly the nonce tag the page's `script-src` authorises, no handler attribute and no `javascript:` URL at
-all — in the static markup, or in a tag of the literal markup the script writes, read as the joined literals spell
-it and as HTML reads a tag, where a quote opens a value only right after `=` and a `>` inside a quoted value ends no
-tag (a nonce authorises a script element, never an attribute or a URL, so one there could not run, and the buttons
-are bound from the script) — and no template expression anywhere but the nonce in that tag and `| tojson` inside
-the script.
+all — in the static markup, or in a tag of the literal markup the script writes, read as the joined literals spell it,
+where a quote opens a value only right after `=` and a `>` inside a quoted value ends no tag (a nonce authorises a
+script element, never an attribute or a URL, so one there could not run, and the buttons are bound from the script) —
+and no template expression anywhere but the nonce in that tag and `| tojson` inside the script.
 
 WHY (the failure it guards against): the GUI paints values it did not author — a staged proposal's ref name, commit
 subject and path names; an API error string, which can quote request input or a remote response; a third-party
@@ -39,7 +38,13 @@ literals, comments and regular-expression literals, not the whole language, and 
   * markup is read as written: an escape sequence in the static or the literal markup (a JS escape or an HTML
     character reference) is not decoded, so one spelling a tag's `<`, a handler's name, its separator or a
     `javascript:` scheme is not seen, nor is a tab or a line break inside the scheme (`java<TAB>script:`), which a
-    browser's URL parser drops.
+    browser's URL parser drops;
+  * a tag of the literal markup is read by one rule of HTML's, a quote opening a value only right after `=`, not by
+    its parser: after an `=` HTML does not read as a value's (one inside an unquoted value, a second `=`, one that
+    starts a name) or a space HTML does not count (a no-break space, a vertical tab) before a quote, the gate reads
+    the quote as opening a value where HTML does not, and a handler written after it, in that tag or a later one, is
+    not seen. The rule errs the other way too: a handler-like word inside an unquoted value or an attribute's name,
+    which HTML reads as no handler (`src=x/onerror=…`, `href=/gui/onboard=1`), is refused.
 
 Those are shapes somebody writes on purpose. What this gate stops is the sink coming back through an ordinary edit,
 under whatever name the value has. It reads source, so it binds what is spelled in this file; it is not a claim
@@ -83,7 +88,7 @@ _LITERAL_CHARS = frozenset("'\"`+() \t\n")
 
 # Inside a tag of the literal markup the script writes: a handler attribute, or a `javascript:` URL. Neither can run
 # under the page's nonce, so either is a control that does nothing. Read in the value the joined literals spell (a
-# tag, or a handler's name, spans the literals a `+` joins), each tag as HTML reads it: a quote opens a value only
+# tag, or a handler's name, spans the literals a `+` joins), each tag by a rule of HTML's: a quote opens a value only
 # right after `=` (elsewhere it is part of a name or an unquoted value), and a `>` inside a quoted value ends no tag.
 # A handler is a name outside the quoted values; a `javascript:` URL is one anywhere in the tag.
 _LITERAL_TAG = re.compile(r"""<[A-Za-z](?:=\s*"[^"]*"|=\s*'[^']*'|[^>])*""")
@@ -277,7 +282,7 @@ def _is_literal(masked_expr):
 def _literal_active(expr, masked_expr):
     """Each tag of the markup a literal-only expression spells that carries a handler attribute (a name: its quoted
     values blanked first) or a `javascript:` URL (anywhere in the tag). The literals' bodies are joined first, so a
-    tag or a name split across a `+` is read whole, and a tag is read as HTML reads it: a quote opens a value only
+    tag or a name split across a `+` is read whole, and in a tag, as in HTML, a quote opens a value only
     right after `=`, and a `>` inside a quoted value does not end the tag."""
     spelt = "".join(expr[q.start() + 1:q.end() - 1] for q in re.finditer(r"(['\"`])[ \n]*\1", masked_expr))
     for t in _LITERAL_TAG.finditer(spelt):
@@ -723,6 +728,8 @@ def test_the_scanner_sees_the_real_sinks():
     "x.innerHTML = '<img src=x alt=5\" onerror=\"search()\">';",
     "x.innerHTML = '<img src=x \" onerror=search()>';",
     "x.innerHTML = '<img src=x alt=a<1 onerror=\"search()\">';",
+    "x.innerHTML = '<button title= \"Next >\" onclick=\"search()\">x</button>';",
+    "x.innerHTML = '<button title=\"a\"onclick=\"search()\">x</button>';",
     # the template engine writing into the script
     "x.innerHTML = '{{ banner | safe }}';",
     "x.appendChild(E('div', null, '<b>{{ title }}</b>'));",
@@ -762,6 +769,10 @@ def test_a_planted_breach_is_reported(line):
     ("a handler attribute with code in it", lambda h: h.replace(' data-testid="search-btn"', ' onclick="results.innerHTML = q.value" data-testid="search-btn"', 1)),
     ("a handler attribute in another case", lambda h: h.replace(' data-testid="search-btn"', ' onClick="search()" data-testid="search-btn"', 1)),
     ("a handler attribute after a slash", lambda h: h.replace(' data-testid="search-btn"', '/onclick="search()" data-testid="search-btn"', 1)),
+    ("a handler attribute with space before its =", lambda h: h.replace(' data-testid="search-btn"', ' onclick ="search()" data-testid="search-btn"', 1)),
+    ("a handler attribute with space after its =", lambda h: h.replace(' data-testid="search-btn"', ' onclick= "search()" data-testid="search-btn"', 1)),
+    ("a javascript: URL with a tab before the colon",
+     lambda h: h.replace("<header>", '<header><a href="javascript\t:openFleetPanel()">x</a>', 1)),
     ("a javascript: URL in another case",
      lambda h: h.replace("<header>", '<header><a href="JAVASCRIPT:openFleetPanel()">x</a>', 1)),
     ("a javascript: URL in the static markup",
@@ -803,6 +814,7 @@ def test_a_planted_structural_bypass_is_reported(change):
     "x.appendChild(E('div', 'meta', 'state: online = reachable; <b>on</b> = enabled'));",
     "x.innerHTML = '<span title=\"turn online = up\">x</span>';",
     "x.innerHTML = \"<span title='turn online = up'>x</span>\";",
+    "x.innerHTML = '<span title= \"turn online = up\">x</span>';",
     "x.innerHTML = '<b>x</b>' + // names <i onclick=f()>\n  '<i>y</i>';",
     "const row9 = E('div', 'row', null, 'unit-row');",
     "const c9 = E('div','card');",
