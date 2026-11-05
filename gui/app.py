@@ -238,14 +238,16 @@ def require_auth(fn):
     as the environment decoded them, so one that is not valid UTF-8 never raises). `hmac.compare_digest` raises on a
     str holding a non-ASCII character, which answered a 500 and an `internal-error` audit row for a denied login, and
     refused every login once the configured password was not ASCII. A header Werkzeug cannot parse is no credential:
-    its base64 decode raises ValueError on a non-ASCII character, which answered the same 500."""
+    its base64 decode raises ValueError on a non-ASCII character, which answered the same 500. Nor is one under any
+    scheme but Basic: Werkzeug reads `username` and `password` from any scheme's parameters, so `Foo username=…,
+    password=…` was compared too, its password the Latin-1 of the bytes sent."""
     @functools.wraps(fn)
     def wrapper(*a, **kw):
         try:
             auth = request.authorization
         except ValueError:             # `Basic <non-ASCII>`: Werkzeug's b64decode raises before any compare
             auth = None
-        ok = (auth and auth.username == GUI_USER
+        ok = (auth and auth.type == "basic" and auth.username == GUI_USER
               and hmac.compare_digest((auth.password or "").encode("utf-8"),
                                       GUI_PASSWORD.encode("utf-8", "surrogateescape")))
         if not ok:

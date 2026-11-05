@@ -22,8 +22,13 @@ secret's own (as the environment decoded them, so one that is not valid UTF-8 ne
   JSON 500 and audited an `internal-error`, and the browser did not ask again. A configured GUI password holding a
   non-ASCII character admits its owner; before, every login with the right user raised. A Basic header whose
   credential is not base64 ASCII (`Basic päss`, which Werkzeug's parse refused with a ValueError) is a 401 too.
+- **Fixed.** The GUI takes a credential from a Basic header alone. Werkzeug reads `username` and `password` from any
+  scheme's parameters, so `Foo username=admin, password=…` (or `Digest …`) admitted the right password.
 - **Fixed.** The API answers a Bearer token holding a non-ASCII character 401 with an `auth-denied` audit line; it
-  answered a bare 500 and audited nothing. A configured token holding one admits its UTF-8 bytes, as the GUI does.
+  answered a bare 500 and audited nothing. A configured token holding one admits its UTF-8 bytes, as the GUI does:
+  the token is read from the header with only spaces and tabs trimmed, since FastAPI's parse strips U+0085 and
+  U+00A0 too (the last byte of `à` or `Å`, as Starlette decodes it), and a byte after the token that is not its own
+  is refused.
 - **Fixed.** A configured GUI password or API token that is not valid UTF-8 (a hand-written `.env`) answers a 401;
   every right-user login, and every Bearer request, answered a 500.
 - **Fixed.** `verify_token` answers a non-ASCII plan token `False`, as its docstring promised, a lone surrogate

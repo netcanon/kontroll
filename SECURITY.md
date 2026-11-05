@@ -290,7 +290,8 @@ crown jewel — protect it where it lives, not at a remote.
 
 The **onboarding GUI is privileged** (writes the working tree, encrypts secrets, runs
 Ansible) and is now guarded: **HTTP Basic auth, fail-closed** (refuses to start without
-`GUI_PASSWORD`, constant-time compare, password from SOPS), **TLS** (`GUI_TLS_CERT/KEY`),
+`GUI_PASSWORD`, constant-time compare, password from SOPS; a credential under any other
+scheme is refused), **TLS** (`GUI_TLS_CERT/KEY`),
 and an **audit log** of every action + auth-denial (no creds). Verified: no-auth → 401,
 HTTP→HTTPS-port refused, wrong password → 401, denials logged.
 

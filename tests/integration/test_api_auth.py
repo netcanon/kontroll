@@ -114,6 +114,41 @@ def test_a_configured_token_that_is_not_utf8_is_a_401_not_a_500(priv, monkeypatc
     assert [row["action"] for row in read_audit(priv.audit_log)] == ["auth-denied"]
 
 
+def test_a_non_utf8_configured_token_admits_its_own_bytes_alone(priv, monkeypatch):
+    """A configured API token that is not valid UTF-8 admits the client that sends its own bytes and refuses the
+    spellings a lossy encode of it gives ('t?ken', 'tken'). Guards the configured side's error handler: a lossy one
+    never raises either, but admits a credential that is not the configured one (AUTH-NA read A2, N2)."""
+    monkeypatch.setattr(priv.client.app.state.settings, "api_token", "t\udcf6ken")
+    for sent, want in ((b"t\xf6ken", 200), (b"t?ken", 401), (b"tken", 401)):
+        r = _post_raw(priv.client.app, "/refresh", b"Bearer " + sent)
+        assert r.status_code == want, (sent, r.status_code)
+
+
+def test_a_configured_token_ending_in_a_strip_byte_admits_its_utf8_bytes(priv, monkeypatch):
+    """A configured API token whose last character's UTF-8 ends in 0xA0 or 0x85 ('tokà', 'tokÅ') admits the client
+    that sends those UTF-8 bytes. Guards the read of the token from the header: FastAPI's parse trims it with
+    `str.strip()`, which takes U+00A0/U+0085 (that last byte, as Starlette decodes it) off, so the compare saw one
+    byte short and no spelling admitted (AUTH-NA read A2, N1)."""
+    for tok in ("tokà", "tokÅ"):
+        monkeypatch.setattr(priv.client.app.state.settings, "api_token", tok)
+        r = _post_raw(priv.client.app, "/refresh", ("Bearer " + tok).encode("utf-8"))
+        assert r.status_code == 200, (tok, r.status_code)
+
+
+def test_the_bearer_token_is_read_with_only_ows_trimmed_and_under_bearer_alone(priv):
+    """The Bearer token is compared as sent with only spaces and tabs trimmed around it (RFC 9110's separator and
+    OWS), and only under the Bearer scheme (in any case). Guards the read of the header itself: trimming as
+    `str.strip()` does admits the token with a stray 0xA0 or 0x85 after it, bytes that are not the token's; trimming
+    one end only refuses a header RFC 9110 allows; and reading the header without FastAPI's scheme check admits the
+    token sent under another scheme (AUTH-NA read A2, N1)."""
+    tok = TOKEN.encode()
+    for sent, want in ((b"Bearer " + tok, 200), (b"Bearer  " + tok, 200), (b"Bearer " + tok + b" \t", 200),
+                       (b"bearer " + tok, 200), (b"Bearer " + tok + b"\xa0", 401),
+                       (b"Bearer " + tok + b"\x85", 401), (b"Basic " + tok, 401), (b"Token " + tok, 401)):
+        r = _post_raw(priv.client.app, "/refresh", sent)
+        assert r.status_code == want, (sent, r.status_code)
+
+
 # --- refresh (lowest blast radius) ------------------------------------------ #
 def test_refresh_ok_and_audited(priv):
     """A valid token admits POST /refresh: 200 + a run_id, and a `refresh` audit line carrying that

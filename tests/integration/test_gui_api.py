@@ -156,6 +156,31 @@ def test_a_configured_password_that_is_not_utf8_is_a_401_for_the_right_user(clie
     assert actions == ["auth-denied"], actions
 
 
+def test_a_non_utf8_configured_password_admits_no_lossy_spelling(client, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 admits neither the spelling a `replace` encode of it gives
+    ('p?ss'), nor the one with a decode's replacement character, nor the one an `ignore` encode gives ('pss').
+    Guards the configured side's error handler: a lossy one never raises either, but admits a credential that is not
+    the configured one (AUTH-NA read A2, N2)."""
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    for pw in ("p?ss", "p\ufffdss", "pss"):
+        assert client.get("/api/search?q=", headers=_auth(pw=pw)).status_code == 401, pw
+
+
+@pytest.mark.parametrize("header", ['Foo username="admin", password="test-password"',
+                                    'Digest username="admin", password="test-password"',
+                                    "Foo username=admin, password*=utf-8''test-password"])
+def test_a_credential_under_another_scheme_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch, header):
+    """The right user and password sent under a scheme other than Basic are refused 401 and audited `auth-denied`.
+    Guards the scheme check: Werkzeug's `Authorization` reads `username` and `password` from any scheme's
+    parameters, so such a header was compared as a Basic one and admitted (AUTH-NA read A2, N3)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=", headers={"Authorization": header})
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
 def test_wrong_user_is_401(client):
     """Wrong username -> 401, even with a plausible password."""
     assert client.get("/api/search?q=cisco", headers=_auth(user="root")).status_code == 401

@@ -45,7 +45,11 @@ def require_token(request: Request,
     if not settings.api_token:
         raise HTTPException(status_code=503,
                             detail="privileged API disabled: KONTROLL_API_TOKEN is not configured")
-    if not (creds and hmac.compare_digest(creds.credentials.encode("latin-1"),
+    # FastAPI's parse trims the token with `str.strip()`, which also takes U+0085 and U+00A0 off (the last byte of a
+    # UTF-8 `à` or `Å`, as Starlette decodes it); so it is read from the header, with RFC 9110's OWS alone trimmed.
+    # `creds` still says the scheme is Bearer.
+    sent = request.headers.get("Authorization", "").partition(" ")[2].strip(" \t") if creds else ""
+    if not (creds and hmac.compare_digest(sent.encode("latin-1"),
                                           settings.api_token.encode("utf-8", "surrogateescape"))):
         try:
             write_audit(settings.audit_log, "anonymous", ip, "auth-denied", run_id, request.url.path)
