@@ -168,11 +168,13 @@ def test_a_non_utf8_configured_password_admits_no_lossy_spelling(client, monkeyp
 
 @pytest.mark.parametrize("header", ['Foo username="admin", password="test-password"',
                                     'Digest username="admin", password="test-password"',
-                                    "Foo username=admin, password*=utf-8''test-password"])
+                                    "Foo username=admin, password*=utf-8''test-password",
+                                    'Basicx username="admin", password="test-password"'])
 def test_a_credential_under_another_scheme_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch, header):
-    """The right user and password sent under a scheme other than Basic are refused 401 and audited `auth-denied`.
-    Guards the scheme check: Werkzeug's `Authorization` reads `username` and `password` from any scheme's
-    parameters, so such a header was compared as a Basic one and admitted (AUTH-NA read A2, N3)."""
+    """The right user and password sent under a scheme other than Basic (one whose name only begins with it, too) are
+    refused 401 and audited `auth-denied`. Guards the scheme check: Werkzeug's `Authorization` reads `username` and
+    `password` from any scheme's parameters, so such a header was compared as a Basic one and admitted (AUTH-NA read
+    A2, N3; `Basicx`, read A3, N2)."""
     logpath = tmp_path / "audit.log"
     monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
     r = client.get("/api/search?q=", headers={"Authorization": header})

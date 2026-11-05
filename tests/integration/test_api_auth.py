@@ -79,16 +79,18 @@ def test_a_token_with_a_non_ascii_character_is_a_401_and_audited(priv):
 
 
 def _post_raw(app, path, authorization):
-    """POST `path` to `app` with an Authorization header of exactly the bytes given. Starlette's TestClient re-encodes
-    a header that is not UTF-8 (httpx reads it as ISO-8859-1, the test transport writes it as UTF-8), so a Latin-1
-    spelling would reach the app as UTF-8; httpx's ASGITransport hands the app the bytes as they are."""
+    """POST `path` to `app` with an Authorization header of exactly the bytes given (a list: one header for each, in
+    order). Starlette's TestClient re-encodes a header that is not UTF-8 (httpx reads it as ISO-8859-1, the test
+    transport writes it as UTF-8), so a Latin-1 spelling would reach the app as UTF-8; httpx's ASGITransport hands the
+    app the bytes as they are."""
     import asyncio
 
     import httpx
 
     async def post():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as c:
-            return await c.post(path, headers={"Authorization": authorization})
+            values = authorization if isinstance(authorization, list) else [authorization]
+            return await c.post(path, headers=[("Authorization", v) for v in values])
     return asyncio.run(post())
 
 
@@ -147,6 +149,17 @@ def test_the_bearer_token_is_read_with_only_ows_trimmed_and_under_bearer_alone(p
                        (b"Bearer " + tok + b"\x85", 401), (b"Basic " + tok, 401), (b"Token " + tok, 401)):
         r = _post_raw(priv.client.app, "/refresh", sent)
         assert r.status_code == want, (sent, r.status_code)
+
+
+def test_the_token_compared_is_the_one_under_the_scheme_checked(priv):
+    """With two Authorization headers, the right token in the second does not admit a request whose first header holds
+    another token or another scheme. Guards the token's read from the header: FastAPI's `creds` gates on the first
+    header, so a read of any other would pass the scheme check on one header and compare the token of another
+    (AUTH-NA read A3, N1)."""
+    tok = TOKEN.encode()
+    for values in ([b"Bearer wrong", b"Bearer " + tok], [b"Basic eDp5", b"Bearer " + tok]):
+        r = _post_raw(priv.client.app, "/refresh", values)
+        assert r.status_code == 401, (values, r.status_code)
 
 
 # --- refresh (lowest blast radius) ------------------------------------------ #
