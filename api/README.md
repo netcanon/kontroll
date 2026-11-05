@@ -57,7 +57,8 @@ Deploy: `ansible-playbook playbooks/deploy-stack.yml -e '{"stack_services":["api
 
 The privileged routes are **fail-closed**: they require a Bearer token matching `KONTROLL_API_TOKEN` (SOPS-backed at
 deploy, like the GUI's `GUI_PASSWORD`); **unset ⇒ those routes are disabled (503)**, never open. The token is
-compared constant-time. Every privileged call is **audited** — an append-only, size-rotated TSV line (`ts, user, ip,
+compared constant-time, as the bytes the client sent.
+Every privileged call is **audited** — an append-only, size-rotated TSV line (`ts, user, ip,
 action, run_id, detail`, never a credential) at `KONTROLL_API_AUDIT_LOG` — and the audit write is **fail-closed**: a
 mutation that can't be audited is refused (503). Each request carries a `kontroll_run_id` (in the response + the
 audit line). C9 of [SECURITY.md](../SECURITY.md). A request field that is not a closed charset is answered **422**

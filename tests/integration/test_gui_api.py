@@ -106,6 +106,83 @@ def test_wrong_password_is_401(client):
     assert client.get("/api/search?q=cisco", headers=_auth(pw="wrong")).status_code == 401
 
 
+def test_a_password_with_a_non_ascii_character_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch):
+    """The right user with a password holding a non-ASCII character is refused 401 and audited `auth-denied`, as any
+    wrong password is. Guards the compare: `hmac.compare_digest` raises TypeError on a non-ASCII str, so the request
+    answered the JSON 500, the audit log named an internal error instead of a denied login, and the browser did not
+    ask again (found by T23 fold 3's runtime read)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=cisco", headers=_auth(pw="pässwörd"))
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_configured_password_with_a_non_ascii_character_admits_its_owner(client, mock_services, monkeypatch):
+    """A GUI password holding a non-ASCII character admits the right user with it (a browser sends Basic credentials
+    as UTF-8) and refuses a wrong one 401. Guards the compare raising on every login, the right one included, once
+    the operator's password is not ASCII: the GUI could not be signed into at all."""
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "pässwörd")
+    assert client.get("/api/search?q=", headers=_auth(pw="pässwörd")).status_code == 200
+    assert client.get("/api/search?q=", headers=_auth(pw="passwörd")).status_code == 401
+
+
+@pytest.mark.parametrize("header", ["Basic päss", "Basic ä"])
+def test_a_basic_header_not_in_base64_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch, header):
+    """A Basic header whose credential holds a non-ASCII character as it is, not base64'd, is refused 401 and audited
+    `auth-denied`. Guards the header's parse: Werkzeug's base64 decode raises ValueError on a non-ASCII str, before
+    any compare, so the request answered the JSON 500 and an `internal-error` row (AUTH-NA read A, S1). No browser
+    sends it; a scripted client or a scanner can."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=", headers={"Authorization": header})
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_configured_password_that_is_not_utf8_is_a_401_for_the_right_user(client, tmp_path, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 (a hand-written .env holding a Latin-1 byte, which the
+    environment decodes `surrogateescape`) answers the right user 401 and audits `auth-denied`. Guards the configured
+    side's encode: a strict UTF-8 encode raised on the escaped byte, so every right-user login answered a 500 while a
+    wrong user got a 401 (AUTH-NA read A, N2)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    r = client.get("/api/search?q=", headers=_auth(pw="päss"))
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_non_utf8_configured_password_admits_no_lossy_spelling(client, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 admits neither the spelling a `replace` encode of it gives
+    ('p?ss'), nor the one with a decode's replacement character, nor the one an `ignore` encode gives ('pss').
+    Guards the configured side's error handler: a lossy one never raises either, but admits a credential that is not
+    the configured one (AUTH-NA read A2, N2)."""
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    for pw in ("p?ss", "p\ufffdss", "pss"):
+        assert client.get("/api/search?q=", headers=_auth(pw=pw)).status_code == 401, pw
+
+
+@pytest.mark.parametrize("header", ['Foo username="admin", password="test-password"',
+                                    'Digest username="admin", password="test-password"',
+                                    "Foo username=admin, password*=utf-8''test-password",
+                                    'Basicx username="admin", password="test-password"'])
+def test_a_credential_under_another_scheme_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch, header):
+    """The right user and password sent under a scheme other than Basic (one whose name only begins with it, too) are
+    refused 401 and audited `auth-denied`. Guards the scheme check: Werkzeug's `Authorization` reads `username` and
+    `password` from any scheme's parameters, so such a header was compared as a Basic one and admitted (AUTH-NA read
+    A2, N3; `Basicx`, read A3, N2)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=", headers={"Authorization": header})
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
 def test_wrong_user_is_401(client):
     """Wrong username -> 401, even with a plausible password."""
     assert client.get("/api/search?q=cisco", headers=_auth(user="root")).status_code == 401
@@ -2468,3 +2545,16 @@ def test_concurrent_first_audits_of_a_file_that_cannot_open_say_it_once(tmp_path
         assert not any(t.is_alive() for t in threads), trial
         assert sum("audit-log open failed" in s for s in said) == 1, (trial, said)
     monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_a_non_utf8_configured_password_is_compared_as_its_own_bytes(client, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 ('p\\udce4ss', as the environment decodes b'p\\xe4ss')
+    is compared as those bytes. Guards the configured side's error handler past the spellings a test can name: no
+    request can admit such a password (a Basic credential reaches the compare as valid UTF-8), so a lossy handler
+    shows only in what the compare is handed, and `backslashreplace` or `xmlcharrefreplace` never raise either but
+    admit an ASCII spelling of the escape (AUTH-NA read B)."""
+    seen, real = [], gui.hmac.compare_digest
+    monkeypatch.setattr(gui.hmac, "compare_digest", lambda a, b: seen.append(b) or real(a, b))
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    assert client.get("/api/search?q=", headers=_auth(pw="p\u00e4ss")).status_code == 401
+    assert seen == [b"p\xe4ss"], seen

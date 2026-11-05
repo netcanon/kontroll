@@ -294,7 +294,8 @@ on the runner image for `deploy-stack.yml` (it provisions the cert + the SOPS pa
 This surface is **privileged**: it can write the repo, encrypt secrets, push, and run
 Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
 - **Auth — HTTP Basic, fail-closed**: the app *refuses to start* without `GUI_PASSWORD`;
-  constant-time compare; the password comes from SOPS (`dashboards: gui_admin_password`).
+  constant-time compare; a credential under any scheme but Basic is a 401; the password
+  comes from SOPS (`dashboards: gui_admin_password`).
 - **TLS**: serves HTTPS from `GUI_TLS_CERT`/`GUI_TLS_KEY` (warns + HTTP only if unset).
 - **Audit log** (`GUI_AUDIT_LOG`): every onboard action + auth-denial — timestamp, client
   IP, what (collection/key/host/flags) — **never** credentials.
