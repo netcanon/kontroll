@@ -45,9 +45,11 @@
       changed_when: false
       no_log: true
 
+    # `raw` has no check mode: a --check run skips it, and its result then has no stdout. The dry-run reads that as
+    # an empty capture; a real run reads the stdout as before (tests/fresh-node-check.sh's backup step failed here).
     - name: Write capture
       ansible.builtin.copy:
-        content: "{{ _cfg.stdout }}"
+        content: "{{ _cfg.stdout | default('') if ansible_check_mode else _cfg.stdout }}"
         dest: "{{ config_backup_dir }}/{{ _backup_file }}"
         mode: "0640"
       delegate_to: localhost

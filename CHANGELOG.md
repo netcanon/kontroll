@@ -11,6 +11,60 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test(ci): a fresh node's install and the fleet plays are evaluated in check mode (T27 / S32, 2026-11-04)
+
+Every gate read the playbooks as text or parsed them (`--syntax-check`); none had Ansible evaluate them, so a play
+that fails only on a node nobody has configured yet was first found by a rebuild (the 2026-07-28 one found four). The
+mock inventory those plays would run against could not dispatch two of its hosts and had none for three shipped
+classes.
+
+- **Added.** `tests/fresh-node-check.sh`, a step of `ci.yml`'s validate job, after steps that install `age` and the
+  `docker` Python library. In a throwaway export of HEAD, made a repository on `main` with HEAD's tree as its one
+  commit (local-canonical.yml's landing reads a tree as a worktree, as a fresh clone is), with HOME moved into it, it
+  runs the real `kontroll-init --fresh` (a throwaway key, `--trust-mode separated --no-break-glass`), then
+  `deploy-stack.yml --check --diff`, which must pass; the same with every service, which must fail with the
+  onboard-gui age-key message (G9: deploy-stack never mints that key); `bootstrap.yml --check`, these three with
+  `KONTROLL_IN_CONTAINER=1` as the installer runs them (bootstrap's tasks that install the host's toolchain, the
+  legacy host path's, are not evaluated); and `ping.yml` and `backup-configs.yml --check` against
+  `tests/mock-inventory.yml`. A step that must pass needs a `PLAY RECAP` that names no failed host. The backup pass
+  must fail, reach its summary, and fail exactly the hosts the script lists, each at its listed task: the classes
+  whose capture reads the device (OPNsense, Cisco IOS and IOS-XE) or needs an API credential a fresh node has none of
+  (FortiGate). `ping.yml` rescues a host it cannot reach; a capture that fails fails the run, so a class whose backup
+  reaches a device is listed there. It writes nothing outside its directory, starts no container and reaches no
+  device; the deploy passes read the runner's Docker daemon (its images and networks), which check mode leaves as it
+  was. Not in `validate.sh`, which also runs on a configured control node; skipped where `KONTROLL_RUNS_ON` is set
+  (the private repository's self-hosted runners are persistent and shared).
+- **Fixed.** `tests/mock-inventory.yml` has one host per shipped device class, in the class's `inventory_group`,
+  with its role as `device_role` (the generic-backend class with its `ansible_network_os`): the hypervisor and
+  docker hosts had no `device_role`, the edge said `cisco_ios`, and the fortigate, routeros and ios_xe_auto classes
+  had no host.
+- **Fixed.** `bootstrap.yml --check` on a fresh tree reaches its summary. A `--check` run skips the task that
+  generates `ansible/collections/requirements.generated.yml`, which is gitignored, and the summary read it with a
+  `file` lookup regardless; the play now stats it first, reads it only where it is, and the summary says a dry-run
+  does not generate it. The new check found it.
+- **Fixed.** `backup-configs.yml --check` no longer fails every OpenWrt and RouterOS host at `Write capture`. Their
+  device reads (`raw` for the raw-SSH backend OpenWrt uses; `community.routeros.command`, which has no check mode from
+  the collection's 3.0.0) are skipped in check mode, a skipped task's result has no `stdout`, and the write read it
+  regardless. In check mode the write now reads an empty capture; a real run writes the device's output as before, and
+  still fails without one. A real fleet's dry-run hit it as the mock one did. The new check found it.
+- **Tests.** `unit/test_mock_inventory.py` derives the classes from `modules/*/module.yml` and holds the mock
+  inventory to a host per class, a role with both fleet entrypoints per host, and documentation addresses reached
+  locally. `unit/test_fresh_node_check_script.py` runs the script with fake tools: every step in the export, a
+  repository on `main` holding HEAD's files, the installer's container flag on the deploy passes and bootstrap only,
+  the checkout and the caller's HOME untouched, the every-service pass failing for any other reason fails the script,
+  and so do a play of any step that must pass exiting non-zero, or 0 with no clean recap, and a kontroll-init that did
+  not finish; the backup pass passing, not reaching its summary, failing a host it does not list, failing a listed one
+  at another task or not failing it fails the script, and a host's earlier ignored failure does not move where it
+  stopped; `KONTROLL_FRESH_KEEP=1` keeps the directory and names it. `unit/test_backup_capture_check_mode.py` renders
+  both capture writes from the role files: an empty capture in check mode where the read was skipped, and a real run's
+  exact output, which still fails without one. `unit/test_bootstrap_summary_lockfile.py` evaluates the summary's two
+  expressions from the play, with no lockfile (no lookup made, and the line says why) and with one.
+  `unit/test_ci_workflows.py` holds the validate job to running it, after the gate, the collections and the steps that
+  install `age` and the `docker` library, unsoftened.
+- **Docs.** tests/README.md (the layer, how to run it, the extending step, the listing),
+  docs/qa-and-release-pipeline.md (§0, §1, §5, the rollout), docs/testing-standards.md §1,
+  docs/engineering-standards.md §1, the backend_raw_ssh and routeros role READMEs (their backup in check mode).
+
 ### fix(security): an error body never carries exception text (T20, 2026-11-02)
 
 An exception's message can quote a request value, a path inside the container or a line of a file being parsed.

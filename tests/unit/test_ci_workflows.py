@@ -209,6 +209,31 @@ def test_every_workflow_step_that_runs_apt_goes_through_the_lock_retry():
     assert "bash .github/scripts/apt-install.sh --run python -m playwright install --with-deps chromium" in ci
 
 
+def test_validate_job_runs_the_fresh_node_check():
+    """ci.yml's validate job runs `bash tests/fresh-node-check.sh` as a step of its own, after the step that
+    installs the collections and after the gate itself, with `age` installed by a step before it (kontroll-init
+    shells age-keygen) and the `docker` library by another (community.docker's, which the deploy passes need to
+    look at images and networks: T27's first real run failed there without it); the three steps are skipped exactly
+    where KONTROLL_RUNS_ON is set (the private repository's persistent, shared runners), and none is softened
+    (`continue-on-error`, `|| true`). Guards the one gate that has Ansible evaluate the plays being dropped or
+    neutered in a workflow edit unnoticed, as the promtool and vector checks were skipped on every green run for
+    months (2026-10-08 review)."""
+    steps = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]["steps"]
+    runs = [str(s.get("run", "")).strip() for s in steps]
+    check = [i for i, r in enumerate(runs) if "tests/fresh-node-check.sh" in r]
+    assert len(check) == 1 and runs[check[0]] == "bash tests/fresh-node-check.sh", check
+    i = check[0]
+    age = [j for j, r in enumerate(runs) if r == "bash .github/scripts/apt-install.sh age"]
+    collections = [j for j, r in enumerate(runs) if "ansible-galaxy collection install" in r]
+    gate = [j for j, r in enumerate(runs) if r == "bash tests/validate.sh --strict"]
+    sdk = [j for j, r in enumerate(runs) if r.startswith("pip install") and '"docker==' in r]
+    assert len(age) == 1 and len(collections) == 1 and len(gate) == 1 and len(sdk) == 1
+    assert collections[0] < i and gate[0] < i and age[0] < i and sdk[0] < i
+    for j in (age[0], sdk[0], i):
+        assert steps[j].get("if") == "${{ !vars.KONTROLL_RUNS_ON }}", steps[j]
+        assert "continue-on-error" not in steps[j] and "|| true" not in runs[j], steps[j]
+
+
 def _run_helper(tmp_path, plan, args=("gawk", "mawk"), tries=4, delay="0"):
     """Run the helper with a fake `sudo` (runs its arguments without LC_ALL, as a sudoers that keeps no locale would —
     sudo's default keeps it, so the helper's export and the pair's own `env LC_ALL=C` each prove out only here), a

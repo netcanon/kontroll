@@ -19,6 +19,7 @@ test-doc + data-testid + test-after-change discipline is
 |---|---|---|---|
 | **L1 lint** | YAML/Ansible/compose/Prometheus syntax + secret hygiene | `validate.ps1` / `validate.sh` | every commit (pre-commit + CI) |
 | **L2 validate** | playbooks parse against a mock inventory | `--syntax-check` | on change, CI |
+| **L2 fresh-node check** | a brand-new node's install evaluated by Ansible in check mode — `deploy-stack.yml` (with the `local-canonical.yml` it imports) and `bootstrap.yml`, with `KONTROLL_IN_CONTAINER=1` as the installer runs them, against the instance a real `kontroll-init --fresh` writes, in a throwaway export of HEAD made a repository on `main`, as a fresh clone is — then `ping.yml` and `backup-configs.yml` against `mock-inventory.yml`, one host per shipped device class: ping must pass, and backup must fail exactly at the hosts the script lists, each at its task (a capture that reads the device or needs a credential). No device, no container | `tests/fresh-node-check.sh` | CI (`validate` job); not in `validate.sh`, which also runs on a configured control node |
 | **L2 vector test** | the internal Vector shapes' VRL run on crafted events — each field the Loki sink templates as a label is set, and the `level` a shape derives (`docker/vector/tests/*.yaml`, one event per test) | `validate.sh` step `vector-test` (`vector test`) | CI (`validate --strict`), the gate container |
 | **L2 pytest** | `galaxy.py` + GUI logic, shell-outs mocked (no lab) | `pytest` (`unit/` + `integration/`) | on change, CI |
 | **L2 as root** | the canonical's git as the service uid, with real uids on a canonical laid out as the play leaves one (`integration/test_canon_drop.py`), and the deploy's content-clone tasks run by ansible-playbook as root (`integration/test_content_clone_as_service.py`); skipped unless root on Linux. A row there that starts a child as ANOTHER uid starts `sh` or a system program, or picks an account that can run the suite's interpreter (`_a_third_account`): a runner's Python may live where only its owner goes | `validate.sh` step `canon-drop-as-root` (directly as root, or through `sudo -n`; a skipped row fails it) | CI (`validate --strict`), the gate container |
@@ -45,6 +46,10 @@ when that needs no password (it says which); with neither it is a SKIP, which `-
 ```bash
 # L2 dry-run a playbook against fake hosts (no real device touched)
 ansible-playbook -i tests/mock-inventory.yml ../ansible/playbooks/backup-configs.yml --check --diff
+# L2 fresh-node check: the install and the fleet plays evaluated in check mode, in a throwaway export of HEAD
+# (needs ansible-playbook with the modules' collections, sops, age-keygen, git, and for the deploy passes the
+# `docker` Python library, buildx and a Docker daemon to read; KONTROLL_FRESH_KEEP=1 keeps it)
+bash tests/fresh-node-check.sh
 ```
 
 ## Isolation (per layer)
@@ -87,8 +92,11 @@ validate's `sops-encrypted` step.
 4. **L2 vector test**: a new internal Vector shape (`docker/vector/config.d/transforms/`) gets a case in
    `docker/vector/tests/` — one event in, the label fields asserted out. The static row in
    `unit/test_compose_logging.py` already holds it to setting every templated label.
-5. **L2 check mode**: give the role's class a host in `mock-inventory.yml` and dry-run
-   the play against it (the `--check --diff` command above).
+5. **L2 check mode**: a new device class gets a host in `mock-inventory.yml`, in its `inventory_group`, with its
+   role as `device_role` — `unit/test_mock_inventory.py` fails until it has one — and the fresh-node check then
+   evaluates its `check` and `backup` entrypoints in CI. If its backup reads the device, or needs a credential,
+   under `ansible_connection: local`, list the host and the task it stops at in `fresh-node-check.sh`'s backup
+   step; the check fails until it is listed. Dry-run a play by hand with the `--check --diff` command above.
 6. **L3 smoke**: add a read-only assertion play (service responds / target `up`)
    under `ansible/playbooks/` and tag it `smoke`.
 
@@ -190,6 +198,10 @@ tests/unit/          # pure functions, no I/O
   test_fleet_line.py         # C22: a fleet line that is not a class key at every deploy-time reader — skipped and named by what renders, refused by what installs and by the promote gate, checked first by the plays
   test_bind_sources.py       # every relative bind source and env_file of a stack service: in the tree, an `instance/` path the scaffold ships, or written by deploy-stack before its one bring-up whenever the service (or a service that starts it) runs — planted conditions (a secrets-present test, another service, a conjunction, the block's) and late writers flagged
   test_check_mode_resolvers.py # every read-only command the control node runs (its plays, delegated tasks, imported files, applied roles) registers and reads again runs under `--check`, or has a reasoned exemption that is not stale; planted resolvers flagged, a device play's not; no device role's read forced to run in a dry-run
+  test_mock_inventory.py     # T27: a mock host per shipped class (derived from modules/), each dispatching to a role with both fleet entrypoints; every address RFC-5737, every host `connection: local`
+  test_fresh_node_check_script.py # T27: tests/fresh-node-check.sh with fake tools — every step in a throwaway export with HOME there, the checkout untouched; the every-service pass must fail for the age-key reason; a pass needs a recap with no failed host and a finished kontroll-init; the backup pass must fail at exactly the listed hosts, each at its task
+  test_backup_capture_check_mode.py # T27: the raw-SSH and RouterOS capture writes render an empty capture in a --check run (their read is skipped), and a real run's exact output, still failing without one
+  test_bootstrap_summary_lockfile.py # T27: bootstrap's summary on a fresh tree with no collection lockfile reads none and says why; with one, lists it
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked
   test_local_canonical_as_root.py # C10, AS ROOT: local-canonical.yml run by ansible-playbook on a scratch node (the installer's mode: root, KONTROLL_IN_CONTAINER=1) — a fresh node's dry-run does not fail, the first apply lands HEAD as a first seed and leaves the canonical the operator's, the second and third applies and a closing dry-run report 0 changed (the ownership pass runs again after the landing), a hand push of main is refused
   test_canonical_normalise_as_root.py # C10 / F-CANON, AS ROOT: the ownership pass chowns a root-made canonical to `<operator>:1001` outside hooks/ — every regular file and directory, through its descriptor; a link's own owner, what a link points at outside the tree, and hooks/ stay root's; the second run has nothing to do
