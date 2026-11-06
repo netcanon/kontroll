@@ -86,7 +86,8 @@ tests/
   onboard-gui's age key is missing), then pass with a throwaway key; a step that must pass needs a
   recap with no failed or unreachable host and its play's last task or summary; ping must rescue, and
   the backup pass fail, exactly the hosts the script lists, each listed class (its read reaches the
-  device or needs a credential) at that task. CI installs every module's collections for it.
+  device or needs a credential) at that task, ping's each for its listed reason; and the backup pass
+  must write no capture. CI installs every module's collections for it.
   Not in `validate.sh`, which also runs on a configured control node; skipped where
   `KONTROLL_RUNS_ON` is set (the self-hosted runners are persistent and shared). Check mode takes
   the role Molecule was scaffolded for (the scaffold never asserted anything and is gone).

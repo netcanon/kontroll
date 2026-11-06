@@ -2243,12 +2243,15 @@ def test_validate_job_runs_the_fresh_node_check():
     look at images and networks: T27's first real run failed there without it), and every module's collections by a
     third, from `gen-requirements.py --all-modules` into the runner's temp dir; the four steps are skipped exactly
     where KONTROLL_RUNS_ON is set (the private repository's persistent, shared runners), and none is softened
-    (`continue-on-error`, `|| true`). Guards the one gate that has Ansible evaluate the plays being dropped or
+    (`continue-on-error` on the step or on the job, `|| true`, a `shell:` of its own: each step has only a name, its
+    skip, an env and its run). Guards the one gate that has Ansible evaluate the plays being dropped or
     neutered in a workflow edit unnoticed, as the promtool and vector checks were skipped on every green run for
     months (2026-10-08 review); and the check run with the example fleet's collections only, which its mock
     inventory (a host for every class) outgrows: T27's fold-1 read showed its backup pass then stops at RouterOS's
     unresolved module on a GitHub-hosted runner, before its summary (B2)."""
-    steps = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]["steps"]
+    job = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]
+    steps = job["steps"]
+    assert "continue-on-error" not in job, job.get("continue-on-error")
     runs = [str(s.get("run", "")).strip() for s in steps]
     check = [i for i, r in enumerate(runs) if "tests/fresh-node-check.sh" in r]
     assert len(check) == 1 and runs[check[0]] == "bash tests/fresh-node-check.sh", check
@@ -2268,6 +2271,7 @@ def test_validate_job_runs_the_fresh_node_check():
     for j in (age[0], sdk[0], every[0], i):
         assert steps[j].get("if") == "${{ !vars.KONTROLL_RUNS_ON }}", steps[j]
         assert "continue-on-error" not in steps[j] and "|| true" not in runs[j], steps[j]
+        assert set(steps[j]) <= {"name", "if", "env", "run"}, sorted(steps[j])
 
 
 def test_the_fresh_node_check_installs_the_installer_images_docker_library():
@@ -2276,7 +2280,8 @@ def test_the_fresh_node_check_installs_the_installer_images_docker_library():
     exists so the fresh-node check's deploy passes see the library the installer image has; it named 7.1.0 as a
     literal, and T29 pinned the installer's at 7.2.0, so the step's own comment was false the day T27 met main. A
     literal drifts on every bump of the pin file (Dependabot's included); a read of the file cannot. A file with no
-    such line leaves `pip install ""`, which fails, and two would install both: the count holds it to one."""
+    such line leaves `pip install ""`, which fails, and two leave one argument with a newline in it, which pip
+    refuses: the count holds it to one, so the file fails here before it fails CI."""
     steps = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]["steps"]
     sdk = [s for s in steps if str(s.get("name", "")).startswith("Install the Docker SDK")]
     assert len(sdk) == 1, [s.get("name") for s in steps]

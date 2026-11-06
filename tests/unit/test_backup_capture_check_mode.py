@@ -7,8 +7,10 @@ real fleet as on the mock one (tests/fresh-node-check.sh's backup step, T27's fi
 an empty capture in a dry-run, and the device's output exactly as before in a real run.
 
 The `content` expressions are read from the role files and rendered with core Jinja and StrictUndefined, as Ansible
-fails on an undefined attribute; the skipped results are the shape Ansible registers for a skipped task.
+fails on an undefined attribute; the skipped results are the shape Ansible registers for a skipped task. And no
+role's capture write is forced to run in a dry-run, where it would write that empty preview over a good capture.
 """
+import glob
 import os
 
 import jinja2
@@ -55,10 +57,48 @@ def test_a_dry_run_writes_an_empty_capture_where_the_read_was_skipped(role):
 
 @pytest.mark.parametrize("role", sorted(ROLES))
 def test_a_real_run_writes_the_device_output_and_still_needs_it(role):
-    """Outside check mode the write renders the read's output exactly as before, and a result with no output still
-    fails the render. Guards the dry-run's default leaking into a real run, where an empty capture would overwrite
-    a good one without an error."""
+    """Outside check mode the write renders the read's output exactly as before, and a result with no `stdout` (a
+    skipped read's) still fails the render. Guards the dry-run's default leaking into a real run, where a read that
+    left no result would be written as an empty capture without an error. A read that returns an empty `stdout` is
+    written as one, as before T27: that is queued on its own (T27's fold-1 read, N9)."""
     register, real, capture = ROLES[role]
     assert _render(role, real, False) == capture
     with pytest.raises(jinja2.UndefinedError):
         _render(role, SKIPPED, False)
+
+
+def _capture_writes():
+    """(role, task name, check_mode) for every task in a role's task files whose module writes a `dest` under
+    `config_backup_dir`, with the `check_mode` of the blocks around it where it sets none."""
+    out = []
+
+    def walk(role, tasks, forced):
+        for t in tasks or []:
+            if not isinstance(t, dict):
+                continue
+            here = t.get("check_mode", forced)
+            if any(isinstance(t.get(k), list) for k in ("block", "rescue", "always")):
+                for k in ("block", "rescue", "always"):
+                    walk(role, t.get(k), here)
+                continue
+            if any(isinstance(v, dict) and "config_backup_dir" in str(v.get("dest", "")) for v in t.values()):
+                out.append((role, t.get("name"), here))
+
+    for path in sorted(glob.glob(os.path.join(ROOT, "ansible", "roles", "*", "tasks", "*.yml"))):
+        with open(path, encoding="utf-8") as fh:
+            walk(os.path.basename(os.path.dirname(os.path.dirname(path))), yaml.safe_load(fh), None)
+    return out
+
+
+def test_no_capture_write_is_forced_to_run_in_check_mode():
+    """No role task that writes under `config_backup_dir` carries `check_mode: false`, on itself or on a block around
+    it; and the walk finds the writes of the backends these tests render, and OPNsense's. A forced write runs in the
+    mandated `--check` and writes its preview, the empty capture, over the device's last good one. T27's fold-2 read
+    planted it on the raw-SSH write and the fresh-node check passed (N6); that check now fails on a written capture,
+    but it reaches only the writes a local connection lets a class reach, and the classes whose read stops there
+    (OPNsense, the netcommon and API classes) never get to theirs, so it is held here for every role."""
+    writes = _capture_writes()
+    names = {(role, name) for role, name, _ in writes}
+    assert {("backend_raw_ssh", "Write capture"), ("routeros", "Write capture"),
+            ("opnsense", "Write capture")} <= names, sorted(names)
+    assert [(r, n) for r, n, cm in writes if str(cm).strip().lower() == "false"] == []

@@ -71,9 +71,11 @@ def git(*a):
     r = subprocess.run(["git", "-C", os.path.dirname(os.getcwd())] + list(a), capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
 extra = {}
-for a in args:
+for i, a in enumerate(args):
     if a.startswith("{"):
         extra.update(json.loads(a))
+    elif i and args[i - 1] == "-e" and "=" in a:
+        extra.update([a.split("=", 1)])
 key = None
 if "kontroll_storage_root" in extra:
     p = os.path.join(extra["kontroll_storage_root"], "onboard-gui", "age.key")
@@ -133,9 +135,15 @@ if pb == "playbooks/ping.yml":
         rescued.append(("mock-hv", "proxmox : SSH liveness ping"))
     elif mode == "ping:other-task":
         rescued[0] = ("mock-fortigate", "backend_api : GET the check endpoint")
+    why = {"mock-fortigate": "mock-fortigate: no API token is in scope, so this check cannot authenticate."}
+    other = {"ping:other-reason": "mock-switch", "ping:other-reason-xe": "mock-xe",
+             "ping:other-reason-fortigate": "mock-fortigate"}
+    if mode in other:
+        why[other[mode]] = "The task includes an option with an undefined variable"
     out = []
     for h, t in rescued:
-        out += ["", "TASK [%s] ****" % t, 'fatal: [%s]: FAILED! => {"msg": "no answer"}' % h]
+        out += ["", "TASK [%s] ****" % t, 'fatal: [%s]: FAILED! => {"changed": false, "msg": "%s"}' % (
+            h, why.get(h, "Connection type local is not valid for this module"))]
     out += ["", land, recap([(h, 0, 0, any(h == s for s, _ in rescued)) for h in HOSTS])]
     print("\n".join(out)); sys.exit(0)
 if pb == "playbooks/backup-configs.yml":
@@ -164,10 +172,21 @@ if pb == "playbooks/backup-configs.yml":
     if mode == "backup:ignored-after":
         out += ["", "TASK [backend_netcommon_cli : Clean up, errors ignored] ****",
                 'fatal: [mock-switch]: FAILED! => {', '    "msg": "nothing to clean"', '}', "...ignoring"]
+    if mode == "backup:ignored-loop-after":
+        out += ["", "TASK [backend_netcommon_cli : Clean up each, errors ignored] ****",
+                'failed: [mock-switch] (item=a) => {"msg": "nothing to clean"}',
+                'failed: [mock-switch] (item=b) => {"msg": "nothing to clean"}',
+                'fatal: [mock-switch]: FAILED! => {"msg": "One or more items failed"}', "...ignoring"]
+    unreach = set()
+    if mode == "backup:unreachable-host":
+        out += ["", "TASK [proxmox : SSH capture] ****", 'fatal: [mock-hv]: UNREACHABLE! => {"msg": "no route"}']
+        unreach.add("mock-hv")
+    if mode == "backup:wrote-capture":
+        open(os.path.join(extra["config_backup_dir"], "OpenWrt_192-0-2-3.cfg"), "w").close()
     if mode != "backup:no-summary":
         out += ["", "PLAY [Backup run summary] ****"]
     if mode != "backup:no-recap":
-        out += [recap([(h, 0, h in failed, 0) for h in HOSTS])]
+        out += [recap([(h, h in unreach, h in failed, 0) for h in HOSTS])]
     print("\n".join(out)); sys.exit(2 if failed else 0)
 print(land + ok)
 '''.replace("ENV", repr(ENV)).replace("RESCUES", repr([
@@ -235,8 +254,9 @@ def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkou
     runs them, and for nothing else (the caller's own value dropped before kontroll-init, whose installer-container
     refusal reads it; bootstrap without it runs the legacy host path, whose apt task in check mode read the host's
     python3-apt in T27's first real run, not a fresh node's install), the caller's collections still on the
-    collections path; the plays ran in order (the deploy, the deploy of every service, that again with a key,
-    bootstrap, then ping and backup-configs against the mock inventory, the captures under TMPDIR); and afterwards
+    collections path; the plays ran in order (the deploy, the deploy of every service, that again with a key, the
+    three with `--diff` as the installer's `check` verb runs them, bootstrap, then ping and backup-configs against the
+    mock inventory, the captures under TMPDIR); and afterwards
     the checkout is as committed (not even an ignored file), the caller's HOME is empty and TMPDIR is empty. Guards
     the script run on a configured control node writing a second instance/ into the checkout or a second age key into
     the operator's ~/.config/sops/age, and a step that runs the checkout's tree rather than the export."""
@@ -257,6 +277,7 @@ def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkou
         assert c["cwd"] == init["root"] + "/ansible" and "--check" in c["argv"], c
         assert c["env"]["HOME"] == home and c["env"]["SOPS_AGE_KEY_FILE"] == init["env"]["SOPS_AGE_KEY_FILE"], c
         assert str(p["home"]) + "/.ansible/collections" in c["env"]["ANSIBLE_COLLECTIONS_PATH"].split(":"), c
+    assert all("--diff" in c["argv"] for c in plays[:3]), [c["argv"] for c in plays[:3]]
     assert [c["env"]["KONTROLL_IN_CONTAINER"] for c in plays] == ["1", "1", "1", "1", None, None]
     assert "-e" not in plays[0]["argv"]
     assert json.loads(plays[1]["argv"][plays[1]["argv"].index("-e") + 1]) == {"stack_services": ALL}
@@ -389,14 +410,18 @@ def test_a_play_that_must_pass_and_exits_non_zero_fails_at_its_exit(tmp_path, st
 @pytest.mark.parametrize("mode, says", [
     ("ping:none", "ping-check: the hosts it rescued are not the listed ones"),
     ("ping:other-host", "'mock-hv': 'proxmox : SSH liveness ping'"),
-    ("ping:other-task", "'mock-fortigate': 'backend_api : GET the check endpoint'")])
+    ("ping:other-task", "'mock-fortigate': 'backend_api : GET the check endpoint'"),
+    ("ping:other-reason", "ping-check's log does not say mock-switch was refused its network_cli connection"),
+    ("ping:other-reason-xe", "ping-check's log does not say mock-xe was refused its network_cli connection"),
+    ("ping:other-reason-fortigate", "ping-check's log does not say mock-fortigate stopped at its credential gate")])
 def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp_path, mode, says):
     """ping.yml must pass, and the hosts it rescues (and reports UNREACHABLE) must be exactly the listed ones, each
     rescued from its listed task (the class's read of its device, or the API-credential gate a fresh node cannot
-    pass). None rescued, one more, or a listed host rescued from another task fails the script at `ping-check`,
-    naming what the log held. Guards a class's `check` that does not evaluate passing as a device that did not
-    answer: ping.yml's rescue catches a template error too, and T27's fold-1 read passed an undefined variable in
-    proxmox's check that way (S2)."""
+    pass) for its listed reason. None rescued, one more, a listed host rescued from another task, or one rescued at
+    its task for another reason fails the script at `ping-check`, naming what the log held. Guards a class's `check`
+    that does not evaluate passing as a device that did not answer: ping.yml's rescue catches a template error too,
+    and T27's fold-1 read passed an undefined variable in proxmox's check that way (S2); the fold-2 read passed one
+    in the very task the netcommon classes are listed at, which only the reason tells apart (its S2)."""
     r, _, p = _run(tmp_path, mode)
     assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
     assert says in r.stderr, r.stderr
@@ -412,14 +437,19 @@ def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp
     ("backup:other-host", "'mock-ap': 'backend_raw_ssh : Write capture'"),
     ("backup:other-task", "'mock-edge': 'opnsense : Resolve capture filename'"),
     ("backup:handler", "'mock-hv': 'proxmox : Note the capture'"),
-    ("backup:listed-passes", "backup-check: the hosts that failed are not the listed ones")])
+    ("backup:listed-passes", "backup-check: the hosts that failed are not the listed ones"),
+    ("backup:unreachable-host", "'mock-hv': 'proxmox : SSH capture'"),
+    ("backup:wrote-capture", "a --check run wrote a capture under")])
 def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere_else(tmp_path, mode, says):
     """The backup pass against the mock inventory must fail, reach its summary, say the API class stopped at its
-    credential gate, and have exactly the listed hosts fail, each at its listed task (the read of its device, or the
-    API-credential gate a fresh node cannot pass). It passing, dying before its summary, the API class stopping for
-    another reason, printing no recap, failing one more host (in a task or in a handler, which is charged to the
-    handler and not to the task before it), failing a listed host at another task, or a listed host passing each
-    fails the script at that step, and a stop mismatch names what the log held, with the step to take. Guards the
+    credential gate, have exactly the listed hosts fail, each at its listed task (the read of its device, or the
+    API-credential gate a fresh node cannot pass), and write no capture. It passing, dying before its summary, the
+    API class stopping for another reason, printing no recap, failing one more host (in a task or in a handler, which
+    is charged to the handler and not to the task before it) or leaving one unreachable, failing a listed host at
+    another task, a listed host passing, or a capture written by the dry-run each fails the script at that step, and
+    a stop mismatch names what the log held, with the step to take. A dry-run that writes a capture would, on a real
+    fleet, overwrite the last good one with the empty preview (T27's fold-2 read planted `check_mode: false` on the
+    raw-SSH write and the step passed, N6). Guards the
     step degrading to "any red is fine": backup-configs.yml rescues nothing, so under the mock's local connection
     those classes fail by design, and a host that fails anywhere else is a play that did not evaluate (T27's first
     real run: the openwrt and RouterOS captures failed their write in every --check run)."""
@@ -431,15 +461,16 @@ def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere
     assert os.listdir(p["tmpdir"]) == []
 
 
-@pytest.mark.parametrize("mode", ["", "backup:ignored-after", "backup:rescued-first"])
+@pytest.mark.parametrize("mode", ["", "backup:ignored-after", "backup:ignored-loop-after", "backup:rescued-first"])
 def test_the_backup_pass_says_where_each_host_stopped(tmp_path, mode):
     """With the fake answering as the real play does against the mock inventory, the backup step passes and says the
     run reached its summary and the hosts that failed were the listed ones, each host's stop read from its last
     failure line that was not ignored: mock-switch's after an ignored one, and before one that is (its result printed
-    over several lines, as Ansible does for a structured one); mock-xe's after a failure a `rescue` took, which is not
-    where it stopped. Guards the parse reading the recap or the failure lines wrongly (a host's first failure, which
-    `ignore_errors` may have let pass or a `rescue` recovered, or a cleanup's ignored failure after the one that
-    stopped it, rather than that one), which would fail every run, or (with the exact match dropped) pass any."""
+    over several lines, as Ansible does for a structured one, or a loop's, whose items fail one line each before the
+    task's own line); mock-xe's after a failure a `rescue` took, which is not where it stopped. Guards the parse
+    reading the recap or the failure lines wrongly (a host's first failure, which `ignore_errors` may have let pass or
+    a `rescue` recovered, or a cleanup's ignored failure after the one that stopped it, rather than that one), which
+    would fail every run, or (with the exact match dropped) pass any."""
     r, _, _ = _run(tmp_path, mode)
     assert r.returncode == 0, r
     assert "fresh-node-check: backup-check — ok (rc=2, expected fail)" in r.stdout, r.stdout

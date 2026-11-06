@@ -28,8 +28,9 @@
 #      class, `ansible_connection: local`, RFC-5737 addresses): the fleet plays dispatch every class's `check` and
 #      `backup` entrypoint and reach their summaries. No device is contacted and none answers: the step proves the
 #      plays evaluate, not that a device does. ping.yml must pass, rescuing exactly the classes whose check reads a
-#      device or needs a credential, each at that task; backup-configs.yml must fail, at exactly the classes whose
-#      capture does, each at that task (both lists below). Such a class is evaluated up to that task, not past it.
+#      device or needs a credential, each at that task and for that reason; backup-configs.yml must fail, at exactly
+#      the classes whose capture does, each at that task (both lists below), and write no capture. Such a class is
+#      evaluated up to that task, not past it.
 #
 # What it never does: keep a file outside its temporary directory (HOME and TMPDIR are moved there before
 # kontroll-init runs, Python writes no bytecode, and the tree it runs is the export, never this checkout; a task that
@@ -213,8 +214,9 @@ recap bootstrap-check
 needs bootstrap-check '^TASK \[Summary\]' "bootstrap reached its summary"
 
 # ping.yml rescues a host its check cannot reach and reports it UNREACHABLE: a class whose check reads its device,
-# or needs an API credential, is rescued at that task. Held to the list, so a `check` that does not evaluate (a
-# template error is rescued too) cannot pass as a device that did not answer.
+# or needs an API credential, is rescued at that task. Held to the list, and each listed host to its reason, so a
+# `check` that does not evaluate (a template error is rescued too, at the same task) cannot pass as a device that
+# did not answer.
 step ping-check pass ansible-playbook -i ../tests/mock-inventory.yml playbooks/ping.yml --check
 recap ping-check
 needs ping-check '^PLAY \[Reachability summary\]' "the run reached its summary"
@@ -222,11 +224,18 @@ stops ping-check --rescued \
   "mock-fortigate=backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)" \
   "mock-switch=backend_netcommon_cli : Liveness via cli_command (network_cli)" \
   "mock-xe=backend_netcommon_cli : Liveness via cli_command (network_cli)"
+needs ping-check '^fatal: \[mock-switch\]: .*Connection type local is not valid for this module' \
+  "mock-switch was refused its network_cli connection"
+needs ping-check '^fatal: \[mock-xe\]: .*Connection type local is not valid for this module' \
+  "mock-xe was refused its network_cli connection"
+needs ping-check '"msg": "mock-fortigate: no API token is in scope' "mock-fortigate stopped at its credential gate"
 # The backup pass must FAIL, and only where the mock inventory stops it. backup-configs.yml rescues nothing (a
 # capture that fails is a failed run), so under `ansible_connection: local` a class whose capture reads its device,
 # or needs an API credential a fresh node does not have, fails at that task. Every other host must pass and the run
 # must reach its summary. A host failing anywhere else, or a listed one passing or failing at another task, fails the
-# check: a class added to the mock inventory whose backup reaches a device is listed here, at that task.
+# check: a class added to the mock inventory whose backup reaches a device is listed here, at that task. A listed
+# host is held to its task, not its reason (its read is `no_log`, and ansible-core 2.18 prints no reason for it); the
+# API class is the exception, held by its credential message.
 step backup-check fail ansible-playbook -i ../tests/mock-inventory.yml playbooks/backup-configs.yml --check \
   -e "config_backup_dir=$tmp/backups"
 needs backup-check '^PLAY \[Backup run summary\]' "the run reached its summary"
@@ -236,5 +245,7 @@ stops backup-check \
   "mock-fortigate=backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)" \
   "mock-switch=backend_netcommon_cli : Pull config via cli_command" \
   "mock-xe=backend_netcommon_cli : Pull config via cli_command"
+# A --check run writes no capture: the writes preview an empty one, and the directory stays as it was.
+[ -z "$(ls -A "$tmp/backups")" ] || fail backup-check "a --check run wrote a capture under $tmp/backups"
 
 echo "fresh-node-check: PASS"
