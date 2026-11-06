@@ -11,6 +11,90 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(security): the GUI page runs only the script its response authorises (T23, 2026-11-04)
+
+The page's policy had no `script-src`, so markup that got past the paint rule could run. SECURITY.md C19.
+
+- **Changed.** `GET /` answers `Content-Security-Policy: script-src 'nonce-<n>'; object-src 'none'; base-uri 'none';
+  frame-ancestors 'none'` with a fresh nonce per response, rendered into the page's one `<script>` tag, and
+  `Cache-Control: no-store`. Every other response (each JSON route, the 401, an error the handler sees — also one
+  raised while the page renders) answers `script-src 'none'` with the same three directives. There is no `default-src`
+  and no `style-src`. The nonce is drawn by a template context processor (no route passes it) and reaches one
+  response.
+- **Changed.** The header buttons (search, Index, Pending, Discovery, Backups, Secrets, Keys, Settings, Homepage)
+  are bound from the script instead of `onclick` attributes, which a nonce does not authorise. No `data-testid`
+  moved.
+- **Changed.** The paint gate (`tests/unit/test_card_paint_gate.py`) refuses any handler attribute (a bare call was
+  tolerated) or `javascript:` URL in the static markup, a handler attribute or a `javascript:` URL in a tag of the
+  literal markup the script writes (read as the joined literals spell it, a quote opening a value only right after
+  `=`; SECURITY.md C19 names the tags it misreads), the nonce's expression anywhere in the static markup but the
+  script's tag, and a script element opened with anything but the nonce tag, and the security header test reads the
+  static directives only (`_CSP_STATIC`), refusing a `default-src` or `style-src` there.
+- **Added.** `tests/integration/test_gui_api.py`: the page's header and script tag carry the same fresh nonce and the
+  policy is exactly its four directives, each named once; every other response forbids script, an error the handler
+  sees raised during the render and a response after the page in one app context included; the nonce is 128 bits or
+  more of base64url. `tests/e2e/test_script_policy.py`: neither an injected handler attribute nor an injected script
+  element runs (each with a control that runs it once the header is dropped), and every header button still opens its
+  panel with no policy violation from the page's first byte on.
+
+### fix(security): a credential holding a non-ASCII character is refused, not a 500 (2026-11-04)
+
+`hmac.compare_digest` raises `TypeError` on a str that holds a non-ASCII character, and the GUI's Basic-auth check,
+the API's Bearer check and the promote route's plan-token check each handed it the strings as received. Each now
+compares bytes: the bytes the client sent (the GUI's UTF-8, the API's header as sent), against the configured
+secret's own (as the environment decoded them, so one that is not valid UTF-8 never raises).
+
+- **Fixed.** The GUI answers the right user with a non-ASCII password 401 and audits `auth-denied`; it answered the
+  JSON 500 and audited an `internal-error`, and the browser did not ask again. A configured GUI password holding a
+  non-ASCII character admits its owner; before, every login with the right user raised. A Basic header whose
+  credential is not base64 ASCII (`Basic päss`, which Werkzeug's parse refused with a ValueError) is a 401 too.
+- **Fixed.** The GUI takes a credential from a Basic header alone. Werkzeug reads `username` and `password` from any
+  scheme's parameters, so `Foo username=admin, password=…` (or `Digest …`) admitted the right password.
+- **Fixed.** The API answers a Bearer token holding a non-ASCII character 401 with an `auth-denied` audit line; it
+  answered a bare 500 and audited nothing. A configured token holding one admits its UTF-8 bytes, as the GUI does:
+  the token is read from the header with only spaces and tabs trimmed, since FastAPI's parse strips U+0085 and
+  U+00A0 too (the last byte of `à` or `Å`, as Starlette decodes it), and a byte beside the token that is not its own
+  is refused.
+- **Fixed.** A configured GUI password or API token that is not valid UTF-8 (a hand-written `.env`) answers a 401;
+  every right-user login, and every Bearer request, answered a 500. At the GUI no login can match such a
+  password (a browser sends UTF-8): write the `.env` as UTF-8, as deploy-stack does.
+- **Fixed.** `verify_token` answers a non-ASCII plan token `False`, as its docstring promised, a lone surrogate
+  (a JSON escape) too; it raised, and each promote route answered a 500.
+- **Added.** A test for each, in `tests/integration/test_gui_api.py`, `tests/integration/test_api_auth.py` and
+  `tests/unit/test_promote_token.py`.
+
+### fix(security): an error body never carries exception text (T20, 2026-11-02)
+
+An exception's message can quote a request value, a path inside the container or a line of a file being parsed.
+Every GUI read route with a broad `except` put it in its 500 body (CodeQL `py/stack-trace-exposure`), both onboard
+plan routes answered any `ValueError` 422 with its text, the Homepage editor showed a failed write's path, and `kontroll-init
+--fresh` printed the first-run passwords wherever its output went. SECURITY.md C23.
+
+- **Changed.** An exception no GUI route designed answers 500 with `<what> failed — internal error (ref <id>); the
+  service log has the details`, the code `internal_error` and a `run_id`. The GUI's stderr gets `internal-error
+  kontroll_run_id=<id>` with the route, the exception's type and its frames, and the audit log an `internal-error`
+  row with the same id. Neither log holds the exception's message. A route with no `try` now gets the same JSON
+  answer instead of Flask's HTML 500; an HTTP error keeps its own.
+- **Changed.** The onboard planner's guards raise `OnboardRefusal`, and both onboard routes catch that type
+  instead of every `ValueError`: a stray one is answered as the unexpected (the GUI's 500 above, the API's bare
+  500), not as a 422 with its text. A request-boundary or repository-data refusal raised under a GUI read route's
+  broad `except` now gets its own 422 or 409 instead of a 500.
+- **Changed.** A Homepage save whose overlay write fails answers 500 `write_failed` with a `run_id`; the service
+  logs the file, the exception's type and its errno, and a `homepage-write-failed kontroll_run_id=<id>` line.
+- **Changed.** An audit-log write that fails (a full disk, a rollover that cannot rename) prints `audit-log write
+  failed: <type> errno=<n> action=<action>` to the GUI's stderr, not logging's own report, which printed the
+  exception the route was handling. An audit file the GUI cannot open is said once, `audit-log open failed: <type>
+  errno=<n>`, where every row was lost with no line.
+- **Fixed.** Concurrent first requests after a GUI start each built the audit logger, so it kept several
+  handlers and wrote every later row several times. One lock builds it once.
+- **Changed.** `kontroll-init` shows the bootstrap values only when standard output is a terminal. Otherwise it
+  prints each written field's name, `(not shown)` and, for each domain, the `sops -d` command that reads it back,
+  to run from the repository's root or inside `scripts/kontroll-installer.sh shell`; a key file other than the
+  default is named absolute and quoted.
+- **Docs.** docs/troubleshooting.md §12 reads an `internal error (ref <id>)` answer: a `sed` range for the frames,
+  Loki's `run_id` label and the frames by service and time, the audit row in Loki or its file, and the two lines
+  that say an audit row was lost.
+
 ### fix(security): the leak guard no longer spells the maintainer's email, even as a character class (2026-11-01)
 
 The structural layer of `tests/_leak_guard.py` matched the maintainer's personal email local part with a

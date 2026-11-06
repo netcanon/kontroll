@@ -69,6 +69,100 @@ def test_bad_token_401_and_audited(priv):
     assert any(row["action"] == "auth-denied" for row in read_audit(priv.audit_log))
 
 
+def test_a_token_with_a_non_ascii_character_is_a_401_and_audited(priv):
+    """A Bearer token holding a non-ASCII character is a 401 with an `auth-denied` audit line, as any wrong token is.
+    Guards the compare: `hmac.compare_digest` raises TypeError on a non-ASCII str, so the request answered a bare 500
+    and left no audit line of the denied attempt."""
+    r = priv.client.post("/refresh", headers={"Authorization": "Bearer töken".encode("utf-8")})
+    assert r.status_code == 401
+    assert [row["action"] for row in read_audit(priv.audit_log)] == ["auth-denied"]
+
+
+def _post_raw(app, path, authorization):
+    """POST `path` to `app` with an Authorization header of exactly the bytes given (a list: one header for each, in
+    order). Starlette's TestClient re-encodes a header that is not UTF-8 (httpx reads it as ISO-8859-1, the test
+    transport writes it as UTF-8), so a Latin-1 spelling would reach the app as UTF-8; httpx's ASGITransport hands the
+    app the bytes as they are."""
+    import asyncio
+
+    import httpx
+
+    async def post():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as c:
+            values = authorization if isinstance(authorization, list) else [authorization]
+            return await c.post(path, headers=[("Authorization", v) for v in values])
+    return asyncio.run(post())
+
+
+def test_a_non_ascii_configured_token_admits_its_utf8_bytes_alone(priv, monkeypatch):
+    """A configured API token holding a non-ASCII character admits the client that sends its UTF-8 bytes and refuses
+    its ISO-8859-1 spelling 401, the bytes reaching the app as sent. Guards the compare of the bytes sent: Starlette
+    decodes a header as ISO-8859-1, so a UTF-8 encode of what it hands on is not what came over the wire, and the
+    token admitted its Latin-1 spelling alone while the GUI admits a password's UTF-8 (AUTH-NA read A, N1)."""
+    monkeypatch.setattr(priv.client.app.state.settings, "api_token", "töken")
+    for spelling, want in (("utf-8", 200), ("latin-1", 401)):
+        r = _post_raw(priv.client.app, "/refresh", "Bearer töken".encode(spelling))
+        assert r.status_code == want, (spelling, r.status_code)
+
+
+def test_a_configured_token_that_is_not_utf8_is_a_401_not_a_500(priv, monkeypatch):
+    """A configured API token that is not valid UTF-8 (a hand-written .env holding a Latin-1 byte, which the
+    environment decodes `surrogateescape`) answers a wrong token 401 with an `auth-denied` audit line. Guards the
+    configured side's encode: a strict UTF-8 encode raised on the escaped byte, so every Bearer request answered a bare
+    500 and left no audit line (AUTH-NA read A, N2)."""
+    monkeypatch.setattr(priv.client.app.state.settings, "api_token", "t\udcf6ken")
+    r = priv.client.post("/refresh", headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+    assert [row["action"] for row in read_audit(priv.audit_log)] == ["auth-denied"]
+
+
+def test_a_non_utf8_configured_token_admits_its_own_bytes_alone(priv, monkeypatch):
+    """A configured API token that is not valid UTF-8 admits the client that sends its own bytes and refuses the
+    spellings a lossy encode of it gives ('t?ken', 'tken'). Guards the configured side's error handler: a lossy one
+    never raises either, but admits a credential that is not the configured one (AUTH-NA read A2, N2)."""
+    monkeypatch.setattr(priv.client.app.state.settings, "api_token", "t\udcf6ken")
+    for sent, want in ((b"t\xf6ken", 200), (b"t?ken", 401), (b"tken", 401)):
+        r = _post_raw(priv.client.app, "/refresh", b"Bearer " + sent)
+        assert r.status_code == want, (sent, r.status_code)
+
+
+def test_a_configured_token_ending_in_a_strip_byte_admits_its_utf8_bytes(priv, monkeypatch):
+    """A configured API token whose last character's UTF-8 ends in 0xA0 or 0x85 ('tokà', 'tokÅ') admits the client
+    that sends those UTF-8 bytes. Guards the read of the token from the header: FastAPI's parse trims it with
+    `str.strip()`, which takes U+00A0/U+0085 (that last byte, as Starlette decodes it) off, so the compare saw one
+    byte short and no spelling admitted (AUTH-NA read A2, N1)."""
+    for tok in ("tokà", "tokÅ"):
+        monkeypatch.setattr(priv.client.app.state.settings, "api_token", tok)
+        r = _post_raw(priv.client.app, "/refresh", ("Bearer " + tok).encode("utf-8"))
+        assert r.status_code == 200, (tok, r.status_code)
+
+
+def test_the_bearer_token_is_read_with_only_ows_trimmed_and_under_bearer_alone(priv):
+    """The Bearer token is compared as sent with only spaces and tabs trimmed around it (RFC 9110's separator and
+    OWS), and only under the Bearer scheme (in any case). Guards the read of the header itself: trimming as
+    `str.strip()` does admits the token with a stray 0xA0 or 0x85 after it, and reading it with `split()` admits one
+    before it, bytes that are not the token's; trimming one end only refuses a header RFC 9110 allows; and reading the
+    header without FastAPI's scheme check admits the token sent under another scheme (read A2 N1, read B N3)."""
+    tok = TOKEN.encode()
+    for sent, want in ((b"Bearer " + tok, 200), (b"Bearer  " + tok, 200), (b"Bearer " + tok + b" \t", 200),
+                       (b"bearer " + tok, 200), (b"Bearer " + tok + b"\xa0", 401),
+                       (b"Bearer " + tok + b"\x85", 401), (b"Bearer \xa0" + tok, 401), (b"Bearer \x85" + tok, 401),
+                       (b"Basic " + tok, 401), (b"Token " + tok, 401)):
+        r = _post_raw(priv.client.app, "/refresh", sent)
+        assert r.status_code == want, (sent, r.status_code)
+
+
+def test_the_token_compared_is_the_one_under_the_scheme_checked(priv):
+    """With two Authorization headers, the right token in the second does not admit a request whose first header holds
+    another token or another scheme. Guards the token's read from the header: FastAPI's `creds` gates on the first
+    header, so a read of any other would pass the scheme check on one header and compare the token of another
+    (AUTH-NA read A3, N1)."""
+    tok = TOKEN.encode()
+    for values in ([b"Bearer wrong", b"Bearer " + tok], [b"Basic eDp5", b"Bearer " + tok]):
+        r = _post_raw(priv.client.app, "/refresh", values)
+        assert r.status_code == 401, (values, r.status_code)
+
+
 # --- refresh (lowest blast radius) ------------------------------------------ #
 def test_refresh_ok_and_audited(priv):
     """A valid token admits POST /refresh: 200 + a run_id, and a `refresh` audit line carrying that

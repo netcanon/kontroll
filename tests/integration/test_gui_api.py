@@ -9,7 +9,9 @@ import a usable app without it).
 """
 import base64
 import copy
+import logging
 import os
+import re
 import subprocess
 from types import SimpleNamespace
 
@@ -19,6 +21,7 @@ import yaml
 import _canned             # tests/_canned.py: each canned shape has a conformance row, bar E2E_UNIT
 import app as gui          # gui/ is on sys.path (conftest); app.py is the GUI
 from kontroll import catalog, gitio, paths, probe
+from kontroll.service.onboard import OnboardRefusal
 
 pytestmark = pytest.mark.integration
 
@@ -103,9 +106,245 @@ def test_wrong_password_is_401(client):
     assert client.get("/api/search?q=cisco", headers=_auth(pw="wrong")).status_code == 401
 
 
+def test_a_password_with_a_non_ascii_character_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch):
+    """The right user with a password holding a non-ASCII character is refused 401 and audited `auth-denied`, as any
+    wrong password is. Guards the compare: `hmac.compare_digest` raises TypeError on a non-ASCII str, so the request
+    answered the JSON 500, the audit log named an internal error instead of a denied login, and the browser did not
+    ask again (found by T23 fold 3's runtime read)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=cisco", headers=_auth(pw="pässwörd"))
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_configured_password_with_a_non_ascii_character_admits_its_owner(client, mock_services, monkeypatch):
+    """A GUI password holding a non-ASCII character admits the right user with it (a browser sends Basic credentials
+    as UTF-8) and refuses a wrong one 401. Guards the compare raising on every login, the right one included, once
+    the operator's password is not ASCII: the GUI could not be signed into at all."""
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "pässwörd")
+    assert client.get("/api/search?q=", headers=_auth(pw="pässwörd")).status_code == 200
+    assert client.get("/api/search?q=", headers=_auth(pw="passwörd")).status_code == 401
+
+
+@pytest.mark.parametrize("header", ["Basic päss", "Basic ä"])
+def test_a_basic_header_not_in_base64_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch, header):
+    """A Basic header whose credential holds a non-ASCII character as it is, not base64'd, is refused 401 and audited
+    `auth-denied`. Guards the header's parse: Werkzeug's base64 decode raises ValueError on a non-ASCII str, before
+    any compare, so the request answered the JSON 500 and an `internal-error` row (AUTH-NA read A, S1). No browser
+    sends it; a scripted client or a scanner can."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=", headers={"Authorization": header})
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_configured_password_that_is_not_utf8_is_a_401_for_the_right_user(client, tmp_path, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 (a hand-written .env holding a Latin-1 byte, which the
+    environment decodes `surrogateescape`) answers the right user 401 and audits `auth-denied`. Guards the configured
+    side's encode: a strict UTF-8 encode raised on the escaped byte, so every right-user login answered a 500 while a
+    wrong user got a 401 (AUTH-NA read A, N2)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    r = client.get("/api/search?q=", headers=_auth(pw="päss"))
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
+def test_a_non_utf8_configured_password_admits_no_lossy_spelling(client, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 admits neither the spelling a `replace` encode of it gives
+    ('p?ss'), nor the one with a decode's replacement character, nor the one an `ignore` encode gives ('pss').
+    Guards the configured side's error handler: a lossy one never raises either, but admits a credential that is not
+    the configured one (AUTH-NA read A2, N2)."""
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    for pw in ("p?ss", "p\ufffdss", "pss"):
+        assert client.get("/api/search?q=", headers=_auth(pw=pw)).status_code == 401, pw
+
+
+@pytest.mark.parametrize("header", ['Foo username="admin", password="test-password"',
+                                    'Digest username="admin", password="test-password"',
+                                    "Foo username=admin, password*=utf-8''test-password",
+                                    'Basicx username="admin", password="test-password"'])
+def test_a_credential_under_another_scheme_is_a_401_and_audited_as_denied(client, tmp_path, monkeypatch, header):
+    """The right user and password sent under a scheme other than Basic (one whose name only begins with it, too) are
+    refused 401 and audited `auth-denied`. Guards the scheme check: Werkzeug's `Authorization` reads `username` and
+    `password` from any scheme's parameters, so such a header was compared as a Basic one and admitted (AUTH-NA read
+    A2, N3; `Basicx`, read A3, N2)."""
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/api/search?q=", headers={"Authorization": header})
+    assert r.status_code == 401, r.get_data(as_text=True)[:200]
+    actions = [ln.split("\t")[2] for ln in logpath.read_text(encoding="utf-8").splitlines()]
+    assert actions == ["auth-denied"], actions
+
+
 def test_wrong_user_is_401(client):
     """Wrong username -> 401, even with a plausible password."""
     assert client.get("/api/search?q=cisco", headers=_auth(user="root")).status_code == 401
+
+
+# --- the content security policy (SECURITY.md C19, T23) ---------------------- #
+_STATIC_CSP = ("object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'")
+
+
+def _csp(resp):
+    """The response's policy as {directive name: its whole text}, for one assertion per directive. A name written
+    twice fails here: the browser obeys the FIRST and ignores the rest, while a dict would keep the last, so a test
+    reading it could pass a policy the browser does not enforce. Names compare lower-cased, as the browser's do."""
+    policy = resp.headers.get("Content-Security-Policy", "")
+    parts = [p.strip() for p in policy.split(";") if p.strip()]
+    names = [p.split()[0].lower() for p in parts]
+    assert len(names) == len(set(names)), "a directive named twice (the browser obeys the first): %r" % policy
+    return {p.split()[0].lower(): p for p in parts}
+
+
+def test_the_page_and_its_header_carry_the_same_fresh_nonce(client, monkeypatch):
+    """`GET /` twice: each response's `script-src` is one `'nonce-…'` source, the page's one script element carries
+    the same value, the two values differ, the page is `no-store`, and the policy is exactly `script-src` and the
+    three static directives. Guards a page whose script the browser refuses — a header and a tag that disagree, or
+    a render path that sets no nonce, leaves the whole GUI blank — a nonce reused across responses (or kept in a
+    cache), which a value that reached the page's markup could copy onto a script of its own, and a directive
+    beside the nonce that re-opens what it closes (`script-src-elem 'unsafe-inline'` runs an injected element; a
+    `default-src` or `style-src` breaks the page's style block)."""
+    monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
+    seen = []
+    for _ in range(2):
+        r = client.get("/", headers=_auth())
+        assert r.status_code == 200
+        csp = _csp(r)
+        m = re.fullmatch(r"script-src 'nonce-([A-Za-z0-9_-]{24})'", csp.get("script-src", ""))
+        assert m, "script-src is not one nonce source: %r" % r.headers.get("Content-Security-Policy")
+        nonce = m.group(1)
+        body = r.get_data(as_text=True)
+        tags = re.findall(r"^[ \t]*<script\b[^>]*>", body, re.M | re.I)   # an element starts a line, as in the gate
+        assert tags == ['<script nonce="%s">' % nonce], "the script tag does not carry the header's nonce: %s" % tags
+        assert r.headers.get("Cache-Control") == "no-store"
+        for directive in _STATIC_CSP:
+            assert directive in csp.values(), "missing %s" % directive
+        assert sorted(csp) == ["base-uri", "frame-ancestors", "object-src", "script-src"], sorted(csp)
+        seen.append(nonce)
+    assert seen[0] != seen[1], "the same nonce was served twice"
+
+
+def test_a_response_that_is_not_the_page_forbids_script(client, mock_services):
+    """A JSON route, the 401 and a 404 each answer `script-src 'none'` beside the three static directives. Guards a
+    response that rendered no page becoming a place script can run (an error body a browser opens as HTML), and a
+    nonce leaking into a response that has no script to authorise. Whether such a response is `no-store` is not
+    this test's business: no nonce is cached with it."""
+    responses = {"json": client.get("/api/search?q=", headers=_auth()), "401": client.get("/"),
+                 "404": client.get("/no-such-route", headers=_auth())}
+    assert [r.status_code for r in responses.values()] == [200, 401, 404]
+    for what, r in responses.items():
+        csp = _csp(r)
+        assert csp.get("script-src") == "script-src 'none'", (what, r.headers.get("Content-Security-Policy"))
+        for directive in _STATIC_CSP:
+            assert directive in csp.values(), (what, directive)
+
+
+def test_an_error_raised_while_the_page_renders_forbids_script(client, monkeypatch, tmp_path):
+    """A `GET /` whose template fails after the render drew its nonce answers the fixed JSON 500 (`internal_error`,
+    with a run id the audit log carries too) under `script-src 'none'`, with no nonce anywhere in its policy. Guards
+    a nonce outliving the page it was drawn for: the 500 is JSON with no script in it, and the docs promise an error
+    `'none'` (SECURITY.md C19). The value the template cannot serialise stands for any fault inside a render. It
+    checks its own premise, that a nonce was drawn before the fault (a fault before the draw leaves none to drop).
+    The error handler drops the nonce and the hook's mimetype check would too: the hook's own test below holds the
+    mimetype check alone."""
+    class _Unrenderable:                                    # `has_remote | tojson` cannot write it: the render fails
+        pass
+    monkeypatch.setattr(gitio, "offsite_remote_exists", _Unrenderable)
+    drawn, draw = [], gui._script_nonce
+    monkeypatch.setattr(gui, "_script_nonce", lambda: drawn.append(1) or draw())
+    logpath = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(logpath)); monkeypatch.setattr(gui, "_audit_logger", None)
+    r = client.get("/", headers=_auth())
+    assert r.status_code == 500 and r.get_json()["code"] == "internal_error", r.get_data(as_text=True)[:200]
+    assert _csp(r).get("script-src") == "script-src 'none'", r.headers.get("Content-Security-Policy")
+    assert "nonce-" not in r.headers.get("Content-Security-Policy", "")
+    assert "run_id=%s" % r.get_json()["run_id"] in logpath.read_text(encoding="utf-8")
+    assert drawn, "no nonce was drawn before the fault, so there was none to drop"
+
+
+def test_an_http_error_raised_while_the_page_renders_forbids_script(client, monkeypatch):
+    """A `GET /` whose render raises an HTTP error (a 404) after it drew its nonce answers Werkzeug's HTML error page
+    under `script-src 'none'`, not `no-store`. Guards the case the previous test cannot reach: that answer is
+    `text/html`, so the hook's mimetype check keeps whatever nonce `g` still holds, and only the error handler
+    dropping it keeps a nonce off a page that printed none (the docs promise an error `'none'`, SECURITY.md C19).
+    It checks its own premise, that a nonce was drawn before the fault (a fault before the draw leaves none to
+    drop)."""
+    from werkzeug.exceptions import NotFound
+
+    class _AbortsInRender:                                  # `tojson` calls `__html__`: the render aborts mid-way
+        def __html__(self):
+            raise NotFound()
+    monkeypatch.setattr(gitio, "offsite_remote_exists", _AbortsInRender)
+    drawn, draw = [], gui._script_nonce
+    monkeypatch.setattr(gui, "_script_nonce", lambda: drawn.append(1) or draw())
+    r = client.get("/", headers=_auth())
+    assert r.status_code == 404 and r.mimetype == "text/html", r.get_data(as_text=True)[:200]
+    assert b"<script" not in r.data
+    assert _csp(r).get("script-src") == "script-src 'none'", r.headers.get("Content-Security-Policy")
+    assert r.headers.get("Cache-Control") is None
+    assert drawn, "no nonce was drawn before the fault, so there was none to drop"
+
+
+@pytest.mark.parametrize("mimetype", ["application/json", "text/plain"])
+def test_a_body_that_is_not_a_page_gets_no_nonce_whatever_g_holds(mimetype):
+    """The hook alone, on a JSON and on a text body, with a nonce left on `g`: each answers `script-src 'none'`, not
+    `no-store`. Guards the mimetype check, which no route decides today: the two designed refusals (C22) answer JSON,
+    and every other error a handler sees reaches `_unhandled`, which drops the nonce first, so the error tests pass
+    without it (Flask hands an `abort(response)` and a routing redirect back with no handler: raised during the
+    render, those keep the nonce on a body that prints none, and no template expression here can raise them). It stays
+    the guard for a render whose answer is not a page (a template rendered into a JSON or text body), which would
+    otherwise hand that body a nonce it has no script for."""
+    with gui.app.test_request_context("/"):
+        gui.g.csp_nonce = "n" * 24
+        resp = gui._security_headers(gui.app.response_class("{}", mimetype=mimetype))
+    assert _csp(resp).get("script-src") == "script-src 'none'", resp.headers.get("Content-Security-Policy")
+    assert resp.headers.get("Cache-Control") is None
+
+
+def test_a_nonce_reaches_one_response_only(client, mock_services, monkeypatch):
+    """A 404, the 401 and a JSON route, each served right after the page inside one pushed app context: each page
+    has its nonce and each response after one answers `script-src 'none'`. Guards a nonce left on `g`, which belongs
+    to the app context, not the request: whatever pushes one context around several requests (a test harness, a
+    WSGI wrapper, a CLI command) would hand the next response a nonce an earlier page printed. The 401 is HTML and
+    no error, so only taking the nonce off `g` keeps it out; the 404 is an error too (`_unhandled` drops the nonce)
+    and the JSON one is not HTML (the mimetype check), and each follows its own page, so neither clears the 401's."""
+    monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
+    nexts = {"404": lambda: client.get("/no-such-route", headers=_auth()), "401": lambda: client.get("/"),
+             "json": lambda: client.get("/api/search?q=", headers=_auth())}
+    pages, after = {}, {}
+    with gui.app.app_context():
+        for what, get in nexts.items():
+            pages[what], after[what] = client.get("/", headers=_auth()), get()
+    for what, page in pages.items():
+        assert "'nonce-" in _csp(page).get("script-src", ""), (what, page.headers.get("Content-Security-Policy"))
+    assert [r.status_code for r in after.values()] == [404, 401, 200]
+    for what, r in after.items():
+        assert r.mimetype == ("application/json" if what == "json" else "text/html"), (what, r.mimetype)
+        assert _csp(r).get("script-src") == "script-src 'none'", (what, r.headers.get("Content-Security-Policy"))
+
+
+def test_the_nonce_is_long_and_spelled_from_the_whole_alphabet(client, monkeypatch):
+    """Six page loads: six different nonces, each at least 22 base64url characters (128 bits), between them
+    spelling more than the 22 characters hex has in either case. Guards a nonce weaker than the page test's format
+    check — a 96-bit hex string (`uuid4().hex[:24]`) matches its 24-character pattern — and one drawn from a short
+    or repeating source. Six random 18-byte draws spell about 57 distinct characters."""
+    monkeypatch.setattr(gitio, "offsite_remote_exists", lambda: False)
+    nonces = []
+    for _ in range(6):
+        policy = _csp(client.get("/", headers=_auth())).get("script-src", "")
+        m = re.fullmatch(r"script-src 'nonce-([A-Za-z0-9_-]+)'", policy)
+        assert m, "the page has no nonce source: %r" % policy
+        nonces.append(m.group(1))
+    assert len(set(nonces)) == 6, nonces
+    assert all(len(n) >= 22 for n in nonces), nonces
+    assert len(set("".join(nonces))) > 22, "the nonces use %d characters: %s" % (len(set("".join(nonces))), nonces)
 
 
 # --- the read API surface (in-process over the service layer) ---------------- #
@@ -195,15 +434,16 @@ def test_onboard_missing_field_is_400(client):
 
 
 def test_onboard_partial_auth_set_is_a_422_not_a_500(client, onboard_env, monkeypatch, tmp_path):
-    """Parity with the API route: a planner guard's catchable ValueError — a partially-filled required auth_set
-    (more reachable via F1 TIER-B's derived proxmox api-token set) or the MF-S2 domain-confinement refusal — is a
-    clean 422 CLIENT error, NOT a 500 worker crash, with the code `invalid_request`, and it is audited as
-    `reason=planner-guard` — not as a request-boundary refusal, which names a field. Guards the GUI onboard relay
-    500-ing on a normal operator credential mistake, and the audit log blaming a field for a refusal that is about
-    the combination of fields. The guard is pinned at the service layer (test_onboard_proxmox_auth.py); this pins
-    the GUI route's mapping."""
+    """Parity with the API route: a planner guard's refusal (`OnboardRefusal`) — a partially-filled required
+    auth_set (more reachable via F1 TIER-B's derived proxmox api-token set) or the MF-S2 domain-confinement refusal —
+    is a clean 422 CLIENT error with its own sentence, NOT a 500 worker crash, with the code `invalid_request`, and it
+    is audited as `reason=planner-guard` — not as a request-boundary refusal, which names a field. Guards the GUI
+    onboard relay 500-ing on a normal operator credential mistake, and the audit log blaming a field for a refusal
+    that is about the combination of fields. The guard is pinned at the service layer (test_onboard_proxmox_auth.py);
+    this pins the GUI route's mapping. Since T20 the route catches that type, not every ValueError: a stray one is
+    pinned by test_a_stray_value_error_under_the_onboard_planner_is_no_refusal."""
     def _raise(*a, **k):
-        raise ValueError("incomplete credential set 'proxmox_api' — provide all of "
+        raise OnboardRefusal("incomplete credential set 'proxmox_api' — provide all of "
                          "['api_user', 'api_token_id', 'api_token_secret'] together (missing ['api_token_secret'])")
     monkeypatch.setattr(gui, "build_onboard_plan", _raise)
     monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "audit.log"))
@@ -1899,3 +2139,422 @@ def test_gui_identity_on_a_module_file_that_is_not_a_mapping_is_a_409(client, ca
     assert "modules/demo_sw/module.yml" in r.get_json()["error"]
     audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
     assert "repository-refuse" in audit and "what=module file" in audit
+
+
+# --- T20: an error body never carries exception text (SECURITY.md C23) ------------------------------------------ #
+# The text an unexpected exception carries in these tests: a path inside the container, as an OSError or a YAML error
+# would quote one. No assertion may find it in a response, a log record or the audit file.
+_LEAK = "t20-leak-sentinel /opt/kontroll/instance/secrets/network.sops.yml"
+
+# Each read route with a broad `except` of its own: (url, the attribute its service call resolves, its endpoint, the
+# words its fixed sentence opens with — the words each route answered with before T20).
+_READ_ROUTES = [
+    ("/api/search?q=cisco", "app.service_search", "api_search", "search failed"),
+    ("/api/fleet", "kontroll.service.fleet.list_fleet", "api_fleet", "fleet read failed"),
+    ("/api/services", "kontroll.service.fleet.list_services", "api_services", "services read failed"),
+    ("/api/pending", "kontroll.service.pending.list_pending", "api_pending", "pending read failed"),
+    ("/api/discovery", "kontroll.service.discovery.read_inbox", "api_discovery", "discovery read failed"),
+    ("/api/provenance", "kontroll.service.provenance.fleet_provenance", "api_provenance", "provenance read failed"),
+    ("/api/image-provenance", "kontroll.service.provenance.image_provenance", "api_image_provenance",
+     "image provenance read failed"),
+    ("/api/settings", "kontroll.service.settings.read_view", "api_settings", "settings read failed"),
+    ("/api/homepage", "kontroll.service.homepage.read_board", "api_homepage", "homepage read failed"),
+    ("/api/classify?collection=cisco.ios", "app.service_classify", "api_classify", "classify failed"),
+    ("/api/configurable?kind=secret-domain&id=dashboards", "kontroll.service.configurable.configurable_view",
+     "api_configurable", "configurable read failed"),
+    ("/api/capability/metrics/suggest?key=demo_sw", "kontroll.service.capability.suggest_view",
+     "api_capability_suggest", "suggest failed"),
+    ("/api/units/cisco.ios", "kontroll.service.units.service_units", "api_units", "units read failed"),
+    ("/api/actuation", "kontroll.service.units.registered_units_view", "api_actuation",
+     "actuation registry read failed"),
+]
+
+
+def _boom(*a, **k):
+    """A service call that fails the way no route designed for: a RuntimeError whose text is the sentinel."""
+    raise RuntimeError(_LEAK)
+
+
+@pytest.fixture
+def audit_file(tmp_path, monkeypatch):
+    """The GUI's audit log redirected to a throwaway file (its cached logger dropped so the next line rebuilds it), so a
+    test reads exactly the lines its own request left."""
+    path = tmp_path / "audit.log"
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(path))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    return path
+
+
+def _audit_text(audit_file):
+    """The audit file's text, or '' when the request left no line."""
+    return audit_file.read_text(encoding="utf-8") if audit_file.exists() else ""
+
+
+def _internal_error_seen(r, caplog, audit_file, endpoint, kind, capfd=None, recwarn=None):
+    """The checks every answer to an unexpected exception must pass, shared by the tests below: a JSON 500 whose
+    `code` is `internal_error` and whose `run_id` is twelve hex digits the sentence quotes; ONE service-log line naming
+    that id as `kontroll_run_id=`, the endpoint and the exception's type, with no traceback attached; ONE
+    `internal-error` audit row with the same id and endpoint; and the sentinel nowhere — not in the body, not in any
+    log record or a traceback the log prints with one (`caplog.text`, not only each record's message), not in what
+    the process wrote to stdout or stderr itself (`capfd`, when the caller passes it: the container's log, which
+    `docker logs` and Vector read, holds both), not in a warning the request raised (`recwarn`, when the caller
+    passes it: `warnings` prints one to stderr in production, and pytest records it instead), not in the audit file.
+    The callers capture every level: the GUI's service log prints WARNING and up, so a check of ERROR only would pass
+    a warning that carries the text (T20 fold 1's read B, S1); and a check of stderr alone passed a `print` of the
+    text and a `warnings.warn` of it (T20 fold 2's read B, S1)."""
+    body = r.get_json()
+    assert r.status_code == 500 and body is not None, r.get_data(as_text=True)[:200]
+    assert body["code"] == "internal_error" and re.fullmatch("[0-9a-f]{12}", body["run_id"]), body
+    assert "(ref %s)" % body["run_id"] in body["error"]
+    assert _LEAK not in r.get_data(as_text=True)
+    lines = [rec.getMessage() for rec in caplog.records if "internal-error" in rec.getMessage()]
+    assert len(lines) == 1, lines
+    assert "kontroll_run_id=%s" % body["run_id"] in lines[0], lines[0]
+    assert "route=%s " % endpoint in lines[0] and "type=%s" % kind in lines[0], lines[0]
+    assert all(_LEAK not in rec.getMessage() for rec in caplog.records)
+    # A record's message is not all a handler prints: an attached traceback (`exc_info`) is printed below it.
+    assert _LEAK not in caplog.text
+    if capfd is not None:      # a traceback printed straight to stderr is no log record
+        cap = capfd.readouterr()
+        assert _LEAK not in cap.err and _LEAK not in cap.out      # stdout is in `docker logs` too
+    if recwarn is not None:    # a warning is printed to stderr in production; pytest records it instead
+        assert all(_LEAK not in str(w.message) for w in recwarn)
+    assert all(rec.exc_info is None for rec in caplog.records if "internal-error" in rec.getMessage())
+    audit = _audit_text(audit_file)
+    rows = [ln for ln in audit.splitlines() if "\tinternal-error\t" in ln]
+    assert len(rows) == 1 and "run_id=%s" % body["run_id"] in rows[0] and "route=%s " % endpoint in rows[0], rows
+    assert _LEAK not in audit
+    return body
+
+
+@pytest.mark.parametrize("url,seam,endpoint,opens", _READ_ROUTES, ids=[e for _u, _s, e, _o in _READ_ROUTES])
+def test_an_unexpected_exception_answers_a_fixed_sentence_and_an_id(client, monkeypatch, caplog, audit_file, url,
+                                                                     seam, endpoint, opens, capfd, recwarn):
+    """Each read route whose service call raises an exception it did not design for (a RuntimeError carrying a path)
+    answers 500 with its own opening words and a fixed sentence — `<what> failed — internal error (ref <id>)` — the
+    code `internal_error` and a twelve-hex run id; the GUI's service log gets one line with `kontroll_run_id=<id>`, the
+    endpoint and the exception's TYPE, and the audit log one `internal-error` row with the same id; the exception's
+    text reaches none of the three. Guards the CodeQL `py/stack-trace-exposure` class (brief 16 §9.1, class A): before
+    T20 each of these routes put `str(e)` in the body — an absolute path inside the container, a YAML error's excerpt
+    of the file it read — and left no id to find the failure by. The text is looked for at every log level, on the
+    process's stdout and stderr, and in the warnings the request raised (T20 fold 1's read B, S1; fold 2's read B,
+    S1)."""
+    monkeypatch.setattr(seam, _boom)
+    with caplog.at_level(logging.DEBUG):
+        r = client.get(url, headers=_auth())
+    body = _internal_error_seen(r, caplog, audit_file, endpoint, "RuntimeError", capfd, recwarn)
+    assert body["error"].startswith(opens + " — internal error"), body["error"]
+
+
+def test_the_route_list_is_every_route_with_a_broad_except():
+    """The list the test above runs over is exactly the GUI's functions that catch `Exception` themselves, and each
+    such handler's whole body is `return _internal_error(...)`; a bare `except:` and a tuple naming `Exception` or
+    `BaseException` (`except (OSError, Exception)`) count as broad. Guards a new read route written in the old shape —
+    a broad `except` that puts `str(e)` in its body — passing the suite because nobody added it to the list: the list
+    is checked against gui/app.py, not kept beside it (T20; T20's read B, N1: a tuple's `Exception` was not seen). An
+    alias of `Exception` (`Broad = Exception`) is not read. An `async def` route is walked too (T20 fold 1's read B,
+    N4: one written so passed unseen)."""
+    import ast
+    tree = ast.parse(open(gui.__file__, encoding="utf-8").read())
+    broad, other_shape = set(), []
+
+    def _is_broad(kind):
+        names = kind.elts if isinstance(kind, ast.Tuple) else [kind]
+        return kind is None or any(getattr(n, "id", None) in ("Exception", "BaseException") for n in names)
+
+    for fn in (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        for node in ast.walk(fn):
+            if isinstance(node, ast.ExceptHandler) and _is_broad(node.type):
+                broad.add(fn.name)
+                ret = node.body[0] if len(node.body) == 1 else None
+                if not (isinstance(ret, ast.Return) and isinstance(ret.value, ast.Call)
+                        and getattr(ret.value.func, "id", None) == "_internal_error"):
+                    other_shape.append(fn.name)
+    listed = {endpoint for _u, _s, endpoint, _o in _READ_ROUTES}
+    assert broad == listed, sorted(broad ^ listed)
+    assert other_shape == [], other_shape
+
+
+def test_a_failed_audit_write_prints_its_type_not_the_exception_being_handled(monkeypatch, capsys, audit_file):
+    """An audit write that fails while a route still handles an exception prints one stderr line, `audit-log write
+    failed: <type> errno=<n> action=<the row's action>`, and nothing else: not logging's own `--- Logging error ---`
+    report, which prints the failed call's exception chain, and so the message of the exception the route was
+    handling, and not the row's detail. Guards C23's "neither log holds the exception's message" turning false while
+    the audit volume is full or a rollover cannot rename (T20's read A, N1: `GUI_AUDIT_LOG=/dev/full` printed the
+    sentinel twice); a lost row that says neither which row nor why (T20 fold 1's read A, N2); and the app's own
+    logger writing through another handler, or through its handler with the override undone: the row goes through
+    the app's logger, not a handler the test builds (T20 fold 1's read B, N1). And the row is written by
+    `gui._audit`, inside a request, not by the logger's `info()` called by hand, so an `_audit` that hands the logger
+    a format and its arguments, whose failed write would print `action=%s`, is read (T20 fold 2's read B, N1)."""
+    lg = gui._get_audit_logger()
+    assert len(lg.handlers) == 1 and isinstance(lg.handlers[0], gui._AuditHandler), lg.handlers
+
+    def _full(record):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(lg.handlers[0], "shouldRollover", _full)
+    try:
+        raise RuntimeError(_LEAK)
+    except RuntimeError:
+        with gui.app.test_request_context("/"):
+            gui._audit("internal-error", "what=%s run_id=0123456789ab" % _LEAK)
+    lg.handlers[0].close()
+    err = capsys.readouterr().err
+    assert err == "audit-log write failed: OSError errno=28 action=internal-error\n", err
+
+
+def test_an_audit_file_that_cannot_open_is_said_once_by_type_and_errno(tmp_path, monkeypatch, capsys):
+    """An audit file the GUI cannot open (its directory a file, a bind mount it may not write) prints one stderr line,
+    `audit-log open failed: <type> errno=<n>; no audit row is written until the GUI restarts`, once however many rows
+    follow, and leaves the logger without a handler; the path is not printed. Guards the silent loss of every audit
+    row: the logger is built once and cached, and the open's `except OSError: pass` left no line anywhere while C23
+    said a lost row is reported (T20 fold 1's read A, N1)."""
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "a-file" / "sub" / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    lg = gui._get_audit_logger()
+    assert gui._get_audit_logger() is lg and lg.handlers == [], lg.handlers
+    err = capsys.readouterr().err
+    assert re.fullmatch(r"audit-log open failed: [A-Za-z]+Error errno=\d+; no audit row is written until the GUI "
+                        r"restarts\n", err), err
+    assert str(tmp_path) not in err
+    monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_a_route_without_its_own_try_answers_json_not_an_html_500(client, monkeypatch, caplog, capfd, audit_file,
+                                                                   recwarn):
+    """A route with no `try` of its own (a secret form's field list) whose service call raises answers the same JSON
+    500 — `request failed — internal error (ref <id>)`, `internal_error`, the id in the service log and the audit log
+    — instead of Flask's HTML 500, and none of them holds the exception's text. Guards the page showing a bare "request
+    failed" with nothing to quote, and Flask's own exception log line, which carries the message and its traceback
+    (brief 16 §9.3; T20's read B, S1: the check read each record's message, not the traceback printed with it; fold
+    1's read B, S1: nor a warning, nor stderr; fold 2's read B, S1: nor stdout, nor a `warnings.warn`)."""
+    monkeypatch.setattr(gui.secrets_service, "offerable_fields", _boom)
+    with caplog.at_level(logging.DEBUG):
+        r = client.get("/api/secrets/dashboards/fields", headers=_auth())
+    body = _internal_error_seen(r, caplog, audit_file, "api_secret_fields", "RuntimeError", capfd, recwarn)
+    assert body["error"].startswith("request failed — internal error"), body["error"]
+
+
+def test_an_http_error_keeps_its_own_answer(client, audit_file):
+    """A 404 for a route that does not exist and the 400 a malformed JSON body raises keep Flask's own answer: the
+    app's catch-all for the unexpected hands an HTTP error back as it is, and writes no `internal-error` row. Guards a
+    catch-all written for `Exception` turning every 404 and 400 into a 500 "internal error" (Flask hands HTTP errors
+    to a handler registered for `Exception` too)."""
+    assert client.get("/api/no-such-route", headers=_auth()).status_code == 404
+    r = client.post("/api/onboard", data="{not json", headers=dict(_auth(), **{"Content-Type": "application/json"}))
+    assert r.status_code == 400
+    assert "internal-error" not in _audit_text(audit_file)
+
+
+def _designed(kind):
+    """A service call that raises one of the refusals the GUI answers on purpose, with its own message."""
+    from kontroll.service.backups import BackupStoreError
+
+    def _raise(*a, **k):
+        raise {"backup": BackupStoreError("invalid rev"),
+               "repository": paths.RepositoryDataError("module file", "modules/demo_sw/module.yml adopts a name that "
+                                                                      "is not one — correct that file"),
+               "boundary": paths.RequestBoundaryError("collection", "collection is not a collection name"),
+               }[kind]
+    return _raise
+
+
+@pytest.mark.parametrize("url,seam,kind,status,want", [
+    ("/api/backups/demo.cfg/view?rev=abc1234", "kontroll.service.backups.get_version", "backup", 400,
+     {"error": "view failed: invalid rev"}),
+    ("/api/fleet", "kontroll.service.fleet.list_fleet", "repository", 409,
+     {"error": "modules/demo_sw/module.yml adopts a name that is not one — correct that file",
+      "code": "repository_data"}),
+    ("/api/services", "kontroll.service.fleet.list_services", "boundary", 422,
+     {"error": "collection is not a collection name", "code": "invalid_collection"}),
+], ids=["backup-store-400", "repository-data-409-through-a-broad-except",
+        "request-boundary-422-through-a-broad-except"])
+def test_designed_errors_keep_their_own_message_and_status(client, monkeypatch, audit_file, url, seam, kind, status,
+                                                           want):
+    """A refusal the GUI designed keeps its own status and message and gets no run id: a backup-store error is 400
+    `view failed: invalid rev`; a repository-data refusal raised under a route's broad `except` is the app's 409
+    `repository_data` with its sentence; a request-boundary refusal raised there is the app's 422 with its field code.
+    Guards the catch-all swallowing a designed refusal into "internal error" (brief 16 §9.4's third test): the broad
+    `except` blocks hand both refusals on to their own answers, where before T20 they turned them into a 500 with the
+    text."""
+    monkeypatch.setattr(seam, _designed(kind))
+    r = client.get(url, headers=_auth())
+    assert r.status_code == status and r.get_json() == want, (r.status_code, r.get_json())
+    assert "internal-error" not in _audit_text(audit_file)
+
+
+def test_a_write_conflict_keeps_its_409_and_its_sentence(client, onboard_env, monkeypatch, audit_file):
+    """An onboard apply whose drop-in exists with different content keeps the designed 409: the conflict's own
+    sentence, `conflict: true` and the onboard's run id, and no `internal-error` row. Guards the third designed
+    mapping of brief 16 §9.4 against the catch-all: the route catches `gitio.WriteConflict` itself, and the answer
+    the Overwrite button keys on must not become an "internal error"."""
+    msg = "modules/proxmox/module.yml exists with different content; pass overwrite to replace it"
+
+    def _conflict(*a, **k):
+        raise gitio.WriteConflict(msg)
+    monkeypatch.setattr(gui, "build_onboard_plan", lambda *a, **k: {"error": None, "creds_to_set": []})
+    monkeypatch.setattr(gui, "apply_onboard_plan", _conflict)
+    r = client.post("/api/onboard", json={"collection": "community.proxmox", "key": "proxmox", "group": "hypervisors",
+                                          "host": "192.0.2.40", "apply": True}, headers=_auth())
+    body = r.get_json()
+    assert r.status_code == 409 and body["error"] == msg and body["conflict"] is True, body
+    assert "code" not in body and "internal-error" not in _audit_text(audit_file)
+
+
+def test_a_stray_value_error_under_the_onboard_planner_is_no_refusal(client, onboard_env, monkeypatch, caplog,
+                                                                    audit_file, capfd, recwarn):
+    """A ValueError raised under the onboard planner that is not one of its refusals (a parse error, a library's) is
+    answered as the unexpected — a JSON 500 with `internal_error` and an id, its text nowhere — and leaves no
+    `onboard-refuse` row. Guards brief 16 §9.1's class C: the route caught every ValueError and answered it 422
+    `invalid_request` with its text, so a `json.loads` failure on `ansible-doc` output read as the operator's mistake
+    and showed what it was parsing. The planner's own refusals are a type of their own (OnboardRefusal), pinned by
+    test_onboard_partial_auth_set_is_a_422_not_a_500. The text is looked for at every log level, on stdout and
+    stderr, and in the warnings raised (T20 fold 1's read B, S1; fold 2's read B, S1)."""
+    def _stray(*a, **k):
+        raise ValueError(_LEAK)
+    monkeypatch.setattr(gui, "build_onboard_plan", _stray)
+    with caplog.at_level(logging.DEBUG):
+        r = client.post("/api/onboard", json={"collection": "community.proxmox", "key": "proxmox",
+                                              "group": "hypervisors", "host": "192.0.2.40"}, headers=_auth())
+    body = _internal_error_seen(r, caplog, audit_file, "api_onboard", "ValueError", capfd, recwarn)
+    assert body["error"].startswith("request failed — internal error"), body["error"]
+    assert "onboard-refuse" not in _audit_text(audit_file)
+
+
+def test_a_homepage_write_failure_is_a_fixed_500_with_an_id(client, monkeypatch, caplog, audit_file):
+    """An apply whose overlay write fails (the service's `write_failed`) answers 500 with a fixed sentence, the code
+    `write_failed` and the run id the audit row `homepage-result error=write_failed` carries — not the 422 with the
+    OSError's text the route gave before — and the service log gets one `homepage-write-failed` line with
+    `kontroll_run_id=<id>`, so the sentence's "the service log has the details" finds them. Guards brief 16 §9.1's
+    class C at `/api/homepage` (apply): the service returned `"write failed: %s" % e`, a path inside the container,
+    and the route showed it; and an id the service log does not carry (T20's read B, N7). The line is pinned whole,
+    route included, so it can carry nothing the operator posted (T20 fold 1's read A, N4; read B, N2)."""
+    from kontroll.service import homepage as hp
+    monkeypatch.setattr(hp, "build_homepage_plan", lambda board: {
+        "error": None, "paths": [], "diff": "", "summary": {"removed_tiles": []}, "plan_token": "t"})
+    monkeypatch.setattr(hp, "promote_board", lambda board, token: {"error": "write_failed", "changed": False,
+                                                                   "paths": []})
+    with caplog.at_level(logging.ERROR):
+        r = client.post("/api/homepage", json={"board": {"sections": []}, "apply": True, "token": "t"},
+                        headers=_auth())
+    body = r.get_json()
+    assert r.status_code == 500 and body["code"] == "write_failed" and re.fullmatch("[0-9a-f]{12}", body["run_id"])
+    lines = [rec.getMessage() for rec in caplog.records if "homepage-write-failed" in rec.getMessage()]
+    assert lines == ["homepage-write-failed kontroll_run_id=%s route=api_homepage_apply" % body["run_id"]], lines
+    assert body["error"] == ("homepage write failed — nothing staged (ref %s); the service log has the details"
+                             % body["run_id"])
+    assert "homepage-result\terror=write_failed run_id=%s" % body["run_id"] in _audit_text(audit_file)
+
+
+def test_an_audit_file_that_cannot_open_with_no_stderr_leaves_audit_returning(tmp_path, monkeypatch):
+    """With no stderr at all (Python sets `sys.stderr` to None when fd 2 is closed at start), an audit file that cannot
+    open still leaves `_audit` returning and the logger cached: the report has nowhere to go and is dropped. Guards
+    every audited route answering an HTML 500 over the report itself: the open line's guard named OSError and
+    ValueError, and None's AttributeError escaped on every request (T20 fold 2's read A)."""
+    import sys
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "a-file" / "sub" / "audit.log"))
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    with gui.app.test_request_context("/"):
+        gui._audit("probe", "detail=x")
+    assert gui._audit_logger is not None and gui._audit_logger.handlers == [], gui._audit_logger
+    monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_concurrent_first_audits_build_one_handler(tmp_path, monkeypatch):
+    """Sixteen threads making the GUI's first audit call at once (concurrent first requests on Werkzeug's threaded
+    server) leave the cached logger with ONE handler, so each row is written once (the next test races a file that
+    cannot open). Guards the lazy build racing: each racing thread cleared and added a handler, so the logger kept
+    several and every later row was written several times (13 requests wrote 87 rows on the real server) (T20 fold 2's
+    read A). The barrier and the joins time out, so a thread that stalls fails the test rather than hanging the run (T20
+    fold 3's read B, N4)."""
+    import threading
+    monkeypatch.setattr(gui, "_audit_logger", None)
+    for trial in range(20):
+        if gui._audit_logger is not None:
+            for h in list(gui._audit_logger.handlers):
+                h.close()
+        monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / ("audit-%d.log" % trial)))
+        monkeypatch.setattr(gui, "_audit_logger", None)
+        gate = threading.Barrier(16, timeout=30)
+
+        def first():
+            with gui.app.test_request_context("/"):
+                gate.wait()
+                gui._audit("probe", "detail=x")
+
+        threads = [threading.Thread(target=first) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert not any(t.is_alive() for t in threads), trial
+        assert len(gui._audit_logger.handlers) == 1, (trial, gui._audit_logger.handlers)
+        gui._audit_logger.handlers[0].flush()
+        rows = (tmp_path / ("audit-%d.log" % trial)).read_text(encoding="utf-8").splitlines()
+        assert len(rows) == 16, (trial, len(rows))
+    for h in list(gui._audit_logger.handlers):
+        h.close()
+    monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_concurrent_first_audits_of_a_file_that_cannot_open_say_it_once(tmp_path, monkeypatch):
+    """Sixteen threads making the GUI's first audit call at once against an audit file that cannot open (its
+    directory under a file) print the open-failure line ONCE, not once per racing request. Guards the line said
+    outside the lock while another first request builds, a lock that holds only the handler swap, and an unlocked
+    fast path whose build no longer re-checks under the lock: each lets racing first requests open the file and say
+    so, 2 to 16 lines a trial. The race test above races a file that opens, so it reads handlers and rows, not this
+    line; the barrier and the joins time out, so a stall fails rather than hangs (T20 fold 3's reads A and B, N1).
+    The stand-in stderr sleeps a millisecond on each write, so a line said outside the lock hands the other threads
+    the time to build again: without it the printing thread mostly took the lock back first, and the line said
+    outside it passed twenty trials in one run (T20 fold 4)."""
+    import sys
+    import threading
+    import time
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    monkeypatch.setattr(gui, "AUDIT_LOG", str(tmp_path / "a-file" / "sub" / "audit.log"))
+    said = []
+
+    class _Err:
+        def write(self, s):
+            said.append(s)
+            time.sleep(0.001)
+            return len(s)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stderr", _Err())
+    for trial in range(20):
+        monkeypatch.setattr(gui, "_audit_logger", None)
+        del said[:]
+        gate = threading.Barrier(16, timeout=30)
+
+        def first():
+            with gui.app.test_request_context("/"):
+                gate.wait()
+                gui._audit("probe", "detail=x")
+
+        threads = [threading.Thread(target=first) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert not any(t.is_alive() for t in threads), trial
+        assert sum("audit-log open failed" in s for s in said) == 1, (trial, said)
+    monkeypatch.setattr(gui, "_audit_logger", None)
+
+
+def test_a_non_utf8_configured_password_is_compared_as_its_own_bytes(client, monkeypatch):
+    """A configured GUI password that is not valid UTF-8 ('p\\udce4ss', as the environment decodes b'p\\xe4ss')
+    is compared as those bytes. Guards the configured side's error handler past the spellings a test can name: no
+    request can admit such a password (a Basic credential reaches the compare as valid UTF-8), so a lossy handler
+    shows only in what the compare is handed, and `backslashreplace` or `xmlcharrefreplace` never raise either but
+    admit an ASCII spelling of the escape (AUTH-NA read B)."""
+    seen, real = [], gui.hmac.compare_digest
+    monkeypatch.setattr(gui.hmac, "compare_digest", lambda a, b: seen.append(b) or real(a, b))
+    monkeypatch.setattr(gui, "GUI_PASSWORD", "p\udce4ss")
+    assert client.get("/api/search?q=", headers=_auth(pw="p\u00e4ss")).status_code == 401
+    assert seen == [b"p\xe4ss"], seen

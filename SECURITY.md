@@ -290,7 +290,8 @@ crown jewel — protect it where it lives, not at a remote.
 
 The **onboarding GUI is privileged** (writes the working tree, encrypts secrets, runs
 Ansible) and is now guarded: **HTTP Basic auth, fail-closed** (refuses to start without
-`GUI_PASSWORD`, constant-time compare, password from SOPS), **TLS** (`GUI_TLS_CERT/KEY`),
+`GUI_PASSWORD`, constant-time compare, password from SOPS; a credential under any other
+scheme is refused), **TLS** (`GUI_TLS_CERT/KEY`),
 and an **audit log** of every action + auth-denial (no creds). Verified: no-auth → 401,
 HTTP→HTTPS-port refused, wrong password → 401, denials logged.
 
@@ -407,8 +408,10 @@ the operator, and the honest `capability_gap` names an unresolved selector.
 **Implements:**
 - **Bearer-token auth, fail-closed.** Privileged routes require `KONTROLL_API_TOKEN`
   (SOPS-backed at deploy, like `GUI_PASSWORD`); **unset ⇒ the privileged routes are disabled
-  (503)**, never open. The token is compared **constant-time** (`hmac.compare_digest`); a
-  bad/absent token is a 401. Read-only inquiry (search/probe/units/classify/health) needs no token.
+  (503)**, never open. The token is compared **constant-time** (`hmac.compare_digest`), as the
+  bytes the client sent; a bad/absent token is a 401 (one holding a non-ASCII character too,
+  never a 500), and a configured non-ASCII token admits its UTF-8 bytes.
+  Read-only inquiry (search/probe/units/classify/health) needs no token.
 - **A collection path param is resolved against the installed set or checked against `namespace.name` before
   it is used (SEC-3), never joined raw.** The
   collection-keyed read routes (`/probe`, `/units`, `/classify`) take a `{collection}` from the
@@ -1701,7 +1704,8 @@ out of the public Ansible Galaxy API and `service_search` returns it to the brow
 unpromoted proposal** (the Pending panel lists a `proposed/*` ref's name, its commit subject and its changed path
 names — and, apart, any ref beside the proposals that the service did not stage), **repository** bytes that a
 promote put on `main` (inventory, fleet, descriptors, settings), and every
-route's **error string**, which can quote request input, a repository value or a remote response.
+route's **error string**, which can quote request input, a repository value or a remote response. (What an error
+string may hold at all is C23's: no exception text.)
 
 **The rule is an allow-list: only literal markup written in `index.html` reaches `innerHTML`.** The template's DOM
 helpers are `E()` (assigns `innerHTML`), `ET()` (assigns `textContent`), `T()` (a text node) and `LINK()` (an
@@ -1727,11 +1731,28 @@ census found fifty-nine sinks painting a non-literal, none of which the gate cou
 of every panel not yet converted, written with a direct `.innerHTML =` the gate never read, and two `href`s built
 from server strings. All were rewritten on 2026-10-12, and the gate became the allow-list above.
 
-Defence in depth: an `after_request` hook sets `Content-Security-Policy: object-src 'none'; base-uri 'none';
-frame-ancestors 'none'` plus `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. **`script-src`
-is deliberately absent** — `index.html` carries one large inline `<script>` and inline `onclick` attributes on its
-header buttons, so a `script-src` policy needs a per-response nonce and those handlers rebound first; that is a
-named follow-up and is *not* a substitute for the paint. The paint is the control; CSP is the second layer.
+Defence in depth: an `after_request` hook sets `Content-Security-Policy` on every response, plus
+`X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. Every response carries `object-src 'none';
+base-uri 'none'; frame-ancestors 'none'`. The page (`GET /`) adds `script-src 'nonce-<n>'`, where `<n>` is 18 fresh
+random bytes per response, rendered into the page's one `<script>` tag as well, and is `Cache-Control: no-store` so
+a cached copy cannot outlive its nonce; every other response (each JSON route, the 401, an error) gets
+`script-src 'none'` — also an error raised after a render drew its nonce: the error handler drops it, so the
+JSON 500 and an HTTP error's HTML page answer `'none'` alike (an error the handler sees: Flask hands an
+`abort(response)` and a routing redirect back with no handler, so one raised during the render would keep the nonce
+on a body that prints none, and no template expression can raise either). The nonce comes from a template
+context processor, so every render carries it and no route passes it, and the hook takes it off `g`, so it reaches
+one response even where one app context serves several requests. A nonce authorises a script element, never a
+handler attribute, so markup that reaches the page past the paint (an `<img onerror=…>`) runs nothing, and the
+header buttons are bound from the script instead of `onclick` attributes (since 2026-11-04, T23). **`default-src`
+and `style-src` are deliberately absent:** `default-src` would become the fallback for `style-src`, `connect-src`
+(every `fetch()`) and `img-src`, and the page's `<style>` block and its few `style` attributes carry no nonce; a
+`style-src` would need the nonce on the block and the attributes made classes first. A reverse proxy in front that
+rewrites the page's HTML would have to keep the tag and the header together, and one that adds a policy of its own
+blanks the page unless the page passes both (a browser enforces every policy a response carries); one that
+replaces or removes the header leaves the page working with no script policy, and nothing shows the layer is gone —
+see
+[docs/frontend-exposure.md](docs/frontend-exposure.md) `byo_proxy`. CSP is *not* a substitute for the paint: the
+paint is the control, CSP the second layer.
 
 Covering checks: [tests/unit/test_card_paint_gate.py](tests/unit/test_card_paint_gate.py) — a source scan of the
 template that understands string literals, comments and regular-expression literals. It fails on an `E()` markup
@@ -1741,17 +1762,29 @@ API); on an `href` outside `LINK()`; on an executing attribute or a navigating p
 attribute or property whose name is not spelled in the source; on an element created from anything but one inert
 literal tag name; on a request that is not a direct `fetch()`, and on a request path that carries anything
 unencoded except the few names pinned to the one place their value comes from; and on code the script scan does not
-read (a second script element, a handler attribute that is not a bare call, a template expression in the static
-markup or one in the script that is not `| tojson`, a hidden line-break or display-reordering character). It proves
-it can fail by planting each shape a review found into the real template, and it pins the helpers by their exact
-definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not
-close is refused; a span it misreads as a string or a regex, and a property reached through a computed name
-(`x[k] = v`), are beyond it. Those are shapes written on purpose — the gate stops the sink coming back through an
-ordinary edit, and the paint and the browser proof are what answer the rest.
+read (a second script element, the script element opened with anything but the nonce tag, any handler attribute or
+`javascript:` URL in the static markup or in a tag of the literal markup the script writes, read as the joined
+literals spell it, a quote opening a value only right after `=`, a template expression in the static markup other than
+that nonce or one in the script that is not `| tojson`, a hidden line-break or display-reordering character). It
+proves it can fail by planting each shape a review found into the real template, and it pins the helpers by their
+exact definitions. It is a scan over tokens, not a JavaScript parser. A string or a regular expression that does not
+close is refused; a span it misreads as a string or a regex, a property reached through a computed name (`x[k] = v`),
+an escape sequence in the static or the literal markup (a JS escape or an HTML character reference, which it does not
+decode), a tab or a line break inside a `javascript:` scheme, and a handler written after an `=` HTML does not read as
+a value's (one inside an unquoted value, a second `=`, one that starts a name) or a space HTML does not count (a
+no-break space, a vertical tab) before a quote are beyond it. Those are shapes written on purpose — the gate stops the
+sink coming back through an ordinary edit, and the paint and the browser proof are what answer the rest.
 [tests/e2e/test_paint_rule.py](tests/e2e/test_paint_rule.py) is the browser proof for the Pending, Index,
 Settings, Homepage and Discovery panels and the capability, reconfigure, secret and keygen dialogs: each is served
 a payload in the fields it paints and must show it as text, create no element and run nothing. There is no list to
-extend — a new value on the page is either a literal or painted as text.
+extend — a new value on the page is either a literal or painted as text. The policy's own checks:
+[tests/integration/test_gui_api.py](tests/integration/test_gui_api.py) proves on real responses that the page's header
+and its script tag carry the same nonce, a new one each time and at least 128 bits of base64url, that the page is
+`no-store`, that the policy is exactly its four directives, each named once, and that every other response forbids
+script (an error the handler sees, also one raised while the page renders, and a response after the page in one app
+context, included); [tests/e2e/test_script_policy.py](tests/e2e/test_script_policy.py) proves in a browser that
+neither an injected handler attribute nor an injected script element runs (each does, as a control, with the header
+dropped) and that every header button still opens its panel.
 
 
 ### C21 — The shippable tree carries no identifier of a real deployment  ✔ implemented (2026-10-08, the public split)
@@ -2175,6 +2208,64 @@ does not confine, and on the GUI's read routes: nothing written, the audit actio
 on a module file that is not a mapping; a reserved host name as a 422 on both apps), and the C19 paint gate for the
 Fleet index.
 
+### C23 — An error body never carries exception text  ✔ implemented (2026-11-02, T20)
+
+**Threat:** an exception's message can quote a request value, an absolute path inside the container, or a line of
+a file being parsed — `gitio.sops_decrypt_domain` parses decrypted text with `yaml.safe_load`, and a YAML error
+quotes what it read. Until T20 every GUI read route with a broad `except` answered `"<what> failed: %s" % e` (CodeQL
+`py/stack-trace-exposure`); both onboard plan routes answered every `ValueError` 422 with its text, so a
+`json.loads` failure on `ansible-doc` output read as the operator's mistake and showed what it was parsing; the
+Homepage editor's apply showed an `OSError`'s path; a GUI route with no `try` fell to Flask's HTML 500, whose log
+line carries the message; and `kontroll-init --fresh` printed the first-run passwords to whatever its standard
+output was — a pipe, a `tee` file, a CI log.
+
+**Control:** errors are kept apart by **type**. A *designed* refusal is raised on purpose with a sentence written
+for the operator, and keeps it: `paths.RequestBoundaryError` (422 and a field code, C22),
+`paths.RepositoryDataError` (409 `repository_data`), `gitio.WriteConflict` (409), `backups.BackupStoreError` (fixed
+strings), and `onboard.OnboardRefusal` — the planner's guards' own type, so a route catches exactly those and no
+other `ValueError`. Everything else reaches one helper, `gui/app.py` `_internal_error`, from each route's broad
+`except` (which hands the two app-wide refusals on to their own answers) and from an app-wide
+`errorhandler(Exception)` (an HTTP error — a 404, a malformed body's 400 — keeps its own answer). The client gets
+`<what> failed — internal error (ref <id>); the service log has the details`, the code `internal_error` and a
+twelve-hex run id; the GUI's stderr gets `internal-error kontroll_run_id=<id> route=<endpoint> what=<what>
+type=<type>` and the frames; the audit log the action `internal-error` with the same id
+([logging-architecture.md](docs/logging-architecture.md)). **Neither the body nor either log holds the exception's
+message**: the frames and the type locate the fault, and the cost — a `KeyError` logged without its key — is
+accepted. An audit write that fails is reported by its type, errno and the row's action only (`audit-log write
+failed: <type> errno=<n> action=<action>`), since logging's own report would print the exception the route was
+handling; an audit file that cannot be opened is reported once, by its type and errno (`audit-log open failed: …`), and
+no row is written until the GUI restarts; one lock builds the audit logger, so concurrent first requests build it once
+(each racing build had added a handler, and every row was written once per handler). The Homepage editor's write failure
+is a code (`write_failed`, a 500 with a run id; the service's line names the file, the exception's type and its errno,
+and the route's `homepage-write-failed kontroll_run_id=<id>` line follows it). `kontroll-init` shows the bootstrap
+values only when standard output is a terminal, as the break-glass mint already does; otherwise it prints each written
+field's name, `(not shown)` and, for each domain, the `sops -d` command that reads them back.
+
+**Residual:** the API answers an unexpected exception with FastAPI's bare 500, which holds no text, no run id and no
+audit row, and its server log still prints the exception's message (brief 16 §9.3 left it; the price of a
+message-free log there is the same type-and-frames handler). Some service-layer warnings print an exception's
+message to the GUI's and the API's stderr (a settings group read, the onboard planner's degrade paths — its TIER-B
+argspec derivation among them — and the catalog's); none reaches a body. A module file YAML cannot build, or that is
+not UTF-8, a JSON body that is not an object, and an onboard apply whose SOPS domain this host cannot decrypt (no
+age key, or another one) answer the GUI's 500 `internal_error` rather than a refusal of their own.
+
+**Covering checks:** `tests/integration/test_gui_api.py` (each read route with a broad `except`, with a `RuntimeError`
+carrying a path: the fixed sentence, the code, the id in the body, the stderr line and the audit row, the text in none
+of them — not in a record's message nor in a traceback printed with it — and that the list it runs over is every such
+route in `gui/app.py`, a bare `except:` or a tuple naming `Exception` counted; a route with no `try`; a 404 and a
+malformed body's 400 kept; the designed refusals kept — a backup-store 400, a repository-data 409 and a boundary 422
+raised under a broad `except`, a write conflict's 409; a stray `ValueError` under the onboard planner answered as the
+unexpected; the Homepage write failure, its id in the audit row and the service log line pinned whole; the text looked
+for at every log level, on stdout and stderr, and in the warnings raised; an `async def` route walked; an audit write
+that fails, through the app's own logger, said by type, errno and action, and a file that cannot open said once — with
+no stderr at all, the audit call still returning — and concurrent first audits building one handler and saying a file
+that cannot open once), `tests/integration/test_api_onboard.py` (the planner's refusal still 422; a stray `ValueError` a
+bare 500 with no text and no `onboard-refuse` line), `tests/unit/test_onboard_proxmox_auth.py` and
+`tests/unit/test_onboard_ssh_key.py` (the planner's guards raise `OnboardRefusal`, not a plain `ValueError`),
+`tests/unit/test_homepage.py` (the write failure's code and its log line), and `tests/unit/test_kontroll_init.py` (the
+values not printed off a terminal, with each domain's read-back command and where to run it, the closing line's too;
+another key file named absolute and quoted, in every read-back of a run; shown once per domain on one).
+
 ---
 ## Accepted risks / known limitations
 
@@ -2184,6 +2275,7 @@ Fleet index.
 | **R-KEY-1** — age key loss | Encrypted secrets become **permanently** unrecoverable | Yes (**uncompensated** for an instance with one recipient) | **Corrected 2026-07-28; narrowed 2026-10-23 (a break-glass choice at `--fresh`).** An instance created by `kontroll-init --fresh` with `--break-glass-recipient` or `--mint-break-glass` has a second recipient on every domain from its first secret. An instance created with `--no-break-glass`, or before `--fresh` asked, has **ONE** recipient per domain: losing its control key destroys every device credential, API token and service password in it. Secrets are low-volume and re-enterable *in principle*, but re-entering them means recovering each one from its device, and for a token-only credential (an API token) the plaintext exists nowhere else and must be reissued on the device. **Fix for such an instance:** [docs/break-glass.md](docs/break-glass.md) — add the recipient, re-wrap, verify. The risk stays open for every instance whose break-glass key has not been proven to open every domain (kontroll counts recipients; it cannot know whether the private half was kept), and an off-box **copy of the private key** never closes it — a copy shares the single point of failure. See [C1](#c1--secrets-encrypted-at-rest-sops--age). |
 | API rate-limit counters in-process | Counters reset on restart + are per-process (wrong if the API is ever run multi-worker / multi-replica) | Yes | One uvicorn container today (mgmt-only, single-operator); the store is a swappable seam → move to a shared backend (Redis) the moment the API scales horizontally |
 | API rate-limit `X-Forwarded-For` trust | A spoofed XFF could shift an inquiry IP bucket | Yes | mgmt-VLAN-only; any fronting proxy is operator-controlled. When SSO/proxy lands (cluster 2c), trust XFF only from the known proxy hop |
+| `kontroll-init --fresh` shows the first-run bootstrap passwords once, on a terminal (C23) | The onboard-GUI, Grafana and Semaphore admin passwords appear on the operator's screen and in that terminal's scrollback | Yes | The operator needs the first login, and a terminal is the one place they chose to see it. Off a terminal (a pipe, a file, a CI log) only the field names and the `sops -d` command that reads them back are printed, so no log holds a value; the values stay readable later with that command |
 | Private git remote holds encrypted secrets | Push exposes ciphertext | Yes | SOPS ciphertext is safe to host; the age key is never pushed |
 | Control VM on a hypervisor it also manages | A bad play against that node could affect the controller | Partial | Snapshot + git + offline key; avoid self-targeting the controller's node in risky plays |
 | Current edge is FortiGate/Cisco (pre-cutover) | Edge creds + API differ from the post-cutover target | Yes | Functional groups isolate the churn to one inventory block |

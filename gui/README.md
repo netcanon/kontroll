@@ -294,11 +294,24 @@ on the runner image for `deploy-stack.yml` (it provisions the cert + the SOPS pa
 This surface is **privileged**: it can write the repo, encrypt secrets, push, and run
 Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
 - **Auth — HTTP Basic, fail-closed**: the app *refuses to start* without `GUI_PASSWORD`;
-  constant-time compare; the password comes from SOPS (`dashboards: gui_admin_password`).
+  constant-time compare; a credential under any scheme but Basic is a 401; the password
+  comes from SOPS (`dashboards: gui_admin_password`).
 - **TLS**: serves HTTPS from `GUI_TLS_CERT`/`GUI_TLS_KEY` (warns + HTTP only if unset).
 - **Audit log** (`GUI_AUDIT_LOG`): every onboard action + auth-denial — timestamp, client
   IP, what (collection/key/host/flags) — **never** credentials.
 - Actuation is explicit: the UI dry-runs unless **apply** is ticked.
+- **An error carries no exception text** (SECURITY.md C23). A refusal the GUI designed keeps its sentence: a refused
+  field (422 and its `code`), the repository's own data (409 `repository_data`), a write conflict (409), the backup
+  store's fixed strings, the onboard planner's refusals (422 `invalid_request`). Anything else answers 500 with
+  `<what> failed — internal error (ref <id>); the service log has the details`, the code `internal_error` and a
+  `run_id`. Look the id up with `docker logs onboard-gui 2>&1 | sed -n '/kontroll_run_id=<id>/,/^[^ ]/p'` (the
+  line names the route and the exception's type; the frames follow it on indented lines of their own, which do not
+  carry the id — never its message) or in the audit log's `internal-error` row
+  ([troubleshooting.md](../docs/troubleshooting.md) §12). An audit row the GUI could not write is said on its stderr
+  by type, errno and action (`audit-log write failed: …`), and an audit file it could not open, once (`audit-log
+  open failed: …`). A Homepage save whose write fails answers 500
+  `write_failed` with a `run_id` the audit row `homepage-result` and the service log's `homepage-write-failed` line
+  carry; the service's own line just before it names the file, the exception's type and its errno.
 - **Foreign bytes render as TEXT, never markup** (SECURITY.md C19). The rule is an allow-list: only markup written
   as a literal in `index.html` reaches `innerHTML`. `E()` assigns `innerHTML` and takes literals only; `ET()` assigns
   `textContent` and `T()` makes a text node, and they paint **every** other value — device bytes, Galaxy-published
@@ -314,10 +327,18 @@ Ansible against the lab. Treat it like the Semaphore runner. **Implemented:**
   through `innerHTML`, and until 2026-10-12 the Pending panel painted a staged proposal's ref name, subject and
   paths the same way. Add a value to the page ⇒ paint it with `ET()`/`T()`, or leave an empty element in the
   literal and fill its `textContent`; add a link ⇒ `LINK(url, text)`.
-- **CSP**: `object-src`/`base-uri`/`frame-ancestors` are set on every response, plus `nosniff`. `script-src` is
-  *not* set — the page carries a large inline `<script>` and inline `onclick` attributes on its header buttons;
-  a per-response nonce with those handlers rebound is the prerequisite, and CSP is the second layer regardless.
-  The paint rule above is the actual control.
+- **CSP**: `object-src`/`base-uri`/`frame-ancestors` (each `'none'`) are set on every response, plus `nosniff`. The
+  page adds `script-src 'nonce-<n>'`, a fresh nonce per response that a template context processor also renders into
+  the one `<script>` tag (a route passes no nonce), and `Cache-Control: no-store`; every other response gets
+  `script-src 'none'`, an error raised during the page's render included (one the error handler sees: Flask hands an
+  `abort(response)` and a routing redirect back with none, and no template expression raises either). A nonce
+  authorises no handler attribute, so the template has none: a button is bound from the script
+  (`document.querySelector('[data-testid=…]').onclick = () => f();`), and the paint gate refuses an `on…=` attribute
+  or a `javascript:` URL in the static markup and in a tag of the literal markup the script writes. A reverse proxy
+  that adds its own policy or rewrites the HTML can blank the page, and one that replaces or removes the header leaves
+  it working with no script policy ([../docs/frontend-exposure.md](../docs/frontend-exposure.md)). There is no
+  `default-src` or `style-src` — the `<style>` block and the `style` attributes carry no nonce. CSP is the second
+  layer; the paint rule above is the actual control.
 - **Still: bind to the mgmt network only; never expose it publicly.**
 
 **Pre-beta remaining:** a real CA-signed cert (vs self-signed) and SSO (Authelia) if it's

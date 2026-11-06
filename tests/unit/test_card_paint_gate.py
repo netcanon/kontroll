@@ -8,8 +8,12 @@ spelled any other way (an alias, a literal bracket key, another HTML-parsing API
 exactly one helper and only from `safeHref()`, no attribute or property that executes or navigates is set from
 script, every element is created from one literal, inert tag name, every request is a direct `fetch()` whose path
 carries each dynamic segment encoded (and the few names that stand in a path unencoded are pinned to where their
-value comes from), and the parts of the file the script scan does not read (a second script, a handler attribute, a
-template expression anywhere) are pinned to what they are today.
+value comes from), and the parts of the file the script scan does not read are pinned: one script element, opened
+with exactly the nonce tag the page's `script-src` authorises, no handler attribute and no `javascript:` URL at
+all — in the static markup, or in a tag of the literal markup the script writes, read as the joined literals spell it,
+where a quote opens a value only right after `=` and a `>` inside a quoted value ends no tag (a nonce authorises a
+script element, never an attribute or a URL, so one there could not run, and the buttons are bound from the script) —
+and no template expression anywhere but the nonce in that tag and `| tojson` inside the script.
 
 WHY (the failure it guards against): the GUI paints values it did not author — a staged proposal's ref name, commit
 subject and path names; an API error string, which can quote request input or a remote response; a third-party
@@ -30,7 +34,17 @@ literals, comments and regular-expression literals, not the whole language, and 
   * "regex or division" is decided from the token before the `/`, not by a parser. A span the mask takes for a
     string or a regex is invisible to every rule, and two constructs are known to be misread: a division written
     right after a `}` that ends an expression, and a regex written right after `if (…)`;
-  * a property reached through a COMPUTED name (`x[k] = v`, `x['inner' + 'HTML'] = v`) is not a token it can see.
+  * a property reached through a COMPUTED name (`x[k] = v`, `x['inner' + 'HTML'] = v`) is not a token it can see;
+  * markup is read as written: an escape sequence in the static or the literal markup (a JS escape or an HTML
+    character reference) is not decoded, so one spelling a tag's `<`, a handler's name, its separator or a
+    `javascript:` scheme is not seen, nor is a tab or a line break inside the scheme (`java<TAB>script:`), which a
+    browser's URL parser drops;
+  * a tag of the literal markup is read by one rule of HTML's, a quote opening a value only right after `=`, not by
+    its parser: after an `=` HTML does not read as a value's (one inside an unquoted value, a second `=`, one that
+    starts a name) or a space HTML does not count (a no-break space, a vertical tab) before a quote, the gate reads
+    the quote as opening a value where HTML does not, and a handler written after it, in that tag or a later one, is
+    not seen. The rule errs the other way too: a handler-like word inside an unquoted value or an attribute's name,
+    which HTML reads as no handler (`src=x/onerror=…`, `href=/gui/onboard=1`), is refused.
 
 Those are shapes somebody writes on purpose. What this gate stops is the sink coming back through an ordinary edit,
 under whatever name the value has. It reads source, so it binds what is spelled in this file; it is not a claim
@@ -45,6 +59,11 @@ pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 INDEX = os.path.join(ROOT, "gui", "templates", "index.html")
+
+# The page's one script element opens with exactly this tag: gui/app.py renders a fresh nonce into it and puts the
+# same value in the response's `script-src` (SECURITY.md C19). Any other opening tag is a script the policy refuses
+# (the page would be blank) or one this scan does not read.
+SCRIPT_OPEN = '<script nonce="{{ csp_nonce }}">'
 
 # ---- the helpers, pinned by their exact definitions. A change to what a helper does must be made here too. ----
 E_DEF = ("const E = (t, c, h, tid) => { const e=document.createElement(t); if(c)e.className=c; "
@@ -66,6 +85,15 @@ HELPERS = {"E": E_DEF, "ET": ET_DEF, "T": T_DEF, "safeHref": SAFEHREF_DEF, "LINK
 # the concatenation operator, grouping and whitespace. Anything else — a letter, a digit, `?`, `:`, `.`, `[`, `$` —
 # is a non-literal part.
 _LITERAL_CHARS = frozenset("'\"`+() \t\n")
+
+# Inside a tag of the literal markup the script writes: a handler attribute, or a `javascript:` URL. Neither can run
+# under the page's nonce, so either is a control that does nothing. Read in the value the joined literals spell (a
+# tag, or a handler's name, spans the literals a `+` joins), each tag by a rule of HTML's: a quote opens a value only
+# right after `=` (elsewhere it is part of a name or an unquoted value), and a `>` inside a quoted value ends no tag.
+# A handler is a name outside the quoted values; a `javascript:` URL is one anywhere in the tag.
+_LITERAL_TAG = re.compile(r"""<[A-Za-z](?:=\s*"[^"]*"|=\s*'[^']*'|[^>])*""")
+_LITERAL_HANDLER = re.compile(r"""[\s/"']on[a-z]+\s*=""", re.I)
+_LITERAL_JS_URL = re.compile(r"javascript\s*:", re.I)
 
 # Tag names that execute, load or restyle by merely existing: never created from script.
 _ACTIVE_TAGS = frozenset({"script", "iframe", "object", "embed", "link", "style", "base", "meta", "frame", "frameset"})
@@ -251,6 +279,18 @@ def _is_literal(masked_expr):
     return bool(masked_expr.strip()) and set(masked_expr) <= _LITERAL_CHARS and any(q in masked_expr for q in "'\"`")
 
 
+def _literal_active(expr, masked_expr):
+    """Each tag of the markup a literal-only expression spells that carries a handler attribute (a name: its quoted
+    values blanked first) or a `javascript:` URL (anywhere in the tag). The literals' bodies are joined first, so a
+    tag or a name split across a `+` is read whole, and in a tag, as in HTML, a quote opens a value only
+    right after `=`, and a `>` inside a quoted value does not end the tag."""
+    spelt = "".join(expr[q.start() + 1:q.end() - 1] for q in re.finditer(r"(['\"`])[ \n]*\1", masked_expr))
+    for t in _LITERAL_TAG.finditer(spelt):
+        tag = t.group(0)
+        if _LITERAL_HANDLER.search(re.sub(r"""=\s*(?:"[^"]*"|'[^']*')""", '=""', tag)) or _LITERAL_JS_URL.search(tag):
+            yield tag
+
+
 def _one_literal(js, masked, span):
     """The body of the ONE string literal a span consists of, else None. A concatenation is not one literal:
     `'scr'+'ipt'` must not pass as a tag name."""
@@ -318,11 +358,13 @@ def _tokens(masked, name):
 
 def _script(html):
     """(script body, offset of its first character in the file) of the template's one inline script, or raise."""
-    # An element starts a line here; `<script>` inside a line is prose in a comment (a second element written
-    # mid-line still needs its own closing tag, which the count below sees).
+    # An element starts a line here; `<script>` inside a line is taken for prose in a comment. The closing-tag
+    # count below does not see every second element written mid-line — an SVG `<script …/>` closes itself, and an
+    # opener before the page's own `</script` borrows it — but such an element runs only with the nonce, and
+    # violations() refuses the nonce's expression anywhere in the static markup but the one tag pinned here.
     opens = list(re.finditer(r"^[ \t]*<script\b[^>]*>", html, re.M | re.I))
-    if len(opens) != 1 or opens[0].group(0) != "<script>" or html.lower().count("</script") != 1:
-        raise ValueError("expected exactly one bare inline <script> element")
+    if len(opens) != 1 or opens[0].group(0) != SCRIPT_OPEN or html.lower().count("</script") != 1:
+        raise ValueError("expected exactly one inline script element, opened as %s" % SCRIPT_OPEN)
     start = opens[0].end()
     return html[start:html.lower().index("</script")], start
 
@@ -350,11 +392,17 @@ def violations(html):
     def bad(offset, rule, detail):                              # offset is within the script
         found.append("index.html:%d  %s  ->  %s" % (at(base + offset), rule, " ".join(str(detail).split())[:150]))
 
-    # -- outside the script: handler attributes are a second place code lives; the template engine is a third --
-    outside = html[:base] + " " * len(js) + html[base + len(js):]
+    # -- outside the script: handler attributes are a second place code lives; the template engine is a third. The
+    # script's opening tag (which _script pinned to SCRIPT_OPEN, just before `base`) holds the one expression the
+    # static markup may: the nonce. --
+    tag = base - len(SCRIPT_OPEN)
+    outside = html[:tag] + " " * (len(SCRIPT_OPEN) + len(js)) + html[base + len(js):]
     for m in re.finditer(r"""[\s/"']on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", outside, re.I):
-        if not re.fullmatch(r'"[A-Za-z]+\(\)"', m.group(1)):
-            found.append("index.html:%d  handler-attribute  ->  %s" % (at(m.start()), m.group(0).strip()[:120]))
+        found.append("index.html:%d  handler-attribute  ->  %s (the page's script-src nonce authorises no attribute: "
+                     "bind it from the script)" % (at(m.start()), m.group(0).strip()[:120]))
+    for m in re.finditer(r"javascript\s*:", outside, re.I):
+        found.append("index.html:%d  javascript-url  ->  a `javascript:` URL in the static markup (the page's "
+                     "script-src nonce authorises no URL: bind it from the script)" % at(m.start()))
     for m in re.finditer(r"\{\{|\{%", outside):
         found.append("index.html:%d  template-expression  ->  a template expression in the static markup (hand the "
                      "value to the script as `{{ x | tojson }}` and paint it with ET())" % at(m.start()))
@@ -411,6 +459,10 @@ def violations(html):
     for off, kind, expr, masked_expr in sinks:
         text = expr.strip()
         if _is_literal(masked_expr) or (kind.startswith("E()") and text in ("null", "undefined")):
+            for tag in _literal_active(expr, masked_expr):
+                bad(off, "active-markup-in-a-literal", "%s … in the %s (the page's script-src nonce authorises no "
+                                                       "attribute and no URL: bind it from the script)" % (
+                    tag[-60:], kind))
             continue
         if kind == "innerHTML assignment" and text == "h" and in_helper(off):
             continue                                            # the one assignment that must exist: E's own
@@ -658,6 +710,26 @@ def test_the_scanner_sees_the_real_sinks():
     "const f9 = fetch; f9('/api/keygen/' + j);",
     "navigator.sendBeacon('/api/keygen/' + j);",
     "const x9 = new XMLHttpRequest();",
+    # a handler or a `javascript:` URL in literal markup the script writes: a control the nonce does not authorise
+    "x.appendChild(E('div', null, '<button onclick=\"search()\">x</button>'));",
+    "x.innerHTML = '<img src=x onerror=\"search()\">';",
+    "x.innerHTML = '<a href=\"javascript:search()\">x</a>';",
+    "x.innerHTML = '<button class=\"b\" ' +\n  'onclick=\"search()\">x</button>';",
+    "x.innerHTML = '<IMG SRC=x ONERROR=\"search()\">';",
+    "x.innerHTML = '<button/onclick=\"search()\">x</button>';",
+    "x.innerHTML = '<button title=\"Next >\" onclick=\"search()\">x</button>';",
+    "x.innerHTML = '<img src=x on' + 'error=\"search()\">';",
+    "x.innerHTML = \"<button title='Next >' onclick='search()'>x</button>\";",
+    "x.innerHTML = '<a href=\"JavaScript:search()\">x</a>';",
+    "x.innerHTML = '<img src=x onerror = \"search()\">';",
+    "x.innerHTML = '<a href=\"javascript\t:search()\">x</a>';",
+    "x.innerHTML = `<div>\n  <input name=\"k\" onchange=\"search()\">\n</div>`;",
+    "x.innerHTML = \"<button title=it's onclick=search()>x</button>\";",
+    "x.innerHTML = '<img src=x alt=5\" onerror=\"search()\">';",
+    "x.innerHTML = '<img src=x \" onerror=search()>';",
+    "x.innerHTML = '<img src=x alt=a<1 onerror=\"search()\">';",
+    "x.innerHTML = '<button title= \"Next >\" onclick=\"search()\">x</button>';",
+    "x.innerHTML = '<button title=\"a\"onclick=\"search()\">x</button>';",
     # the template engine writing into the script
     "x.innerHTML = '{{ banner | safe }}';",
     "x.appendChild(E('div', null, '<b>{{ title }}</b>'));",
@@ -678,7 +750,10 @@ def test_a_planted_breach_is_reported(line):
     under a name that is allowed in a path, and through a request that is not a direct `fetch()` — a template
     expression inside the script, and a hidden line break. Most of these were run in a browser by the reviews of
     this gate, where they painted, executed or retargeted a request while an earlier version of it passed; the rest
-    are the same sinks one token away."""
+    are the same sinks one token away. And a handler attribute or a `javascript:` URL in a tag of the literal markup
+    the script writes, also in a tag split across two joined literals or over the lines of a template literal, in
+    any letter case, after a `/` or with space around its `=` or colon, past a `>` in a quoted value and past a quote
+    HTML does not read as one: the nonce authorises neither, so each is a control that would do nothing."""
     assert violations(_planted(line)), "the gate missed: %s" % line
 
 
@@ -686,10 +761,24 @@ def test_a_planted_breach_is_reported(line):
     ("a second script element", lambda h: h.replace("</script>", "</script>\n<script>document.body.innerHTML = name;</script>", 1)),
     ("a module script", lambda h: h.replace("</script>", "</script>\n<script type=\"module\">\ndocument.body.innerHTML = name;\n</script>", 1)),
     ("an external script", lambda h: h.replace("</script>", "</script>\n<script src=\"/static/x.js\"></script>", 1)),
-    ("an attribute on the script element", lambda h: h.replace("\n<script>\n", "\n<script defer>\n", 1)),
-    ("a handler attribute with code in it", lambda h: h.replace('onclick="search()"', 'onclick="results.innerHTML = q.value"', 1)),
-    ("a handler attribute in another case", lambda h: h.replace('onclick="search()"', 'onClick="results.innerHTML = q.value"', 1)),
-    ("a handler attribute after a slash", lambda h: h.replace(' onclick="search()"', '/onclick="results.innerHTML = q.value"', 1)),
+    ("an attribute on the script element", lambda h: h.replace(SCRIPT_OPEN, SCRIPT_OPEN[:-1] + " defer>", 1)),
+    ("the script element without the nonce", lambda h: h.replace(SCRIPT_OPEN, "<script>", 1)),
+    ("a nonce that is not the per-response one", lambda h: h.replace(SCRIPT_OPEN, '<script nonce="{{ csp_nonce | safe }}">', 1)),
+    ("a second script that carries the nonce", lambda h: h.replace("</script>", "</script>\n%s\ndocument.body.innerHTML = name;\n</script>" % SCRIPT_OPEN, 1)),
+    ("a handler attribute that names a function", lambda h: h.replace(' data-testid="search-btn"', ' onclick="search()" data-testid="search-btn"', 1)),
+    ("a handler attribute with code in it", lambda h: h.replace(' data-testid="search-btn"', ' onclick="results.innerHTML = q.value" data-testid="search-btn"', 1)),
+    ("a handler attribute in another case", lambda h: h.replace(' data-testid="search-btn"', ' onClick="search()" data-testid="search-btn"', 1)),
+    ("a handler attribute after a slash", lambda h: h.replace(' data-testid="search-btn"', '/onclick="search()" data-testid="search-btn"', 1)),
+    ("a handler attribute with space before its =", lambda h: h.replace(' data-testid="search-btn"', ' onclick ="search()" data-testid="search-btn"', 1)),
+    ("a handler attribute with space after its =", lambda h: h.replace(' data-testid="search-btn"', ' onclick= "search()" data-testid="search-btn"', 1)),
+    ("a javascript: URL with a tab before the colon",
+     lambda h: h.replace("<header>", '<header><a href="javascript\t:openFleetPanel()">x</a>', 1)),
+    ("a javascript: URL in another case",
+     lambda h: h.replace("<header>", '<header><a href="JAVASCRIPT:openFleetPanel()">x</a>', 1)),
+    ("a javascript: URL in the static markup",
+     lambda h: h.replace("<header>", '<header><a href="javascript:openFleetPanel()">x</a>', 1)),
+    ("a handler attribute that is not onclick", lambda h: h.replace("<header>", '<header><img src="x" onerror="search()">', 1)),
+    ("the nonce a second time in the static markup", lambda h: h.replace("<header>", '<header><svg><script nonce="{{ csp_nonce }}" href="/x.js"/></svg>', 1)),
     ("a template expression in the static markup", lambda h: h.replace("<header>", "<header>{{ banner | safe }}", 1)),
     ("a template expression in a static attribute", lambda h: h.replace("<header>", '<header><a href="{{ url }}">x</a>', 1)),
     ("a template statement in the static markup", lambda h: h.replace("<header>", "<header>{% include banner %}", 1)),
@@ -701,12 +790,17 @@ def test_a_planted_breach_is_reported(line):
     ("a route set from something other than the parameter", lambda h: h.replace(ROUTE_SET, "dlg.dataset.route = id;", 1)),
 ], ids=lambda c: c[0] if isinstance(c, tuple) else None)
 def test_a_planted_structural_bypass_is_reported(change):
-    """The script scan reads one inline script. Everything it does not read must not be able to carry a sink: a
-    second, module or external script element, code in a static handler attribute (in any letter case, after any
-    separator), a template expression or statement in the static markup, a sink smuggled onto a helper's exempt
-    line, a helper redefined to assign innerHTML. And the three places a request path gets an unencoded name from
-    are pinned: a raw segment in the assembled cred-fields path, another value for `deep`, a route that is not the
-    dialog's parameter. Each is applied to the real template and must be reported."""
+    """The script scan reads one inline script. Everything it does not read must not be able to carry a sink: a second,
+    module or external script element (one that carries the nonce too), the script element opened with anything but the
+    nonce tag (none at all, an attribute beside it, a nonce piped through another filter), a static handler attribute of
+    any kind (one that only names a function, since the nonce authorises no attribute and such a button would do
+    nothing; code; another letter case; after another separator; another event than a click), a `javascript:` URL in the
+    static markup in any letter case (the nonce authorises no URL either), the nonce a second time in the static markup
+    (an SVG `<script …/>` closes itself, so the closing-tag count misses it, and with the nonce it runs), a template
+    expression or statement in the static markup, a sink smuggled onto a helper's exempt line, a helper redefined to
+    assign innerHTML. And the three places a request path gets an unencoded name from are pinned: a raw segment in the
+    assembled cred-fields path, another value for `deep`, a route that is not the dialog's parameter. Each is applied to
+    the real template and must be reported."""
     name, edit = change
     html = _template()
     changed = edit(html)
@@ -717,6 +811,11 @@ def test_a_planted_structural_bypass_is_reported(change):
 @pytest.mark.parametrize("line", [
     "x.appendChild(E('div','spin','Searching…','search-loading'));",
     "x.appendChild(E('div', 'meta', 'Reorder <b>sections</b>; '+\n  '<b>Save</b> stages a proposal.'));",
+    "x.appendChild(E('div', 'meta', 'state: online = reachable; <b>on</b> = enabled'));",
+    "x.innerHTML = '<span title=\"turn online = up\">x</span>';",
+    "x.innerHTML = \"<span title='turn online = up'>x</span>\";",
+    "x.innerHTML = '<span title= \"turn online = up\">x</span>';",
+    "x.innerHTML = '<b>x</b>' + // names <i onclick=f()>\n  '<i>y</i>';",
     "const row9 = E('div', 'row', null, 'unit-row');",
     "const c9 = E('div','card');",
     "const d9 = E(`div`);",
@@ -744,7 +843,9 @@ def test_a_planted_structural_bypass_is_reported(change):
 ])
 def test_legitimate_code_is_not_reported(line):
     """The other half of the proof: authored markup (single literals, concatenations across lines, an
-    interpolation-free template, a clear with no semicolon), the text helper, the link helper, an encoded request
+    interpolation-free template, a clear with no semicolon, prose that reads like a handler outside a tag or in a
+    quoted attribute value, a comment naming a handler inside a markup expression), the text
+    helper, the link helper, an encoded request
     path (with a name used only as a ternary's condition, and with a request body that carries anything), a
     reconfigure dialog opened on an encoded route, `Object.assign` onto a new object, a local called `open`, an
     arrow-function timer and ordinary regular expressions and divisions all pass when planted into the real script
@@ -768,7 +869,7 @@ def test_the_scanner_ignores_prose_and_refuses_what_it_cannot_follow():
         _mask("const s = 'never closed;\n")
     with pytest.raises(ValueError):
         _mask("const r = x.replace(/never closed\n, '');\n")
-    unreadable = "<html><body>\n<script>\nconst s = 'never closed;\n</script>\n</body></html>\n"
+    unreadable = "<html><body>\n%s\nconst s = 'never closed;\n</script>\n</body></html>\n" % SCRIPT_OPEN
     assert any("unreadable-script" in v for v in violations(unreadable))
 
 
@@ -782,17 +883,20 @@ def test_unreviewed_values_are_painted_with_the_text_helper():
             "%s (%s) must be painted with ET(), not E()" % (tid, what)
 
 
-def test_security_headers_are_declared():
-    """The defence-in-depth layer ships and stays: object-src/base-uri/frame-ancestors plus nosniff. NOT
-    script-src — index.html carries a large inline <script> and inline handler attributes on its header buttons, so
-    asserting it here would pin a header that breaks the page; a per-response nonce with those handlers rebound is
-    the named follow-up (SECURITY.md C19)."""
+def test_the_static_csp_directives_are_declared():
+    """The directives every response carries ship and stay: object-src, base-uri and frame-ancestors, each `'none'`,
+    plus nosniff. And three that must NOT be in that static part: `default-src`, which would become the fallback for
+    `style-src`, `connect-src` (every `fetch()`) and `img-src` and so break the page; `style-src`, which the page's
+    `<style>` block and `style` attributes (no nonce on either) would fail; and `script-src`, which is computed per
+    response. That computed half is proved on real responses in tests/integration/test_gui_api.py, not read from
+    source here."""
     app_src = open(os.path.join(ROOT, "gui", "app.py"), encoding="utf-8").read()
     assert "@app.after_request" in app_src
-    m = re.search(r'"Content-Security-Policy",\s*\n?\s*"([^"]*)"', app_src)
-    assert m, "no Content-Security-Policy header value found in gui/app.py"
-    policy = m.group(1)          # assert on the POLICY, not the file — prose about script-src is not a directive
+    m = re.search(r'^_CSP_STATIC = "([^"]*)"$', app_src, re.M)
+    assert m, "no _CSP_STATIC policy string found in gui/app.py"
+    policy = m.group(1)          # assert on the POLICY, not the file — prose about a directive is not a directive
     for directive in ("object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'"):
         assert directive in policy, "missing CSP directive: %s (policy is %r)" % (directive, policy)
+    for absent in ("default-src", "style-src", "script-src"):
+        assert absent not in policy, "%s must not be in the static policy (policy is %r)" % (absent, policy)
     assert "X-Content-Type-Options" in app_src
-    assert "script-src" not in policy, "script-src cannot ship while index.html has an inline <script>"

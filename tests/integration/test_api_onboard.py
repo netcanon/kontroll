@@ -15,6 +15,7 @@ from api.audit import read_audit
 from api.main import create_app
 from api.settings import Settings
 from kontroll import catalog, gitio, paths, probe
+from kontroll.service.onboard import OnboardRefusal
 
 pytestmark = pytest.mark.integration
 
@@ -176,14 +177,16 @@ def test_onboard_dryrun_accepts_a_creds_map_and_returns_derived_fields(onb):
 
 
 def test_onboard_partial_auth_set_is_a_422_not_a_500(onb, monkeypatch):
-    """A planner guard that raises a catchable ValueError — a partially-filled required auth_set (more reachable via
-    F1 TIER-B's derived proxmox api-token set) or the MF-S2 domain-confinement refusal — is a clean 422 CLIENT
-    error, NOT a 500 server crash. Guards a normal 'you forgot a credential part' operator mistake surfacing as a
-    worker error (the route now catches ValueError → 422, mirroring WriteConflict → 409). The guard's own behaviour
-    is pinned at the service layer (test_onboard_proxmox_auth.py::test_partial_auth_set_is_refused_for_coherence);
-    this pins the ROUTE's mapping of that ValueError to a 422."""
+    """A planner guard's refusal (`OnboardRefusal`) — a partially-filled required auth_set (more reachable via F1
+    TIER-B's derived proxmox api-token set) or the MF-S2 domain-confinement refusal — is a clean 422 CLIENT error
+    with its own sentence, NOT a 500 server crash. Guards a normal 'you forgot a credential part' operator mistake
+    surfacing as a worker error (the route catches the planner's refusal type → 422, mirroring WriteConflict → 409).
+    The guard's own behaviour is pinned at the service layer
+    (test_onboard_proxmox_auth.py::test_partial_auth_set_is_refused_for_coherence); this pins the ROUTE's mapping of
+    that refusal to a 422. A ValueError that is no refusal is pinned by
+    test_a_stray_value_error_under_the_planner_is_no_422."""
     def _raise(*a, **k):
-        raise ValueError("incomplete credential set 'proxmox_api' — provide all of "
+        raise OnboardRefusal("incomplete credential set 'proxmox_api' — provide all of "
                          "['api_user', 'api_token_id', 'api_token_secret'] together (missing ['api_token_secret'])")
     monkeypatch.setattr("api.routes.onboard.build_onboard_plan", _raise)
     r = onb.client.post("/onboard", headers=AUTH, json=_body(collection="community.proxmox", key="proxmox"))
@@ -192,6 +195,24 @@ def test_onboard_partial_auth_set_is_a_422_not_a_500(onb, monkeypatch):
     assert r.json()["code"] == "invalid_request"                # not a field refusal: no field code to offer
     audit = open(onb.audit_log, encoding="utf-8").read()
     assert "onboard-refuse" in audit and "reason=planner-guard" in audit and "request-boundary" not in audit
+
+
+def test_a_stray_value_error_under_the_planner_is_no_422(onb, monkeypatch):
+    """A ValueError raised under the planner that is not one of its refusals (a parse error, a library's — `json.loads`
+    on `ansible-doc` output raises one) is no 422 `invalid_request` with its text: it reaches FastAPI's bare 500,
+    whose body holds no exception text, and leaves no `onboard-refuse` audit line. Guards brief 16 §9.1's class C on
+    the API side (T20): the route caught every ValueError and answered it as the operator's mistake, showing what the
+    planner was parsing."""
+    leak = "t20-leak-sentinel /opt/kontroll/instance/secrets/network.sops.yml"
+
+    def _stray(*a, **k):
+        raise ValueError(leak)
+    monkeypatch.setattr("api.routes.onboard.build_onboard_plan", _stray)
+    with TestClient(onb.client.app, raise_server_exceptions=False) as c:
+        r = c.post("/onboard", headers=AUTH, json=_body(collection="community.proxmox", key="proxmox"))
+    assert r.status_code == 500 and leak not in r.text
+    audit = open(onb.audit_log, encoding="utf-8").read() if os.path.exists(onb.audit_log) else ""
+    assert "onboard-refuse" not in audit and leak not in audit
 
 
 @pytest.mark.parametrize("field,value", [

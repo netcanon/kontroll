@@ -1336,3 +1336,93 @@ def test_a_missing_break_glass_role_is_refused_before_any_write(fresh_repo, monk
         assert ki.main(_FRESH + ["--break-glass-recipient", BG]) == 1
         assert "key-roles/break-glass.yml" in capsys.readouterr().err
         assert not os.path.exists(os.path.join(fresh_repo, "instance"))
+
+
+# --- T20: a first-run password is shown only on a terminal --------------------------------------------------------- #
+_MINTED_PW = "t20-minted-password-sentinel"
+
+
+def _bootstrap_writes(monkeypatch):
+    """--fresh's seams with each bootstrap domain WRITTEN: a value bootstrap_secret_values supplies for one field (the
+    sentinel), a plan whose view lists it as provided, and an apply that changed the domain."""
+    _mock_fresh_seams(monkeypatch)
+    monkeypatch.setattr(ki, "bootstrap_secret_values", lambda form, existing: {"gui_password": _MINTED_PW})
+    monkeypatch.setattr(secrets_service, "build_secret_plan",
+                        lambda d, s, r=None: {"error": None, "view": [{"key": "gui_password", "source": "provided"}]})
+    monkeypatch.setattr(secrets_service, "apply_secret_plan", lambda p: {"changed": True, "error": None, "paths": []})
+
+
+def test_bootstrap_secrets_are_not_printed_when_output_is_not_a_terminal(fresh_repo, monkeypatch, capsys):
+    """With standard output not a terminal (a pipe, a `tee` file, a CI log), --fresh writes the bootstrap secrets but
+    prints none of their values: each written field's NAME with `(not shown)`, and, once per domain, the command that
+    reads that domain back from a terminal — the default key file written `~/…`, the overlay's path; the closing lines
+    say to read the passwords back, not to save the ones "above". Guards brief 16 §9.4's last row (T20): a first-run
+    GUI/Grafana password printed into a log nobody chose to keep, the same rule the break-glass mint already follows;
+    and a run that names no way back to a domain's values — the semaphore domain's command is the only way back to
+    the Semaphore admin password (T20's read B, N2: the closing line alone met the check); and the command naming no
+    way to run it where the host has no sops (T20's read A, N4). Each domain's sentence says where to run it, and
+    the closing line names the dashboards command and where to run it (T20 fold 1's read B, N3; read A, N3)."""
+    _bootstrap_writes(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: False)
+    assert ki.main(_FRESH + ["--no-break-glass"]) == 0
+    out = capsys.readouterr().out
+    assert _MINTED_PW not in out
+    assert "gui_password:" in out and "(not shown)" in out and "SAVE these now" not in out
+    assert (out.count("Not shown: standard output is not a terminal. Read them from a terminal with:")
+            == len(ki.BOOTSTRAP_DOMAINS)), out
+    for domain in ki.BOOTSTRAP_DOMAINS:
+        assert ("SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/%s.sops.yml" % domain
+                in out), domain
+    assert "semaphore" in ki.BOOTSTRAP_DOMAINS
+    assert "no sops on this host? run it inside `scripts/kontroll-installer.sh shell`" in out
+    assert out.count("(from the repository's root; no sops on this host?") == len(ki.BOOTSTRAP_DOMAINS), out
+    assert ("    - Read the GUI/Grafana passwords (your onboard-GUI + Grafana logins) from a terminal at the"
+            " repository's root (no sops on this host? run it inside `scripts/kontroll-installer.sh shell`):"
+            " SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt sops -d instance/secrets/dashboards.sops.yml\n") in out, out
+    assert "SAVE the GUI/Grafana passwords above" not in out
+
+
+def test_the_read_back_names_another_key_file_absolute_and_quoted(tmp_path, monkeypatch):
+    """A key file other than the default is named in the read-back command by its absolute path, quoted for the shell:
+    the command is run from the repository's root, so a relative path given from another directory would name another
+    file there, and a path with a space would split into two words. The default key keeps its `~/…` form. Guards the
+    command kontroll-init prints in place of a password being one that cannot read it back (T20 fold 1's read A, N3).
+    The key's name holds a space and a quote of each kind, which a path put in double or single quotes by hand does not
+    survive, so the shell's own quoting is told from a hand quoting that escapes nothing (T20 fold 2's read B, N2); one
+    that escapes only `"` passes here, and `test_a_run_with_another_key_file_names_it_in_every_read_back` pins
+    `shlex.quote` itself (T20 fold 3's read B)."""
+    import shlex
+    monkeypatch.chdir(tmp_path)
+    cmd = ki._read_back("dashboards", os.path.join("my keys", "it's \"k\".txt"))
+    words = shlex.split(cmd)
+    assert words[0] == "SOPS_AGE_KEY_FILE=%s" % os.path.join(str(tmp_path), "my keys", "it's \"k\".txt"), cmd
+    assert words[1:] == ["sops", "-d", ki.paths.overlay_target("ansible/secrets/dashboards.sops.yml")], cmd
+    assert ki._read_back("dashboards", ki.AGE_KEY_FILE).startswith("SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt "), \
+        ki._read_back("dashboards", ki.AGE_KEY_FILE)
+
+
+def test_bootstrap_secrets_are_shown_once_on_a_terminal(fresh_repo, monkeypatch, capsys):
+    """On a terminal the written bootstrap values are shown, once per domain, under `SAVE these now:` — the operator's
+    one chance to note the first GUI/Grafana login, unchanged by T20. Guards the non-terminal rule above hiding the
+    values from the operator who ran the command at a terminal."""
+    _bootstrap_writes(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: True)
+    assert ki.main(_FRESH + ["--no-break-glass"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("SAVE these now:") == len(ki.BOOTSTRAP_DOMAINS)
+    assert out.count(_MINTED_PW) == len(ki.BOOTSTRAP_DOMAINS) and "(not shown)" not in out
+
+
+def test_a_run_with_another_key_file_names_it_in_every_read_back(fresh_repo, monkeypatch, capsys, tmp_path):
+    """A --fresh run off a terminal with a key file other than the default names THAT key, absolute and quoted, in
+    each domain's read-back and in the closing line, and never the default `~/…` key. Guards the two call sites in
+    main() handing `_read_back` another key than the one the run wrote: the command printed in place of a password
+    would then open nothing (T20 fold 2's read A: a call site passing AGE_KEY_FILE survived the suite)."""
+    import shlex
+    _bootstrap_writes(monkeypatch)
+    monkeypatch.setattr(ki, "_stdout_is_terminal", lambda: False)
+    key = str(tmp_path / "my keys" / "ctl.txt")
+    assert ki.main(_FRESH + ["--no-break-glass", "--key-file", key]) == 0
+    out = capsys.readouterr().out
+    assert out.count("SOPS_AGE_KEY_FILE=%s sops -d " % shlex.quote(key)) == len(ki.BOOTSTRAP_DOMAINS) + 1, out
+    assert "SOPS_AGE_KEY_FILE=~/" not in out, out

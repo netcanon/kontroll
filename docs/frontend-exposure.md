@@ -24,6 +24,13 @@ SSO. kontroll generates no cert and needs no domain. `--forwarded-allow-ips=*` m
 proxy's `X-Forwarded-For`, so the API rate-limiter keys off the **real client IP**, not the proxy hop.
 Caveat: with a remote proxy, auth creds traverse the mgmt VLAN in cleartext — accepted-risk on a
 single-operator mgmt-only VLAN (SECURITY C3), or co-locate the proxy (loopback) / keep self-signed upstream.
+Pass the onboard GUI's responses through unchanged: its page runs only the script its response's
+`Content-Security-Policy` nonce names (SECURITY C19), so a proxy that adds a policy of its own (the browser enforces
+both) or rewrites the page's HTML (the tag's nonce must match the header's) can leave the GUI blank, and one that
+replaces or removes the header leaves it working with no script policy, so nothing shows the layer is gone. A second
+policy that refuses nothing the page does (a `frame-ancestors` of its own, an `img-src 'self'`) is harmless; one
+whose `default-src`, `connect-src` or `sandbox` refuses what the page does (`default-src 'self'` its inline script,
+`connect-src 'none'` its requests, a bare `sandbox` all script) breaks the GUI as surely as a script directive does.
 
 ## `self_signed` (the zero-config default)
 deploy-stack generates a per-service self-signed cert (the API's uvicorn `--ssl-*`). Working HTTPS with
@@ -65,7 +72,8 @@ onboard-gui) are intentionally not behind Caddy.
 
 ## See also
 - [api-architecture.md](api-architecture.md) §9 — the API's deploy posture
-- [../SECURITY.md](../SECURITY.md) — C1 (secret domains, incl. `acme`), C3 (reachability), C9 (the API surface)
+- [../SECURITY.md](../SECURITY.md) — C1 (secret domains, incl. `acme`), C3 (reachability), C9 (the API surface),
+  C19 (the onboard GUI's script policy)
 - [../instance/instance.yml](../instance/instance.yml) — the `frontend` block (this instance)
 - [../instance/secrets/README.md](../instance/secrets/README.md) — the `acme` secret domain
 - [reviews/2026-06-13-roadmap/03-redesign-frontend-exposure.md](reviews/2026-06-13-roadmap/03-redesign-frontend-exposure.md) — the re-scope design

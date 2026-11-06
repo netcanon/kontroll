@@ -330,10 +330,13 @@ def build_homepage_plan(board):
 
 def apply_homepage_plan(plan):
     """APPLY: write plan['text_after'] to the two overlay files, idempotent (identical content ⇒ changed:False,
-    no write). Returns {error?, changed, paths}. Never raises; a write failure returns an error, never sys.exit."""
+    no write). Returns {error?, changed, paths}. Never raises; a write failure returns the code `write_failed`,
+    never sys.exit, and never the OSError's text (an absolute path inside the container): the log line names the
+    file, the exception's type and its errno, and the route answers with a fixed sentence (T20)."""
     ta = plan.get("text_after") or {}
     writes = (("services.yaml", ta.get("services")), ("settings.yaml", ta.get("settings")))
     changed = False
+    name = None
     try:
         for name, after in writes:
             if after is None:
@@ -343,7 +346,8 @@ def apply_homepage_plan(plan):
                     fh.write(after)
                 changed = True
     except OSError as e:
-        return {"error": "write failed: %s" % e, "changed": changed, "paths": plan.get("paths")}
+        log.error("homepage write failed: file=%s type=%s errno=%s", name, type(e).__name__, e.errno)
+        return {"error": "write_failed", "changed": changed, "paths": plan.get("paths")}
     return {"error": None, "changed": changed, "paths": plan.get("paths")}
 
 

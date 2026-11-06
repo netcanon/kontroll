@@ -15,7 +15,8 @@ from pydantic import BaseModel
 from api.auth import Principal, audit_action, require_token
 from api.deps import Catalog, get_catalog
 from kontroll import authspec, catalog, gitio, paths, probe
-from kontroll.service.onboard import apply_onboard_plan, build_onboard_plan, default_secrets_domain, no_backend_message
+from kontroll.service.onboard import (OnboardRefusal, apply_onboard_plan, build_onboard_plan, default_secrets_domain,
+                                      no_backend_message)
 from kontroll.service.pending import promote_hint
 
 # What a `no_backend` answer tells an API or GUI caller to do (the CLI's names its own flag).
@@ -92,11 +93,12 @@ def onboard(body: OnboardIn, request: Request,
         plan = build_onboard_plan(body.collection, body.key, body.group, body.host,
                                   host_name=body.host_name, secrets=body.secrets or None, backend=body.backend,
                                   creds=creds, backends=cat.backends, deep=body.deep)
-    except ValueError as e:
-        # A catchable planner guard fired BEFORE any write: the request boundary (C22 — a field that is not a closed
+    except (paths.RequestBoundaryError, OnboardRefusal) as e:
+        # A planner guard fired BEFORE any write: the request boundary (C22 — a field that is not a closed
         # charset), MF-S2 domain-confinement, or a partially-filled required auth_set (both operator-input errors —
         # the latter more reachable via F1 TIER-B's derived multi-field auth_sets, e.g. proxmox
-        # api_user+token_id+token_secret). A clean 422, never a 500 (mirrors WriteConflict → 409); no creds were
+        # api_user+token_id+token_secret). Any other ValueError below the planner is no refusal and is not answered
+        # with its text (T20). A clean 422, never a 500 (mirrors WriteConflict → 409); no creds were
         # written (the guards run pre-`creds_to_set`). AUDITED by field NAME, never value: a refused `key` of
         # `../../etc` must not be copied into the audit log, and a refusal that leaves no trace is a blind spot.
         boundary = isinstance(e, paths.RequestBoundaryError)
