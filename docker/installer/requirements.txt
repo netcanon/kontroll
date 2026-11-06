@@ -1,6 +1,6 @@
-# docker/installer/requirements.txt — the installer image's Python packages: ansible-core, ansible-lint, the
-# `docker` SDK and their dependencies, one exact pin each (the published v0.1.2 installer's set, certifi aside). The
-# Dockerfile installs it with `--no-deps` and then runs `pip check`, so the file is the whole set. Produced by
+# docker/installer/requirements.txt — the installer image's Python packages: ansible-core, ansible-lint, the `docker`
+# SDK and their dependencies, one exact pin each (the published v0.1.2 installer's set, certifi and filelock aside).
+# The Dockerfile installs it with `--no-deps` and then runs `pip check`, so the file is the whole set. Produced by
 # docker/README.md § Refreshing a pin (`pip freeze` in a build with the three top-level packages, less the pip,
 # setuptools and wheel Debian ships) and never edited by hand without that rebuild. ansible-core stays inside the
 # range scripts/install-prereqs.sh puts on a host. Hash pins are the next rung (see
@@ -18,7 +18,7 @@ click==8.5.0
 cryptography==50.0.2
 distro==1.9.0
 docker==7.2.0
-filelock==4.1.0
+filelock==4.2.1
 idna==3.20
 Jinja2==3.1.6
 jsonschema-specifications==2025.9.1

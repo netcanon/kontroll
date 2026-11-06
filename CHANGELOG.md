@@ -126,7 +126,8 @@ were built from was not.
   venv) and `docker/installer/requirements.txt` (ansible-core 2.18.19, the version the published v0.1.2 installer
   carries, with ansible-lint, the docker SDK and their dependencies), each installed `--no-deps` and followed by
   `pip check`; the runner also import-checks the paramiko and PyYAML its base ships. certifi moves to 2026.10.19
-  (PYSEC-2026-4320; the published v0.1.2 installer carries 2026.7.22 until the next release).
+  (PYSEC-2026-4320) and filelock to 4.2.1 (CVE-2026-112906 and the other advisories filed against 4.1.0); the
+  published v0.1.2 installer carries the older two until the next release.
 - **apk by minor** (`~=`), with the baked versions printed in the build log; **sops and Docker's apt key by
   SHA-256** in the installer; **postgres** at `16.15-alpine`.
 - `api/requirements.txt` names plain `uvicorn`, as the image installs it; it and `gui/requirements.txt` stay the
