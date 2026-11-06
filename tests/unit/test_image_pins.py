@@ -86,28 +86,28 @@ pattern replacement of an unset variable (`${x/#/exit} 0`: a bad substitution to
 operator's word where sh runs no command word from it (`${x/a/exit} 0`, `${x:+exit} 0` and `${x+exit} 0` with `x` unset,
 `${1:+exit} 0` with no arguments, and `${1=exit} 0`, which sh refuses to assign), an expansion inside double quotes
 glued to `exit` (`exit"$x"0`, `exit"${IFS}"0`: quoted, an expansion splits no word, but for a `$@` between two of its
-arguments), a gap inside double quotes in a command holding the word `eval`, or a word an expansion's gap glues into one
-or splits one off (`eval "export X=${HOME}"`, `echo${IFS}eval "a${x}"`: eval reads the string again, where the gap can
-be a space or a newline), a bare `{` in an expansion glued to `exit` (`exit${x:+{}} 0`: sh runs `exit}`, a command not
-found, but the expansion is read as a space too, as any is), any `PIP_…` word in a Dockerfile that installs with pip
-(`ENV PIP_NO_CACHE_DIR=1`, `ENV PIP_DISABLE_PIP_VERSION_CHECK=1`, one in a message: pip reads every long option from
-one, read 170, S4), an ONBUILD's `--from=` a stage the later build names, or an image through an ARG default, any RUN
-flag in a Dockerfile that installs with pip, a cache mount at pip's own cache too
-(`--mount=type=cache,target=/root/.cache/pip`, `--network=none`, a bind mount of the requirements file: these checks do
-not read what a mount puts in front of the install, a pip.conf, a planted wheel in a shared cache, or a target an
-earlier RUN made a link), a `set --` given a variable (`set -- $x`), a digest name that an ARG or ENV gives another
-value or none, assigned in the RUN (`ENV X=$FOO`, then `X=<hex> && …`), the word `exit`, `return`, `trap` or `exec` in a
-message (`echo "will exit on error"`), a function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`,
-or a `name()`, in a quoted message too), the word `set` or `shopt` in a message before a word holding `$`, a backquote,
-a glob character, `{` or `(` (`echo "set up (once)"`), an ANSI-C `$'…'` before the check or later in its own list, a
-`sha256sum` that is not the first word of its command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo
-$(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after a space inside quotes (`echo "see
-#1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two
-outputs, a trailing comment on a RUN's last line, a digest ARG redeclared without its value in a later stage, and an
-unquoted `case` followed by a blank inside a `$(…)` that opens no case (`$(echo case x)`: these checks refuse a case
-pattern they cannot read and read such a word as a case whose `esac` has not come), and a case in a `$(…)` whose last
-branch is empty or that has none (`$(case a in x) esac)`, `$(case a in esac)`: these checks count an `esac` only after
-`;` or a lone `&`, so a decoy one evens nothing in the shapes their rows hold, read 170, B1, and read 180, B1)."""
+arguments), a gap inside double quotes in a command holding the word `eval`, or a word gaps glue into one, split one
+off, or both (`eval "export X=${HOME}"`, `echo${IFS}eval "a${x}"`: eval reads the string again, where the gap can be a
+space or a newline), a bare `{` in an expansion glued to `exit` (`exit${x:+{}} 0`: sh runs `exit}`, a command not found,
+but the expansion is read as a space too, as any is), any `PIP_…` word in a Dockerfile that installs with pip (`ENV
+PIP_NO_CACHE_DIR=1`, `ENV PIP_DISABLE_PIP_VERSION_CHECK=1`, one in a message: pip reads every long option from one, read
+170, S4), an ONBUILD's `--from=` a stage the later build names, or an image through an ARG default, any RUN flag in a
+Dockerfile that installs with pip, a cache mount at pip's own cache too (`--mount=type=cache,target=/root/.cache/pip`,
+`--network=none`, a bind mount of the requirements file: these checks do not read what a mount puts in front of the
+install, a pip.conf, a planted wheel in a shared cache, or a target an earlier RUN made a link), a `set --` given a
+variable (`set -- $x`), a digest name that an ARG or ENV gives another value or none, assigned in the RUN (`ENV X=$FOO`,
+then `X=<hex> && …`), the word `exit`, `return`, `trap` or `exec` in a message (`echo "will exit on error"`), a function
+or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`, or a `name()`, in a quoted message too), the word
+`set` or `shopt` in a message before a word holding `$`, a backquote, a glob character, `{` or `(` (`echo "set up
+(once)"`), an ANSI-C `$'…'` before the check or later in its own list, a `sha256sum` that is not the first word of its
+command (`| env sha256sum -c -`), a `#` right after a `$(…)` (`echo $(true)#x`: one word to sh, a comment inside a RUN
+to these checks), a `#` after a space inside quotes (`echo "see #1"`), a SHELL such as hadolint's `["/bin/bash", "-o",
+"pipefail", "-c"]`, a curl or wget naming two URLs or two outputs, a trailing comment on a RUN's last line, a digest ARG
+redeclared without its value in a later stage, and an unquoted `case` followed by a blank inside a `$(…)` that opens no
+case (`$(echo case x)`: these checks refuse a case pattern they cannot read and read such a word as a case whose `esac`
+has not come), and a case in a `$(…)` whose last branch is empty or that has none (`$(case a in x) esac)`, `$(case a in
+esac)`: these checks count an `esac` only after `;` or a lone `&`, so a decoy one evens nothing in the shapes their rows
+hold, read 170, B1, and read 180, B1)."""
 import json
 import os
 import re
@@ -1533,6 +1533,21 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
     ("true; command${IFS}eval \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
      ["pip install shares the RUN with `command${IFS}eval \"ex${y}it${IFS}0\"`",
       "pip check shares the RUN with `command${IFS}eval \"ex${y}it${IFS}0\"`"]),
+    ("true; se$(: $[ ; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: $[ ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: $[ ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(: $[ \"]\" ; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: $[ \"]\" ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: $[ \"]\" ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(:; $[ ; esac ]esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: ; $[ ; esac ]esac ; case a in $(echo ')')) 1`",
+      "pip check shares the RUN with `se$(: ; $[ ; esac ]esac ; case a in $(echo ')')) 1`"]),
+    ("true; ev${x}al${IFS}\"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `ev${x}al${IFS}\"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `ev${x}al${IFS}\"ex${y}it${IFS}0\"`"]),
+    ("true; ev${x}\"\"${y}al \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `ev${x}\"\"${y}al \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `ev${x}\"\"${y}al \"ex${y}it${IFS}0\"`"]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1664,7 +1679,12 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "exit-built-by-an-eval-glued-around-an-empty-backquoted-command",
         "exit-built-by-an-eval-glued-around-a-positional-parameter",
         "exit-built-by-an-eval-after-an-unset-variable",
-        "exit-built-by-an-eval-that-command-runs-across-an-ifs"])
+        "exit-built-by-an-eval-that-command-runs-across-an-ifs",
+        "set-n-split-by-a-case-after-an-unclosed-bash-arithmetic-bracket",
+        "set-n-split-by-a-case-after-a-bash-arithmetic-bracket-whose-close-is-quoted",
+        "set-n-split-by-a-case-after-a-decoy-esac-glued-to-a-bash-arithmetic-bracket-holding-another",
+        "exit-built-by-an-eval-glued-around-an-unset-variable-and-split-off-by-an-ifs",
+        "exit-built-by-an-eval-glued-around-two-unset-variables-an-empty-double-quote-parts"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1761,7 +1781,7 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     substitution a `;` cuts (`"e${x:+'$( echo '}' " ; : " ; : )'}"xit 0`); and it passes a message whose quoted strip
     the scan leaves open (`` z='`' echo ex"`:`"it "${x#"\\"}"'"'"'"}" ``). Fold 18 added (fold 17's settle read): a
     case whose pattern these checks cannot read, which leaves its `)` to close the substitution before the `esac`, so
-    sh runs `set -n` (`se$(case a in $(echo ')')) 1;; esac)t -n`): refused whatever the pattern holds. Guards a pin
+    sh runs `set -n` (`se$(case a in $(echo ')')) 1;; esac)t -n`): refused, in the shapes its rows hold. Guards a pin
     check that a common install shape walks past, and a `pip check` that cannot fail the build — "make the cleanup
     tolerant" with a trailing `|| true` was one (T29's read, S2 and S3: P1, P2, P5, P8; its fold-2 read, S1, N3, N4;
     its fold-3 read, S2, N1, N2, N6: Z1, Z5, Z6, Z10, V2, V3; fold 4's mutants: S4, O7, O8, E4, E5; its read, S1, S2,
@@ -1778,7 +1798,10 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     option exported in the install's own RUN (`export PIP_REQUIREMENT=…`, a file that can name an index: S4); from read
     171, the four case patterns it found no row held (S1). Fold 20 added (read 180): the same decoy `esac` after a
     redirect's `&` as a RUN (`se$(: >&esac; case a in $(echo ')')) 1;; esac)t -n`: B1), and an `eval` an expansion glues
-    into or one splits off (S1)."""
+    into or one splits off (S1). Fold 21 added (read 190): a `$[` no `]` closes, or one whose `]` sits in a quote, as a
+    RUN (`se$(: $[ ; case a in $(echo ')')) 1;; esac)t -n`: B1), the decoy `esac` glued to a `$[…]` that holds another,
+    an `eval` an expansion glues into and an IFS splits off at once, and one whose word holds two gaps an empty double
+    quote parts (B2)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 

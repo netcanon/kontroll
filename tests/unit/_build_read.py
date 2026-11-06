@@ -283,15 +283,24 @@ def _case_unread(text):
     join lines with `;`, or after a lone `&`), so a decoy `esac` in an argument, a pattern, a `${…}`, an inner `$(…)` or
     `$[…]`, a redirect's word or a `[[ … ]]` evens nothing (`e$(: esac; case a in $(echo ')')) :;; esac)xit 0`, `e$(case
     a in $(echo ')')|esac) :;; esac)xit 0`, `e$(: ${x:-;esac }; case …`: read 170, B1; `e$(: >&esac; case …`, `e$(: $[ ;
-    esac ]; case …`, `e$([[ a && esac ]]; case …`: read 180, B1). It fails closed: `_open_subst` reads such a text as
-    open until the case's `esac` is joined (so `_spans` joins the commands up to it, and the audit after it stays its
-    own command) and `_choices` reads it as `exit`, so a pattern `_CASE_PIECE` cannot read is refused in each of these
-    shapes. The walk is not sh's parser: a decoy `esac` it reads where a command starts and sh reads none would even the
-    count (a limit test_image_pins.py's docstring names). Refused although sound: an unquoted `case` word followed by a
-    blank inside a `$(…)` that opens no case (`$(echo case x)`), after the check too (`$(echo case)` is passed there, as
-    no blank follows the word; before it, `_left_open` refuses a `$(…)` holding any `case` word, as it did before), and
-    a case whose last branch is empty or that has none (`$(case a in x) esac)`, `$(case a in esac)`), whose `esac`
-    follows no `;` or lone `&` (read 170, B1)."""
+    esac ]; case …`, `e$([[ a && esac ]]; case …`: read 180, B1). A bash `$[…]` is a frame in one reading and plain text
+    in the other (dash and POSIX sh read no `$[`), and the text is refused if either reading closes early, so a `$[` no
+    `]` closes, or one whose `]` sits in a quote, hides no `)` from the dash reading (`e$(: $[ ; case …`, `se$(: $[ "]"
+    ; case …`: read 190, B1); a quote inside a `$[…]` is a frame of its own, so a `]` it holds closes nothing (`e$(: $[
+    "]" ; esac ]; case …`: read 190, S1). It fails closed: `_open_subst` reads such a text as open until the case's
+    `esac` is joined (so `_spans` joins the commands up to it, and the audit after it stays its own command) and
+    `_choices` reads it as `exit`, so a pattern `_CASE_PIECE` cannot read is refused in each of these shapes. The walk
+    is not sh's parser: a decoy `esac` it reads where a command starts and sh reads none would even the count (a limit
+    test_image_pins.py's docstring names). Refused although sound: an unquoted `case` word followed by a blank inside a
+    `$(…)` that opens no case (`$(echo case x)`), after the check too (`$(echo case)` is passed there, as no blank
+    follows the word; before it, `_left_open` refuses a `$(…)` holding any `case` word, as it did before), and a case
+    whose last branch is empty or that has none (`$(case a in x) esac)`, `$(case a in esac)`), whose `esac` follows no
+    `;` or lone `&` (read 170, B1)."""
+    return _case_walk(text, True) or _case_walk(text, False)
+
+
+def _case_walk(text, brackets):
+    """`_case_unread`'s walk, a bash `$[…]` read as a frame where `brackets` is set and as plain text where not."""
     stack, k = [["", []]], 0  # each frame: its kind and the text of its own level
     while k < len(text):
         ch, top, own = text[k], stack[-1][0], stack[-1][1]
@@ -306,10 +315,10 @@ def _case_unread(text):
             if ch == "`":
                 stack.pop()
                 stack[-1][1].append("\x01")
-        elif ch == "$" and text[k + 1:k + 2] in ("{", "(", "["):
+        elif ch == "$" and text[k + 1:k + 2] in (("{", "(", "[") if brackets else ("{", "(")):
             stack.append([text[k + 1], []])
             k += 1
-        elif top == "[":
+        elif top == "[" and ch in "[]":
             if ch == "[":
                 stack.append(["[", []])
             elif ch == "]":
@@ -348,7 +357,6 @@ _CHOICES = 64
 _GAP = chr(7)  # where `_choices` removed an expansion, read at the end as empty and as a space (`_fills`)
 _GAP_AT = chr(8)  # where it removed a `$@`-like expansion, which splits a word inside double quotes too
 _AT = re.compile(r"\$(?:@|\{!?(?:@|[A-Za-z_]\w*(?:\[@\]|@)))")  # `$@`, `${@…}`, `${!p@}`, `${a[@]…}`
-_EVAL = re.compile(r"(?:^|[\s;&|()`])eval(?=\s|$)")
 
 
 def _choices(command):
@@ -471,12 +479,14 @@ def _fills(text):
     command holding the word `eval` with a gap inside double quotes, but for one that is a whole quoted word, is read
     past `_CHOICES` ways: eval reads the string again, so the gap can be a space or a newline (`eval "ex${x}it${IFS}0"`,
     read 160, S3). The word is read with the text's quotes and backslashes removed, as the shell reads a command word
-    (`\\eval`, `"eval"`, `e\\val`: read 170, S2), and with each gap read as empty and as a space, as the gaps around
-    `exit` are (`ev${x}al`, `${x}eval`, `command${IFS}eval`: read 180, S1)."""
+    (`\\eval`, `"eval"`, `e\\val`: read 170, S2), and with a gap allowed before it, between its letters and after it, so
+    each gap reads as empty or as a space in any mix (`ev${x}al`, `${x}eval`, `command${IFS}eval`: read 180, S1;
+    `ev${x}al${IFS}…`, `command${IFS}ev${x}al …`: read 190, B2)."""
     text = re.sub("[" + _GAP + _GAP_AT + "]+", lambda r: _GAP_AT if _GAP_AT in r.group(0) else _GAP, text)
     parts, quoted, q, k = re.split("[" + _GAP + _GAP_AT + "]", text), [], None, 0
     plain = re.sub(r"""["'\\]""", "", text)
-    evals = any(_EVAL.search(re.sub("[" + _GAP + _GAP_AT + "]", sep, plain)) for sep in ("", " "))
+    g = "[" + _GAP + _GAP_AT + "]"
+    evals = re.search(r"(?:^|[\s;&|()`]|" + g + ")" + (g + "*").join("eval") + r"(?=\s|$|" + g + ")", plain)
     while k < len(text):  # whether each gap sits inside double quotes; a backslash before a gap leaves it a gap
         ch = text[k]
         if ch in (_GAP, _GAP_AT):

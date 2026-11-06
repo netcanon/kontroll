@@ -347,16 +347,18 @@ too) or an inner substitution holds closes nothing (`e${x:+$(echo })}xit 0`), a 
 cannot read refuses the command (`e$(case a in $(echo ')')) :;; esac)xit 0`: the readers fail
 closed; an `esac` counts only where a command starts (after `;` or a lone `&`), at its paren's own
 level, so a decoy one in an argument, a pattern, a `${…}`, a `$[…]`, a redirect's word (`>&esac`) or
-a `[[ … ]]` evens nothing; the walk is not sh's parser, a limit test_image_pins.py's docstring
-names), a bare `{` inside a `${…}` is a character, and a `'` inside a double-quoted `${…}` is read
-both as a quote and as a character (POSIX sh reads it as one); a command that opens an expansion
-`commands()` cut at an operator inside it is read with the pieces cut from it (`exit$(:|:) 0`); a
-brace list it cannot read (an item holding a nested substitution or parameter, or one an operator
-inside a quote or a substitution cuts) is refused. It reads errexit the way `/bin/sh` does: a `;`
-after `set -e` counts only for a check that starts its AND-OR list and is the whole of it (a guard
-before it can skip it), and never inside a compound (a brace group, a subshell, an `if` body, a
-loop); a `set -e` counts only as a whole top-level command, and a `set +e`, a `set` or `shopt` given
-a variable, a backquoted command, a glob or a brace expansion, or a `shopt` naming errexit,
+a `[[ … ]]` evens nothing; a bash `$[…]` is a frame in one reading and plain text in the other (dash
+reads no `$[`), and the command is refused if either reading closes early (`e$(: $[ ; case …`), a
+quote inside a `$[…]` a frame of its own; the walk is not sh's parser, a limit test_image_pins.py's
+docstring names), a bare `{` inside a `${…}` is a character, and a `'` inside a double-quoted `${…}`
+is read both as a quote and as a character (POSIX sh reads it as one); a command that opens an
+expansion `commands()` cut at an operator inside it is read with the pieces cut from it (`exit$(:|:)
+0`); a brace list it cannot read (an item holding a nested substitution or parameter, or one an
+operator inside a quote or a substitution cuts) is refused. It reads errexit the way `/bin/sh` does:
+a `;` after `set -e` counts only for a check that starts its AND-OR list and is the whole of it (a
+guard before it can skip it), and never inside a compound (a brace group, a subshell, an `if` body,
+a loop); a `set -e` counts only as a whole top-level command, and a `set +e`, a `set` or `shopt`
+given a variable, a backquoted command, a glob or a brace expansion, or a `shopt` naming errexit,
 anywhere, switches errexit off. It removes quoted strings (escapes, a `'` or backquotes inside
 `"…"`) when it decides what a check runs inside, but it splits on `&&`, `||`, `;` and `|` inside
 quotes too (a lone `&` only outside them). A Dockerfile's lines reach it joined as BuildKit joins

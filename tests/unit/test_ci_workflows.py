@@ -1455,6 +1455,19 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
      ["shares the step with `command${IFS}eval \"ex${y}it${IFS}0\"`"]),
     ({"run": "true\necho${IFS}eval \"a${x}\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `echo${IFS}eval \"a${x}\"`"]),
+    ({"run": "true\ne$(: $[ ; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT, "shell": "sh"}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: $[ ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(: $[ \"]\" ; esac ]; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: $[ \"]\" ; esac ] ; case a in $(echo ')')) :`"]),
+    ({"run": "true\ne$(:; $[ ; esac ]esac; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: ; $[ ; esac ]esac ; case a in $(echo ')')) :`"]),
+    ({"run": "true\nev${x}al${IFS}\"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ev${x}al${IFS}\"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\nev${x}\"\"${y}al \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ev${x}\"\"${y}al \"ex${y}it${IFS}0\"`"]),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -1775,7 +1788,12 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "exit-built-by-an-eval-glued-around-a-positional-parameter",
         "exit-built-by-an-eval-after-an-unset-variable",
         "exit-built-by-an-eval-that-command-runs-across-an-ifs",
-        "an-eval-word-an-ifs-splits-off-in-a-message-sound-but-refused"])
+        "an-eval-word-an-ifs-splits-off-in-a-message-sound-but-refused",
+        "exit-split-by-a-case-after-an-unclosed-bash-arithmetic-bracket-under-sh",
+        "exit-split-by-a-case-after-a-decoy-esac-in-a-bash-arithmetic-bracket-holding-a-quoted-close",
+        "exit-split-by-a-case-after-a-decoy-esac-glued-to-a-bash-arithmetic-bracket-holding-another",
+        "exit-built-by-an-eval-glued-around-an-unset-variable-and-split-off-by-an-ifs",
+        "exit-built-by-an-eval-glued-around-two-unset-variables-an-empty-double-quote-parts"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -1979,7 +1997,7 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     z='`' e$(: '`' $((1)) | :)xit 0 ``); and a quoted `#` in a substitution holding a subshell (`x="$( (:); : " #" )";
     exit 0`). It passes a `$` that ends a single-quoted string in the audit's own list. Fold 18 added (fold 17's
     settle read): a case whose pattern these checks cannot read, which leaves its `)` to close the substitution before
-    the `esac`, so sh runs `exit 0`: refused whatever the pattern holds, a substitution holding a quoted paren, a
+    the `esac`, so sh runs `exit 0`: refused in the shapes its rows hold, a substitution holding a quoted paren, a
     default holding a paren, a backquoted command holding an escaped backquote, or a substitution nesting two
     subshells (`e$(case a in $(echo ')')) :;; esac)xit 0`, `e$(case a in ${x:-)}) :;; esac)xit 0`, `` e$(case a in `:
     \\`:\\``) :;; esac)xit 0 ``, `e$(case a in $( ( (echo b) ) )) :;; esac)xit 0`), and, from fold 18's host trial, also
@@ -2028,7 +2046,13 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     count no longer reads where a command starts (`e$(: >&esac; case a in $(echo ')')) :;; esac)xit 0`: B1), one glued
     to a `$[…]` (passed on fold 19 too, the bracket's mark keeps it from a command's start), and an `eval` an expansion
     glues into or one splits off (`ev${x}al "ex${y}it${IFS}0"`, `${x}eval …`, `command${IFS}eval …`: S1), the last
-    refused although sound in a message too (`echo${IFS}eval "a${x}"`)."""
+    refused although sound in a message too (`echo${IFS}eval "a${x}"`). Fold 21 added (read 190): a `$[` no `]` closes,
+    which dash reads as plain text, under `shell: sh` (`e$(: $[ ; case a in $(echo ')')) :;; esac)xit 0`: B1), a decoy
+    `esac` after a quoted `]` inside a `$[…]` (`e$(: $[ "]" ; esac ]; case …`: S1), a decoy `esac` glued to a `$[…]`
+    that holds another (`e$(:; $[ ; esac ]esac; case …`: refused on fold 20 too; it holds the bash reading's close mark,
+    which the plain reading would hide), an `eval` an expansion glues into and an IFS splits off at once
+    (`ev${x}al${IFS}"ex${y}it${IFS}0"`: B2), and one whose word holds two gaps an empty double quote parts
+    (`ev${x}""${y}al …`: refused on fold 20 too; it holds the word's letters across a run of gaps)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults
