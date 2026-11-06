@@ -83,6 +83,38 @@ def test_every_shipped_class_has_a_mock_host():
                 "class %s: its mock host must set ansible_network_os: %s" % (m["key"], nos)
 
 
+def _fits(m, hv):
+    """Whether a mock host's vars are the class's: its role as the `device_role` and, for a class run by a generic
+    backend, its `network_os` as `ansible_network_os`."""
+    nos = (m.get("backend_params") or {}).get("network_os")
+    return hv.get("device_role") == m["role"] and (not nos or hv.get("ansible_network_os") == nos)
+
+
+def test_every_shipped_class_has_a_mock_host_of_its_own():
+    """The classes can each be given a different mock host that fits them (in the class's `inventory_group`, with
+    its role and network_os): as many hosts as classes, one per class key. Guards a class added under a new key that
+    reuses another class's role and group (a variant of one): the rule above finds the other class's host and passes,
+    so the new class is counted as covered while one host stands for two (T27's fold-1 read, N5), and the header's
+    "ONE host per shipped device class" is no longer what the file holds."""
+    groups = _groups()
+    mods = _modules()
+    fit = {m["key"]: [h for h, hv in groups.get(m["inventory_group"], {}).items() if _fits(m, hv)] for m in mods}
+    owner = {}
+
+    def place(key, seen):                     # Kuhn's augmenting path: give `key` a host, moving others if need be
+        for h in fit[key]:
+            if h not in seen:
+                seen.add(h)
+                if h not in owner or place(owner[h], seen):
+                    owner[h] = key
+                    return True
+        return False
+
+    unplaced = [k for k in sorted(fit) if not place(k, set())]
+    assert not unplaced, "classes with no mock host of their own (add one each, in its inventory_group): %s; " \
+        "the hosts that fit them: %s" % (unplaced, {k: fit[k] for k in unplaced})
+
+
 def test_every_mock_host_is_a_documentation_address_reached_locally():
     """Every mock host's `ansible_host` is in an RFC-5737 documentation range, and the file sets
     `ansible_connection: local` for all of them. Guards the seam's one safety property: a check-mode run against

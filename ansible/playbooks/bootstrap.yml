@@ -229,7 +229,8 @@
       changed_when: false
 
     # A --check run skips the generator above, and the lockfile is gitignored: on a fresh tree there is none to read,
-    # so the summary reads it only where it is (tests/fresh-node-check.sh's bootstrap step failed here without this).
+    # so a --check run's summary reads it only where it is (tests/fresh-node-check.sh's bootstrap step failed here
+    # without this). A real run always reads it: the generator wrote it, and its absence there is an error to show.
     - name: Look for the collection lockfile
       ansible.builtin.stat:
         path: "{{ req_generated }}"
@@ -239,13 +240,13 @@
       ansible.builtin.set_fact:
         secrets_present: "{{ sec_stat.results | selectattr('stat.exists') | map(attribute='item') | list }}"
         resolved_colls: "{{ (lookup('file', req_generated) | from_yaml).collections | map(attribute='name') | list
-                            if lockfile_stat.stat.exists else [] }}"
+                            if lockfile_stat.stat.exists or not ansible_check_mode else [] }}"
 
     - name: Summary
       ansible.builtin.debug:
         msg:
           - "enabled modules : {{ fleet.enabled_modules | default([], true) | join(', ') }}"
-          - "collections     : {{ resolved_colls | join(', ') if lockfile_stat.stat.exists
+          - "collections     : {{ resolved_colls | join(', ') if lockfile_stat.stat.exists or not ansible_check_mode
                                   else 'no lockfile yet (a --check run does not generate it)' }}"
           - "age recipient   : {{ age_pub.stdout }} (put in .sops.yaml)"
           - "secrets needed  : {{ secrets_domains | join(', ') }}"

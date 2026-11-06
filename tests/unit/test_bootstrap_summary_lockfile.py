@@ -3,8 +3,9 @@
 WHY. ansible/playbooks/bootstrap.yml generates `ansible/collections/requirements.generated.yml` with a `command`
 task, which a `--check` run skips, and the file is gitignored, so a fresh tree has none. The summary read it with a
 `file` lookup regardless, and `bootstrap.yml --check` on a fresh node failed there (tests/fresh-node-check.sh's
-bootstrap step, T27's first real run). The play now stats the file first and looks it up only when it exists; the
-summary says why the list is empty when it does not.
+bootstrap step, T27's first real run). The play now stats the file first, and a `--check` run looks it up only when
+it exists, the summary saying why the list is empty when it does not; a real run always looks it up, so a lockfile
+the generator failed to leave is an error there, never an empty list (T27's fold-1 read, N10).
 
 The two expressions are read from the play and evaluated here with core Jinja: `lookup` and `from_yaml` are stand-ins,
 and the lookup fails the test if it is called for a file the stat did not find.
@@ -41,13 +42,20 @@ def _expr(s):
     return s[2:-2]
 
 
-def _env(lockfile_text):
+class _NoFile(Exception):
+    """What the stand-in lookup raises for a file that is not there, as Ansible's `file` lookup fails the task."""
+
+
+def _env(lockfile_text, missing_fails_test=True):
     """Core Jinja with stand-ins for Ansible's `lookup('file', …)` and `from_yaml`. With `lockfile_text` None the
-    lookup fails the test: the play must not read a file its stat did not find."""
+    lookup fails the test (the play must not read a file its stat did not find), or, with `missing_fails_test`
+    False, raises _NoFile as the real lookup fails the task."""
     calls = []
 
     def lookup(kind, path):
         calls.append((kind, path))
+        if lockfile_text is None and not missing_fails_test:
+            raise _NoFile(path)
         assert lockfile_text is not None, "the lockfile was looked up although the stat found none"
         return lockfile_text
 
@@ -79,7 +87,7 @@ def test_the_lockfile_is_looked_for_before_the_summary_reads_it():
 
 
 def test_a_fresh_tree_has_no_lockfile_and_the_summary_says_why():
-    """With no lockfile (a `--check` run on a fresh tree), the collection names are an empty list, no lookup is
+    """With no lockfile in a `--check` run (a fresh tree), the collection names are an empty list, no lookup is
     made, and the summary's collections line says the dry-run does not generate the file. Guards the summary's
     `file` lookup failing `bootstrap.yml --check` on a fresh node, as it did before."""
     tasks, _ = _tasks()
@@ -87,10 +95,29 @@ def test_a_fresh_tree_has_no_lockfile_and_the_summary_says_why():
     env, calls = _env(None)
     st = {"stat": {"exists": False}}
     colls = env.compile_expression(_expr(tasks[j]["ansible.builtin.set_fact"]["resolved_colls"]))(
-        req_generated="/x/requirements.generated.yml", lockfile_stat=st)
+        req_generated="/x/requirements.generated.yml", lockfile_stat=st, ansible_check_mode=True)
     assert colls == [] and calls == []
-    line = env.from_string(_summary_line(tasks)).render(resolved_colls=colls, lockfile_stat=st)
+    line = env.from_string(_summary_line(tasks)).render(resolved_colls=colls, lockfile_stat=st,
+                                                        ansible_check_mode=True)
     assert line.startswith("collections     : ") and "--check" in line and "does not generate" in line, line
+
+
+def test_a_real_run_with_no_lockfile_still_reads_it_and_fails():
+    """Outside check mode, with the stat finding no lockfile, the summary still looks the file up, so the run fails
+    there as Ansible's `file` lookup fails a task, and the collections line never says a dry-run is the reason.
+    Guards the check-mode guard hiding a real fault: on a real run the generator task before it has written the
+    lockfile, and a missing one there is an error to show, not an empty list (T27's fold-1 read, N10)."""
+    tasks, _ = _tasks()
+    j = _named(tasks, "Compute summary facts (secret files present + the resolved collection names)")
+    env, calls = _env(None, missing_fails_test=False)
+    st = {"stat": {"exists": False}}
+    with pytest.raises(_NoFile):
+        env.compile_expression(_expr(tasks[j]["ansible.builtin.set_fact"]["resolved_colls"]))(
+            req_generated="/x/requirements.generated.yml", lockfile_stat=st, ansible_check_mode=False)
+    assert calls == [("file", "/x/requirements.generated.yml")]
+    line = env.from_string(_summary_line(tasks)).render(resolved_colls=["community.general"], lockfile_stat=st,
+                                                        ansible_check_mode=False)
+    assert line == "collections     : community.general", line
 
 
 def test_a_lockfile_present_is_read_and_listed():
@@ -101,8 +128,9 @@ def test_a_lockfile_present_is_read_and_listed():
     env, calls = _env("---\ncollections:\n  - name: community.general\n    version: 1.0.0\n  - name: cisco.ios\n")
     st = {"stat": {"exists": True}}
     colls = env.compile_expression(_expr(tasks[j]["ansible.builtin.set_fact"]["resolved_colls"]))(
-        req_generated="/x/requirements.generated.yml", lockfile_stat=st)
+        req_generated="/x/requirements.generated.yml", lockfile_stat=st, ansible_check_mode=True)
     assert colls == ["community.general", "cisco.ios"]
     assert calls == [("file", "/x/requirements.generated.yml")]
-    line = env.from_string(_summary_line(tasks)).render(resolved_colls=colls, lockfile_stat=st)
+    line = env.from_string(_summary_line(tasks)).render(resolved_colls=colls, lockfile_stat=st,
+                                                        ansible_check_mode=True)
     assert line == "collections     : community.general, cisco.ios", line

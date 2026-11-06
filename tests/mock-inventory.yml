@@ -7,10 +7,11 @@
 # Same functional groups as instance.example/inventory/hosts.yml, and ONE host per
 # shipped device class (modules/<key>/module.yml), in that class's
 # `inventory_group`, with its `role` as the host's `device_role` — so a fleet play
-# dispatches every class's `check` and `backup` entrypoint
-# (tests/unit/test_mock_inventory.py holds both rules). tests/fresh-node-check.sh
-# runs ping.yml and backup-configs.yml against it in check mode, and lists
-# the hosts whose backup stops here and the task each stops at.
+# dispatches every class's `check` and `backup` entrypoint. Each class has a host
+# of its own, even where two share a group and role
+# (tests/unit/test_mock_inventory.py holds these rules). tests/fresh-node-check.sh
+# runs ping.yml and backup-configs.yml against it in check mode, and lists the
+# hosts ping rescues and those whose backup stops here, and the task each stops at.
 #
 # The LIMIT: `ansible_connection: local` and addresses nothing answers mean no
 # device is contacted. A class's tasks that would reach one fail, are skipped, or

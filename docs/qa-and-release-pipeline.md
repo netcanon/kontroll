@@ -78,13 +78,15 @@ tests/
 **kontroll-specific additions:**
 - ✅ **The plays evaluated in CI** — `tests/fresh-node-check.sh`, a step of `ci.yml`'s validate job:
   `ansible-playbook --check` of the install playbooks (deploy-stack, the local-canonical it imports,
-  bootstrap; with `KONTROLL_IN_CONTAINER=1`, as the installer runs them) against the instance a real
-  `kontroll-init --fresh` writes, in a throwaway export of HEAD with HOME moved into it, and of the
-  fleet plays (ping, backup-configs) against `tests/mock-inventory.yml`, so templating, role
-  dispatch and `set_fact` logic are executed without the lab. The deploy of every service must fail,
-  and for the one reason a fresh node must refuse (the onboard-gui's age key is missing); a step
-  that must pass needs a recap with no failed host, and the backup pass must fail exactly where the
-  script lists, each listed class (its capture reads the device or needs a credential) at that task.
+  bootstrap; with `KONTROLL_IN_CONTAINER=1` and an operator named, as the installer runs them) against
+  the instance a real `kontroll-init --fresh` writes, in a throwaway export of HEAD with HOME and
+  TMPDIR moved into it, and of the fleet plays (ping, backup-configs) against
+  `tests/mock-inventory.yml`, so templating, role dispatch and `set_fact` logic are executed without
+  the lab. The deploy of every service must fail, and for the one reason a fresh node must refuse (the
+  onboard-gui's age key is missing), then pass with a throwaway key; a step that must pass needs a
+  recap with no failed or unreachable host and its play's last task or summary; ping must rescue, and
+  the backup pass fail, exactly the hosts the script lists, each listed class (its read reaches the
+  device or needs a credential) at that task. CI installs every module's collections for it.
   Not in `validate.sh`, which also runs on a configured control node; skipped where
   `KONTROLL_RUNS_ON` is set (the self-hosted runners are persistent and shared). Check mode takes
   the role Molecule was scaffolded for (the scaffold never asserted anything and is gone).
@@ -172,8 +174,9 @@ protection is one mis-click from a merge). A public repository has no such branc
   port-binding guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`), and
   `STATUS.md`'s dates (`tests/check-status.py` — a month-old page is a WARN, which never fails the run).
   Then, where `KONTROLL_RUNS_ON` is unset, the fresh-node check (§1): the install and the fleet plays
-  evaluated in check mode, after steps that install `age` for its `kontroll-init` and the `docker`
-  library for its deploy passes (which read the runner's Docker daemon; check mode leaves it as it was).
+  evaluated in check mode, after steps that install `age` for its `kontroll-init`, the `docker`
+  library for its deploy passes (which read the runner's Docker daemon; check mode leaves it as it was)
+  and every module's collections (`gen-requirements.py --all-modules`) for its mock inventory's hosts.
 - **tests** (matrix Python 3.11–3.14): `pytest -m "not e2e and not slow"` with coverage; the
   shell-outs are mocked (§1), no ansible, no lab.
 - **snmp-modules**: rebuild `modules.generated.yml` with the pinned CGO snmp_exporter generator

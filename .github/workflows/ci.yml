@@ -122,6 +122,17 @@ jobs:
         if: ${{ !vars.KONTROLL_RUNS_ON }}
         run: pip install --quiet "$(grep -x 'docker==[0-9.]*' docker/installer/requirements.txt)"
 
+      - name: Install every module's collections (for the fresh-node check's mock inventory, a host per class)
+        # The install above is the example fleet's set (CI has no instance/); the mock inventory has a host for every
+        # shipped class, so the check needs every module's collections, as the published runner image bakes them.
+        # The requirements file goes to the runner's temp dir; the generator also rewrites the checkout's ignored
+        # trust sidecar, which nothing after this step reads (the check runs an export of HEAD).
+        if: ${{ !vars.KONTROLL_RUNS_ON }}
+        run: |
+          set -euo pipefail
+          python3 scripts/gen-requirements.py "$RUNNER_TEMP/all-modules.yml" --all-modules
+          ansible-galaxy collection install -r "$RUNNER_TEMP/all-modules.yml"
+
       - name: fresh-node check (a new node's install and the fleet plays, evaluated in check mode)
         # tests/fresh-node-check.sh: every gate above reads the plays or parses them; this one has Ansible EVALUATE
         # them — deploy-stack (and the local-canonical it imports) and bootstrap against the instance a real

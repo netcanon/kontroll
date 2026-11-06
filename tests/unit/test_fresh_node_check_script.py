@@ -4,8 +4,9 @@ environment, and what makes it fail.
 WHY — the script is the one gate that makes Ansible evaluate a fresh node's install (CI's validate job runs it), and
 two ways it could go wrong would never show as a red run: run on a configured control node, it could mint a second
 age key into the operator's ~/.config/sops/age or scaffold an instance/ into the checkout it was started from; and its
-full-stack pass, which must FAIL, could degrade to "any red is fine", passing a play that breaks for a reason that
-has nothing to do with the age key. The real tools are not needed to see either: a fake `ansible-playbook` records
+passes could degrade to "an exit code is enough" — the full-stack pass, which must FAIL, passing a play that breaks
+for a reason that has nothing to do with the age key, or a pass that must succeed passing a play that matched no host,
+or a rescue that hid a template error. The real tools are not needed to see either: a fake `ansible-playbook` records
 where and how it was called and answers as the mode says, and a stub kontroll-init writes the two files the real one
 does. Real git, real bash, the real script.
 """
@@ -23,6 +24,9 @@ pytestmark = [pytest.mark.unit,
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ALL = ["semaphore", "homepage", "prometheus", "grafana", "loki", "vector", "api", "onboard-gui"]
+ENV = ("HOME", "SOPS_AGE_KEY_FILE", "KONTROLL_IN_CONTAINER", "ANSIBLE_COLLECTIONS_PATH", "KONTROLL_OPERATOR_USER",
+       "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID", "TMPDIR", "PYTHONDONTWRITEBYTECODE", "ANSIBLE_NOCOLOR",
+       "ANSIBLE_FORCE_COLOR", "ANSIBLE_CONFIG")
 
 # The stub kontroll-init: records how it was run, writes the key and instance/.sops.yaml as the real one does, and
 # ends with the real one's last line; FAKE_MODE leaves one of the three out.
@@ -45,9 +49,20 @@ if mode != "init-unfinished":
     print("\n==> kontroll-init done. Next:")
 '''
 
-# The fake ansible-playbook: records how it was called and what git reads of the tree above its cwd; answers by
-# FAKE_MODE. backup-configs.yml answers as the real one does against the mock inventory (four hosts stopped at their
-# device's read or credential gate, every host in the recap, exit 2), or as a `backup:<how>` mode bends that.
+# The stub age-keygen: writes a key where `-o` names one, as the real one does, mode 0600.
+_KEYGEN = r'''#!/bin/sh
+while [ $# -gt 0 ]; do
+  if [ "$1" = -o ]; then echo "AGE-SECRET-KEY-1FAKE" > "$2"; chmod 600 "$2"; fi
+  shift
+done
+'''
+
+# The fake ansible-playbook: records how it was called, what git reads of the tree above its cwd, and (for a deploy
+# naming a storage root) the mode of the onboard-gui key there; answers by FAKE_MODE. Every pass that must succeed
+# prints its landmark (the stack play's last task, bootstrap's Summary, ping's summary play) and a clean recap.
+# ping.yml rescues three hosts at their checks; backup-configs.yml answers as the real one does against the mock
+# inventory (four hosts stopped at their device's read or credential gate, every host in the recap, exit 2). A
+# `<how>:<play>` mode bends one play; `ping:<how>` and `backup:<how>` bend those two.
 _PLAYBOOK = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys
 sys.stdout.reconfigure(encoding="utf-8")
@@ -55,32 +70,75 @@ args = sys.argv[1:]
 def git(*a):
     r = subprocess.run(["git", "-C", os.path.dirname(os.getcwd())] + list(a), capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
+extra = {}
+for a in args:
+    if a.startswith("{"):
+        extra.update(json.loads(a))
+key = None
+if "kontroll_storage_root" in extra:
+    p = os.path.join(extra["kontroll_storage_root"], "onboard-gui", "age.key")
+    key = oct(os.stat(p).st_mode & 0o777) if os.path.exists(p) else None
 with open(os.environ["FAKE_LOG"], "a") as fh:
-    fh.write(json.dumps({"tool": "ansible-playbook", "cwd": os.getcwd(), "argv": args,
-                         "env": {k: os.environ.get(k) for k in ("HOME", "SOPS_AGE_KEY_FILE", "KONTROLL_IN_CONTAINER",
-                                                                "ANSIBLE_COLLECTIONS_PATH")},
+    fh.write(json.dumps({"tool": "ansible-playbook", "cwd": os.getcwd(), "argv": args, "key_mode": key,
+                         "env": {k: os.environ.get(k) for k in ENV},
                          "git": {"top": git("rev-parse", "--show-toplevel"),
                                  "branch": git("symbolic-ref", "--short", "HEAD"),
                                  "files": git("ls-tree", "-r", "--name-only", "HEAD")}}) + "\n")
 mode = os.environ.get("FAKE_MODE", "")
-everything = any("onboard-gui" in a for a in args)
-ok = "PLAY RECAP\nlocalhost : ok=3 changed=0 unreachable=0 failed=0 skipped=1 rescued=0 ignored=0"
-bad = "PLAY RECAP\nlocalhost : ok=2 changed=0 unreachable=0 failed=1 skipped=0 rescued=0 ignored=0"
-if everything and mode == "all-pass":
-    print(ok); sys.exit(0)
-if everything and mode == "other-red":
-    print("fatal: [localhost]: FAILED! => something else broke\n" + bad); sys.exit(2)
-if everything:
-    print("onboard-gui's age key at /opt/kontroll/gui/age.key is MISSING. deploy-stack never creates it\n" + bad)
+how, _, target = mode.partition(":")
+pb = next(a for a in args if a.startswith("playbooks/"))
+everything = "onboard-gui" in extra.get("stack_services", [])
+keyed = "kontroll_storage_root" in extra
+ROW = "%-26s : ok=3    changed=0    unreachable=%d    failed=%d    skipped=1    rescued=%d    ignored=0"
+def recap(rows):
+    return "\n".join(["", "PLAY RECAP ****"] + [ROW % r for r in rows])
+ok, bad = recap([("localhost", 0, 0, 0)]), recap([("localhost", 0, 1, 0)])
+LAND = {"playbooks/deploy-stack.yml": "TASK [Report the running stack containers] ****",
+        "playbooks/bootstrap.yml": "TASK [Summary] ****", "playbooks/ping.yml": "PLAY [Reachability summary] ****"}
+land = "" if how == "no-landmark" and target == ("gui" if keyed else pb) else LAND.get(pb, "")
+if how == "unresolved" and target == pb:
+    print("[ERROR]: couldn't resolve module/action 'community.routeros.command'. This often indicates a "
+          "misspelling, missing collection, or incorrect module path." + recap([("mock-routeros", 0, 1, 0)]))
     sys.exit(2)
-how, _, play = mode.partition(":")
-if how == "no-recap" and play in args:
+if everything and keyed:
+    if mode == "gui-red":
+        print("fatal: [localhost]: FAILED! => an onboard-gui task after G9 broke" + bad); sys.exit(2)
+    if target == "gui" and how == "no-recap":
+        sys.exit(0)
+    if target == "gui" and how == "failed-host":
+        print(land + bad); sys.exit(0)
+    if target == "gui" and how == "unreachable-host":
+        print(land + recap([("localhost", 1, 0, 0)])); sys.exit(0)
+    print(land + ok); sys.exit(0)
+if everything and mode == "all-pass":
+    print(land + ok); sys.exit(0)
+if everything and mode == "other-red":
+    print("fatal: [localhost]: FAILED! => something else broke" + bad); sys.exit(2)
+if everything:
+    print("onboard-gui's age key at /opt/kontroll/gui/age.key is MISSING. deploy-stack never creates it" + bad)
+    sys.exit(2)
+if how == "no-recap" and target == pb:
     sys.exit(0)
-if how == "failed-host" and play in args:
-    print(bad); sys.exit(0)
-if how == "red" and play in args:
+if how == "failed-host" and target == pb:
+    print(land + bad); sys.exit(0)
+if how == "unreachable-host" and target == pb:
+    print(land + recap([("localhost", 1, 0, 0)])); sys.exit(0)
+if how == "red" and target == pb:
     print("ERROR! the playbook could not be read"); sys.exit(4)
-if "playbooks/backup-configs.yml" in args:
+if pb == "playbooks/ping.yml":
+    rescued = list(RESCUES)
+    if mode == "ping:none":
+        rescued = []
+    elif mode == "ping:other-host":
+        rescued.append(("mock-hv", "proxmox : SSH liveness ping"))
+    elif mode == "ping:other-task":
+        rescued[0] = ("mock-fortigate", "backend_api : GET the check endpoint")
+    out = []
+    for h, t in rescued:
+        out += ["", "TASK [%s] ****" % t, 'fatal: [%s]: FAILED! => {"msg": "no answer"}' % h]
+    out += ["", land, recap([(h, 0, 0, any(h == s for s, _ in rescued)) for h in HOSTS])]
+    print("\n".join(out)); sys.exit(0)
+if pb == "playbooks/backup-configs.yml":
     stops = list(STOPS)
     if mode == "backup:pass":
         stops = []
@@ -92,21 +150,36 @@ if "playbooks/backup-configs.yml" in args:
         stops = stops[:-1]
     out = ["", "TASK [backend_netcommon_cli : A read whose failure is ignored] ****",
            'fatal: [mock-switch]: FAILED! => {"msg": "no answer"}', "...ignoring"]
+    if mode == "backup:rescued-first":
+        out += ["", "TASK [backend_netcommon_cli : A probe whose failure is rescued] ****",
+                'fatal: [mock-xe]: FAILED! => {"msg": "no answer"}']
     for h, t in stops:
-        out += ["", "TASK [%s] ****" % t, 'fatal: [%s]: FAILED! => {"censored": "no_log"}' % h]
+        why = ("%s: no API token is in scope, so this capture cannot authenticate." % h
+               if h == "mock-fortigate" and mode != "backup:no-token-message" else "censored")
+        out += ["", "TASK [%s] ****" % t, 'fatal: [%s]: FAILED! => {"msg": "%s"}' % (h, why)]
+    failed = {h for h, _ in stops}
+    if mode == "backup:handler":
+        out += ["", "RUNNING HANDLER [proxmox : Note the capture] ****", 'fatal: [mock-hv]: FAILED! => {}']
+        failed.add("mock-hv")
+    if mode == "backup:ignored-after":
+        out += ["", "TASK [backend_netcommon_cli : Clean up, errors ignored] ****",
+                'fatal: [mock-switch]: FAILED! => {', '    "msg": "nothing to clean"', '}', "...ignoring"]
     if mode != "backup:no-summary":
         out += ["", "PLAY [Backup run summary] ****"]
     if mode != "backup:no-recap":
-        out += ["", "PLAY RECAP ****"] + ["%-26s : ok=3    changed=0    unreachable=0    failed=%d    skipped=6"
-                                          % (h, any(h == s for s, _ in stops)) for h in HOSTS]
-    print("\n".join(out)); sys.exit(2 if stops else 0)
-print(ok)
-'''.replace("STOPS", repr([
-    ("mock-edge", "opnsense : Read /conf/config.xml"),
+        out += [recap([(h, 0, h in failed, 0) for h in HOSTS])]
+    print("\n".join(out)); sys.exit(2 if failed else 0)
+print(land + ok)
+'''.replace("ENV", repr(ENV)).replace("RESCUES", repr([
     ("mock-fortigate", "backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"),
-    ("mock-switch", "backend_netcommon_cli : Pull config via cli_command"),
-    ("mock-xe", "backend_netcommon_cli : Pull config via cli_command")])).replace("HOSTS", repr(
-        ["mock-ap", "mock-docker", "mock-edge", "mock-fortigate", "mock-hv", "mock-routeros", "mock-switch", "mock-xe"]))
+    ("mock-switch", "backend_netcommon_cli : Liveness via cli_command (network_cli)"),
+    ("mock-xe", "backend_netcommon_cli : Liveness via cli_command (network_cli)")])).replace("STOPS", repr([
+        ("mock-edge", "opnsense : Read /conf/config.xml"),
+        ("mock-fortigate", "backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"),
+        ("mock-switch", "backend_netcommon_cli : Pull config via cli_command"),
+        ("mock-xe", "backend_netcommon_cli : Pull config via cli_command")])).replace("HOSTS", repr(
+            ["mock-ap", "mock-docker", "mock-edge", "mock-fortigate", "mock-hv", "mock-routeros", "mock-switch",
+             "mock-xe"]))
 
 
 def _exe(path, text):
@@ -117,7 +190,9 @@ def _exe(path, text):
 
 def _run(tmp_path, mode="", extra_env=None):
     """A scratch checkout (the real script, the stub kontroll-init, one commit), fake tools first on PATH, an empty
-    caller HOME and TMPDIR; runs the script from the checkout and returns (result, calls, paths)."""
+    caller HOME and TMPDIR, and none of the variables the script must set itself inherited (a caller that exports
+    PYTHONDONTWRITEBYTECODE, as a mutation harness does, would otherwise meet the test's check for the script); runs
+    the script from the checkout and returns (result, calls, paths)."""
     repo = tmp_path / "repo"
     for d in ("tests", "scripts", "ansible/playbooks"):
         (repo / d).mkdir(parents=True)
@@ -131,15 +206,17 @@ def _run(tmp_path, mode="", extra_env=None):
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     _exe(bin_ / "ansible-playbook", _PLAYBOOK)
-    for tool in ("sops", "age-keygen"):
-        _exe(bin_ / tool, "#!/bin/sh\nexit 0\n")
+    _exe(bin_ / "age-keygen", _KEYGEN)
+    _exe(bin_ / "sops", "#!/bin/sh\nexit 0\n")
     home, tmpdir, log = tmp_path / "caller-home", tmp_path / "tmpdir", tmp_path / "calls.jsonl"
     home.mkdir()
     tmpdir.mkdir()
     env = dict(os.environ, PATH="%s:%s" % (bin_, os.environ["PATH"]), HOME=str(home), TMPDIR=str(tmpdir),
                FAKE_LOG=str(log), FAKE_MODE=mode)
     env.pop("ANSIBLE_COLLECTIONS_PATH", None)
-    env.pop("KONTROLL_FRESH_KEEP", None)
+    for k in ("KONTROLL_FRESH_KEEP", "PYTHONDONTWRITEBYTECODE", "ANSIBLE_NOCOLOR", "KONTROLL_OPERATOR_USER",
+              "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID"):
+        env.pop(k, None)
     env.update(extra_env or {})
     r = subprocess.run(["bash", str(repo / "tests" / "fresh-node-check.sh")], cwd=str(repo), env=env,
                        capture_output=True, text=True, timeout=120)
@@ -147,18 +224,22 @@ def _run(tmp_path, mode="", extra_env=None):
     return r, calls, {"repo": repo, "home": home, "tmpdir": tmpdir}
 
 
+def _plays(calls):
+    return [c for c in calls if c["tool"] == "ansible-playbook"]
+
+
 def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkout_alone(tmp_path):
     """With every tool answering as a fresh node's would, the script passes; kontroll-init and every
     `ansible-playbook` ran inside an export under TMPDIR (kontroll-init's root and each play's cwd), with HOME and
-    SOPS_AGE_KEY_FILE there too, KONTROLL_IN_CONTAINER=1 for the two deploy passes and bootstrap, as the installer
+    SOPS_AGE_KEY_FILE there too, KONTROLL_IN_CONTAINER=1 for the three deploy passes and bootstrap, as the installer
     runs them, and for nothing else (the caller's own value dropped before kontroll-init, whose installer-container
     refusal reads it; bootstrap without it runs the legacy host path, whose apt task in check mode read the host's
     python3-apt in T27's first real run, not a fresh node's install), the caller's collections still on the
-    collections path; the plays ran in order (the deploy, the deploy of every service, bootstrap, then ping and
-    backup-configs against the mock inventory, the captures under TMPDIR); and afterwards the checkout is as
-    committed (not even an ignored file), the caller's HOME is empty and TMPDIR is empty. Guards the script run on a
-    configured control node writing a second instance/ into the checkout or a second age key into the operator's
-    ~/.config/sops/age, and a step that runs the checkout's tree rather than the export."""
+    collections path; the plays ran in order (the deploy, the deploy of every service, that again with a key,
+    bootstrap, then ping and backup-configs against the mock inventory, the captures under TMPDIR); and afterwards
+    the checkout is as committed (not even an ignored file), the caller's HOME is empty and TMPDIR is empty. Guards
+    the script run on a configured control node writing a second instance/ into the checkout or a second age key into
+    the operator's ~/.config/sops/age, and a step that runs the checkout's tree rather than the export."""
     r, calls, p = _run(tmp_path, extra_env={"KONTROLL_IN_CONTAINER": "1"})
     assert r.returncode == 0 and "fresh-node-check: PASS" in r.stdout, r
     tmpdir = str(p["tmpdir"]) + os.sep
@@ -170,22 +251,47 @@ def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkou
     home = init["env"]["HOME"]
     assert home.startswith(tmpdir) and init["env"]["SOPS_AGE_KEY_FILE"] == home + "/.config/sops/age/keys.txt"
     assert [next(a for a in c["argv"] if a.startswith("playbooks/")) for c in plays] == [
-        "playbooks/deploy-stack.yml", "playbooks/deploy-stack.yml", "playbooks/bootstrap.yml",
-        "playbooks/ping.yml", "playbooks/backup-configs.yml"]
+        "playbooks/deploy-stack.yml", "playbooks/deploy-stack.yml", "playbooks/deploy-stack.yml",
+        "playbooks/bootstrap.yml", "playbooks/ping.yml", "playbooks/backup-configs.yml"]
     for c in plays:
         assert c["cwd"] == init["root"] + "/ansible" and "--check" in c["argv"], c
         assert c["env"]["HOME"] == home and c["env"]["SOPS_AGE_KEY_FILE"] == init["env"]["SOPS_AGE_KEY_FILE"], c
         assert str(p["home"]) + "/.ansible/collections" in c["env"]["ANSIBLE_COLLECTIONS_PATH"].split(":"), c
-    assert [c["env"]["KONTROLL_IN_CONTAINER"] for c in plays] == ["1", "1", "1", None, None]
+    assert [c["env"]["KONTROLL_IN_CONTAINER"] for c in plays] == ["1", "1", "1", "1", None, None]
+    assert "-e" not in plays[0]["argv"]
     assert json.loads(plays[1]["argv"][plays[1]["argv"].index("-e") + 1]) == {"stack_services": ALL}
-    for c in plays[3:]:
+    for c in plays[4:]:
         assert c["argv"][c["argv"].index("-i") + 1] == "../tests/mock-inventory.yml", c
-    backup_dir = plays[4]["argv"][plays[4]["argv"].index("-e") + 1]
+    backup_dir = plays[5]["argv"][plays[5]["argv"].index("-e") + 1]
     assert backup_dir.startswith("config_backup_dir=" + tmpdir), backup_dir
     st = subprocess.run(["git", "-C", str(p["repo"]), "status", "--porcelain", "--ignored", "--untracked-files=all"],
                         capture_output=True, text=True, check=True)
     assert st.stdout == "", st.stdout
     assert os.listdir(p["home"]) == [] and os.listdir(p["tmpdir"]) == []
+
+
+def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_files_inside(tmp_path):
+    """Every `ansible-playbook` runs with the operator named as the installer's launcher names one
+    (KONTROLL_OPERATOR_USER, _UID, _GID = fresh-operator, 1000, 1000), with TMPDIR inside the script's directory,
+    PYTHONDONTWRITEBYTECODE=1 and ANSIBLE_NOCOLOR=1, and with neither the caller's ANSIBLE_CONFIG nor its
+    ANSIBLE_FORCE_COLOR. Guards: a GitHub-hosted runner is uid 1001, which local-canonical.yml refuses as an operator
+    (Q-6), so with no operator named the deploy pass failed on the very runner CI targets (T27's fold-1 read, B1); a
+    caller's ANSIBLE_CONFIG replaces the export's ansible.cfg, and colour codes leave the stops' parse nothing to read
+    (S4, N7); a module's temporary files and Python's bytecode landed beside the caller's TMPDIR and collections
+    (N1)."""
+    r, calls, p = _run(tmp_path, extra_env={"ANSIBLE_CONFIG": "/elsewhere/ansible.cfg", "ANSIBLE_FORCE_COLOR": "1",
+                                            "KONTROLL_OPERATOR_UID": "1001"})
+    assert r.returncode == 0, r
+    plays = _plays(calls)
+    assert len(plays) == 6, calls
+    inside = str(p["tmpdir"]) + os.sep + "kontroll-fresh."
+    for c in plays:
+        e = c["env"]
+        assert (e["KONTROLL_OPERATOR_USER"], e["KONTROLL_OPERATOR_UID"], e["KONTROLL_OPERATOR_GID"]) == (
+            "fresh-operator", "1000", "1000"), c
+        assert e["TMPDIR"].startswith(inside) and e["TMPDIR"].endswith("/tmp"), c
+        assert e["PYTHONDONTWRITEBYTECODE"] == "1" and e["ANSIBLE_NOCOLOR"] == "1", c
+        assert e["ANSIBLE_CONFIG"] is None and e["ANSIBLE_FORCE_COLOR"] is None, c
 
 
 def test_every_play_runs_in_a_repository_on_main_holding_heads_tree(tmp_path):
@@ -199,8 +305,8 @@ def test_every_play_runs_in_a_repository_on_main_holding_heads_tree(tmp_path):
     assert r.returncode == 0, r
     head = subprocess.run(["git", "-C", str(p["repo"]), "ls-tree", "-r", "--name-only", "HEAD"],
                           capture_output=True, text=True, check=True).stdout.strip()
-    plays = [c for c in calls if c["tool"] == "ansible-playbook"]
-    assert len(plays) == 5, calls
+    plays = _plays(calls)
+    assert len(plays) == 6, calls
     for c in plays:
         g = c["git"]
         assert g["top"] and os.path.realpath(g["top"]) == os.path.realpath(os.path.dirname(c["cwd"])), c
@@ -220,17 +326,52 @@ def test_the_full_stack_pass_must_fail_for_the_age_key_reason(tmp_path, mode):
     assert os.listdir(p["tmpdir"]) == []
 
 
-@pytest.mark.parametrize("how", ["no-recap", "failed-host"])
+def test_the_full_stack_pass_runs_again_with_a_throwaway_key_and_must_pass(tmp_path):
+    """After the pass that must fail at G9, the script deploys every service again with `kontroll_storage_root`
+    inside its directory and a throwaway onboard-gui key there, written by age-keygen and made mode 0644 (G9 asks
+    that the GUI's uid 1001 can read it), and that pass must pass; its failing fails the script at
+    `deploy-check-gui`. Guards the onboard-gui's tasks after G9 going unevaluated: the pass that must fail stops at
+    G9 and the first pass deploys no onboard-gui, so a fault after G9 passed every pass (T27's fold-1 read, S3)."""
+    r, calls, p = _run(tmp_path)
+    assert r.returncode == 0, r
+    gui = _plays(calls)[2]
+    extra = json.loads(gui["argv"][gui["argv"].index("-e") + 1])
+    assert extra["stack_services"] == ALL, extra
+    assert extra["kontroll_storage_root"].startswith(str(p["tmpdir"]) + os.sep + "kontroll-fresh."), extra
+    assert gui["key_mode"] == "0o644", gui
+    r, _, _ = _run(tmp_path / "red", "gui-red")
+    assert r.returncode == 1 and "FAIL — deploy-check-gui exited 2, expected pass" in r.stderr, r
+    assert "an onboard-gui task after G9 broke" in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("how", ["no-recap", "failed-host", "unreachable-host"])
 @pytest.mark.parametrize("step, play", [("deploy-check", "playbooks/deploy-stack.yml"),
+                                        ("deploy-check-gui", "gui"),
                                         ("bootstrap-check", "playbooks/bootstrap.yml"),
                                         ("ping-check", "playbooks/ping.yml")])
 def test_a_play_that_exits_0_without_a_clean_recap_fails_the_check(tmp_path, how, step, play):
-    """For each step that must pass (the deploy, bootstrap, ping), a play that exits 0 but prints no
-    PLAY RECAP (it ran no play), or whose recap names a failed host, fails the script at that step. Guards a pass
-    read from the exit alone: a play whose hosts all fell out before the first task, or an `ignore_errors` that hid
-    a host's failure, would then pass the step that exists to show the play evaluated."""
+    """For each step that must pass (the deploy, the deploy with a throwaway onboard-gui key, bootstrap, ping), a
+    play that exits 0 but prints no
+    PLAY RECAP (it ran no play), or whose recap names a failed or an unreachable host, fails the script at that step.
+    Guards a pass read from the exit alone: a play whose hosts all fell out before the first task, or an
+    `ignore_errors` or `ignore_unreachable` that hid a host's failure, would then pass the step that exists to show
+    the play evaluated."""
     r, _, _ = _run(tmp_path, "%s:%s" % (how, play))
     assert r.returncode == 1 and ("FAIL — %s's log has no PLAY RECAP" % step) in r.stderr, r
+
+
+@pytest.mark.parametrize("mode, step", [("no-landmark:playbooks/deploy-stack.yml", "deploy-check"),
+                                        ("no-landmark:gui", "deploy-check-gui"),
+                                        ("no-landmark:playbooks/bootstrap.yml", "bootstrap-check"),
+                                        ("no-landmark:playbooks/ping.yml", "ping-check")])
+def test_a_play_that_must_pass_and_never_reaches_its_end_fails_the_check(tmp_path, mode, step):
+    """For each pass that must succeed, a play that exits 0 with a clean recap but never prints its landmark (the
+    stack play's last task for the deploys, bootstrap's Summary task, ping's summary play) fails the script at that
+    step, naming what its log does not say. Guards a pass read from the recap alone: a play that matched no host, or
+    ran no task, prints an empty recap or one with no failure, and T27's fold-1 read passed bootstrap, ping and the
+    stack play each with its `hosts:` misspelt."""
+    r, _, _ = _run(tmp_path, mode)
+    assert r.returncode == 1 and ("FAIL — %s's log does not say" % step) in r.stderr, r
 
 
 @pytest.mark.parametrize("step, play", [("deploy-check", "playbooks/deploy-stack.yml"),
@@ -246,38 +387,77 @@ def test_a_play_that_must_pass_and_exits_non_zero_fails_at_its_exit(tmp_path, st
 
 
 @pytest.mark.parametrize("mode, says", [
-    ("backup:pass", "backup-check exited 0, expected fail"),
-    ("backup:no-summary", "backup-check's log does not say the run reached its summary"),
-    ("red:playbooks/backup-configs.yml", "backup-check's log does not say the run reached its summary"),
-    ("backup:no-recap", "backup-check: the hosts that failed are not the listed ones"),
-    ("backup:other-host", "'mock-ap': 'backend_raw_ssh : Write capture'"),
-    ("backup:other-task", "'mock-edge': 'opnsense : Resolve capture filename'"),
-    ("backup:listed-passes", "backup-check: the hosts that failed are not the listed ones")])
-def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere_else(tmp_path, mode, says):
-    """The backup pass against the mock inventory must fail, reach its summary, and have exactly the listed hosts
-    fail, each at its listed task (the read of its device, or the API-credential gate a fresh node cannot pass). It
-    passing, dying before its summary, printing no recap, failing one more host, failing a listed host at another
-    task, or a listed host passing each fails the script at that step, and a stop mismatch names what the log held.
-    Guards the step degrading to "any red is fine": backup-configs.yml rescues nothing, so under the mock's local
-    connection those classes fail by design, and a host that fails anywhere else is a play that did not evaluate (T27's
-    first real run: the openwrt and RouterOS captures failed their write in every --check run)."""
+    ("ping:none", "ping-check: the hosts it rescued are not the listed ones"),
+    ("ping:other-host", "'mock-hv': 'proxmox : SSH liveness ping'"),
+    ("ping:other-task", "'mock-fortigate': 'backend_api : GET the check endpoint'")])
+def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp_path, mode, says):
+    """ping.yml must pass, and the hosts it rescues (and reports UNREACHABLE) must be exactly the listed ones, each
+    rescued from its listed task (the class's read of its device, or the API-credential gate a fresh node cannot
+    pass). None rescued, one more, or a listed host rescued from another task fails the script at `ping-check`,
+    naming what the log held. Guards a class's `check` that does not evaluate passing as a device that did not
+    answer: ping.yml's rescue catches a template error too, and T27's fold-1 read passed an undefined variable in
+    proxmox's check that way (S2)."""
     r, _, p = _run(tmp_path, mode)
     assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
     assert says in r.stderr, r.stderr
     assert os.listdir(p["tmpdir"]) == []
 
 
-def test_the_backup_pass_says_where_each_host_stopped(tmp_path):
+@pytest.mark.parametrize("mode, says", [
+    ("backup:pass", "backup-check exited 0, expected fail"),
+    ("backup:no-summary", "backup-check's log does not say the run reached its summary"),
+    ("red:playbooks/backup-configs.yml", "backup-check's log does not say the run reached its summary"),
+    ("backup:no-token-message", "backup-check's log does not say the API class stopped at its credential gate"),
+    ("backup:no-recap", "backup-check: the hosts that failed are not the listed ones"),
+    ("backup:other-host", "'mock-ap': 'backend_raw_ssh : Write capture'"),
+    ("backup:other-task", "'mock-edge': 'opnsense : Resolve capture filename'"),
+    ("backup:handler", "'mock-hv': 'proxmox : Note the capture'"),
+    ("backup:listed-passes", "backup-check: the hosts that failed are not the listed ones")])
+def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere_else(tmp_path, mode, says):
+    """The backup pass against the mock inventory must fail, reach its summary, say the API class stopped at its
+    credential gate, and have exactly the listed hosts fail, each at its listed task (the read of its device, or the
+    API-credential gate a fresh node cannot pass). It passing, dying before its summary, the API class stopping for
+    another reason, printing no recap, failing one more host (in a task or in a handler, which is charged to the
+    handler and not to the task before it), failing a listed host at another task, or a listed host passing each
+    fails the script at that step, and a stop mismatch names what the log held, with the step to take. Guards the
+    step degrading to "any red is fine": backup-configs.yml rescues nothing, so under the mock's local connection
+    those classes fail by design, and a host that fails anywhere else is a play that did not evaluate (T27's first
+    real run: the openwrt and RouterOS captures failed their write in every --check run)."""
+    r, _, p = _run(tmp_path, mode)
+    assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
+    assert says in r.stderr, r.stderr
+    if "are not the listed ones" in r.stderr:
+        assert "is listed in this script as host=role : task" in r.stderr, r.stderr
+    assert os.listdir(p["tmpdir"]) == []
+
+
+@pytest.mark.parametrize("mode", ["", "backup:ignored-after", "backup:rescued-first"])
+def test_the_backup_pass_says_where_each_host_stopped(tmp_path, mode):
     """With the fake answering as the real play does against the mock inventory, the backup step passes and says the
-    run reached its summary and the hosts that failed were the listed ones, mock-switch's stop read from its last
-    failure line, after an ignored one. Guards the parse reading the recap or the failure lines wrongly (a host's
-    first failure, which `ignore_errors` may have let pass, rather than the one that stopped it), which would fail
-    every run, or (with the exact match dropped) pass any."""
-    r, _, _ = _run(tmp_path)
+    run reached its summary and the hosts that failed were the listed ones, each host's stop read from its last
+    failure line that was not ignored: mock-switch's after an ignored one, and before one that is (its result printed
+    over several lines, as Ansible does for a structured one); mock-xe's after a failure a `rescue` took, which is not
+    where it stopped. Guards the parse reading the recap or the failure lines wrongly (a host's first failure, which
+    `ignore_errors` may have let pass or a `rescue` recovered, or a cleanup's ignored failure after the one that
+    stopped it, rather than that one), which would fail every run, or (with the exact match dropped) pass any."""
+    r, _, _ = _run(tmp_path, mode)
     assert r.returncode == 0, r
     assert "fresh-node-check: backup-check — ok (rc=2, expected fail)" in r.stdout, r.stdout
     assert "fresh-node-check: backup-check — says the run reached its summary" in r.stdout, r.stdout
     assert "fresh-node-check: backup-check — the hosts that failed, and where, are the listed ones" in r.stdout
+    assert "fresh-node-check: ping-check — the hosts it rescued, and where, are the listed ones" in r.stdout
+
+
+def test_a_module_no_installed_collection_provides_is_named_with_the_install_that_fixes_it(tmp_path):
+    """A play that fails because Ansible could not resolve a module (its collection is not installed) fails the
+    script at that step, and the message names the module and the install of every module's set
+    (`gen-requirements.py <file> --all-modules`). Guards the failure CI's first run would have shown: CI installed the
+    example fleet's collections, the mock inventory has a host for every class, and the backup step said only that
+    the run never reached its summary, naming neither community.routeros nor the fix (T27's fold-1 read, B2)."""
+    r, _, _ = _run(tmp_path, "unresolved:playbooks/backup-configs.yml")
+    assert r.returncode == 1, r
+    assert "backup-check — no installed collection provides community.routeros.command" in r.stderr, r.stderr
+    assert "gen-requirements.py <file> --all-modules" in r.stderr, r.stderr
 
 
 @pytest.mark.parametrize("mode, says", [("init-unfinished", "init's log does not say kontroll-init finished"),
@@ -303,5 +483,5 @@ def test_keep_leaves_the_directory_and_names_it(tmp_path):
     d = os.path.join(str(p["tmpdir"]), kept[0])
     assert ("fresh-node-check: kept " + d) in r.stdout, r.stdout
     assert sorted(os.listdir(os.path.join(d, "logs"))) == sorted(
-        n + ".log" for n in ("init", "deploy-check", "deploy-check-all", "bootstrap-check", "ping-check",
-                             "backup-check"))
+        n + ".log" for n in ("init", "deploy-check", "deploy-check-all", "deploy-check-gui", "bootstrap-check",
+                             "ping-check", "backup-check"))

@@ -18,30 +18,39 @@ that fails only on a node nobody has configured yet was first found by a rebuild
 mock inventory those plays would run against could not dispatch two of its hosts and had none for three shipped
 classes.
 
-- **Added.** `tests/fresh-node-check.sh`, a step of `ci.yml`'s validate job, after steps that install `age` and the
-  `docker` Python library. In a throwaway export of HEAD, made a repository on `main` with HEAD's tree as its one
-  commit (local-canonical.yml's landing reads a tree as a worktree, as a fresh clone is), with HOME moved into it, it
-  runs the real `kontroll-init --fresh` (a throwaway key, `--trust-mode separated --no-break-glass`), then
-  `deploy-stack.yml --check --diff`, which must pass; the same with every service, which must fail with the
-  onboard-gui age-key message (G9: deploy-stack never mints that key); `bootstrap.yml --check`, these three with
+- **Added.** `tests/fresh-node-check.sh`, a step of `ci.yml`'s validate job, after steps that install `age`, the
+  `docker` Python library and every module's collections (`gen-requirements.py --all-modules`, as the published
+  runner image bakes them: the mock inventory has a host for every shipped class). In a throwaway export of HEAD,
+  made a repository on `main` with HEAD's tree as its one commit (local-canonical.yml's landing reads a tree as a
+  worktree, as a fresh clone is), with HOME and TMPDIR moved into it and an operator named, as the installer's
+  launcher names one, it runs the real `kontroll-init --fresh` (a throwaway key, `--trust-mode separated
+  --no-break-glass`), then `deploy-stack.yml --check --diff`, which must pass and reach the stack play's last task;
+  the same with every service, which must fail with the onboard-gui age-key message (G9: deploy-stack never mints
+  that key); the same again with a throwaway onboard-gui key under a storage root inside the directory, which must
+  pass and reach that last task; `bootstrap.yml --check`, which must reach its summary, these four with
   `KONTROLL_IN_CONTAINER=1` as the installer runs them (bootstrap's tasks that install the host's toolchain, the
   legacy host path's, are not evaluated); and `ping.yml` and `backup-configs.yml --check` against
-  `tests/mock-inventory.yml`. A step that must pass needs a `PLAY RECAP` that names no failed host. The backup pass
-  must fail, reach its summary, and fail exactly the hosts the script lists, each at its listed task: the classes
-  whose capture reads the device (OPNsense, Cisco IOS and IOS-XE) or needs an API credential a fresh node has none of
-  (FortiGate). `ping.yml` rescues a host it cannot reach; a capture that fails fails the run, so a class whose backup
-  reaches a device is listed there. It writes nothing outside its directory, starts no container and reaches no
-  device; the deploy passes read the runner's Docker daemon (its images and networks), which check mode leaves as it
-  was. Not in `validate.sh`, which also runs on a configured control node; skipped where `KONTROLL_RUNS_ON` is set
-  (the private repository's self-hosted runners are persistent and shared).
+  `tests/mock-inventory.yml`. A step that must pass needs a `PLAY RECAP` that names no failed or unreachable host.
+  `ping.yml` must reach its reachability summary and rescue exactly the hosts the script lists, each at its listed
+  task (FortiGate at its credential gate, Cisco IOS and IOS-XE at their `network_cli` liveness read). The backup pass
+  must fail, reach its summary, say no API token is in scope, and fail exactly the hosts the script lists, each at
+  its listed task: the classes whose capture reads the device (OPNsense, Cisco IOS and IOS-XE) or needs an API
+  credential a fresh node has none of (FortiGate). A class listed in either is evaluated up to that task, not past
+  it. A failing step prints its log's last lines and, where a task names a module no installed collection provides,
+  how to install every module's set. It keeps no file outside its directory (a task that becomes root works in
+  root's `~/.ansible/tmp`, as every `become` does), starts no container and reaches no device; the deploy passes read
+  the runner's Docker daemon (its images and networks), which check mode leaves as it was. Not in `validate.sh`,
+  which also runs on a configured control node; skipped where `KONTROLL_RUNS_ON` is set (the private repository's
+  self-hosted runners are persistent and shared).
 - **Fixed.** `tests/mock-inventory.yml` has one host per shipped device class, in the class's `inventory_group`,
   with its role as `device_role` (the generic-backend class with its `ansible_network_os`): the hypervisor and
   docker hosts had no `device_role`, the edge said `cisco_ios`, and the fortigate, routeros and ios_xe_auto classes
   had no host.
 - **Fixed.** `bootstrap.yml --check` on a fresh tree reaches its summary. A `--check` run skips the task that
   generates `ansible/collections/requirements.generated.yml`, which is gitignored, and the summary read it with a
-  `file` lookup regardless; the play now stats it first, reads it only where it is, and the summary says a dry-run
-  does not generate it. The new check found it.
+  `file` lookup regardless; a `--check` run now stats it first and reads it only where it is, the summary saying a
+  dry-run does not generate it. A real run reads it as before, so a lockfile the generator failed to leave is still an
+  error there. The new check found it.
 - **Fixed.** `backup-configs.yml --check` no longer fails every OpenWrt and RouterOS host at `Write capture`. Their
   device reads (`raw` for the raw-SSH backend OpenWrt uses; `community.routeros.command`, which has no check mode from
   the collection's 3.0.0) are skipped in check mode, a skipped task's result has no `stdout`, and the write read it

@@ -2239,24 +2239,33 @@ def test_every_workflow_step_that_runs_apt_goes_through_the_lock_retry():
 def test_validate_job_runs_the_fresh_node_check():
     """ci.yml's validate job runs `bash tests/fresh-node-check.sh` as a step of its own, after the step that
     installs the collections and after the gate itself, with `age` installed by a step before it (kontroll-init
-    shells age-keygen) and the `docker` library by another (community.docker's, which the deploy passes need to
-    look at images and networks: T27's first real run failed there without it); the three steps are skipped exactly
+    shells age-keygen), the `docker` library by another (community.docker's, which the deploy passes need to
+    look at images and networks: T27's first real run failed there without it), and every module's collections by a
+    third, from `gen-requirements.py --all-modules` into the runner's temp dir; the four steps are skipped exactly
     where KONTROLL_RUNS_ON is set (the private repository's persistent, shared runners), and none is softened
     (`continue-on-error`, `|| true`). Guards the one gate that has Ansible evaluate the plays being dropped or
     neutered in a workflow edit unnoticed, as the promtool and vector checks were skipped on every green run for
-    months (2026-10-08 review)."""
+    months (2026-10-08 review); and the check run with the example fleet's collections only, which its mock
+    inventory (a host for every class) outgrows: T27's fold-1 read showed its backup pass then stops at RouterOS's
+    unresolved module on a GitHub-hosted runner, before its summary (B2)."""
     steps = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]["steps"]
     runs = [str(s.get("run", "")).strip() for s in steps]
     check = [i for i, r in enumerate(runs) if "tests/fresh-node-check.sh" in r]
     assert len(check) == 1 and runs[check[0]] == "bash tests/fresh-node-check.sh", check
     i = check[0]
     age = [j for j, r in enumerate(runs) if r == "bash .github/scripts/apt-install.sh age"]
-    collections = [j for j, r in enumerate(runs) if "ansible-galaxy collection install" in r]
+    installs = [j for j, r in enumerate(runs) if "ansible-galaxy collection install" in r]
+    collections = [j for j in installs if "--all-modules" not in runs[j]]
+    every = [j for j in installs if "--all-modules" in runs[j]]
     gate = [j for j, r in enumerate(runs) if r == "bash tests/validate.sh --strict"]
     sdk = [j for j, r in enumerate(runs) if r.startswith("pip install") and "docker/installer/requirements.txt" in r]
-    assert len(age) == 1 and len(collections) == 1 and len(gate) == 1 and len(sdk) == 1
-    assert collections[0] < i and gate[0] < i and age[0] < i and sdk[0] < i
-    for j in (age[0], sdk[0], i):
+    assert len(age) == 1 and len(collections) == 1 and len(every) == 1 and len(gate) == 1 and len(sdk) == 1
+    assert collections[0] < gate[0] < every[0] < i and age[0] < i and sdk[0] < i, (collections, gate, every, i)
+    assert runs[every[0]].splitlines() == [
+        "set -euo pipefail",
+        'python3 scripts/gen-requirements.py "$RUNNER_TEMP/all-modules.yml" --all-modules',
+        'ansible-galaxy collection install -r "$RUNNER_TEMP/all-modules.yml"'], runs[every[0]]
+    for j in (age[0], sdk[0], every[0], i):
         assert steps[j].get("if") == "${{ !vars.KONTROLL_RUNS_ON }}", steps[j]
         assert "continue-on-error" not in steps[j] and "|| true" not in runs[j], steps[j]
 
