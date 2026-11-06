@@ -5,20 +5,20 @@
 # setuptools and wheel Debian ships) and never edited by hand without that rebuild. ansible-core stays inside the
 # range scripts/install-prereqs.sh puts on a host. Hash pins are the next rung (see
 # docker/semaphore-runner/requirements.txt).
-ansible-compat==26.9.0
+ansible-compat==26.10.0
 ansible-core==2.18.19
-ansible-lint==26.9.0
+ansible-lint==26.10.1
 attrs==26.1.0
 black==26.10.1
-bracex==3.0.1
-certifi==2026.10.19
+bracex==3.2
+certifi==2026.10.23
 cffi==2.1.1
 charset-normalizer==3.5.2
 click==8.5.0
 cryptography==50.0.2
 distro==1.9.0
 docker==7.2.0
-filelock==4.2.1
+filelock==4.2.4
 idna==3.20
 Jinja2==3.1.6
 jsonschema-specifications==2025.9.1
@@ -27,17 +27,17 @@ MarkupSafe==3.0.4
 mypy_extensions==1.1.0
 packaging==26.3
 pathspec==1.1.1
-platformdirs==4.12.4
-pycparser==3.11
+platformdirs==4.14.0
+pycparser==3.12
 pytokens==0.4.1
 PyYAML==6.0.3
 referencing==0.37.0
 requests==2.34.2
-resolvelib==1.0.1
+resolvelib==1.2.1
 rpds-py==2026.9.1
 ruamel.yaml==0.19.1
 subprocess-tee==0.4.2
 typing_extensions==4.16.0
 urllib3==2.8.0
-wcmatch==11.0.1
+wcmatch==11.2
 yamllint==1.38.0
