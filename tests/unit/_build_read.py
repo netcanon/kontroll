@@ -267,7 +267,7 @@ def _decase(text):
 
 
 _CASE_WORD = re.compile(r"(?<![^\s;&|(`])case(?=\s)")
-_ESAC_WORD = re.compile(r"(?<![^\s;&|(`])esac(?=[\s;&|)`]|$)")
+_ESAC_WORD = re.compile(r"[;&][ \t]*esac(?=[\s;&|)`]|$)")  # after `;` or `&`, where a command starts: read 170, B1
 
 
 def _case_unread(text):
@@ -275,44 +275,57 @@ def _case_unread(text):
     the `$(…)` or the paren around the case before the `esac`, so every reading ends the substitution there and glues
     nothing (`e$(case a in $(echo ')')) :;; esac)xit 0` runs `exit 0`; so do a pattern `${x:-)}`, one in backquotes
     holding an escaped backquote, and one a `$(…)` nesting two parens: the settle read of fold 17). Read with
-    `_scan_open`'s stack, each paren's start kept: a `$(…)`, or a paren inside one, whose text holds more unquoted
-    `case` words than `esac` ones closed early. It fails closed: `_open_subst` reads such a text as open until the
+    `_scan_open`'s stack, each frame keeping the text of its own level (each nested quote, backquote, `${…}`, `$(…)` or
+    paren one mark there): a `$(…)`, or a paren inside one, whose own level holds more `case` words than `esac` ones
+    closed early, an `esac` counted only where a command starts (after `;` or `&`: the readers join lines with `;`), so
+    a decoy `esac` in an argument, a pattern, a `${…}` or an inner `$(…)` evens nothing
+    (`e$(: esac; case a in $(echo ')')) :;; esac)xit 0`, `e$(case a in $(echo ')')|esac) :;; esac)xit 0`,
+    `e$(: ${x:-;esac }; case …`: read 170, B1). It fails closed: `_open_subst` reads such a text as open until the
     case's `esac` is joined (so `_spans` joins the commands up to it, and the audit after it stays its own command) and
     `_choices` reads it as `exit`, so a pattern `_CASE_PIECE` cannot read is refused, whatever it holds. Refused
     although sound: an unquoted `case` word followed by a blank inside a `$(…)` that opens no case (`$(echo case x)`),
     after the check too (`$(echo case)` is passed there, as no blank follows the word; before it, `_left_open`
-    refuses a `$(…)` holding any `case` word, as it did before)."""
-    stack, k = [], 0
+    refuses a `$(…)` holding any `case` word, as it did before), and a case whose last branch is empty or that has none
+    (`$(case a in x) esac)`, `$(case a in esac)`), whose `esac` follows no `;` or `&` (read 170, B1)."""
+    stack, k = [["", []]], 0  # each frame: its kind and the text of its own level
     while k < len(text):
-        ch, top = text[k], (stack[-1][0] if stack else None)
+        ch, top, own = text[k], stack[-1][0], stack[-1][1]
         if top == "'":
             if ch == "'":
                 stack.pop()
+                stack[-1][1].append("\x01")
         elif ch == "\\":
             k += 1
+            own.append("\x01")
         elif top == "`":
             if ch == "`":
                 stack.pop()
+                stack[-1][1].append("\x01")
         elif ch == "$" and text[k + 1:k + 2] in ("{", "("):
-            stack.append((text[k + 1], k))
+            stack.append([text[k + 1], []])
             k += 1
         elif top == '"':
             if ch == '"':
                 stack.pop()
+                stack[-1][1].append("\x01")
             elif ch == "`":
-                stack.append((ch, k))
-        elif ch == "'" and next((s for s, _ in reversed(stack) if s in ('"', "(", "p")), None) == '"':
+                stack.append([ch, []])
+        elif ch == "'" and next((s[0] for s in reversed(stack) if s[0] in ('"', "(", "p")), None) == '"':
             pass
         elif ch in "'\"`":
-            stack.append((ch, k))
+            stack.append([ch, []])
         elif ch == "}" and top == "{":
             stack.pop()
+            stack[-1][1].append("\x01")
         elif ch == "(" and top in ("(", "p"):
-            stack.append(("p", k))
+            stack.append(["p", []])
         elif ch == ")" and top in ("(", "p"):
-            inner = _without_quotes(text[stack.pop()[1]:k])
+            inner = "".join(stack.pop()[1])
             if len(_CASE_WORD.findall(inner)) > len(_ESAC_WORD.findall(inner)):
                 return True
+            stack[-1][1].append("\x01")
+        else:
+            own.append(ch)
         k += 1
     return False
 
@@ -445,15 +458,17 @@ def _fills(text):
     A run of gaps is one: empty, or a space somewhere in it, and a `$@`'s if it holds one. One value for every gap
     never reads `ex${x}it${IFS}0`, which runs `exit 0` where x is unset, nor `"ex"${x}"it"${IFS}0` (read 150, S1). A
     command holding the word `eval` with a gap inside double quotes, but for one that is a whole quoted word, is read
-    past `_CHOICES` ways: eval reads the string again, so the gap can be a space or a newline (`eval
-    "ex${x}it${IFS}0"`, read 160, S3)."""
+    past `_CHOICES` ways: eval reads the string again, so the gap can be a space or a newline (`eval "ex${x}it${IFS}0"`,
+    read 160, S3). The word is read with the text's quotes and backslashes removed, as the shell reads a command word
+    (`\\eval`, `"eval"`, `e\\val`: read 170, S2)."""
     text = re.sub("[" + _GAP + _GAP_AT + "]+", lambda r: _GAP_AT if _GAP_AT in r.group(0) else _GAP, text)
     parts, quoted, q, k = re.split("[" + _GAP + _GAP_AT + "]", text), [], None, 0
+    evals = _EVAL.search(re.sub(r"""["'\\]""", "", text))
     while k < len(text):  # whether each gap sits inside double quotes; a backslash before a gap leaves it a gap
         ch = text[k]
         if ch in (_GAP, _GAP_AT):
             quoted.append(q == '"' and ch == _GAP)
-            if q == '"' and _EVAL.search(text) and not (text[k - 1:k] == '"' and text[k + 1:k + 2] == '"'):
+            if q == '"' and evals and not (text[k - 1:k] == '"' and text[k + 1:k + 2] == '"'):
                 return None
         elif ch == "\\" and q != "'" and text[k + 1:k + 2] not in (_GAP, _GAP_AT):
             k += 1

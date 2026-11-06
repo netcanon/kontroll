@@ -16,31 +16,34 @@ test_fresh_install_compat.py.
 How a Dockerfile is read. A Dockerfile is any file whose name Dependabot's docker fetcher reads as one; every one lives
 under docker/. Its lines are read as BuildKit's parser splits and joins them: split on LF only, a byte-order mark
 dropped, continuation lines joined with no space (a line ending in two backslashes continues nothing), a blank line or a
-comment line inside a continued instruction skipped, an instruction's keyword ended by a space, a tab, VT, FF or CR. A
-whitespace character other than a space, a tab or a line feed (a carriage return inside a line, VT, FF, U+001C to
-U+001F, NEL, a no-break space, LS, PS, any other Unicode space) is refused: sh splits words on none of them, while these
-checks (and, for VT, FF and CR, BuildKit's keyword split) do. A RUN is read in shell form by tests/unit/_build_read.py
-(its docstring gives the rules), a RUN flag read as the start of its first command (and refused before an install, a
-cache mount too: `pip_install_faults`): split into commands on `&&`, `||`, `;`, `|` and a lone `&`, a command found by
-its words anywhere in it (`pip … install`, `apk … add`, `curl`, `wget`, `sha256sum … -c`), so a path before the program,
-an option before the subcommand, a shell keyword (`then`) or a `$(…)` does not hide it from being found; a `curl` or
-`wget` that an `apt-get install` or `apk add` names is a package, not a download. A command that must stop the build (a
-`pip install`, a `pip check`, an `apk add`, a download, a `sha256sum -c`) must fail the RUN when it fails: nothing is
-piped after it, no `||` follows it, it is no condition, it does not run inside a `$(…)` or a quoted string (`sh -c
-'…'`), after an ANSI-C `$'…'` or in a list holding one, nor in a compound behind `||` or `!`, no function or alias is
-defined in the RUN (nor a `hash`, `enable`, `BASH_CMDS` or `BASH_ALIASES` entry), no `trap`, `exec`, `return` or `exit`
-(but `exit 1` to `exit 255`) and no `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt`
-given a variable, a backquoted command, a glob or a brace expansion, which can be one) shares the RUN, and every
-operator after it to the end of the RUN is `&&` (a lone `&` sends the list to the background) — or errexit is on (`set
--e`, `set -o errexit`), it is inside no compound (a brace group, a subshell, an `if`, a loop), it starts its AND-OR
-list, and `;` ends that list right after it. A download is checked by `echo "<digest> <file>" | sha256sum -c -` in the
-same RUN (`sha256sum`, `/bin/sha256sum` or `/usr/bin/sha256sum` the first word of its command), its file written by name
-(one URL, one output), the digest an ARG or ENV whose every value in the file (an ONBUILD one's too) is 64 hex, or a
-shell variable the RUN sets only from one (and no ARG or ENV gives another value or none, nor is it a build arg Docker
-predefines), and no `--mount=` option in the file sets it (`--mount=type=secret,id=…,env=<name>`, the option read from
-the joined instruction with its backslashes removed, so a continuation, a comment line or an escape inside it hides no
-key, its `env=` key in any case, quoted or not, its value read with its quotes and backslashes removed, and one that is
-not then a name, such as `env=$X`, read as setting every digest name); a checksum file next to the download is not a
+comment line inside a continued instruction skipped, an instruction's keyword ended by a space, a tab, VT, FF or CR. An
+ONBUILD is read by every check as the instruction it holds, its keyword in any case, as BuildKit runs it in each stage
+built FROM this one: its pins (a stage name or an ARG default there is the later build's, so only a pin, `scratch` or a
+stage index passes), its RUN's commands and flags, its form and its ADD (read 170, S3). A whitespace character other
+than a space, a tab or a line feed (a carriage return inside a line, VT, FF, U+001C to U+001F, NEL, a no-break space,
+LS, PS, any other Unicode space) is refused: sh splits words on none of them, while these checks (and, for VT, FF and
+CR, BuildKit's keyword split) do. A RUN is read in shell form by tests/unit/_build_read.py (its docstring gives the
+rules), a RUN flag read as the start of its first command (and refused, a cache mount too, as is any RUN flag in a
+Dockerfile that installs with pip: `pip_install_faults`): split into commands on `&&`, `||`, `;`, `|` and a lone `&`, a
+command found by its words anywhere in it (`pip … install`, `apk … add`, `curl`, `wget`, `sha256sum … -c`), so a path
+before the program, an option before the subcommand, a shell keyword (`then`) or a `$(…)` does not hide it from being
+found; a `curl` or `wget` that an `apt-get install` or `apk add` names is a package, not a download. A command that must
+stop the build (a `pip install`, a `pip check`, an `apk add`, a download, a `sha256sum -c`) must fail the RUN when it
+fails: nothing is piped after it, no `||` follows it, it is no condition, it does not run inside a `$(…)` or a quoted
+string (`sh -c '…'`), after an ANSI-C `$'…'` or in a list holding one, nor in a compound behind `||` or `!`, no function
+or alias is defined in the RUN (nor a `hash`, `enable`, `BASH_CMDS` or `BASH_ALIASES` entry), no `trap`, `exec`,
+`return` or `exit` (but `exit 1` to `exit 255`) and no `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a
+`set` or `shopt` given a variable, a backquoted command, a glob or a brace expansion, which can be one) shares the RUN,
+and every operator after it to the end of the RUN is `&&` (a lone `&` sends the list to the background) — or errexit is
+on (`set -e`, `set -o errexit`), it is inside no compound (a brace group, a subshell, an `if`, a loop), it starts its
+AND-OR list, and `;` ends that list right after it. A download is checked by `echo "<digest> <file>" | sha256sum -c -`
+in the same RUN (`sha256sum`, `/bin/sha256sum` or `/usr/bin/sha256sum` the first word of its command), its file written
+by name (one URL, one output), the digest an ARG or ENV whose every value in the file (an ONBUILD one's too) is 64 hex,
+or a shell variable the RUN sets only from one (and no ARG or ENV gives another value or none, nor is it a build arg
+Docker predefines), and no `--mount=` option in the file sets it (`--mount=type=secret,id=…,env=<name>`, the option read
+from the joined instruction with its backslashes removed, so a continuation, a comment line or an escape inside it hides
+no key, its `env=` key in any case, quoted or not, its value read with its quotes and backslashes removed, and one that
+is not then a name, such as `env=$X`, read as setting every digest name); a checksum file next to the download is not a
 check, since whoever swaps the file swaps it too. A SHELL other than Docker's default, an exec-form RUN (`RUN [...]`
 that parses as JSON), a heredoc (a `<<` that opens a word inside a `$((…))` is one to BuildKit: `$((1 << 2))` alone
 fails the build, unterminated heredoc), a comment inside a RUN (Docker joins its lines first, so the shell drops the
@@ -54,32 +57,37 @@ a `${…}` (`e${x+{a,b}xit 0`: sh runs `exit 0`)), a package manager or download
 install`, `git clone`, `python3 -c 'urllib…'`), the URLs and outputs a curl config file adds (`curl -K`, or with no
 option at all a `~/.curlrc` or one under `$CURL_HOME`) or a wget input file (`wget -i`), a second URL written without
 its scheme and sent to standard output, a later command that writes the checked file again, a file the RUN sources (`.
-/tmp/env`, which can set a digest name), a checked program that an earlier PATH entry shadows (a `sha256sum` an earlier
-step put in /usr/local/bin), a quote inside a `$(…)` that is itself inside double quotes (the reader pairs it with the
-outer one), a digest ARG one stage declares and another reads, a digest name the base image's ENV sets that the RUN
-assigns a digest on only some paths (the check then reads the image's value), and the apt packages, which float inside
-the pinned base (SECURITY.md R-IMG-2). Refused although sound (each fails loudly): a `pip check` in a later RUN than its
-install, a `pip install` option that takes a value and is not named here (its value reads as a package), a check written
-to a file and read by `sha256sum -c <file>`, a check line written with `printf`, a `;` inside a compound (under `set
--e`, or the one before a brace group's `}`: `{ a && check; }`), a check right before a subshell's `)` (`( install &&
-check )`, behind `&&` or not: the `)` joins the check's command, which then reads as no `pip check`), a `;` inside a
-quoted string after a check (`&& python3 -c "import yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the
-RUN (one a brace expansion builds too, `{exit,0}`: sh expands no brace, so it runs a command not found and goes on (or
-fails, behind `&&`), while these checks read it as bash would), a brace list these checks cannot read
-(`{exec,true,${x:-${y}}}`: sh runs it as a command not found), a `$-` anywhere in the RUN (`echo "$-"`: it holds the
-option letters a `set` gives, which can build `exit` or `set`), a command these checks would read more ways than they
-try (`_CHOICES`: seven parameters given an operator, `true${x:+a}…${x:+g} 0`, three replacements with a word, or seven
-expansions each glued to a word on both sides, `echo a${x}b…h`), an arithmetic expansion, `${#}`, `${#x}` or `$0` glued
-to `exit` (`exit$((0))`: sh runs `exit0`, a command not found), a pattern replacement of an unset variable (`${x/#/exit}
-0`: a bad substitution to dash, `0` to busybox ash), another operator's word where sh runs no command word from it
-(`${x/a/exit} 0`, `${x:+exit} 0` and `${x+exit} 0` with `x` unset, `${1:+exit} 0` with no arguments, and `${1=exit} 0`,
-which sh refuses to assign), an expansion inside double quotes glued to `exit` (`exit"$x"0`, `exit"${IFS}"0`: quoted, an
-expansion splits no word, but for a `$@` between two of its arguments), a gap inside double quotes in a command holding
-the word `eval` (`eval "export X=${HOME}"`: eval reads the string again, where the gap can be a space or a newline), a
-bare `{` in an expansion glued to `exit` (`exit${x:+{}} 0`: sh runs `exit}`, a command not found, but the expansion is
-read as a space too, as any is), any RUN flag in a Dockerfile that installs with pip, a cache mount at pip's own cache
-too (`--mount=type=cache,target=/root/.cache/pip`, `--network=none`, a bind mount of the requirements file: these checks
-do not read what a mount puts in front of the install, a pip.conf, a planted wheel in a shared cache, or a target an
+/tmp/env`, which can set a digest name), a pip config that a COPY of a directory or an ADD of an archive puts where pip
+looks (`COPY cfg/ /etc/xdg/pip/`, `ADD cfg.tar /`: no text names the file; an ENV or ARG that moves pip's config
+directory is refused), an environment name built at run time (`n=PIP_INDEX; export ${n}_URL=…`), a checked program that
+an earlier PATH entry shadows (a `sha256sum` an earlier step put in /usr/local/bin), a quote inside a `$(…)` that is
+itself inside double quotes (the reader pairs it with the outer one), a digest ARG one stage declares and another reads,
+a digest name the base image's ENV sets that the RUN assigns a digest on only some paths (the check then reads the
+image's value), and the apt packages, which float inside the pinned base (SECURITY.md R-IMG-2). Refused although sound
+(each fails loudly): a `pip check` in a later RUN than its install, a `pip install` option that takes a value and is not
+named here (its value reads as a package), a check written to a file and read by `sha256sum -c <file>`, a check line
+written with `printf`, a `;` inside a compound (under `set -e`, or the one before a brace group's `}`: `{ a && check;
+}`), a check right before a subshell's `)` (`( install && check )`, behind `&&` or not: the `)` joins the check's
+command, which then reads as no `pip check`), a `;` inside a quoted string after a check (`&& python3 -c "import yaml;
+…"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN (one a brace expansion builds too, `{exit,0}`: sh
+expands no brace, so it runs a command not found and goes on (or fails, behind `&&`), while these checks read it as bash
+would), a brace list these checks cannot read (`{exec,true,${x:-${y}}}`: sh runs it as a command not found), a `$-`
+anywhere in the RUN (`echo "$-"`: it holds the option letters a `set` gives, which can build `exit` or `set`), a command
+these checks would read more ways than they try (`_CHOICES`: seven parameters given an operator, `true${x:+a}…${x:+g}
+0`, three replacements with a word, or seven expansions each glued to a word on both sides, `echo a${x}b…h`), an
+arithmetic expansion, `${#}`, `${#x}` or `$0` glued to `exit` (`exit$((0))`: sh runs `exit0`, a command not found), a
+pattern replacement of an unset variable (`${x/#/exit} 0`: a bad substitution to dash, `0` to busybox ash), another
+operator's word where sh runs no command word from it (`${x/a/exit} 0`, `${x:+exit} 0` and `${x+exit} 0` with `x` unset,
+`${1:+exit} 0` with no arguments, and `${1=exit} 0`, which sh refuses to assign), an expansion inside double quotes
+glued to `exit` (`exit"$x"0`, `exit"${IFS}"0`: quoted, an expansion splits no word, but for a `$@` between two of its
+arguments), a gap inside double quotes in a command holding the word `eval` (`eval "export X=${HOME}"`: eval reads the
+string again, where the gap can be a space or a newline), a bare `{` in an expansion glued to `exit` (`exit${x:+{}} 0`:
+sh runs `exit}`, a command not found, but the expansion is read as a space too, as any is), any `PIP_…` word in a
+Dockerfile that installs with pip (`ENV PIP_NO_CACHE_DIR=1`, `ENV PIP_DISABLE_PIP_VERSION_CHECK=1`, one in a message:
+pip reads every long option from one, read 170, S4), an ONBUILD's `--from=` a stage the later build names, or an image
+through an ARG default, any RUN flag in a Dockerfile that installs with pip, a cache mount at pip's own cache too
+(`--mount=type=cache,target=/root/.cache/pip`, `--network=none`, a bind mount of the requirements file: these checks do
+not read what a mount puts in front of the install, a pip.conf, a planted wheel in a shared cache, or a target an
 earlier RUN made a link), a `set --` given a variable (`set -- $x`), a digest name that an ARG or ENV gives another
 value or none, assigned in the RUN (`ENV X=$FOO`, then `X=<hex> && …`), the word `exit`, `return`, `trap` or `exec` in a
 message (`echo "will exit on error"`), a function or an alias anywhere in the RUN (the word `alias`, `hash` or `enable`,
@@ -90,7 +98,9 @@ $(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after
 #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two
 outputs, a trailing comment on a RUN's last line, a digest ARG redeclared without its value in a later stage, and an
 unquoted `case` followed by a blank inside a `$(…)` that opens no case (`$(echo case x)`: these checks refuse a case
-pattern they cannot read, whatever it holds, and read such a word as a case whose `esac` has not come)."""
+pattern they cannot read, whatever it holds, and read such a word as a case whose `esac` has not come), and a case in a
+`$(…)` whose last branch is empty or that has none (`$(case a in x) esac)`, `$(case a in esac)`: these checks count an
+`esac` only after `;` or `&`, so a decoy one evens nothing, read 170, B1)."""
 import json
 import os
 import re
@@ -123,9 +133,12 @@ _PIP_INDEX_LONG = ("--index-url", "--extra-index-url", "--find-links", "--truste
 # of the word, or the next word) and the long ones. Another option's value reads as a package: a loud refusal.
 _PIP_SHORT_VALUED = set("rcteifC")
 _PIP_LONG_VALUED = ("--requirement", "--constraint", "--target", "--prefix", "--root", "--editable") + _PIP_INDEX_LONG
-# pip's own environment and config: an index named there reaches every install.
-_PIP_SETTINGS = re.compile(r"\bPIP_(?:INDEX_URL|EXTRA_INDEX_URL|FIND_LINKS|TRUSTED_HOST|CONFIG_FILE)\b"
-                           r"|\bpip\.(?:conf|ini)\b|\bpip[\d.]*\"?\s+(?:-\S+\s+)*config\b")
+# pip's own environment and config, read from the text with its quotes and backslashes removed: an index named there
+# reaches every install, and pip reads each long option from a `PIP_<OPTION>` (`PIP_REQUIREMENT` names a file that can
+# name an index: read 170, S4).
+_PIP_SETTINGS = re.compile(r"\bPIP_\w+|\bpip\.(?:conf|ini)\b|\bpip[\d.]*\s+(?:-\S+\s+)*config\b")
+# An ENV or ARG name that moves where pip looks for its config, or one built from a variable (read 170, S4).
+_PIP_CONFIG_NAME = re.compile(r"XDG_CONFIG_|.*\$")
 _APK = re.compile(r"\bapk\b(?:\s+-\S+)*\s+(add|upgrade)\b(.*)$")
 _APT_INSTALL = re.compile(r"\b(?:apt-get|apt)\s+(?:\S+\s+)*?install\b")
 _DOWNLOAD = re.compile(r"\b(curl|wget)\b")
@@ -191,10 +204,24 @@ def instructions(text):
     return out
 
 
+def _unwrapped(text):
+    """[(KEYWORD, arguments, onbuild)] of a Dockerfile's `instructions`, an ONBUILD read as the instruction it holds,
+    its keyword in any case, with `onbuild` True: BuildKit runs it in each stage built FROM this one (read 170, S3)."""
+    out = []
+    for keyword, args in instructions(text):
+        onbuild = keyword == "ONBUILD"
+        if onbuild:
+            keyword, args = (re.split(r"[\t\v\f\r ]+", args.strip(), maxsplit=1) + [""])[:2]
+            keyword, args = keyword.upper(), args.strip()
+        out.append((keyword, args, onbuild))
+    return out
+
+
 def _runs(text):
-    """[the commands of each RUN] of a Dockerfile, as tests/unit/_build_read.py splits them. A RUN flag is read as the
-    start of its first command; `pip_install_faults` refuses it in a Dockerfile that installs with pip."""
-    return [_commands(args) for keyword, args in instructions(text) if keyword == "RUN"]
+    """[the commands of each RUN, an ONBUILD's too] of a Dockerfile, as tests/unit/_build_read.py splits them. A RUN
+    flag is read as the start of its first command; `pip_install_faults` refuses it in a Dockerfile that installs with
+    pip."""
+    return [_commands(args) for keyword, args, _ in _unwrapped(text) if keyword == "RUN"]
 
 
 def _tag(ref):
@@ -209,9 +236,12 @@ def from_pin_faults(text):
     image not pinned as `<image>:<tag>@sha256:<64 hex>` with a tag other than `latest`. An earlier stage's name
     (`FROM base`, `--from=build`, a stage index) and `scratch` pull nothing. A `${NAME}` or `$NAME` in the reference is
     read through the default of an ARG declared before the first FROM; with no default it stays unread, so
-    unpinned."""
+    unpinned. An ONBUILD is read as the instruction it holds (`_unwrapped`), with no ARG default and no stage name, as
+    both are the later build's: only a pin, `scratch` or a stage index passes there (read 170, S3). BuildKit refuses an
+    `ONBUILD FROM` and an ONBUILD before the first FROM (measured: "FROM isn't allowed as an ONBUILD trigger", "no build
+    stage in current context"), so this check reads either as the plain instruction."""
     faults, stages, defaults, seen_from = [], set(), {}, False
-    for keyword, args in instructions(text):
+    for keyword, args, onbuild in _unwrapped(text):
         if keyword == "ARG" and not seen_from:
             for token in args.split():
                 name, eq, value = token.partition("=")
@@ -229,8 +259,10 @@ def from_pin_faults(text):
         else:
             continue
         for ref in refs:
-            ref = re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda m: defaults.get(m.group(1) or m.group(2)) or m.group(0), ref)
-            if ref.lower() in stages or ref == "scratch" or (keyword != "FROM" and ref.isdigit()):
+            if not onbuild:
+                ref = re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda m: defaults.get(m.group(1) or m.group(2)) or m.group(0),
+                             ref)
+            if (ref.lower() in stages and not onbuild) or ref == "scratch" or (keyword != "FROM" and ref.isdigit()):
                 continue
             if not _DIGEST.search(ref):
                 faults.append("no digest: " + args)
@@ -262,7 +294,7 @@ def form_faults(text):
     a space or an operator character: Docker joins a RUN's lines before the shell reads it, so a comment on one line
     drops every later line; only a whole-line comment is removed first), an `# escape=` directive (it moves which lines
     continue a RUN), and a `# syntax=` parser directive not pinned by digest (BuildKit pulls that frontend image on
-    every build)."""
+    every build). An ONBUILD is read as the instruction it holds (`_unwrapped`: read 170, S3)."""
     faults = []
     if _ODD_SPACE.search(text):
         faults.append("a whitespace character other than a space, a tab or a line feed (sh splits words on none of "
@@ -273,7 +305,7 @@ def form_faults(text):
             faults.append("a syntax directive with no digest: " + line.strip())
         if re.match(r"\s*#\s*escape\s*=", line, re.I):
             faults.append("an escape directive: " + line.strip())
-    for keyword, args in instructions(text):
+    for keyword, args, _ in _unwrapped(text):
         if keyword == "SHELL" and _json_array(args) != ["/bin/sh", "-c"]:
             faults.append("a SHELL instruction other than Docker's default (the RUN rules read /bin/sh -c): " + args)
         if keyword == "RUN" and _exec_form(args):
@@ -365,13 +397,16 @@ def pip_installs(text):
 def pip_install_faults(text):
     """["<reason>: <command>"] for each `pip install` in a Dockerfile that names a package itself, names an index,
     lacks `--no-deps`, does not stop the build, or is not followed in the same RUN by a `pip check` of the same pip
-    that stops the build; and for an index named in pip's environment or config (`PIP_INDEX_URL`, a `pip.conf`,
-    `pip config`), and for each RUN flag (`--mount`, `--network`, `--security`), in a Dockerfile that runs one. These
-    checks do not read a flag, and a mount can put a pip.conf in front of the install: a bind mount at `/etc/xdg/pip`
-    before a first command that is not the install (read 160, B1), a cache mount whose target an earlier RUN made a link
-    to pip's config directory, or any cache mount, as the builder's cache is shared with every build that names its id
-    and can hold a planted wheel or index page (read 160, S5, N3). So a cache mount, which is sound on a builder whose
-    cache is trusted, is refused too (read 150, N2 had cache mounts at a cache directory read through)."""
+    that stops the build; and for an index named in pip's environment or config (any `PIP_…` option, a `pip.conf`,
+    `pip config`, read with the quotes and backslashes removed, so `PIP\\_INDEX_URL` and `pip.c''onf` are read too), an
+    ENV or ARG that moves pip's config directory (`XDG_CONFIG_…`) or whose name is built from a variable
+    (`ENV ${N}EX_URL=…`: read 170, S4), and for each RUN flag (`--mount`, `--network`, `--security`), in a Dockerfile
+    that runs one. These checks do not read a flag, and a mount can put a pip.conf in front of the install: a bind mount
+    at `/etc/xdg/pip` before a first command that is not the install (read 160, B1), a cache mount whose target an
+    earlier RUN made a link to pip's config directory, or any cache mount, as the builder's cache is shared with every
+    build that names its id and can hold a planted wheel or index page (read 160, S5, N3). So a cache mount, which is
+    sound on a builder whose cache is trusted, is refused too (read 150, N2 had cache mounts at a cache directory read
+    through)."""
     faults = []
     installs = pip_installs(text)
     for command, files, bare, flags, commands, i in installs:
@@ -389,11 +424,29 @@ def pip_install_faults(text):
         else:
             faults += gate_faults("pip check", commands, checks[0])
     if installs:
-        faults += ["names an index in pip's environment or config: " + args
-                   for _, args in instructions(text) if _PIP_SETTINGS.search(args)]
+        faults += ["names an index or option in pip's environment or config: " + args
+                   for _, args in instructions(text) if _PIP_SETTINGS.search(_unquoted(args))]
+        faults += ["an ENV or ARG that moves pip's config directory, or whose name is built from a variable: " + args
+                   for keyword, args, _ in _unwrapped(text) if keyword in ("ENV", "ARG")
+                   and not _PIP_SETTINGS.search(_unquoted(args))
+                   and any(map(_PIP_CONFIG_NAME.match, _env_names(keyword, args)))]
         faults += ["a RUN flag these checks do not read (a mount can put a pip.conf in front of the install): " + args
-                   for keyword, args in instructions(text) if keyword == "RUN" and args.startswith("--")]
+                   for keyword, args, _ in _unwrapped(text) if keyword == "RUN" and args.startswith("--")]
     return faults
+
+
+def _unquoted(text):
+    """`text` with its quotes and backslashes removed, as BuildKit reads an ENV or ARG name and sh a word."""
+    return re.sub(r"""["'\\]""", "", text)
+
+
+def _env_names(keyword, args):
+    """[each name an ENV or ARG sets, its quotes and backslashes removed]: every word's text before its `=` (an ARG's
+    word with no `=` too), or the first word of a legacy `ENV NAME value`."""
+    tokens = args.split()
+    if keyword == "ENV" and len(tokens) >= 2 and "=" not in tokens[0]:
+        tokens = tokens[:1]
+    return [_unquoted(t.partition("=")[0]) for t in tokens if "=" in t or keyword == "ARG" or len(tokens) == 1]
 
 
 def apk_faults(text):
@@ -562,7 +615,7 @@ def download_faults(text):
     faults, digests = [], tree_digests(text)
     mounts = _mount_env_names(text)
     others = (set(_tree_values(text)) - digests) | _PREDEFINED_ARGS | mounts | (digests if "$" in mounts else set())
-    for keyword, args in instructions(text):
+    for keyword, args, _ in _unwrapped(text):
         if keyword == "ADD":
             sources = [t for t in args.split() if not t.startswith("--")][:-1]
             if any(re.match(r"(?:https?|git|ssh)://|git@", s) for s in sources) and not re.search(
@@ -723,6 +776,9 @@ def test_every_dockerfile_is_one_these_checks_read():
     ("RUN echo $((1 << 2)) && true\n", ["heredoc"]),
     ("RUN true \\\r\n && echo ok\r\n", []),
     ("FROM x:1.2@sha256:" + "a" * 64 + "\r\nRUN echo ok\r", []),
+    ("ONBUILD RUN [\"pip\", \"install\", \"requests\"]\n", ["exec-form"]),
+    ("ONBUILD SHELL [\"/bin/bash\", \"-c\"]\n", ["SHELL instruction"]),
+    ("ONBUILD RUN echo a # b\n", ["a comment inside a RUN"]),
 ], ids=["exec-form", "exec-form-after-mount", "heredoc", "syntax-unpinned", "syntax-pinned", "shell-form",
         "test-bracket", "arithmetic-shift", "escape-directive", "comment-mid-run", "comment-after-an-assignment",
         "comment-line-in-a-run", "hash-inside-a-word", "comment-after-a-semicolon", "comment-after-and-and",
@@ -733,7 +789,10 @@ def test_every_dockerfile_is_one_these_checks_read():
         "file-separator-on-a-continuation", "paragraph-separator", "form-feed", "ideographic-space",
         "tab-before-a-heredoc-in-an-arithmetic-expansion", "exec-form-after-a-tab", "shell-after-a-tab",
         "heredoc-in-an-arithmetic-expansion", "heredoc-after-digits-in-an-arithmetic-expansion",
-        "spaced-shift-in-an-arithmetic-expansion", "crlf-line-endings", "carriage-return-at-the-end"])
+        "spaced-shift-in-an-arithmetic-expansion", "crlf-line-endings", "carriage-return-at-the-end",
+        "onbuild-exec-form",
+        "onbuild-shell",
+        "onbuild-comment-inside-a-run"])
 def test_the_form_check_refuses_what_the_checks_cannot_read(text, expected):
     """The form check flags an exec-form RUN (behind a `--mount` too), a heredoc, an `# escape=` directive, a `#
     syntax=` directive with no digest, and a `#` that opens a word inside a RUN; it passes a pinned directive, a
@@ -757,7 +816,8 @@ def test_the_form_check_refuses_what_the_checks_cannot_read(text, expected):
     key installed, an install never run, while the checks read the dropped lines (fold 3's read, S1: Z3, Z4; fold 4's
     read, S3: C-a, Z19b) — a SHELL that runs every RUN under a wrapper the checks never read (fold 4's read, N4: C-h,
     Z21), and lines the checks split where BuildKit does not (fold 5's read A, S4 and S6: D6, L2, L3, I1 to I3, M1; fold
-    6's read A, S1, S2, S8; its read B, S1, S5, N4: BK5 to BK7; fold 7's read B, S2: OS1, OS2, HD1)."""
+    6's read A, S1, S2, S8; its read B, S1, S5, N4: BK5 to BK7; fold 7's read B, S2: OS1, OS2, HD1). Fold 19 added (read
+    170, S3): an ONBUILD's exec-form RUN, its SHELL and a comment inside its RUN."""
     assert _found(form_faults(text), expected), form_faults(text)
 
 
@@ -799,11 +859,26 @@ _PINNED = "x:1.2@sha256:" + "e" * 64
     ("FROM\tdebian:12-slim", ["no digest: debian:12-slim"]),
     ("  FROM debian:12-slim", ["no digest: debian:12-slim"]),
     ("FROM " + _PINNED + "\nCOPY\t--from=alpine:3.20 /a /b", ["no digest: --from=alpine:3.20 /a /b"]),
+    ("FROM " + _PINNED + "\nONBUILD COPY --from=busybox:latest /bin/busybox /opt/x",
+     ["no digest: --from=busybox:latest /bin/busybox /opt/x", "no tag: --from=busybox:latest /bin/busybox /opt/x"]),
+    ("FROM " + _PINNED + "\nONBUILD RUN --mount=type=bind,from=busybox:latest,target=/b ls",
+     ["no digest: --mount=type=bind,from=busybox:latest,target=/b ls",
+      "no tag: --mount=type=bind,from=busybox:latest,target=/b ls"]),
+    ("FROM " + _PINNED + " AS build\nFROM " + _PINNED + "\nONBUILD COPY --from=build /a /b",
+     ["no digest: --from=build /a /b", "no tag: --from=build /a /b"]),
+    ("ARG IMG=" + _PINNED + "\nFROM " + _PINNED + "\nONBUILD COPY --from=${IMG} /a /b",
+     ["no digest: --from=${IMG} /a /b", "no tag: --from=${IMG} /a /b"]),
+    ("FROM " + _PINNED + "\nONBUILD COPY --from=0 /a /b\nonbuild copy --from=" + _PINNED + " /a /c", []),
 ], ids=["no-digest", "latest", "digest-only", "registry-port-and-stage", "short-digest", "registry-port-no-tag",
         "arg-default-pinned", "arg-default-latest", "arg-no-default", "arg-after-from", "earlier-stage",
         "scratch-and-index", "copy-from-image", "copy-from-pinned", "mount-from-image", "mount-from-stage",
         "from-after-a-double-backslash", "byte-order-mark-before-the-from", "from-after-a-tab", "indented-from",
-        "copy-after-a-tab"])
+        "copy-after-a-tab",
+        "onbuild-copy-from-image",
+        "onbuild-mount-from-image",
+        "onbuild-copy-from-a-name-this-file-gives-a-stage",
+        "onbuild-copy-from-an-arg-default",
+        "onbuild-copy-from-an-index-and-a-pin"])
 def test_the_from_check_tells_a_pin_from_a_near_miss(text, faults):
     """The FROM check flags a tag with no digest, `latest` or no tag with a digest, a digest one hex digit short, an
     ARG-built reference whose default is unpinned or missing (or declared after the first FROM, where a FROM cannot read
@@ -814,7 +889,10 @@ def test_the_from_check_tells_a_pin_from_a_near_miss(text, faults):
     drops it), a FROM or a COPY whose keyword a tab ends (BuildKit splits there), and an indented FROM (BuildKit trims
     the indent). Guards a check that passes everything, reads a registry port as a tag, or refuses a correct multi-stage
     or ARG-built pin (T29's read, N4: F3, F5; its fold-2 read, N4: a `--mount` pulled `busybox:latest` unread; its
-    fold-5 read A, S4 and S6: D5, L1; its fold-6 read A, S1; its fold-7 read B, S2: KS1)."""
+    fold-5 read A, S4 and S6: D5, L1; its fold-6 read A, S1; its fold-7 read B, S2: KS1). Fold 19 added (read 170, S3):
+    an ONBUILD's COPY `--from=` and RUN `--mount=…,from=` of an unpinned image, and, read as the later build's, a name
+    this file gives a stage and an ARG default, both refused; a stage index and a pin pass there, the keywords in any
+    case."""
     assert from_pin_faults(text + "\n") == faults
 
 
@@ -1380,6 +1458,32 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
     ("true; se$(case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
      ["pip install shares the RUN with `se$(case a in $(echo ')')) 1 ; esac)t -n`",
       "pip check shares the RUN with `se$(case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(case a in \\($(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(case a in \\($(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(case a in \\($(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(case a in \"${x:+'}\" | $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(case a in \"${x:+'}\" | $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(case a in \"${x:+'}\" | $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(case a in \"`echo \"(\"`\" | $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(case a in \"`echo \"(\"`\" | $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(case a in \"`echo \"(\"`\" | $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(case a in $(echo xesac ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(case a in $(echo xesac ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(case a in $(echo xesac ')')) 1 ; esac)t -n`"]),
+    ("true; se$(case a in $(echo ')')|esac) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(case a in $(echo ')') | esac) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(case a in $(echo ')') | esac) 1 ; esac)t -n`"]),
+    ("true; se$(: esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: esac ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: esac ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(: ${x:-;esac }; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: ${x:- ; esac } ; case a in $(echo ')')) 1`",
+      "pip check shares the RUN with `se$(: ${x:- ; esac } ; case a in $(echo ')')) 1`"]),
+    ("true; \\eval \"ex${x}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `\\eval \"ex${x}it${IFS}0\"`",
+      "pip check shares the RUN with `\\eval \"ex${x}it${IFS}0\"`"]),
+    ("true; export PIP_REQUIREMENT=/tmp/x.txt; " + _INSTALL + " && python3 -m pip check",
+     ["environment or config: true; export PIP_REQUIREMENT="]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1488,7 +1592,16 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "exit-glued-to-a-quoted-alternative-holding-a-single-quote-before-a-backquoted-command",
         "a-message-holding-a-quoted-strip-the-scan-leaves-open",
         "exit-glued-to-a-quoted-alternative-whose-single-quote-opens-a-substitution-cut-by-a-semicolon",
-        "set-n-split-by-a-case-whose-pattern-is-a-substitution-holding-a-quoted-paren"])
+        "set-n-split-by-a-case-whose-pattern-is-a-substitution-holding-a-quoted-paren",
+        "set-n-split-by-a-case-whose-unread-pattern-holds-an-escaped-paren",
+        "set-n-split-by-a-case-whose-unread-pattern-holds-a-single-quote-in-a-quoted-alternative",
+        "set-n-split-by-a-case-whose-unread-pattern-holds-a-backquoted-paren-in-double-quotes",
+        "set-n-split-by-a-case-whose-unread-pattern-holds-a-word-ending-in-esac",
+        "set-n-split-by-a-case-whose-pattern-has-a-decoy-esac-alternative",
+        "set-n-split-by-a-case-after-a-decoy-esac-argument",
+        "set-n-split-by-a-case-after-a-decoy-esac-in-a-default",
+        "exit-built-by-an-escaped-eval",
+        "a-pip-option-exported-before-the-install"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1597,7 +1710,10 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     S2; fold 13's mutant run: X13o, X13p; its read A, S1 to S3: r01 to r16; its read B, S1, S2; fold 14's read A, S2
     to S4; its read B, S1, N6; fold 15's fuzz; fold 15's read A, S1 to S3, N2; its read B, S1 to S3: F8c, X15D, XQ2,
     XQ4, XQ5, XQ6; fold 16's mutant run: FL6, CP2, CP3; fold 16's read A, B1, S5, N3; its read B, S1; fold 17's mutant
-    run: SG2, SG7, SO4; fold 17's settle read, the case pattern it cannot read)."""
+    run: SG2, SG7, SO4; fold 17's settle read, the case pattern it cannot read). Fold 19 added (read 170): the decoy
+    `esac` texts in a RUN (`se$(: esac; case a in $(echo ')')) 1;; esac)t -n`: B1), an escaped `eval` (S2), and a pip
+    option exported in the install's own RUN (`export PIP_REQUIREMENT=…`, a file that can name an index: S4); from read
+    171, the four case patterns it found no row held (S1)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 
@@ -1609,14 +1725,66 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     ("COPY docker/x/pip.conf /etc/pip.conf\n", ["environment or config: docker/x/pip.conf"]),
     ("RUN python3 -m pip config set global.index-url https://x.test\n", ["environment or config: python3 -m pip"]),
     ("COPY --from=build /w /w\n", []),
-], ids=["none", "env-index", "arg-extra-index", "pip-conf", "pip-config-set", "copy-from-a-stage"])
+    ("ONBUILD RUN echo T && python3 -m pip install six\n",
+     ["installs a package by name", "no --no-deps", "no `pip check`"]),
+    ("onbuild run echo T && python3 -m pip install six\n",
+     ["installs a package by name", "no --no-deps", "no `pip check`"]),
+    ("ONBUILD RUN --mount=type=cache,target=/root/.cache/pip true\n", ["a RUN flag these checks do not read"]),
+    ("ONBUILD RUN --mount=type=bind,source=r.txt,target=/m/r.txt cat /m/r.txt\n",
+     ["a RUN flag these checks do not read"]),
+    ("ONBUILD RUN\techo T && python3 -m pip install six\n",
+     ["installs a package by name", "no --no-deps", "no `pip check`"]),
+    ("ENV PIP\\_INDEX_URL=http://192.0.2.1/simple\n", ["environment or config: PIP\\_INDEX_URL="]),
+    ("ARG N=PIP_IND\nENV ${N}EX_URL=http://192.0.2.1/simple\n",
+     ["environment or config: N=PIP_IND", "built from a variable: ${N}EX_URL="]),
+    ("ARG N\nENV ${N}=http://192.0.2.1/simple\n", ["built from a variable: ${N}="]),
+    ("ENV PIP_REQUIREMENT=/tmp/x.txt\n", ["environment or config: PIP_REQUIREMENT="]),
+    ("ENV PIP_REQUIREMENT /tmp/x.txt\n", ["environment or config: PIP_REQUIREMENT /tmp"]),
+    ("ENV XDG_CONFIG_DIRS=/opt/c\n",
+     ["moves pip's config directory, or whose name is built from a variable: XDG_CONFIG_DIRS"]),
+    ("ONBUILD ENV XDG_CONFIG_HOME=/opt/c\n", ["built from a variable: XDG_CONFIG_HOME=/opt/c"]),
+    ("ARG XDG_CONFIG_HOME\n", ["built from a variable: XDG_CONFIG_HOME"]),
+    ("ARG A XDG_CONFIG_HOME\n", ["built from a variable: A XDG_CONFIG_HOME"]),
+    ("ENV XDG\\_CONFIG_HOME=/opt/c\n", ["built from a variable: XDG\\_CONFIG_HOME=/opt/c"]),
+    ("ENV XDG_CONFIG_HOME /opt/c\n", ["built from a variable: XDG_CONFIG_HOME /opt/c"]),
+    ("RUN printf x > /etc/xdg/pip/pip.c''onf\n", ["environment or config: printf x > /etc/xdg/pip/pip.c''onf"]),
+    ("ENV PIP_NO_CACHE_DIR=1\n", ["environment or config: PIP_NO_CACHE_DIR=1"]),
+    ("ENV DEBIAN_FRONTEND=noninteractive PATH=/opt/venv/bin:$PATH\n", []),
+], ids=["none", "env-index", "arg-extra-index", "pip-conf", "pip-config-set", "copy-from-a-stage",
+        "onbuild-install-by-name",
+        "onbuild-in-lower-case",
+        "onbuild-cache-mount",
+        "onbuild-bind-mount",
+        "onbuild-keyword-ended-by-a-tab",
+        "env-index-with-an-escaped-name",
+        "env-name-built-from-an-arg",
+        "env-name-that-is-a-variable",
+        "env-requirement-option",
+        "env-requirement-option-in-the-legacy-form",
+        "env-xdg-config-dirs",
+        "onbuild-env-xdg-config-home",
+        "arg-xdg-config-home-with-no-value",
+        "arg-of-two-names-one-moving-pips-config",
+        "env-xdg-config-home-with-an-escaped-name",
+        "env-xdg-config-home-in-the-legacy-form",
+        "a-quote-inside-a-pip-conf-name",
+        "env-no-cache-dir-sound-but-refused",
+        "env-of-other-names-and-a-value-holding-a-variable"])
 def test_the_pip_check_reads_pips_environment_and_config(text, expected):
     """An index named in pip's environment (`ENV`/`ARG PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, …), a copied
     `pip.conf`, or a `pip config set` is flagged in a Dockerfile that runs a `pip install`: pip reads each before its
     command line, so the install's own words name no index while one is used. A `COPY --from=` a build stage passes:
-    `--from` is COPY's flag, and only a RUN's flags can put a config in front of the install. Guards an index the
-    per-command read cannot see (T29's fold-2 read, N4: `ENV PIP_INDEX_URL` passed), and a flag of another
-    instruction refused as a RUN's (fold 17's mutant run: RF3)."""
+    `--from` is COPY's flag, and of the flags, only a RUN's can put a config in front of the install (a COPY of a
+    directory that holds one can too, a limit the module docstring names). Guards an index the per-command read cannot
+    see (T29's fold-2 read, N4: `ENV PIP_INDEX_URL` passed), and a flag of another instruction refused as a RUN's (fold
+    17's mutant run: RF3). Fold 19 added (read 170, S3 and S4): an ONBUILD's RUN read as a RUN (an install by name, its
+    keyword in any case or ended by a tab, and a mount: BuildKit runs it in each stage built FROM this one); pip's
+    settings read with their quotes and backslashes removed (`ENV PIP\\_INDEX_URL=…`, `pip.c''onf`), and every `PIP_…`
+    option (`PIP_REQUIREMENT` names a file that can name an index), in the legacy `ENV NAME value` form too; and an ENV
+    or ARG that moves pip's config directory (`XDG_CONFIG_DIRS`, an ONBUILD's `XDG_CONFIG_HOME`, an ARG's with no value
+    or beside another name, one with an escaped letter, one in the legacy form) or whose name is built from a variable
+    (`ENV ${N}EX_URL=…`). It refuses, although sound, `ENV PIP_NO_CACHE_DIR=1`, and passes other names and a value
+    holding a variable (`PATH=/opt/venv/bin:$PATH`)."""
     faults = pip_install_faults(text + "RUN " + _INSTALL + " && python3 -m pip check\n")
     assert _found(faults, expected), faults
 
@@ -2004,6 +2172,7 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
     ("RUN --mo\\\nunt=type=secret,id=s,env=TOOL_SHA256 " + _GET + " && " + _SUM,
      ["a download no later sha256sum -c checks "]),
     ("RUN --mount=type=secret,id=s,\\\nenv=OTHER_TOKEN " + _GET + " && " + _SUM, []),
+    ("ONBUILD ADD https://x.test/tool /usr/local/bin/tool", ["ADD from a URL"]),
 ], ids=["curl-checked", "wget-checked", "apt-package", "add-checksum", "add-url", "path-prefix-unchecked",
         "piped-to-sh", "check-or-true", "wget-in-an-if", "checks-another-file", "remote-name", "in-a-substitution",
         "checked-before", "summed-not-checked", "or-true-at-the-end", "semicolon-later", "check-as-a-condition",
@@ -2056,7 +2225,8 @@ _SIDECAR = "curl -fsSL https://x.test/tool.sha256 -o /tmp/tool.sha256"
         "digest-name-a-secret-mount-sets-past-a-continuation", "digest-name-a-secret-mount-sets-past-a-comment-line",
         "digest-name-a-secret-mount-sets-with-an-escaped-key-letter",
         "digest-name-a-secret-mount-sets-past-a-continuation-in-its-flag",
-        "another-name-a-secret-mount-sets-past-a-continuation"])
+        "another-name-a-secret-mount-sets-past-a-continuation",
+        "onbuild-add-url"])
 def test_the_download_check_tells_a_checked_download_from_a_near_miss(text, expected):
     """The download check flags an ADD from a URL with no checksum, a download behind a path prefix or inside an `if`
     that nothing checks, a download piped to a shell, one to curl's remote name or captured by `$(…)`, a check of
@@ -2123,7 +2293,7 @@ def test_the_download_check_tells_a_checked_download_from_a_near_miss(text, expe
     N1; its read B, N2, N8: NM1, NM3, NM5; fold 6's read A, S1, S4, S6; its read B, S1, S3, N4: FA1, MA2; fold 7's read
     A, S2, N1; fold 8's read B, N1, N4: SH1; fold 11's read A, N2; its read B, S3; fold 13's mutant run: X13O; its read
     A, S4; fold 14's mutants: ME1 to ME4, OB1; its read A, S1; fold 15's mutant run: ME4, MK5, TN4; fold 15's read A,
-    S4)."""
+    S4). Fold 19 added (read 170, S3): an ONBUILD's ADD from a URL with no checksum."""
     faults = download_faults(_TREE + text + "\n")
     assert _found(faults, expected), faults
 
