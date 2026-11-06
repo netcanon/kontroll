@@ -63,38 +63,39 @@ were built from was not.
   can hold, `ex${IFS/#/it}0`, each gap an expansion leaves glued to a word on both sides read as empty and as a space
   apart from the others, `ex${x}it${IFS}0`, a `)` or `}` that a quote, an escape, a case pattern, quoted or escaped
   itself, or an inner substitution holds closing nothing, `e${x:+$(echo })}xit 0`, `ex$(case a in ")") 1;; esac)it 0`, a
-  case pattern the check cannot read refusing the command whatever it holds (a `case` word no `esac` follows reads as
-  one, so the sound `$(echo case x)` is refused too), a decoy `esac` in an argument, a pattern or a `${…}` evening
-  nothing, `e$(: esac; case a in $(echo ')')) :;; esac)xit 0`, a gap inside double quotes under an `eval`, which reads
-  the string again (so the sound `eval "export X=${HOME}"` is refused too), however it is spelt, `\eval
-  "ex${x}it${IFS}0"`, a bare `{` inside a `${…}` read as a character, `ex${x+{}it 0`, and a `'` inside a double-quoted
-  `${…}` read as POSIX sh reads it, `ex"${x:+y'}"''it 0`; and any `$-`, whose option letters can spell `exit` or `set`,
-  `set -e; $-xit 0`), or a brace list the check cannot read (an item holding a nested substitution or parameter, or one
-  an operator inside a quote or a substitution cuts) keeps from failing the build; a download naming more than one URL
-  or output; a comment inside a `RUN`; a `SHELL` other than Docker's default; a whitespace character other than a space,
-  a tab or a line feed; a `sha256sum` named by a path other than `/bin/` or `/usr/bin/`; or a checksum not held in the
-  tree, a variable holding one only where no `ARG` or `ENV` (an `ONBUILD` one too) gives it another value or none, it is
-  no build arg Docker predefines and no `--mount=` option's `env=` sets it, however it is cased, quoted, escaped or
-  continued, so a `--build-arg` cannot stand in for it), never because one is old. It reads a Dockerfile's lines as
-  BuildKit joins them, and an `ONBUILD` as the instruction it holds (BuildKit runs it in each stage built FROM this one;
-  a stage name or an `ARG` default there is the later build's, so it is refused), and refuses every `RUN` flag in a
-  Dockerfile that installs with pip, a cache mount (`--mount=type=cache,target=/root/.cache/pip`) too, since a mount can
-  put a `pip.conf` or a planted wheel in front of the install, and there pip's environment and config read with their
-  quotes and backslashes removed: any `PIP_…` word (pip reads every long option from one: `PIP_REQUIREMENT` names a file
-  that can name an index; `ENV PIP_NO_CACHE_DIR=1` is refused too), a `pip.conf`, `pip config`, and an `ENV` or `ARG`
-  that moves pip's config directory (`XDG_CONFIG_…`) or whose name is built from a variable.
-  `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same rules, reading its `run:` whole (a `#` inside a
-  `${…}` cuts no line, but for one inside a `$(…)` there) and as bash expands its braces (a command word `{exit,0}` or
-  `{e..e}xit 0` builds, and one left once every expansion is removed, or read as a space, all but `$#`, `$?` and `$$`);
-  the step must name its shell under any runner that is not a named Linux or macOS one (a Windows image, a list with no
-  OS label or an expression in it, no `runs-on`), may hold no `${{` expression (in a comment too), no odd whitespace, no
-  `#` right after a `)`, no newline inside a quoted string, no `'` inside a double-quoted `${…}` (bash pairs it as a
-  quote where sh reads a character, so the two end a comment apart) and no C0 control character that is not whitespace,
-  and run under no env key, in any case (a Windows runner reads `Path` as `PATH`), that changes what it runs
-  (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`,
-  `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) and no job `container:`, and the pip-audit job now
-  names its shell (`bash`), since a repository variable picks its runner. The refresh procedure is `docker/README.md` §
-  Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+  case pattern the check cannot read refusing the command (a `case` word no `esac` follows reads as one, so the sound
+  `$(echo case x)` is refused too), a decoy `esac` in an argument, a pattern, a `${…}`, a `$[…]`, a redirect's word or a
+  `[[ … ]]` evening nothing, `e$(: esac; case a in $(echo ')')) :;; esac)xit 0`, `e$(: >&esac; case …`, a gap inside
+  double quotes under an `eval`, which reads the string again (so the sound `eval "export X=${HOME}"` is refused too),
+  spelt with a quote or a backslash, or with an expansion glued into it or splitting it off, `\eval "ex${x}it${IFS}0"`,
+  `ev${x}al "ex${y}it${IFS}0"`, `command${IFS}eval …`, a bare `{` inside a `${…}` read as a character, `ex${x+{}it 0`,
+  and a `'` inside a double-quoted `${…}` read as POSIX sh reads it, `ex"${x:+y'}"''it 0`; and any `$-`, whose option
+  letters can spell `exit` or `set`, `set -e; $-xit 0`), or a brace list the check cannot read (an item holding a nested
+  substitution or parameter, or one an operator inside a quote or a substitution cuts) keeps from failing the build; a
+  download naming more than one URL or output; a comment inside a `RUN`; a `SHELL` other than Docker's default; a
+  whitespace character other than a space, a tab or a line feed; a `sha256sum` named by a path other than `/bin/` or
+  `/usr/bin/`; or a checksum not held in the tree, a variable holding one only where no `ARG` or `ENV` (an `ONBUILD` one
+  too) gives it another value or none, it is no build arg Docker predefines and no `--mount=` option's `env=` sets it,
+  however it is cased, quoted, escaped or continued, so a `--build-arg` cannot stand in for it), never because one is
+  old. It reads a Dockerfile's lines as BuildKit joins them, and an `ONBUILD` as the instruction it holds (BuildKit runs
+  it in each stage built FROM this one; a stage name or an `ARG` default there is the later build's, so it is refused),
+  and refuses every `RUN` flag in a Dockerfile that installs with pip, a cache mount
+  (`--mount=type=cache,target=/root/.cache/pip`) too, since a mount can put a `pip.conf` or a planted wheel in front of
+  the install, and there pip's environment and config read with their quotes and backslashes removed: any `PIP_…` word
+  (pip reads every long option from one: `PIP_REQUIREMENT` names a file that can name an index; `ENV PIP_NO_CACHE_DIR=1`
+  is refused too), a `pip.conf`, `pip config`, and an `ENV` or `ARG` that moves pip's config directory (`XDG_CONFIG_…`)
+  or whose name is built from a variable. `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same rules,
+  reading its `run:` whole (a `#` inside a `${…}` cuts no line, but for one inside a `$(…)` there) and as bash expands
+  its braces (a command word `{exit,0}` or `{e..e}xit 0` builds, and one left once every expansion is removed, or read
+  as a space, all but `$#`, `$?` and `$$`); the step must name its shell under any runner that is not a named Linux or
+  macOS one (a Windows image, a list with no OS label or an expression in it, no `runs-on`), may hold no `${{`
+  expression (in a comment too), no odd whitespace, no `#` right after a `)`, no newline inside a quoted string, no `'`
+  inside a double-quoted `${…}` (bash pairs it as a quote where sh reads a character, so the two end a comment apart)
+  and no C0 control character that is not whitespace, and run under no env key, in any case (a Windows runner reads
+  `Path` as `PATH`), that changes what it runs (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`,
+  `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) and no job
+  `container:`, and the pip-audit job now names its shell (`bash`), since a repository variable picks its runner. The
+  refresh procedure is `docker/README.md` § Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
 
 The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is
 in `docker/services/semaphore.yaml`, not the image lock). A box that builds locally also rebuilds the control image

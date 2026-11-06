@@ -8,10 +8,11 @@ upstream published that day: a different Semaphore, a different library in Semap
 saw (L11 F11-4, L17 F17-12). The published images were pinned by digest (docker/images.lock.yml); the bases they were
 built from, and every local build, were not.
 
-These checks read the committed text only. They fail when a pin is MISSING or its check is switched off, never because a
-pin is old — nothing here compares a version with upstream; Dependabot (.github/dependabot.yml) and the refresh
-procedure in docker/README.md move the pins. The host's legacy ansible-core range is held by
-test_fresh_install_compat.py.
+These checks read the committed text only, and hold a build reproducible to its pins (SECURITY.md R-IMG-2): they are no
+sandbox, and a change that runs code at build time can write a config or fetch a file they never read, which review must
+catch. They fail when a pin is MISSING or its check is switched off, never because a pin is old — nothing here compares
+a version with upstream; Dependabot (.github/dependabot.yml) and the refresh procedure in docker/README.md move the
+pins. The host's legacy ansible-core range is held by test_fresh_install_compat.py.
 
 How a Dockerfile is read. A Dockerfile is any file whose name Dependabot's docker fetcher reads as one; every one lives
 under docker/. Its lines are read as BuildKit's parser splits and joins them: split on LF only, a byte-order mark
@@ -58,18 +59,23 @@ install`, `git clone`, `python3 -c 'urllib…'`), the URLs and outputs a curl co
 option at all a `~/.curlrc` or one under `$CURL_HOME`) or a wget input file (`wget -i`), a second URL written without
 its scheme and sent to standard output, a later command that writes the checked file again, a file the RUN sources (`.
 /tmp/env`, which can set a digest name), a pip config that a COPY of a directory or an ADD of an archive puts where pip
-looks (`COPY cfg/ /etc/xdg/pip/`, `ADD cfg.tar /`: no text names the file; an ENV or ARG that moves pip's config
-directory is refused), an environment name built at run time (`n=PIP_INDEX; export ${n}_URL=…`), a checked program that
-an earlier PATH entry shadows (a `sha256sum` an earlier step put in /usr/local/bin), a quote inside a `$(…)` that is
-itself inside double quotes (the reader pairs it with the outer one), a digest ARG one stage declares and another reads,
-a digest name the base image's ENV sets that the RUN assigns a digest on only some paths (the check then reads the
-image's value), and the apt packages, which float inside the pinned base (SECURITY.md R-IMG-2). Refused although sound
-(each fails loudly): a `pip check` in a later RUN than its install, a `pip install` option that takes a value and is not
-named here (its value reads as a package), a check written to a file and read by `sha256sum -c <file>`, a check line
-written with `printf`, a `;` inside a compound (under `set -e`, or the one before a brace group's `}`: `{ a && check;
-}`), a check right before a subshell's `)` (`( install && check )`, behind `&&` or not: the `)` joins the check's
-command, which then reads as no `pip check`), a `;` inside a quoted string after a check (`&& python3 -c "import yaml;
-…"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN (one a brace expansion builds too, `{exit,0}`: sh
+looks (`COPY cfg/ /etc/xdg/pip/`, `ADD cfg.tar /`, a COPY of a directory under a `HOME` an ENV moves: no text names the
+file; an ENV or ARG that moves pip's config directory is refused), a `pip config` whose command word an expansion builds
+(`pi${x}p config set global.index-url …`), a program that writes pip's config (`python3 -c "open('/etc/pip.co'+'nf',
+'w')…"`), a decoy `esac` the case walk reads where a command starts and sh reads none (the walk is not sh's parser: it
+and four other readers in tests/unit/_build_read.py and the pip-audit check, `_scan_gaps`, `_scan_open`, `_ansi_c` and
+`_script`, each scan the text left to right, and one that reads it otherwise than a shell can fail open; one shared
+scanner is the follow-up: read 180, N4), an environment name built at run time (`n=PIP_INDEX; export ${n}_URL=…`), a
+checked program that an earlier PATH entry shadows (a `sha256sum` an earlier step put in /usr/local/bin), a quote inside
+a `$(…)` that is itself inside double quotes (the reader pairs it with the outer one), a digest ARG one stage declares
+and another reads, a digest name the base image's ENV sets that the RUN assigns a digest on only some paths (the check
+then reads the image's value), and the apt packages, which float inside the pinned base (SECURITY.md R-IMG-2). Refused
+although sound (each fails loudly): a `pip check` in a later RUN than its install, a `pip install` option that takes a
+value and is not named here (its value reads as a package), a check written to a file and read by `sha256sum -c <file>`,
+a check line written with `printf`, a `;` inside a compound (under `set -e`, or the one before a brace group's `}`: `{ a
+&& check; }`), a check right before a subshell's `)` (`( install && check )`, behind `&&` or not: the `)` joins the
+check's command, which then reads as no `pip check`), a `;` inside a quoted string after a check (`&& python3 -c "import
+yaml; …"`), an `exit 0`, `exec 2>&1` or `(exit 0)` anywhere in the RUN (one a brace expansion builds too, `{exit,0}`: sh
 expands no brace, so it runs a command not found and goes on (or fails, behind `&&`), while these checks read it as bash
 would), a brace list these checks cannot read (`{exec,true,${x:-${y}}}`: sh runs it as a command not found), a `$-`
 anywhere in the RUN (`echo "$-"`: it holds the option letters a `set` gives, which can build `exit` or `set`), a command
@@ -80,12 +86,13 @@ pattern replacement of an unset variable (`${x/#/exit} 0`: a bad substitution to
 operator's word where sh runs no command word from it (`${x/a/exit} 0`, `${x:+exit} 0` and `${x+exit} 0` with `x` unset,
 `${1:+exit} 0` with no arguments, and `${1=exit} 0`, which sh refuses to assign), an expansion inside double quotes
 glued to `exit` (`exit"$x"0`, `exit"${IFS}"0`: quoted, an expansion splits no word, but for a `$@` between two of its
-arguments), a gap inside double quotes in a command holding the word `eval` (`eval "export X=${HOME}"`: eval reads the
-string again, where the gap can be a space or a newline), a bare `{` in an expansion glued to `exit` (`exit${x:+{}} 0`:
-sh runs `exit}`, a command not found, but the expansion is read as a space too, as any is), any `PIP_…` word in a
-Dockerfile that installs with pip (`ENV PIP_NO_CACHE_DIR=1`, `ENV PIP_DISABLE_PIP_VERSION_CHECK=1`, one in a message:
-pip reads every long option from one, read 170, S4), an ONBUILD's `--from=` a stage the later build names, or an image
-through an ARG default, any RUN flag in a Dockerfile that installs with pip, a cache mount at pip's own cache too
+arguments), a gap inside double quotes in a command holding the word `eval`, or a word an expansion's gap glues into one
+or splits one off (`eval "export X=${HOME}"`, `echo${IFS}eval "a${x}"`: eval reads the string again, where the gap can
+be a space or a newline), a bare `{` in an expansion glued to `exit` (`exit${x:+{}} 0`: sh runs `exit}`, a command not
+found, but the expansion is read as a space too, as any is), any `PIP_…` word in a Dockerfile that installs with pip
+(`ENV PIP_NO_CACHE_DIR=1`, `ENV PIP_DISABLE_PIP_VERSION_CHECK=1`, one in a message: pip reads every long option from
+one, read 170, S4), an ONBUILD's `--from=` a stage the later build names, or an image through an ARG default, any RUN
+flag in a Dockerfile that installs with pip, a cache mount at pip's own cache too
 (`--mount=type=cache,target=/root/.cache/pip`, `--network=none`, a bind mount of the requirements file: these checks do
 not read what a mount puts in front of the install, a pip.conf, a planted wheel in a shared cache, or a target an
 earlier RUN made a link), a `set --` given a variable (`set -- $x`), a digest name that an ARG or ENV gives another
@@ -98,9 +105,9 @@ $(true)#x`: one word to sh, a comment inside a RUN to these checks), a `#` after
 #1"`), a SHELL such as hadolint's `["/bin/bash", "-o", "pipefail", "-c"]`, a curl or wget naming two URLs or two
 outputs, a trailing comment on a RUN's last line, a digest ARG redeclared without its value in a later stage, and an
 unquoted `case` followed by a blank inside a `$(…)` that opens no case (`$(echo case x)`: these checks refuse a case
-pattern they cannot read, whatever it holds, and read such a word as a case whose `esac` has not come), and a case in a
-`$(…)` whose last branch is empty or that has none (`$(case a in x) esac)`, `$(case a in esac)`: these checks count an
-`esac` only after `;` or `&`, so a decoy one evens nothing, read 170, B1)."""
+pattern they cannot read and read such a word as a case whose `esac` has not come), and a case in a `$(…)` whose last
+branch is empty or that has none (`$(case a in x) esac)`, `$(case a in esac)`: these checks count an `esac` only after
+`;` or a lone `&`, so a decoy one evens nothing in the shapes their rows hold, read 170, B1, and read 180, B1)."""
 import json
 import os
 import re
@@ -1484,6 +1491,48 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
       "pip check shares the RUN with `\\eval \"ex${x}it${IFS}0\"`"]),
     ("true; export PIP_REQUIREMENT=/tmp/x.txt; " + _INSTALL + " && python3 -m pip check",
      ["environment or config: true; export PIP_REQUIREMENT="]),
+    ("true; se$(: >&esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: >&esac ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: >&esac ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(: >& esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: >& esac ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: >& esac ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(: <&esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: <&esac ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: <&esac ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(: 2>&esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: 2>&esac ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: 2>&esac ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(: >&esac; case a in ${x:-)}) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: >&esac ; case a in ${x:-)}) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: >&esac ; case a in ${x:-)}) 1 ; esac)t -n`"]),
+    ("true; se$(echo >&esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(echo >&esac ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(echo >&esac ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; se$(:; $[0]esac; case a in $(echo ')')) 1;; esac)t -n; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `se$(: ; $[0]esac ; case a in $(echo ')')) 1 ; esac)t -n`",
+      "pip check shares the RUN with `se$(: ; $[0]esac ; case a in $(echo ')')) 1 ; esac)t -n`"]),
+    ("true; ev${x}al \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `ev${x}al \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `ev${x}al \"ex${y}it${IFS}0\"`"]),
+    ("true; ev$(:)al \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `ev$(:)al \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `ev$(:)al \"ex${y}it${IFS}0\"`"]),
+    ("true; ev$@al \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `ev$@al \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `ev$@al \"ex${y}it${IFS}0\"`"]),
+    ("true; ev`:`al \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `ev`:`al \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `ev`:`al \"ex${y}it${IFS}0\"`"]),
+    ("true; ev$1al \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `ev$1al \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `ev$1al \"ex${y}it${IFS}0\"`"]),
+    ("true; ${x}eval \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `${x}eval \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `${x}eval \"ex${y}it${IFS}0\"`"]),
+    ("true; command${IFS}eval \"ex${y}it${IFS}0\"; " + _INSTALL + " && python3 -m pip check",
+     ["pip install shares the RUN with `command${IFS}eval \"ex${y}it${IFS}0\"`",
+      "pip check shares the RUN with `command${IFS}eval \"ex${y}it${IFS}0\"`"]),
 ], ids=["module", "venv-pip", "bare", "option-first", "versioned-pip", "uv", "check-or-true", "install-then-semicolon",
         "check-then-semicolon", "check-piped", "check-another-pip", "no-no-deps", "extra-index", "behind-or",
         "set-e-semicolons", "set-e-or-true", "or-true-at-the-end", "semicolon-later", "set-e-not-last-of-its-list",
@@ -1601,7 +1650,21 @@ _INSTALL = "python3 -m pip install --no-deps -r /tmp/r.txt"
         "set-n-split-by-a-case-after-a-decoy-esac-argument",
         "set-n-split-by-a-case-after-a-decoy-esac-in-a-default",
         "exit-built-by-an-escaped-eval",
-        "a-pip-option-exported-before-the-install"])
+        "a-pip-option-exported-before-the-install",
+        "set-n-split-by-a-case-after-a-decoy-esac-as-a-redirects-word",
+        "set-n-split-by-a-case-after-a-decoy-esac-as-a-redirects-word-after-a-blank",
+        "set-n-split-by-a-case-after-a-decoy-esac-as-an-input-redirects-word",
+        "set-n-split-by-a-case-after-a-decoy-esac-as-a-numbered-redirects-word",
+        "set-n-split-by-a-case-whose-default-pattern-follows-a-decoy-esac-as-a-redirects-word",
+        "set-n-split-by-a-case-after-a-decoy-esac-as-an-echos-redirects-word",
+        "set-n-split-by-a-case-after-a-decoy-esac-glued-to-a-bash-arithmetic-bracket",
+        "exit-built-by-an-eval-glued-around-an-unset-variable",
+        "exit-built-by-an-eval-glued-around-an-empty-substitution",
+        "exit-built-by-an-eval-glued-around-a-dollar-at",
+        "exit-built-by-an-eval-glued-around-an-empty-backquoted-command",
+        "exit-built-by-an-eval-glued-around-a-positional-parameter",
+        "exit-built-by-an-eval-after-an-unset-variable",
+        "exit-built-by-an-eval-that-command-runs-across-an-ifs"])
 def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     """The pip check flags an install that names a package (with an option before `install`, a versioned pip, `uv pip`,
     or an `-e`/`--editable` project), lacks `--no-deps`, names an index (in full, by an unambiguous prefix, attached to
@@ -1713,7 +1776,9 @@ def test_the_pip_check_tells_a_pinned_install_from_a_near_miss(run, expected):
     run: SG2, SG7, SO4; fold 17's settle read, the case pattern it cannot read). Fold 19 added (read 170): the decoy
     `esac` texts in a RUN (`se$(: esac; case a in $(echo ')')) 1;; esac)t -n`: B1), an escaped `eval` (S2), and a pip
     option exported in the install's own RUN (`export PIP_REQUIREMENT=…`, a file that can name an index: S4); from read
-    171, the four case patterns it found no row held (S1)."""
+    171, the four case patterns it found no row held (S1). Fold 20 added (read 180): the same decoy `esac` after a
+    redirect's `&` as a RUN (`se$(: >&esac; case a in $(echo ')')) 1;; esac)t -n`: B1), and an `eval` an expansion glues
+    into or one splits off (S1)."""
     faults = pip_install_faults("RUN " + run + "\n")
     assert _found(faults, expected), faults
 

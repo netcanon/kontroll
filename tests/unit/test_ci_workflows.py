@@ -1414,6 +1414,47 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
      ["shares the step with `e\\val \"ex${x}it${IFS}0\"`"]),
     ({"run": "true\n'eval' \"ex${x}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
      ["shares the step with `'eval' \"ex${x}it${IFS}0\"`"]),
+    ({"run": "true\ne$(: >&esac; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: >&esac ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(: >& esac; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: >& esac ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(: <&esac; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: <&esac ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(: 2>&esac; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: 2>&esac ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(: >&esac; case a in ${x:-)}) :;; esac)xit 0\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: >&esac ; case a in ${x:-)}) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(echo >&esac; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(echo >&esac ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$(: $[ ; esac ]; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: $[ ; esac ] ; case a in $(echo ')')) :`"]),
+    ({"run": "true\ne$(: $[ x[0] ; esac ]; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: $[ x[0] ; esac ] ; case a in $(echo ')')) :`"]),
+    ({"run": "true\ne$(:; $[0]esac; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$(: ; $[0]esac ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\ne$([[ a && esac ]]; case a in $(echo ')')) :;; esac)xit 0\n" + _AUDIT}, {},
+     {"docker/a/requirements.txt"},
+     ["shares the step with `e$([[ a && esac ]] ; case a in $(echo ')')) : ; esac)xit 0`"]),
+    ({"run": "true\nev${x}al \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ev${x}al \"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\nev$(:)al \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ev$(:)al \"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\nev$@al \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ev$@al \"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\nev`:`al \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ev`:`al \"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\nev$1al \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `ev$1al \"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\n${x}eval \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `${x}eval \"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\ncommand${IFS}eval \"ex${y}it${IFS}0\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `command${IFS}eval \"ex${y}it${IFS}0\"`"]),
+    ({"run": "true\necho${IFS}eval \"a${x}\"\n" + _AUDIT}, {}, {"docker/a/requirements.txt"},
+     ["shares the step with `echo${IFS}eval \"a${x}\"`"]),
 ], ids=["audit", "install-only", "named-not-run", "commented-out", "or-true", "step-continue", "job-continue",
         "set-plus-e", "conditional", "set-plus-e-in-a-comment", "after-cd", "continued-lines",
         "or-true-on-a-continuation", "piped-to-tee", "another-shell", "job-default-shell", "errexit-switched-off",
@@ -1716,7 +1757,25 @@ _RUNNER = "${{ fromJSON(vars.KONTROLL_RUNS_ON || '\"ubuntu-latest\"') }}"
         "exit-built-by-an-escaped-eval",
         "exit-built-by-a-quoted-eval",
         "exit-built-by-an-eval-with-an-escaped-letter",
-        "exit-built-by-a-single-quoted-eval"])
+        "exit-built-by-a-single-quoted-eval",
+        "exit-split-by-a-case-after-a-decoy-esac-as-a-redirects-word",
+        "exit-split-by-a-case-after-a-decoy-esac-as-a-redirects-word-after-a-blank",
+        "exit-split-by-a-case-after-a-decoy-esac-as-an-input-redirects-word",
+        "exit-split-by-a-case-after-a-decoy-esac-as-a-numbered-redirects-word",
+        "exit-split-by-a-case-whose-default-pattern-follows-a-decoy-esac-as-a-redirects-word",
+        "exit-split-by-a-case-after-a-decoy-esac-as-an-echos-redirects-word",
+        "exit-split-by-a-case-after-a-decoy-esac-in-a-bash-arithmetic-bracket",
+        "exit-split-by-a-case-after-a-decoy-esac-in-a-bash-arithmetic-bracket-holding-a-bracket",
+        "exit-split-by-a-case-after-a-decoy-esac-glued-to-a-bash-arithmetic-bracket",
+        "exit-split-by-a-case-after-a-decoy-esac-in-a-double-bracket-test",
+        "exit-built-by-an-eval-glued-around-an-unset-variable",
+        "exit-built-by-an-eval-glued-around-an-empty-substitution",
+        "exit-built-by-an-eval-glued-around-a-dollar-at",
+        "exit-built-by-an-eval-glued-around-an-empty-backquoted-command",
+        "exit-built-by-an-eval-glued-around-a-positional-parameter",
+        "exit-built-by-an-eval-after-an-unset-variable",
+        "exit-built-by-an-eval-that-command-runs-across-an-ifs",
+        "an-eval-word-an-ifs-splits-off-in-a-message-sound-but-refused"])
 def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read, expected):
     """The pip-audit check reads the files of a live `pip-audit` run (after a `cd … &&`, `--requirement=` too, and
     across backslash continuations), reads nothing from a commented-out run, the step that installs pip-audit or a
@@ -1964,7 +2023,12 @@ def test_the_pip_audit_check_tells_a_live_audit_from_a_dead_one(step, job, read,
     `esac)` and fails, so `e$((${x:-')}'b)${x:+ esac)xit 0` runs `exit 0` and only the reading with its single quotes
     removed refuses it (S2). From fold 19's mutant run: a branch quoting `; esac`, which ends no join, as only its
     quotes keep `_ESAC_WORD` from counting it, so the refusal names the whole command (`e$(case a in $(echo ')')) echo
-    'a; esac b';; esac)xit 0`: CU10)."""
+    'a; esac b';; esac)xit 0`: CU10). Fold 20 added (read 180): a decoy `esac` that a redirect's `&` (`>&esac`,
+    `<&esac`, `2>&esac`, after a blank too), a bash `$[…]` (holding a bracket too) or a `[[ … && … ]]` holds, which the
+    count no longer reads where a command starts (`e$(: >&esac; case a in $(echo ')')) :;; esac)xit 0`: B1), one glued
+    to a `$[…]` (passed on fold 19 too, the bracket's mark keeps it from a command's start), and an `eval` an expansion
+    glues into or one splits off (`ev${x}al "ex${y}it${IFS}0"`, `${x}eval …`, `command${IFS}eval …`: S1), the last
+    refused although sound in a message too (`echo${IFS}eval "a${x}"`)."""
     audited, faults = pip_audit_faults({"jobs": {"a": dict({"runs-on": "ubuntu-latest"}, **job, steps=[step])}})
     assert audited == read
     assert len(faults) == len(expected) and all(e in f for e, f in zip(expected, faults)), faults

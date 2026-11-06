@@ -267,7 +267,9 @@ def _decase(text):
 
 
 _CASE_WORD = re.compile(r"(?<![^\s;&|(`])case(?=\s)")
-_ESAC_WORD = re.compile(r"[;&][ \t]*esac(?=[\s;&|)`]|$)")  # after `;` or `&`, where a command starts: read 170, B1
+# An `esac` where a command starts: after `;`, or after an `&` that is no redirect's (`>&`, `<&`) and no `&&`'s or
+# `|&`'s, after which an `esac` fails to parse or, inside `[[ … ]]`, is a word (read 170, B1; read 180, B1).
+_ESAC_WORD = re.compile(r"(?:;|(?<![<>&|])&)[ \t]*esac(?=[\s;&|)`]|$)")
 
 
 def _case_unread(text):
@@ -275,18 +277,21 @@ def _case_unread(text):
     the `$(…)` or the paren around the case before the `esac`, so every reading ends the substitution there and glues
     nothing (`e$(case a in $(echo ')')) :;; esac)xit 0` runs `exit 0`; so do a pattern `${x:-)}`, one in backquotes
     holding an escaped backquote, and one a `$(…)` nesting two parens: the settle read of fold 17). Read with
-    `_scan_open`'s stack, each frame keeping the text of its own level (each nested quote, backquote, `${…}`, `$(…)` or
-    paren one mark there): a `$(…)`, or a paren inside one, whose own level holds more `case` words than `esac` ones
-    closed early, an `esac` counted only where a command starts (after `;` or `&`: the readers join lines with `;`), so
-    a decoy `esac` in an argument, a pattern, a `${…}` or an inner `$(…)` evens nothing
-    (`e$(: esac; case a in $(echo ')')) :;; esac)xit 0`, `e$(case a in $(echo ')')|esac) :;; esac)xit 0`,
-    `e$(: ${x:-;esac }; case …`: read 170, B1). It fails closed: `_open_subst` reads such a text as open until the
-    case's `esac` is joined (so `_spans` joins the commands up to it, and the audit after it stays its own command) and
-    `_choices` reads it as `exit`, so a pattern `_CASE_PIECE` cannot read is refused, whatever it holds. Refused
-    although sound: an unquoted `case` word followed by a blank inside a `$(…)` that opens no case (`$(echo case x)`),
-    after the check too (`$(echo case)` is passed there, as no blank follows the word; before it, `_left_open`
-    refuses a `$(…)` holding any `case` word, as it did before), and a case whose last branch is empty or that has none
-    (`$(case a in x) esac)`, `$(case a in esac)`), whose `esac` follows no `;` or `&` (read 170, B1)."""
+    `_scan_open`'s stack, each frame keeping the text of its own level (each nested quote, backquote, `${…}`, `$(…)`,
+    bash `$[…]` or paren one mark there): a `$(…)`, or a paren inside one, whose own level holds more `case` words than
+    `esac` ones closed early, an `esac` counted only where a command starts (`_ESAC_WORD`: after `;`, as the readers
+    join lines with `;`, or after a lone `&`), so a decoy `esac` in an argument, a pattern, a `${…}`, an inner `$(…)` or
+    `$[…]`, a redirect's word or a `[[ … ]]` evens nothing (`e$(: esac; case a in $(echo ')')) :;; esac)xit 0`, `e$(case
+    a in $(echo ')')|esac) :;; esac)xit 0`, `e$(: ${x:-;esac }; case …`: read 170, B1; `e$(: >&esac; case …`, `e$(: $[ ;
+    esac ]; case …`, `e$([[ a && esac ]]; case …`: read 180, B1). It fails closed: `_open_subst` reads such a text as
+    open until the case's `esac` is joined (so `_spans` joins the commands up to it, and the audit after it stays its
+    own command) and `_choices` reads it as `exit`, so a pattern `_CASE_PIECE` cannot read is refused in each of these
+    shapes. The walk is not sh's parser: a decoy `esac` it reads where a command starts and sh reads none would even the
+    count (a limit test_image_pins.py's docstring names). Refused although sound: an unquoted `case` word followed by a
+    blank inside a `$(…)` that opens no case (`$(echo case x)`), after the check too (`$(echo case)` is passed there, as
+    no blank follows the word; before it, `_left_open` refuses a `$(…)` holding any `case` word, as it did before), and
+    a case whose last branch is empty or that has none (`$(case a in x) esac)`, `$(case a in esac)`), whose `esac`
+    follows no `;` or lone `&` (read 170, B1)."""
     stack, k = [["", []]], 0  # each frame: its kind and the text of its own level
     while k < len(text):
         ch, top, own = text[k], stack[-1][0], stack[-1][1]
@@ -301,9 +306,15 @@ def _case_unread(text):
             if ch == "`":
                 stack.pop()
                 stack[-1][1].append("\x01")
-        elif ch == "$" and text[k + 1:k + 2] in ("{", "("):
+        elif ch == "$" and text[k + 1:k + 2] in ("{", "(", "["):
             stack.append([text[k + 1], []])
             k += 1
+        elif top == "[":
+            if ch == "[":
+                stack.append(["[", []])
+            elif ch == "]":
+                stack.pop()
+                stack[-1][1].append("\x01")
         elif top == '"':
             if ch == '"':
                 stack.pop()
@@ -460,10 +471,12 @@ def _fills(text):
     command holding the word `eval` with a gap inside double quotes, but for one that is a whole quoted word, is read
     past `_CHOICES` ways: eval reads the string again, so the gap can be a space or a newline (`eval "ex${x}it${IFS}0"`,
     read 160, S3). The word is read with the text's quotes and backslashes removed, as the shell reads a command word
-    (`\\eval`, `"eval"`, `e\\val`: read 170, S2)."""
+    (`\\eval`, `"eval"`, `e\\val`: read 170, S2), and with each gap read as empty and as a space, as the gaps around
+    `exit` are (`ev${x}al`, `${x}eval`, `command${IFS}eval`: read 180, S1)."""
     text = re.sub("[" + _GAP + _GAP_AT + "]+", lambda r: _GAP_AT if _GAP_AT in r.group(0) else _GAP, text)
     parts, quoted, q, k = re.split("[" + _GAP + _GAP_AT + "]", text), [], None, 0
-    evals = _EVAL.search(re.sub(r"""["'\\]""", "", text))
+    plain = re.sub(r"""["'\\]""", "", text)
+    evals = any(_EVAL.search(re.sub("[" + _GAP + _GAP_AT + "]", sep, plain)) for sep in ("", " "))
     while k < len(text):  # whether each gap sits inside double quotes; a backslash before a gap leaves it a gap
         ch = text[k]
         if ch in (_GAP, _GAP_AT):
