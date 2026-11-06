@@ -3,7 +3,8 @@
 Fail-closed in two senses: if no token is configured (KONTROLL_API_TOKEN unset) every privileged
 route is DISABLED (503) — the surface never allows an unauthenticated mutation; and a privileged
 mutation that cannot be audited is REFUSED (503) rather than performed silently. A presented token
-is compared constant-time (`hmac.compare_digest`); a bad/absent token is a 401 with a best-effort
+is compared constant-time (`hmac.compare_digest`), as the bytes the client sent against the configured
+token's; a bad/absent token is a 401 with a best-effort
 `auth-denied` audit line (the token itself is never logged). Mirrors the GUI's fail-closed Basic
 auth (gui/app.py), extended with Bearer tokens + a per-request run_id.
 """
@@ -34,14 +35,22 @@ def _client_ip(request: Request) -> str:
 def require_token(request: Request,
                   creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> Principal:
     """Authenticate a privileged request. No token configured ⇒ 503 (fail-closed; the surface is
-    disabled). Constant-time compare; a bad/absent token ⇒ 401 + a best-effort `auth-denied` audit.
+    disabled). Constant-time compare, of bytes (`hmac.compare_digest` raises on a non-ASCII str, which answered a
+    bare 500 with no audit line): the bytes the client sent (Starlette decodes a header as ISO-8859-1, so `latin-1`
+    gives them back) against the configured token's UTF-8 (`surrogateescape`: the environment's own bytes where they
+    are not UTF-8). A bad/absent token ⇒ 401 + a best-effort `auth-denied` audit.
     On success returns the Principal carrying the request's run_id."""
     settings = request.app.state.settings
     ip, run_id = _client_ip(request), mint_run_id()
     if not settings.api_token:
         raise HTTPException(status_code=503,
                             detail="privileged API disabled: KONTROLL_API_TOKEN is not configured")
-    if not (creds and hmac.compare_digest(creds.credentials, settings.api_token)):
+    # FastAPI's parse trims the token with `str.strip()`, which also takes U+0085 and U+00A0 off (the last byte of a
+    # UTF-8 `à` or `Å`, as Starlette decodes it); so it is read from the header, with RFC 9110's OWS alone trimmed.
+    # `creds` still says the scheme is Bearer.
+    sent = request.headers.get("Authorization", "").partition(" ")[2].strip(" \t") if creds else ""
+    if not (creds and hmac.compare_digest(sent.encode("latin-1"),
+                                          settings.api_token.encode("utf-8", "surrogateescape"))):
         try:
             write_audit(settings.audit_log, "anonymous", ip, "auth-denied", run_id, request.url.path)
         except OSError:

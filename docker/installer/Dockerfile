@@ -12,9 +12,12 @@
 # docker/services/installer.yaml — never an image layer, never a named volume. The repo-root .dockerignore is
 # the guard that keeps instance/ + keys + local/ out of the build context (a Phase-1 test pins it).
 #
-# Build context = repo ROOT (same as docker/semaphore-runner/Dockerfile). The image is built LOCALLY in Phase 1
-# (trusted at the level of today's host toolchain — NOT yet digest-pinned; that rigor is Phase C, synthesis §5.6).
-FROM debian:12-slim
+# Build context = repo ROOT (same as docker/semaphore-runner/Dockerfile). The base is pinned by tag AND digest (the
+# digest is what is pulled); the sops binary is checked against its release checksum and the Python set is one
+# exact pin per package (requirements.txt here). The apt packages still float inside the pinned base: a local
+# build is reproducible to the base plus that day's Debian updates, and the published image's digest
+# (docker/images.lock.yml) is the full pin (SECURITY.md, accepted risks). A bump: docker/README.md § Refreshing a pin.
+FROM debian:12-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -35,9 +38,13 @@ RUN apt-get update -qq \
 # The Docker CLI + compose plugin ONLY — this container DRIVES the host daemon over the bound socket; it never
 # runs a daemon of its own (no docker-ce/containerd). deploy-stack.yml shells `docker compose` + builds the
 # runner/vector images through this CLI against the host socket. The keyring + deb822 .sources mirror
-# scripts/install-prereqs.sh exactly (same Signed-By, no "Conflicting values" if the two ever co-exist).
+# scripts/install-prereqs.sh exactly (same Signed-By, no "Conflicting values" if the two ever co-exist). The key
+# file's SHA-256 is checked before apt trusts it: a swapped key would let any package through. Docker has served
+# the same key since 2017; if it rotates, this build fails until the new key's checksum is read and pinned here.
+ARG DOCKER_APT_GPG_SHA256=1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
 RUN install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+ && echo "$DOCKER_APT_GPG_SHA256  /etc/apt/keyrings/docker.asc" | sha256sum -c - \
  && chmod a+r /etc/apt/keyrings/docker.asc \
  && printf 'Types: deb\nURIs: https://download.docker.com/linux/debian\nSuites: bookworm\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n' \
       "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/docker.sources \
@@ -48,17 +55,32 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 
 # sops is NOT in Debian apt — the pinned GitHub release, in lock-step with scripts/install-prereqs.sh +
 # bootstrap.yml's sops_version. community.sops shells out to this binary to decrypt the SOPS service domains.
+# Each architecture's SHA-256 is the release's own checksums file (sops-<version>.checksums.txt); a swapped
+# asset fails the build before it is made executable. A version bump changes all three ARGs together.
 ARG SOPS_VERSION=v3.13.1
-RUN curl -fsSL "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.$(dpkg --print-architecture)" \
+ARG SOPS_SHA256_AMD64=620a9d7e3352ababeca6908cea24a6e8b14ce89a448ddbd3f94f1ef3398f470a
+ARG SOPS_SHA256_ARM64=19576fb1734dbf8fb77eda0cf0f3a2218f99bf4d33b814318e5e10d6babb9820
+RUN arch="$(dpkg --print-architecture)" \
+ && case "$arch" in amd64) sha="$SOPS_SHA256_AMD64" ;; arm64) sha="$SOPS_SHA256_ARM64" ;; \
+      *) echo "FATAL: no sops checksum for $arch" >&2; exit 1 ;; esac \
+ && curl -fsSL "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/sops-${SOPS_VERSION}.linux.${arch}" \
       -o /usr/local/bin/sops \
+ && echo "$sha  /usr/local/bin/sops" | sha256sum -c - \
  && chmod 0755 /usr/local/bin/sops
 
-# ansible-core via pip, pinned to the SAME range install-prereqs.sh used on the host (>=2.16 for deploy-stack's
-# ansible.builtin.deb822_repository). ansible-lint for the future `validate` verb (synthesis §4.1). The `docker`
-# Python SDK is the RUNTIME dependency of community.docker's docker_network / docker_image_build modules deploy-stack
-# uses (it pulls in requests; without it the play fails "No module named 'requests'" — dogfood-caught 2026-06-29).
+# ansible-core, ansible-lint and the `docker` SDK via pip, from requirements.txt here: one exact pin per package,
+# the three and their dependencies. ansible-core is the version the published v0.1.2 installer carries, inside the
+# range install-prereqs.sh puts on the host (>=2.16 for deploy-stack's ansible.builtin.deb822_repository; the
+# range is pinned by tests/unit/test_fresh_install_compat.py). ansible-lint for the future `validate` verb
+# (synthesis §4.1). The `docker` SDK is the RUNTIME dependency of community.docker's docker_network /
+# docker_image_build modules deploy-stack uses (it pulls in requests; without it the play fails "No module named
+# 'requests'" — dogfood-caught 2026-06-29). `--no-deps` installs nothing the file does not name; `pip check` fails
+# the build if the set is incomplete. Copied alone, before the repo, so a source edit keeps this layer cached.
 # debian:12 python is externally-managed ⇒ --break-system-packages (single-purpose image, no other Python tenant).
-RUN python3 -m pip install --break-system-packages --no-cache-dir "ansible-core>=2.16,<2.19" ansible-lint docker
+COPY docker/installer/requirements.txt /tmp/requirements.txt
+RUN python3 -m pip install --break-system-packages --no-cache-dir --no-deps -r /tmp/requirements.txt \
+ && python3 -m pip check \
+ && rm -f /tmp/requirements.txt
 
 # The repo (playbooks + scripts + modules). The .dockerignore (repo root) keeps instance/, secrets, keys, local/,
 # .git, and docs/reviews OUT. NOTE: at run time docker/services/installer.yaml binds the host /repo over /repo,

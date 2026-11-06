@@ -435,7 +435,8 @@
           {% endif %}
           {# Gated custom Vector image (stock + openssh-client) — emitted ONLY when a class declares file_tail_ssh
              (its exec-ssh source needs an ssh client the stock image lacks). Absent => compose uses the stock
-             pinned default (${KONTROLL_VECTOR_IMAGE:-timberio/vector:0.56.0-debian} in docker/services/vector.yaml). #}
+             pinned default (${KONTROLL_VECTOR_IMAGE:-timberio/vector:0.56.0-debian@sha256:…} in
+             docker/services/vector.yaml). #}
           {% if (_file_tail_ssh_decls.matched | default(0)) | int > 0 and not use_published_images %}
           KONTROLL_VECTOR_IMAGE=kontroll/vector:latest
           {% endif %}

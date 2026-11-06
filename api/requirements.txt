@@ -1,5 +1,8 @@
 # kontroll onboarding API runtime deps. The service layer it wraps (scripts/kontroll/) is local
 # (on sys.path via api/__init__.py), so it isn't a pip dep. Kept tiny, like the GUI's.
+# These are development FLOORS. What the control image runs is docker/semaphore-runner/requirements.txt (exact
+# pins); tests/unit/test_image_pins.py holds that every package named here ships there or in the image's base.
+# Plain uvicorn, as the image installs it: the [standard] extra's event loop and parsers are not shipped.
 fastapi>=0.110
-uvicorn[standard]>=0.27
+uvicorn>=0.27
 PyYAML>=6

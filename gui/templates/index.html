@@ -71,16 +71,16 @@
 <main>
   <div class="bar">
     <input id="q" data-testid="search-input" placeholder="e.g.  cisco ios   ·   arista   ·   mikrotik" autofocus>
-    <button class="go" onclick="search()" data-testid="search-btn">Search</button>
+    <button class="go" data-testid="search-btn">Search</button>
     <label class="row" title="Deep-probe local matches (slower; resolves ? cells)"><input type="checkbox" id="deep" data-testid="search-deep"> deep</label>
-    <button data-testid="fleet-open" onclick="openFleetPanel()" title="Index — the control-plane services + what you've onboarded; jump to each class's dialogs">Index</button>
-    <button data-testid="pending-open" onclick="openPendingPanel()" title="Proposals staged and awaiting promotion — copy a proposal's <run id>@<commit id> into the Semaphore promote-proposal task">Pending</button>
-    <button data-testid="discovery-open" onclick="openDiscoveryPanel()" title="Devices the network sees but you haven't onboarded — click Onboard this to pre-fill the host into the onboard form">Discovery</button>
-    <button data-testid="backup-open" onclick="openBackupPanel()" title="View + diff device config backups (read-only; secrets masked best-effort)">Backups</button>
-    <button data-testid="secrets-open" onclick="openSecretsPicker()" title="Enter service/infra secrets (encrypted to SOPS, staged)">Secrets</button>
-    <button data-testid="keygen-open" onclick="openKeygenPicker()" title="Generate an age key (break-glass / Semaphore / control rotation) — private shown once">Keys</button>
-    <button data-testid="settings-open" onclick="openSettingsPanel()" title="Platform settings — your instance's identity, fleet, backup, and status (read-only)">Settings</button>
-    <button data-testid="homepage-open" onclick="openHomepagePanel()" title="Homepage — choose which control-plane tiles appear and reorder the portal sections">Homepage</button>
+    <button data-testid="fleet-open" title="Index — the control-plane services + what you've onboarded; jump to each class's dialogs">Index</button>
+    <button data-testid="pending-open" title="Proposals staged and awaiting promotion — copy a proposal's <run id>@<commit id> into the Semaphore promote-proposal task">Pending</button>
+    <button data-testid="discovery-open" title="Devices the network sees but you haven't onboarded — click Onboard this to pre-fill the host into the onboard form">Discovery</button>
+    <button data-testid="backup-open" title="View + diff device config backups (read-only; secrets masked best-effort)">Backups</button>
+    <button data-testid="secrets-open" title="Enter service/infra secrets (encrypted to SOPS, staged)">Secrets</button>
+    <button data-testid="keygen-open" title="Generate an age key (break-glass / Semaphore / control rotation) — private shown once">Keys</button>
+    <button data-testid="settings-open" title="Platform settings — your instance's identity, fleet, backup, and status (read-only)">Settings</button>
+    <button data-testid="homepage-open" title="Homepage — choose which control-plane tiles appear and reorder the portal sections">Homepage</button>
   </div>
   <div class="hint">Badges: <b>A</b> actuate · <b>B</b> backup · <b>L</b> bespoke/local · <b>T</b> telemetry (scrapable)
     · → suggested backend. ✓ confirmed, ? unknown at this depth.</div>
@@ -91,7 +91,7 @@
        style="display:none;border-left:3px solid #4a90d9;padding-left:8px"></div>
   <div id="results" data-testid="results"></div>
 </main>
-<script>
+<script nonce="{{ csp_nonce }}">
 const HAS_REMOTE = {{ (has_remote | default(false)) | tojson }};   // server: an OFFSITE git remote exists; gates the "push origin" box
 // E(tag, class, html, testid) — testid (optional) sets data-testid so JS-built nodes are
 // test-addressable exactly like static elements (testing-standards.md §3, the data-testid SOP).
@@ -1963,6 +1963,18 @@ async function keygenApply(dlg) {
     : (r.changed ? 'committed to '+(r.target_ref||'main')+' (run_id '+r.run_id+')' : r.note);
   out.appendChild(ET('pre','out', head+'\n'+steps, 'keygen-steps'));
 }
+// The header buttons are bound here, not by handler attributes: the page's script-src is a per-response nonce,
+// which authorises this script element and never an attribute (SECURITY.md C19). `() => f()`, not `= f`: a
+// bare reference would hand the click event to `openBackupPanel(host)` as its host.
+document.querySelector('[data-testid=search-btn]').onclick = () => search();
+document.querySelector('[data-testid=fleet-open]').onclick = () => openFleetPanel();
+document.querySelector('[data-testid=pending-open]').onclick = () => openPendingPanel();
+document.querySelector('[data-testid=discovery-open]').onclick = () => openDiscoveryPanel();
+document.querySelector('[data-testid=backup-open]').onclick = () => openBackupPanel();
+document.querySelector('[data-testid=secrets-open]').onclick = () => openSecretsPicker();
+document.querySelector('[data-testid=keygen-open]').onclick = () => openKeygenPicker();
+document.querySelector('[data-testid=settings-open]').onclick = () => openSettingsPanel();
+document.querySelector('[data-testid=homepage-open]').onclick = () => openHomepagePanel();
 document.getElementById('q').addEventListener('keydown', e => { if(e.key==='Enter') search(); });
 </script>
 </body>

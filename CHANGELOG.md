@@ -65,6 +65,58 @@ classes.
   docs/qa-and-release-pipeline.md (§0, §1, §5, the rollout), docs/testing-standards.md §1,
   docs/engineering-standards.md §1, the backend_raw_ssh and routeros role READMEs (their backup in check mode).
 
+### fix(security): the GUI page runs only the script its response authorises (T23, 2026-11-04)
+
+The page's policy had no `script-src`, so markup that got past the paint rule could run. SECURITY.md C19.
+
+- **Changed.** `GET /` answers `Content-Security-Policy: script-src 'nonce-<n>'; object-src 'none'; base-uri 'none';
+  frame-ancestors 'none'` with a fresh nonce per response, rendered into the page's one `<script>` tag, and
+  `Cache-Control: no-store`. Every other response (each JSON route, the 401, an error the handler sees — also one
+  raised while the page renders) answers `script-src 'none'` with the same three directives. There is no `default-src`
+  and no `style-src`. The nonce is drawn by a template context processor (no route passes it) and reaches one
+  response.
+- **Changed.** The header buttons (search, Index, Pending, Discovery, Backups, Secrets, Keys, Settings, Homepage)
+  are bound from the script instead of `onclick` attributes, which a nonce does not authorise. No `data-testid`
+  moved.
+- **Changed.** The paint gate (`tests/unit/test_card_paint_gate.py`) refuses any handler attribute (a bare call was
+  tolerated) or `javascript:` URL in the static markup, a handler attribute or a `javascript:` URL in a tag of the
+  literal markup the script writes (read as the joined literals spell it, a quote opening a value only right after
+  `=`; SECURITY.md C19 names the tags it misreads), the nonce's expression anywhere in the static markup but the
+  script's tag, and a script element opened with anything but the nonce tag, and the security header test reads the
+  static directives only (`_CSP_STATIC`), refusing a `default-src` or `style-src` there.
+- **Added.** `tests/integration/test_gui_api.py`: the page's header and script tag carry the same fresh nonce and the
+  policy is exactly its four directives, each named once; every other response forbids script, an error the handler
+  sees raised during the render and a response after the page in one app context included; the nonce is 128 bits or
+  more of base64url. `tests/e2e/test_script_policy.py`: neither an injected handler attribute nor an injected script
+  element runs (each with a control that runs it once the header is dropped), and every header button still opens its
+  panel with no policy violation from the page's first byte on.
+
+### fix(security): a credential holding a non-ASCII character is refused, not a 500 (2026-11-04)
+
+`hmac.compare_digest` raises `TypeError` on a str that holds a non-ASCII character, and the GUI's Basic-auth check,
+the API's Bearer check and the promote route's plan-token check each handed it the strings as received. Each now
+compares bytes: the bytes the client sent (the GUI's UTF-8, the API's header as sent), against the configured
+secret's own (as the environment decoded them, so one that is not valid UTF-8 never raises).
+
+- **Fixed.** The GUI answers the right user with a non-ASCII password 401 and audits `auth-denied`; it answered the
+  JSON 500 and audited an `internal-error`, and the browser did not ask again. A configured GUI password holding a
+  non-ASCII character admits its owner; before, every login with the right user raised. A Basic header whose
+  credential is not base64 ASCII (`Basic päss`, which Werkzeug's parse refused with a ValueError) is a 401 too.
+- **Fixed.** The GUI takes a credential from a Basic header alone. Werkzeug reads `username` and `password` from any
+  scheme's parameters, so `Foo username=admin, password=…` (or `Digest …`) admitted the right password.
+- **Fixed.** The API answers a Bearer token holding a non-ASCII character 401 with an `auth-denied` audit line; it
+  answered a bare 500 and audited nothing. A configured token holding one admits its UTF-8 bytes, as the GUI does:
+  the token is read from the header with only spaces and tabs trimmed, since FastAPI's parse strips U+0085 and
+  U+00A0 too (the last byte of `à` or `Å`, as Starlette decodes it), and a byte beside the token that is not its own
+  is refused.
+- **Fixed.** A configured GUI password or API token that is not valid UTF-8 (a hand-written `.env`) answers a 401;
+  every right-user login, and every Bearer request, answered a 500. At the GUI no login can match such a
+  password (a browser sends UTF-8): write the `.env` as UTF-8, as deploy-stack does.
+- **Fixed.** `verify_token` answers a non-ASCII plan token `False`, as its docstring promised, a lone surrogate
+  (a JSON escape) too; it raised, and each promote route answered a 500.
+- **Added.** A test for each, in `tests/integration/test_gui_api.py`, `tests/integration/test_api_auth.py` and
+  `tests/unit/test_promote_token.py`.
+
 ### fix(security): an error body never carries exception text (T20, 2026-11-02)
 
 An exception's message can quote a request value, a path inside the container or a line of a file being parsed.
@@ -112,6 +164,85 @@ value to anyone who opened the file, and a finding printed the matched text.
   message of every commit being merged (the `KONTROLL_LEAK_TOKENS` secret feeds it the same instance tokens).
 - **Fails closed.** A missing scanner or digest list exits 2.
 - **Tests:** `test_listed_personal_identifier_is_caught_by_digest_and_never_printed`; SECURITY.md C21 updated.
+
+### build(docker): every image input is pinned; Dependabot and pip-audit read the pins (T29 / S15a + S50, 2026-10-23)
+
+A rebuild — the project's recovery move — landed on whatever upstream published that day: the runner built `FROM
+semaphoreui/semaphore:latest` and ran a bare `pip install paramiko flask fastapi uvicorn` into Semaphore's ansible
+venv, the installer built on `debian:12-slim` with an `ansible-core>=2.16,<2.19` range and an unchecked sops
+download, and Semaphore's database ran `postgres:16-alpine`. The published images were pinned by digest; what they
+were built from was not.
+
+- **Bases by tag and digest:** `semaphoreui/semaphore:v2.19.17`, `debian:12-slim` and `timberio/vector:0.56.0-debian`
+  (the Dockerfile and the compose default, in lock-step). The Semaphore pin is the release `:latest` named on
+  2026-10-23, so it is not older than the base any box built from (Semaphore migrates its database forward).
+- **Python by exact version:** `docker/semaphore-runner/requirements.txt` (what the control image adds to the base's
+  venv) and `docker/installer/requirements.txt` (ansible-core 2.18.19, the version the published v0.1.2 installer
+  carries, with ansible-lint, the docker SDK and their dependencies), each installed `--no-deps` and followed by
+  `pip check`; the runner also import-checks the paramiko and PyYAML its base ships. certifi moves to 2026.10.19
+  (PYSEC-2026-4320) and filelock to 4.2.1 (CVE-2026-112906 and the other advisories filed against 4.1.0); the
+  published v0.1.2 installer carries the older two until the next release.
+- **apk by minor** (`~=`), with the baked versions printed in the build log; **sops and Docker's apt key by
+  SHA-256** in the installer; **postgres** at `16.15-alpine`.
+- `api/requirements.txt` names plain `uvicorn`, as the image installs it; it and `gui/requirements.txt` stay the
+  development floors, and a test holds that every package they name ships in the image.
+- **Dependabot** covers every Dockerfile's base and both pin files (default strategy: exact pins); **pip-audit**
+  reads the pin files too. The compose tags have no bot: Dependabot's compose fetcher reads no `<service>.yaml`
+  name, so they are bumped by hand, Postgres's included. Promtool and vector in CI are held to the compose tags.
+- `tests/unit/test_image_pins.py` fails when a pin is missing or its check is switched off (a `pip check` or `sha256sum
+  -c` that a later `|| true`, a `;` errexit does not cover, a pipe, a background `&`, a condition, a `$(…)` or quoted
+  string, an ANSI-C `$'…'` before it or in its list, a compound behind `||` or `!`, a function or alias (or a `hash` or
+  `enable` entry) in the `RUN`, a `set -n` or `set -t` (or a `shopt` naming noexec or onecmd, or a `set` or `shopt`
+  given a variable, a backquoted command, a glob or a brace expansion), or a `trap`, `exec`, `return` or `exit 0` (one
+  glued to an expansion that can come out empty or as a space, all but `$#`, `$?` and `$$`, `exit$@` (a `$@` in double
+  quotes too, which splits its word, `set -- '' ''; "e${x}xit$@0"`), `exit${10}`, `exit$x`, `exit$(:|:)`, `exit${IFS}0`,
+  `exit${x:+foo} 0`, each parameter read unset and set empty in every combination, `${y-ex}${x:+foo}it 0`, or read as a
+  parameter's default, alternative, assigned default or pattern replacement, `${1-exit} 0`, `${x:-exit} 0`, `${x:=exit}
+  0`, `${0/*/exit} 0`, `${x:-${y}exit} 0`, too, a replacement's word beside the space the rest of its parameter's value
+  can hold, `ex${IFS/#/it}0`, each gap an expansion leaves glued to a word on both sides read as empty and as a space
+  apart from the others, `ex${x}it${IFS}0`, a `)` or `}` that a quote, an escape, a case pattern, quoted or escaped
+  itself, or an inner substitution holds closing nothing, `e${x:+$(echo })}xit 0`, `ex$(case a in ")") 1;; esac)it 0`, a
+  case pattern the check cannot read refusing the command (a `case` word no `esac` follows reads as one, so the sound
+  `$(echo case x)` is refused too), a decoy `esac` in an argument, a pattern, a `${…}`, a `$[…]`, a redirect's word or a
+  `[[ … ]]` evening nothing, `e$(: esac; case a in $(echo ')')) :;; esac)xit 0`, `e$(: >&esac; case …`, a bash `$[…]`
+  read both as a frame and as the plain text dash reads, a quote inside it a frame of its own, `e$(: $[ ; case …`, `e$(:
+  $[ "]" ; esac ]; case …`, a gap inside double quotes under an `eval`, which reads the string again (so the sound `eval
+  "export X=${HOME}"` is refused too), spelt with a quote or a backslash, or with expansions glued into it or splitting
+  it off, together too, `\eval "ex${x}it${IFS}0"`, `ev${x}al "ex${y}it${IFS}0"`, `command${IFS}eval …`,
+  `ev${x}al${IFS}…`, a bare `{` inside a `${…}` read as a character, `ex${x+{}it 0`, and a `'` inside a double-quoted
+  `${…}` read as POSIX sh reads it, `ex"${x:+y'}"''it 0`; and any `$-`, whose option letters can spell `exit` or `set`,
+  `set -e; $-xit 0`), or a brace list the check cannot read (an item holding a nested substitution or parameter, or one
+  an operator inside a quote or a substitution cuts) keeps from failing the build; a download naming more than one URL
+  or output; a comment inside a `RUN`; a `SHELL` other than Docker's default; a whitespace character other than a space,
+  a tab or a line feed; a `sha256sum` named by a path other than `/bin/` or `/usr/bin/`; or a checksum not held in the
+  tree, a variable holding one only where no `ARG` or `ENV` (an `ONBUILD` one too) gives it another value or none, it is
+  no build arg Docker predefines and no `--mount=` option's `env=` sets it, however it is cased, quoted, escaped or
+  continued, so a `--build-arg` cannot stand in for it), never because one is old. It reads a Dockerfile's lines as
+  BuildKit joins them, and an `ONBUILD` as the instruction it holds (BuildKit runs it in each stage built FROM this one;
+  a stage name or an `ARG` default there is the later build's, so it is refused), and refuses every `RUN` flag in a
+  Dockerfile that installs with pip, a cache mount (`--mount=type=cache,target=/root/.cache/pip`) too, since a mount can
+  put a `pip.conf` or a planted wheel in front of the install, and there pip's environment and config read with their
+  quotes and backslashes removed: any `PIP_…` word (pip reads every long option from one: `PIP_REQUIREMENT` names a file
+  that can name an index; `ENV PIP_NO_CACHE_DIR=1` is refused too), a `pip.conf`, `pip config`, and an `ENV` or `ARG`
+  that moves pip's config directory (`XDG_CONFIG_…`) or whose name is built from a variable.
+  `tests/unit/test_ci_workflows.py` holds the pip-audit step to the same rules, reading its `run:` whole (a `#` inside a
+  `${…}` cuts no line, but for one inside a `$(…)` there) and as bash expands its braces (a command word `{exit,0}` or
+  `{e..e}xit 0` builds, and one left once every expansion is removed, or read as a space, all but `$#`, `$?` and `$$`);
+  the step must name its shell under any runner that is not a named Linux or macOS one (a Windows image, a list with no
+  OS label or an expression in it, no `runs-on`), may hold no `${{` expression (in a comment too), no odd whitespace, no
+  `#` right after a `)`, no newline inside a quoted string, no `'` inside a double-quoted `${…}` (bash pairs it as a
+  quote where sh reads a character, so the two end a comment apart) and no C0 control character that is not whitespace,
+  and run under no env key, in any case (a Windows runner reads `Path` as `PATH`), that changes what it runs
+  (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PATH`, `BASH_FUNC_…`, `PYTHONPATH`, `PYTHONHOME`,
+  `PYTHONUSERBASE`, `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) and no job `container:`, and the pip-audit job now
+  names its shell (`bash`), since a repository variable picks its runner. The refresh procedure is `docker/README.md` §
+  Refreshing a pin; what still floats is SECURITY.md R-IMG-2.
+
+The next deploy pulls `postgres:16.15-alpine` on either path (a minor move inside 16: no dump and restore; its tag is
+in `docker/services/semaphore.yaml`, not the image lock). A box that builds locally also rebuilds the control image
+on the pinned base, and recreates Vector's container once where it runs the stock image (its `image:` now names the
+digest it already runs, so nothing is pulled). A box on the published images keeps its control, Vector and installer
+images until the next release re-pins them.
 
 ### feat(scripts): a new instance gets a break-glass recipient before its first secret, unless the operator declines one (T11, 2026-10-23)
 

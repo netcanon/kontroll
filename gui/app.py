@@ -19,6 +19,7 @@ won't start without a password), **TLS** (set GUI_TLS_CERT/GUI_TLS_KEY), and an
 **audit log** of every action. Still: bind it to the mgmt network only, never expose
 it publicly. See gui/README.md + SECURITY.md.
 """
+import base64
 import functools
 import hmac
 import logging
@@ -30,7 +31,7 @@ import traceback
 import uuid
 from logging.handlers import RotatingFileHandler
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -58,14 +59,49 @@ from kontroll.service.search import service_search  # noqa: E402
 app = Flask(__name__)
 
 
+# The directives every response carries; `script-src` is added per response by _security_headers.
+_CSP_STATIC = "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+
+
+def _script_nonce():
+    """A fresh nonce for the page's one script element (SECURITY.md C19, T23): 18 random bytes, base64url, a new one
+    per response. Set on `g` so the hook below puts the same value in the header. `os.urandom`, not the `secrets`
+    module: this module binds `secrets` to other things (the secret-onboarding service, a local in a route)."""
+    g.csp_nonce = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii")
+    return g.csp_nonce
+
+
+@app.context_processor
+def _csp_nonce_context():
+    """Every template render gets the response's nonce as `csp_nonce`, drawn here on first use. A route therefore
+    renders the page with no nonce argument of its own, and no render path (a second page, a fork's own `index()`)
+    can serve `<script nonce="">` under a `script-src 'none'` header — a page that shows and does nothing."""
+    return {"csp_nonce": g.get("csp_nonce") or _script_nonce()}
+
+
 @app.after_request
 def _security_headers(resp):
     """Defence-in-depth headers on every response. The REAL fix for third-party bytes on the page is painting them
-    with ET()/textContent (see index.html's card()) — this is the second layer, not the first. `script-src` is
-    deliberately ABSENT: index.html carries one large inline <script>, so a `script-src 'self'` would break the page,
-    and relocating that script is a separate change. Shipping the directives that DO hold rather than none of them."""
-    resp.headers.setdefault("Content-Security-Policy",
-                            "object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+    with ET()/textContent (see index.html's card()) — this is the second layer, not the first. The page's
+    `script-src` is the nonce its one inline <script> carries, so markup a value smuggles past the paint rule (an
+    `<img onerror=…>`, a `<script>`) does not run: a nonce authorises a script element, never a handler attribute,
+    and index.html binds its buttons from the script. A response that is not a rendered page gets `script-src
+    'none'`: every JSON route, the 401, and an error a handler sees — also one raised after a render drew a nonce,
+    which answers the JSON 500 below, a body with no script to authorise, or an HTTP error's page (`_unhandled`
+    drops the nonce: an error replaces whatever the request rendered). Flask hands an `abort(response)` and a
+    routing redirect back with no handler, so one raised during a render keeps the nonce on a body that prints
+    none; no template expression here can raise either. The nonce is taken off `g` here, so it reaches one
+    response: `g` belongs to the app context, and one app context can serve more than one request. The page is
+    `no-store`: a cached copy must not outlive its nonce. There is no `default-src` and no `style-src` on purpose —
+    `default-src` would become the fallback for `style-src`, `connect-src` and `img-src`, and the page's `<style>`
+    block and `style` attributes carry no nonce."""
+    nonce = g.pop("csp_nonce", None)
+    if resp.mimetype != "text/html":
+        nonce = None
+    script = ("script-src 'nonce-%s'" % nonce) if nonce else "script-src 'none'"
+    resp.headers.setdefault("Content-Security-Policy", "%s; %s" % (script, _CSP_STATIC))
+    if nonce:
+        resp.headers.setdefault("Cache-Control", "no-store")
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "same-origin")
     return resp
@@ -226,19 +262,33 @@ def _unhandled(exc):
     """An exception a route did not catch ends here, not in Flask's HTML 500 (which the page can only show as
     "request failed", and which Flask logs with the exception's message): the same fixed answer and id as a route's
     own broad `except`. An HTTP error (404, 405, a malformed JSON body's 400) keeps its own response; the two
-    refusals above keep theirs, since Flask picks the most specific handler."""
+    refusals above keep theirs, since Flask picks the most specific handler. An error replaces whatever the request
+    rendered, so the nonce a render drew before it is dropped: an HTTP error raised during the page's render answers
+    Werkzeug's HTML page, which the hook's mimetype check alone would let keep the nonce."""
+    g.pop("csp_nonce", None)
     if isinstance(exc, HTTPException):
         return exc
     return _internal_error("request", exc)
 
 
 def require_auth(fn):
-    """HTTP Basic auth on every route; constant-time compare; fail-closed."""
+    """HTTP Basic auth on every route; constant-time compare; fail-closed. The password is compared as bytes: the
+    UTF-8 the browser sent (Werkzeug decodes it strictly) with the configured password's own bytes (`surrogateescape`,
+    as the environment decoded them, so one that is not valid UTF-8 never raises). `hmac.compare_digest` raises on a
+    str holding a non-ASCII character, which answered a 500 and an `internal-error` audit row for a denied login, and
+    refused every login once the configured password was not ASCII. A header Werkzeug cannot parse is no credential:
+    its base64 decode raises ValueError on a non-ASCII character, which answered the same 500. Nor is one under any
+    scheme but Basic: Werkzeug reads `username` and `password` from any scheme's parameters, so `Foo username=…,
+    password=…` was compared too, its password the Latin-1 of the bytes sent."""
     @functools.wraps(fn)
     def wrapper(*a, **kw):
-        auth = request.authorization
-        ok = (auth and auth.username == GUI_USER
-              and hmac.compare_digest(auth.password or "", GUI_PASSWORD))
+        try:
+            auth = request.authorization
+        except ValueError:             # `Basic <non-ASCII>`: Werkzeug's b64decode raises before any compare
+            auth = None
+        ok = (auth and auth.type == "basic" and auth.username == GUI_USER
+              and hmac.compare_digest((auth.password or "").encode("utf-8"),
+                                      GUI_PASSWORD.encode("utf-8", "surrogateescape")))
         if not ok:
             _audit("auth-denied", request.path)
             return Response("authentication required", 401,
