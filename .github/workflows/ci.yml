@@ -1,7 +1,8 @@
 # CI — the OFFLINE correctness gate. Runs the exact same tests/validate.sh used locally
 # and on the control VM (single source of truth for "is it green"), hermetically: the
-# live lab is NEVER in CI (docs/qa-and-release-pipeline.md). A check-mode run of the plays
-# and the compose-up smoke land here as the QA plan rolls out.
+# live lab is NEVER in CI (docs/qa-and-release-pipeline.md). The validate job also runs
+# the plays in check mode on a fresh node (tests/fresh-node-check.sh); the compose-up smoke
+# lands here as the QA plan rolls out.
 #
 # RUNNERS (public-split, 2026-10-08): every job's `runs-on` is the repository/organization variable
 # KONTROLL_RUNS_ON — a JSON string — and defaults to GitHub-hosted `ubuntu-latest` when the variable is unset.
@@ -107,6 +108,43 @@ jobs:
         # uid 1001): it runs through `sudo -n`, and under --strict a runner without passwordless sudo fails it.
         # A run that is cancelled in that step can leave /tmp/kontroll-drop-* behind, owned by root.
         run: bash tests/validate.sh --strict
+
+      - name: Install age (for the fresh-node check's kontroll-init, which shells age-keygen)
+        # The distribution's package, as bootstrap.yml installs it on a real node; skipped where the check is.
+        if: ${{ !vars.KONTROLL_RUNS_ON }}
+        run: bash .github/scripts/apt-install.sh age
+
+      - name: Install the Docker SDK (for the fresh-node check's deploy passes, as the installer image has it)
+        # deploy-stack looks at images and networks through community.docker, whose library is the `docker` package,
+        # in the Python Ansible runs localhost with; in check mode the runner's daemon is only read. The version is
+        # the installer image's own pin, read from its pin file, so a bump there moves this step too (a line that
+        # is not there leaves `pip install ""`, which fails).
+        if: ${{ !vars.KONTROLL_RUNS_ON }}
+        run: pip install --quiet "$(grep -x 'docker==[0-9.]*' docker/installer/requirements.txt)"
+
+      - name: Install every module's collections (for the fresh-node check's mock inventory, a host per class)
+        # The install above is the example fleet's set (CI has no instance/); the mock inventory has a host for every
+        # shipped class, so the check needs every module's collections, as the published runner image bakes them.
+        # The requirements file goes to the runner's temp dir; the generator also rewrites the checkout's ignored
+        # trust sidecar, which nothing after this step reads (the check runs an export of HEAD).
+        if: ${{ !vars.KONTROLL_RUNS_ON }}
+        run: |
+          set -euo pipefail
+          python3 scripts/gen-requirements.py "$RUNNER_TEMP/all-modules.yml" --all-modules
+          ansible-galaxy collection install -r "$RUNNER_TEMP/all-modules.yml"
+
+      - name: fresh-node check (a new node's install and the fleet plays, evaluated in check mode)
+        # tests/fresh-node-check.sh: every gate above reads the plays or parses them; this one has Ansible EVALUATE
+        # them — deploy-stack (and the local-canonical it imports) and bootstrap against the instance a real
+        # `kontroll-init --fresh` writes, then ping and backup-configs against tests/mock-inventory.yml — in a
+        # throwaway export of HEAD, with HOME moved into it. Not in validate.sh, which also runs on a configured
+        # control node. Skipped where KONTROLL_RUNS_ON is set (the private repository's self-hosted runners):
+        # those are persistent and shared, and the plays' `check_mode: false` reads run there under sudo.
+        if: ${{ !vars.KONTROLL_RUNS_ON }}
+        env:
+          ANSIBLE_DEPRECATION_WARNINGS: "false"
+          PYTHONWARNINGS: "ignore::DeprecationWarning"
+        run: bash tests/fresh-node-check.sh
 
   tests:
     name: pytest (unit · integration · gui) — py${{ matrix.python }}

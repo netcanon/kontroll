@@ -25,14 +25,14 @@ Status legend: ⬜ todo · 🟡 partial (exists, needs lift) · ✅ done.
 | Layer | Today | File |
 |---|---|---|
 | 🟡 L1 lint/validate | yamllint + ansible-lint (`moderate`) + ansible syntax-check + `docker compose config` + promtool + **sops-encrypted check** + **secret-grep** | [tests/validate.sh](../tests/validate.sh) / `.ps1` |
-| ⬜ Role testing | none automated. Roles are parsed by `--syntax-check`; nothing evaluates them. The Molecule scaffold was removed on 2026-10-12: its converge set a flag that every role answered by skipping its device tasks, so its idempotence step could not fail | [tests/mock-inventory.yml](../tests/mock-inventory.yml) |
+| 🟡 Role testing | the fleet plays run every shipped class's `check` and `backup` entrypoint in check mode against `tests/mock-inventory.yml` (CI's fresh-node check, §1); no device answers, so a role is evaluated, not exercised, and nothing re-applies one for idempotence. The Molecule scaffold was removed on 2026-10-12: its converge set a flag that every role answered by skipping its device tasks, so its idempotence step could not fail | [tests/mock-inventory.yml](../tests/mock-inventory.yml) |
 | 🟡 Mock seam | `tests/mock-inventory.yml` (RFC-5737 IPs, `connection: local`) + `tests/e2e/` non-human onboarding fixture | [tests/](../tests/) |
 | ✅ pytest (code half) | `tests/{unit,integration}` over `galaxy.py` + the GUI, fully offline; in `validate` (L2) + a CI matrix job | [tests/README.md](../tests/README.md) |
 | ✅ GitHub Actions | `ci.yml` (validate + pytest **py3.11–3.14**) · `security.yml` (gitleaks history + pip-audit) · **`zizmor.yml` (GHA workflow audit)** · `dependabot.yml`; all checkouts `persist-credentials: false`, hybrid action-pinning policy (`.github/zizmor.yml`) | [../.github/](../.github/) |
 | ✅ Secret hygiene | SOPS+age per-domain, `no_log` convention, secrets gitignored, gitleaks gate | [SECURITY.md](../SECURITY.md) |
 
-The remaining gap vs netcanon: **Python static analysis (ruff/mypy/bandit), a check-mode run of
-the plays in CI, trivy image scanning, and the signed-image release path.** This plan closes those.
+The remaining gap vs netcanon: **Python static analysis (ruff/mypy/bandit),
+trivy image scanning, and the signed-image release path.** This plan closes those.
 
 ---
 
@@ -43,7 +43,7 @@ surfaces: `scripts/galaxy.py` (pure logic + subprocess orchestration) and `gui/`
 The `unit/` + `integration/` layers below are **implemented and green** (fully offline —
 see [tests/README.md](../tests/README.md) "Code-half pytest"); **Playwright GUI e2e**
 (`tests/e2e/test_onboard_flow.py`, a dedicated CI job) is implemented + green too. The ⬜
-items (a check-mode run of the plays in CI, recipe/vector schema tests) remain.
+item (recipe/vector schema tests) remains.
 
 ```
 tests/
@@ -76,10 +76,21 @@ tests/
   `--apply`/`enable_in_fleet`/`sops_set` never touch the real tree.
 
 **kontroll-specific additions:**
-- ⬜ **The plays evaluated in CI** — `ansible-playbook --check` of the install playbooks on a
-  fresh checkout and of the fleet plays against `tests/mock-inventory.yml`, so templating,
-  role dispatch and `set_fact` logic are executed without the lab. Check mode takes the
-  role Molecule was scaffolded for (the scaffold never asserted anything and is gone).
+- ✅ **The plays evaluated in CI** — `tests/fresh-node-check.sh`, a step of `ci.yml`'s validate job:
+  `ansible-playbook --check` of the install playbooks (deploy-stack, the local-canonical it imports,
+  bootstrap; with `KONTROLL_IN_CONTAINER=1` and an operator named, as the installer runs them) against
+  the instance a real `kontroll-init --fresh` writes, in a throwaway export of HEAD with HOME and
+  TMPDIR moved into it, and of the fleet plays (ping, backup-configs) against
+  `tests/mock-inventory.yml`, so templating, role dispatch and `set_fact` logic are executed without
+  the lab. The deploy of every service must fail, and for the one reason a fresh node must refuse (the
+  onboard-gui's age key is missing), then pass with a throwaway key; a step that must pass needs a
+  recap with no failed or unreachable host and its play's last task or summary; ping must rescue, and
+  the backup pass fail, exactly the hosts the script lists, each listed class (its read reaches the
+  device or needs a credential) at that task, ping's each for its listed reason; and the backup pass
+  must write no capture. CI installs every module's collections for it.
+  Not in `validate.sh`, which also runs on a configured control node; skipped where
+  `KONTROLL_RUNS_ON` is set (the self-hosted runners are persistent and shared). Check mode takes
+  the role Molecule was scaffolded for (the scaffold never asserted anything and is gone).
 - ⬜ **Recipe/vector/backend schema tests** — assert every `vectors/*.yml`,
   `ansible/backends/*/backend.yml`, `backends/api/recipes/*.yml` parses and matches its
   contract (the extensibility seam — netcanon's "frozen pipeline signatures" analogue).
@@ -132,7 +143,7 @@ Mirror netcanon's dev loop, enforced locally + in CI:
 
 ---
 
-## 5. CI platform — GitHub Actions (🟡 — as built; the check-mode run and gui-smoke still ⬜)
+## 5. CI platform — GitHub Actions (🟡 — as built; the compose-up smoke still ⬜)
 
 Five workflows (`.github/workflows/`), the same files in the public repository and the private
 instance repository (docs/public-split.md). Every job's `runs-on` is
@@ -163,12 +174,16 @@ protection is one mis-click from a merge). A public repository has no such branc
   secret-grep / gitleaks gates, every `gen-*.py --check`, the test-docstring, document-link and
   port-binding guards, the discovery P-1 fixture gate and the identifier-leak gate (`pii-guard`), and
   `STATUS.md`'s dates (`tests/check-status.py` — a month-old page is a WARN, which never fails the run).
+  Then, where `KONTROLL_RUNS_ON` is unset, the fresh-node check (§1): the install and the fleet plays
+  evaluated in check mode, after steps that install `age` for its `kontroll-init`, the `docker`
+  library for its deploy passes (which read the runner's Docker daemon; check mode leaves it as it was)
+  and every module's collections (`gen-requirements.py --all-modules`) for its mock inventory's hosts.
 - **tests** (matrix Python 3.11–3.14): `pytest -m "not e2e and not slow"` with coverage; the
   shell-outs are mocked (§1), no ansible, no lab.
 - **snmp-modules**: rebuild `modules.generated.yml` with the pinned CGO snmp_exporter generator
   and byte-compare (the no-bespoke gate for the SNMP module).
 - **e2e**: the Playwright suite against the in-process Flask app, headless chromium.
-- ⬜ still planned: a **check-mode run of the plays** (templating, role dispatch) and a **compose-up smoke** (boot
+- ⬜ still planned: a **compose-up smoke** (boot
   the minimal stack, curl the API/GUI health, one onboard dry-run) — the layer the fault ledger
   says would have caught most live faults.
 
@@ -241,7 +256,8 @@ fronted by auth.
 5. 🟡 **`ci.yml`** — the `validate` gate runs hermetically in GitHub Actions (lint +
    secrets + compose-config + ansible-syntax; collections via `scripts/gen-requirements.py`)
    **+ a `tests` matrix job (py3.11–3.13) running the unit/integration pytest suite**.
-   *Next:* the check-mode run + gui-smoke (build the image, curl `/`) as those land.
+   The validate job also runs the fresh-node check (§1). *Next:* the gui-smoke (build the
+   image, curl `/`).
 6. 🟡 **`security.yml`** (gitleaks full-history + pip-audit) **+ `.github/dependabot.yml`**
    (pip + actions + docker) landed. *Next:* bandit + trivy as the GUI/images harden.
 7. ⬜ **ansible-lint `moderate`→`safety`** graduation (already-planned Phase-2 exit action).

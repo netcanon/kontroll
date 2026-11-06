@@ -21,6 +21,11 @@ operator onboards from the Generic SSH host search card.
 Output is `no_log` (captured config may carry secrets). Supply only **read-only**
 commands — this backend runs whatever it's given.
 
+`raw` has no check mode: a `--check` run never reads the device, and the capture
+write previews an empty capture. A real run writes the command's output as before: a
+result with no `stdout` is still an error, but a command that prints nothing writes
+an empty capture.
+
 ## See also
 - [../../backends/raw_ssh/backend.yml](../../backends/raw_ssh/backend.yml) — classifier metadata
 - [../../../docs/capability-matrix.md](../../../docs/capability-matrix.md) — the design

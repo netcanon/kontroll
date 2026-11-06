@@ -2236,6 +2236,62 @@ def test_every_workflow_step_that_runs_apt_goes_through_the_lock_retry():
     assert "bash .github/scripts/apt-install.sh --run python -m playwright install --with-deps chromium" in ci
 
 
+def test_validate_job_runs_the_fresh_node_check():
+    """ci.yml's validate job runs `bash tests/fresh-node-check.sh` as a step of its own, after the step that
+    installs the collections and after the gate itself, with `age` installed by a step before it (kontroll-init
+    shells age-keygen), the `docker` library by another (community.docker's, which the deploy passes need to
+    look at images and networks: T27's first real run failed there without it), and every module's collections by a
+    third, from `gen-requirements.py --all-modules` into the runner's temp dir; the four steps are skipped exactly
+    where KONTROLL_RUNS_ON is set (the private repository's persistent, shared runners), and none is softened
+    (`continue-on-error` on the step or on the job, `|| true`, a `shell:` of its own: each step has only a name, its
+    skip, an env and its run). Guards the one gate that has Ansible evaluate the plays being dropped or
+    neutered in a workflow edit unnoticed, as the promtool and vector checks were skipped on every green run for
+    months (2026-10-08 review); and the check run with the example fleet's collections only, which its mock
+    inventory (a host for every class) outgrows: T27's fold-1 read showed its backup pass then stops at RouterOS's
+    unresolved module on a GitHub-hosted runner, before its summary (B2)."""
+    job = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]
+    steps = job["steps"]
+    assert "continue-on-error" not in job, job.get("continue-on-error")
+    runs = [str(s.get("run", "")).strip() for s in steps]
+    check = [i for i, r in enumerate(runs) if "tests/fresh-node-check.sh" in r]
+    assert len(check) == 1 and runs[check[0]] == "bash tests/fresh-node-check.sh", check
+    i = check[0]
+    age = [j for j, r in enumerate(runs) if r == "bash .github/scripts/apt-install.sh age"]
+    installs = [j for j, r in enumerate(runs) if "ansible-galaxy collection install" in r]
+    collections = [j for j in installs if "--all-modules" not in runs[j]]
+    every = [j for j in installs if "--all-modules" in runs[j]]
+    gate = [j for j, r in enumerate(runs) if r == "bash tests/validate.sh --strict"]
+    sdk = [j for j, r in enumerate(runs) if r.startswith("pip install") and "docker/installer/requirements.txt" in r]
+    assert len(age) == 1 and len(collections) == 1 and len(every) == 1 and len(gate) == 1 and len(sdk) == 1
+    assert collections[0] < gate[0] < every[0] < i and age[0] < i and sdk[0] < i, (collections, gate, every, i)
+    assert runs[every[0]].splitlines() == [
+        "set -euo pipefail",
+        'python3 scripts/gen-requirements.py "$RUNNER_TEMP/all-modules.yml" --all-modules',
+        'ansible-galaxy collection install -r "$RUNNER_TEMP/all-modules.yml"'], runs[every[0]]
+    for j in (age[0], sdk[0], every[0], i):
+        assert steps[j].get("if") == "${{ !vars.KONTROLL_RUNS_ON }}", steps[j]
+        assert "continue-on-error" not in steps[j] and "|| true" not in runs[j], steps[j]
+        assert set(steps[j]) <= {"name", "if", "env", "run"}, sorted(steps[j])
+
+
+def test_the_fresh_node_check_installs_the_installer_images_docker_library():
+    """The validate job's Docker SDK step installs `docker` at the version docker/installer/requirements.txt pins,
+    read from that file (`grep -x 'docker==[0-9.]*'`), and that file holds exactly one such line. Why: the step
+    exists so the fresh-node check's deploy passes see the library the installer image has; it named 7.1.0 as a
+    literal, and T29 pinned the installer's at 7.2.0, so the step's own comment was false the day T27 met main. A
+    literal drifts on every bump of the pin file (Dependabot's included); a read of the file cannot. A file with no
+    such line leaves `pip install ""`, which fails, and two leave one argument with a newline in it, which pip
+    refuses: the count holds it to one, so the file fails here before it fails CI."""
+    steps = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]["steps"]
+    sdk = [s for s in steps if str(s.get("name", "")).startswith("Install the Docker SDK")]
+    assert len(sdk) == 1, [s.get("name") for s in steps]
+    assert str(sdk[0]["run"]).strip() == (
+        'pip install --quiet "$(grep -x \'docker==[0-9.]*\' docker/installer/requirements.txt)"'), sdk[0]["run"]
+    pins = [ln for ln in _read("docker/installer/requirements.txt").splitlines()
+            if re.fullmatch(r"docker==[0-9.]*", ln)]
+    assert len(pins) == 1 and re.fullmatch(r"docker==\d+\.\d+\.\d+", pins[0]), pins
+
+
 def _run_helper(tmp_path, plan, args=("gawk", "mawk"), tries=4, delay="0"):
     """Run the helper with a fake `sudo` (runs its arguments without LC_ALL, as a sudoers that keeps no locale would —
     sudo's default keeps it, so the helper's export and the pair's own `env LC_ALL=C` each prove out only here), a

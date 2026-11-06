@@ -24,7 +24,7 @@ unit-test, but the *shape* maps directly onto infrastructure code:
 | NetConfig layer | kontroll layer | What runs | Speed / when |
 |---|---|---|---|
 | unit (pure, no I/O) | **L1 lint** | `yamllint`, `ansible-lint`, `--syntax-check`, `docker compose config`, `promtool check config`, `sops --verify` | sub-second; every commit (pre-commit + CI) |
-| integration (TestClient, mocked SSH) | **L2 validate** | playbooks parsed against a **mock inventory** (`--syntax-check`); the pytest suite. Evaluating role/playbook logic with `--check --diff` in CI is the open item (docs/qa-and-release-pipeline.md §1) | seconds–minutes; CI on change |
+| integration (TestClient, mocked SSH) | **L2 validate** | playbooks parsed against a **mock inventory** (`--syntax-check`); the pytest suite. In CI, `tests/fresh-node-check.sh` also has Ansible evaluate a fresh node's install and the fleet plays (against the mock inventory) in check mode (docs/qa-and-release-pipeline.md §1) | seconds–minutes; CI on change |
 | e2e (live server, Playwright) | **L3 live smoke** | `ping.yml` reaches the real fleet; post-deploy asserts (service responds, Prometheus target `up`, Homepage 200) | live; manually / Semaphore schedule, never in blind CI |
 | desktop (mocked shell) | **L4 idempotence** | run the play **twice**; second run must report **0 changed** | per role; the IaC analog of determinism |
 

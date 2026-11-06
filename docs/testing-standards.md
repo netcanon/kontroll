@@ -22,6 +22,7 @@ kontroll is a *composed* control plane, so it has two test halves. Both are firs
 |---|---|---|---|---|
 | IaC | **L1 lint** | YAML/Ansible/compose/Prometheus syntax + secret hygiene | `tests/validate.ps1` / `.sh` | every commit (pre-commit + CI) |
 | IaC | **L2 validate** | playbooks parse vs a mock inventory | `--syntax-check` | on change, CI |
+| IaC | **L2 fresh-node check** | a new node's install (`deploy-stack`, `bootstrap`) and the fleet plays (`ping`, `backup-configs`, against the mock inventory) evaluated in check mode | `tests/fresh-node-check.sh` | CI (`validate` job) |
 | Code | **L2 pytest (unit)** | pure `dict→dict` logic + service layer in `scripts/kontroll/` | `pytest tests/unit` | on change, CI |
 | Code | **L2 pytest (integration)** | `galaxy.py` + `gui/app.py` as black boxes, shell-outs mocked | `pytest tests/integration` | on change, CI |
 | Code | **L3 GUI e2e** | the real booted Flask GUI in a headless browser | Playwright (`tests/e2e/`, `e2e` marker) | a dedicated CI job |

@@ -1,29 +1,47 @@
 # Mock inventory for L2 check-mode dry-runs. The SINGLE seam for swapping
 # real ↔ fake (the kontroll analog of NetConfig's FakeCollector). Uses
-# loopback/RFC-5737 doc addresses so a stray live run hits nothing real.
+# RFC-5737 documentation addresses so a stray live run hits nothing real.
 #
 #   ansible-playbook -i tests/mock-inventory.yml playbooks/backup-configs.yml --check
 #
-# Same group structure as inventory/hosts.yml so plays exercise identically.
+# Same functional groups as instance.example/inventory/hosts.yml, and ONE host per
+# shipped device class (modules/<key>/module.yml), in that class's
+# `inventory_group`, with its `role` as the host's `device_role` — so a fleet play
+# dispatches every class's `check` and `backup` entrypoint. Each class has a host
+# of its own, even where two share a group and role
+# (tests/unit/test_mock_inventory.py holds these rules). tests/fresh-node-check.sh
+# runs ping.yml and backup-configs.yml against it in check mode, and lists the
+# hosts ping rescues and those whose backup stops here, and the task each stops at.
+#
+# The LIMIT: `ansible_connection: local` and addresses nothing answers mean no
+# device is contacted. A class's tasks that would reach one fail, are skipped, or
+# are rescued; what a run against this file proves is that the plays EVALUATE
+# (templating, the dispatch, `set_fact`, the summaries), never that a device does.
 all:
   vars:
     ansible_connection: local        # never opens a real SSH/API session
   children:
     edge_firewall:
       hosts:
-        mock-edge: { ansible_host: 192.0.2.1, device_role: cisco_ios }
+        mock-edge: { ansible_host: 192.0.2.1, device_role: opnsense }
+        mock-fortigate: { ansible_host: 192.0.2.4, device_role: fortigate }
     core_switch:
       hosts:
         mock-switch: { ansible_host: 192.0.2.2, device_role: cisco_ios }
+        mock-routeros: { ansible_host: 192.0.2.5, device_role: routeros }
+        mock-xe:
+          ansible_host: 192.0.2.6
+          device_role: backend_netcommon_cli   # the ios_xe_auto class: the generic backend, no class role
+          ansible_network_os: cisco.ios.ios    # its module.yml's backend_params.network_os
     wireless_ap:
       hosts:
         mock-ap: { ansible_host: 192.0.2.3, device_role: openwrt }
     hypervisors:
       hosts:
-        mock-hv: { ansible_host: 192.0.2.10 }
+        mock-hv: { ansible_host: 192.0.2.10, device_role: proxmox }
     docker_hosts:
       hosts:
-        mock-docker: { ansible_host: 192.0.2.20 }
+        mock-docker: { ansible_host: 192.0.2.20, device_role: docker_host }
     network_devices:
       children:
         edge_firewall:

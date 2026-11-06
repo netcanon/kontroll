@@ -19,4 +19,6 @@ RouterOS API / SSH. Creds in `secrets/network.sops.yml`. See
 > `/export show-sensitive` via `community.routeros` (`no_log`); not yet verified
 > against a live device (none in the active fleet). Activated by enabling
 > `routeros` in `instance/fleet.yml` at cutover (dropping `cisco_ios`). **No serial
-> console** — recovery is MAC-Winbox / reset+import.
+> console** — recovery is MAC-Winbox / reset+import. `community.routeros.command`
+> has no check mode (from the collection's 3.0.0): a `--check` run skips the export
+> and the capture write previews an empty capture.

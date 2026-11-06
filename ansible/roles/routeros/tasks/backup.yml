@@ -37,9 +37,13 @@
       changed_when: false
       no_log: true                       # export carries passwords/keys
 
+    # community.routeros.command has no check mode (from the collection's 3.0.0): a --check run skips it, and its
+    # result then has no stdout. The dry-run reads that as an empty capture; a real run reads the export as before
+    # (tests/fresh-node-check.sh's backup step failed here).
     - name: Write capture
       ansible.builtin.copy:
-        content: "{{ ros_export.stdout[0] }}\n"
+        content: "{{ ros_export.stdout | default([]) | first | default('') if ansible_check_mode
+                     else ros_export.stdout[0] }}\n"
         dest: "{{ config_backup_dir }}/{{ _backup_file }}"
         mode: "0640"
       delegate_to: localhost
