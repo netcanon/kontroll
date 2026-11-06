@@ -1,0 +1,27 @@
+# docker/semaphore-runner/requirements.txt — the Python packages the control image adds to the Semaphore base's
+# ansible venv: the whole set, one exact pin each. The Dockerfile installs it with `--no-deps` (nothing this file
+# does not name can be installed or moved) and then runs `pip check` (the build fails if the set is incomplete or
+# conflicts with the base). Produced by docker/README.md § Refreshing a pin — the difference between `pip freeze`
+# in the bare base's venv and `pip freeze` after installing flask, fastapi, uvicorn, paramiko and PyYAML — and
+# never edited by hand without that rebuild. paramiko and PyYAML come with the base; the Dockerfile's import line
+# fails the build if a new base drops either. gui/requirements.txt and api/requirements.txt stay the development
+# floors; tests/unit/test_image_pins.py holds that every package they name is here or in the base.
+# Hash pins (--require-hashes) are the next rung, not this one: they need every wheel's hash for each platform the
+# publish workflow can build, and nothing in the repo produces them yet.
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+blinker==1.9.0
+click==8.5.0
+fastapi==0.161.1
+Flask==3.1.3
+h11==0.16.0
+itsdangerous==2.2.0
+opentelemetry-api==1.45.1
+pydantic==2.14.1
+pydantic_core==2.50.1
+starlette==1.9.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.54.0
+Werkzeug==3.1.9

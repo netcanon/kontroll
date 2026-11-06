@@ -79,6 +79,86 @@ Cosign signing is the deferred rung.
   `--check`, so a stale/forgotten regen fails loudly and a tag can't publish drifted baked code); `--verify <tree>`
   re-checks a materialized baked tree (`/opt/kontroll`) fail-closed for an audit. OFFLINE (pure file hashing).
 
+### Refreshing a pin
+
+Every input an image build or the stack pulls is pinned, and
+[`tests/unit/test_image_pins.py`](../tests/unit/test_image_pins.py) fails when a pin is **missing** (never because
+one is old):
+
+| Input | Pinned as | Where |
+|---|---|---|
+| a Dockerfile's base | `FROM <image>:<tag>@sha256:<digest>` — the digest is pulled, the tag is its label | each `Dockerfile` (Vector's also in `services/vector.yaml`, in lock-step) |
+| the Python packages an image adds | one `name==version` per package, installed `--no-deps`, then `pip check` | `semaphore-runner/requirements.txt`, `installer/requirements.txt` |
+| the runner's apk packages | `~=<major.minor>` (the patch revision still moves: an Alpine branch keeps only its newest) | `semaphore-runner/Dockerfile` |
+| a downloaded file (a binary, an apt key) | its SHA-256, written in the tree: a `curl`/`wget` to a named file, then `echo "$<ARG>  <file>" \| sha256sum -c -` in the same `RUN` (an `ARG` or `ENV` holding the 64 hex), or `ADD --checksum=sha256:` | `installer/Dockerfile` (sops, Docker's apt key) |
+| a compose image | an exact tag (at least major.minor), or a digest under a tag | `services/*.yaml`, `../telemetry/*.yml` |
+
+A check that is switched off counts as missing. A `pip install`, `pip check`, `apk add`, download or `sha256sum -c`
+fails the build only if every operator after it to the end of the `RUN` is `&&` (a pipe after a later `&&` too): a `||
+true` or `; rm …` anywhere later, a pipe right after it, a lone `&` (it sends the list to the background), an `if`,
+`elif`, `while` or `until` condition around it or a `!` before it switches it off. Under `set -e` (or `set -o errexit`),
+written as a whole command at the top of the `RUN`, a `;` right after the check is enough when the check starts its
+AND-OR list and is the whole of it — not after a later `&& …` (errexit spares every command of a list but the last), not
+after a guard (`[ "$TARGETARCH" = amd64 ] && check;` skips the check when the guard fails), and not inside a brace
+group, a subshell, an `if` body or a loop (a `|| true` after the compound switches errexit off inside it). A `set +e`
+anywhere, a `set` or a `shopt` given a variable, a backquoted command, a glob or a brace expansion, or a `shopt` naming
+errexit switches errexit off. A check inside a `$(…)`, backquotes or a quoted string (`sh -c '…'`, `eval '…'`), after an
+ANSI-C `$'…'` or in a list holding one, or in a compound behind `||` or `!` is refused, as is a function or an alias
+defined anywhere in the `RUN`, or a `hash` or `enable` entry (each can stand in for the checked program), a `set -n`, a
+`set -t`, a `shopt` naming noexec or onecmd, or a `set` or `shopt` that can be one (the shell then runs nothing, or
+stops after one command), and a `trap`, an `exec`, a `return` or an `exit` other than `exit 1` to `exit 255` in the same
+`RUN`: each can end it with a status that is not the check's. A download names one URL and one output. A checksum
+fetched beside the file is no pin either — whoever swaps the file swaps it too — so the digest must be one the tree
+holds: an `ARG` or `ENV` whose every value is the 64 hex, on one `echo "$<ARG>  <file>" | sha256sum -c -` line, no build
+passes that `ARG` in, it is no build arg Docker predefines (a proxy name, which a build sets with no `ARG`), and no
+`--mount=` option's `env=` sets it, however the option is written (BuildKit sets that variable from a secret). A
+Dockerfile that installs with pip may give no `RUN` a flag, a cache mount (`--mount=type=cache,target=/root/.cache/pip`)
+too: a mount can put a `pip.conf`, code or a planted wheel in front of the install, through a target an earlier `RUN`
+linked elsewhere or a cache other builds share, and the test reads none of it. The rules are in
+[`tests/unit/_build_read.py`](../tests/unit/_build_read.py), and the pip-audit step is held to them too (and must name
+its shell unless its runner is a named Linux or macOS one). The test reads a Dockerfile's lines as BuildKit splits and
+joins them (on LF only, a byte-order mark dropped, a continuation joined with no space, a line ending in two backslashes
+continuing nothing), and refuses a whitespace character other than a space, a tab or a line feed (sh splits words on
+none of them; the test, and for VT, FF and CR BuildKit's keyword split, do). It also refuses what it cannot read (a
+`SHELL` other than Docker's default, an exec-form `RUN`, a heredoc, a brace list it cannot read (sound under sh, which
+expands no brace, but refused), a comment inside a `RUN` — Docker joins the lines first, so the shell drops the rest —
+an `# escape=` directive, a Dockerfile outside this directory) and a `# syntax=` frontend not pinned by digest. What it
+still cannot see is listed in the test's docstring. The installer's and Vector's **apt** packages still float inside
+their pinned base; the published image's digest in [`images.lock.yml`](images.lock.yml) is the full pin
+([SECURITY.md](../SECURITY.md) § Accepted risks, R-IMG-2).
+
+One procedure, the same for a Dependabot PR and a hand bump. It is an authoring-time act with network; nothing in
+it runs on a deploy path.
+
+1. **Change the tag** in the `FROM` line or the compose `image:`. Dependabot opens the PR for a Dockerfile base
+   and for a pip pin. A compose `image:` has no bot (Dependabot's compose fetcher reads no `<service>.yaml` name),
+   so every compose tag, Postgres's in `services/semaphore.yaml` among them, is bumped here by hand. The exporter
+   images are generated: bump them in `telemetry/*.yml` and run `scripts/gen-exporters.py`.
+2. **Resolve the digest** for that exact tag, and write it after the tag: `docker buildx imagetools inspect
+   <image>:<tag>`, taking the top-level `Digest:` (the manifest list, so one pin serves every platform the publish
+   matrix builds). Bumping only a pip, apk or checksum pin skips this step.
+3. **The control image: re-derive what the base decides.** Build it on the new base, then:
+   - regenerate `semaphore-runner/requirements.txt` as the difference between `pip freeze` in the bare base's
+     ansible venv and `pip freeze` after `pip install paramiko flask fastapi uvicorn PyYAML` there (sorted, one
+     `name==version` per line; the header stays). A package the base already ships stays out of the file — the
+     Dockerfile's import line holds it — unless the base stops shipping it;
+   - re-read the apk constraints with `apk policy <package>` if the Alpine branch moved.
+
+   **The installer:** its `requirements.txt` is `pip freeze` in a build with `"ansible-core==<series>.*"`,
+   `ansible-lint` and `docker` installed (less Debian's own pip, setuptools and wheel). `<series>` stays inside the
+   range `scripts/install-prereqs.sh` puts on the host, which `tests/unit/test_image_pins.py` holds: unconstrained,
+   the resolve lands on the next series. A new sops version changes `SOPS_VERSION` and
+   both `SOPS_SHA256_*` from the release's `checksums.txt` together.
+4. **Prove it.** Build every image from the change (the control image after `python3
+   scripts/gen-requirements.py --all-modules`, as the publish workflow does) — `pip check`, the import line, the
+   checksums and the apk constraints run in the build. In the built control image, `ansible --version`, `sops
+   --version`, `age --version`, `snmpbulkwalk -V` and `ssh -V`; copy `/opt/kontroll` out and run
+   `scripts/gen-code-manifest.py --verify` on it. In the installer, `ansible --version`, `ansible-galaxy collection
+   list` and `docker compose version`. A Semaphore base must be at least the version every live box runs: Semaphore
+   migrates its database forward on start, so an older pin is a downgrade over a migrated schema. No pull-request
+   job builds an image, so a PR that moves an image is merged only after this step.
+5. **Publish and re-pin** (above): tag, publish, `gen-image-digests.py --refresh <tag>`.
+
 ### C1 — the installer image + bundle-as-compose
 
 C1 publishes the **installer** image too, so a fresh node installs from published images with **no git clone and no
@@ -110,6 +190,8 @@ full tree until those run *baked* code (Phase B).
 ## Testing
 Covered by `tests/validate`'s `compose-config` check (structure validated against
 `.env.example`) + `gen-image-digests --check` (the lock is well-formed). Runs only where Docker is installed.
+The pins are held by `tests/unit/test_image_pins.py`, and their Dependabot and pip-audit coverage by
+`tests/unit/test_ci_workflows.py` — both pure text, no Docker.
 
 ## See also
 - [installer/README.md](installer/README.md) — the compose-native installer (Phase 1)

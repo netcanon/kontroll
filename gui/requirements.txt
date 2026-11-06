@@ -1,3 +1,5 @@
 # GUI runtime deps. Intentionally tiny — the GUI is a thin shell over galaxy.py,
 # which carries all the real logic (search/classify/onboard).
+# A development FLOOR. What the control image runs is docker/semaphore-runner/requirements.txt (exact pins);
+# tests/unit/test_image_pins.py holds that every package named here ships there.
 flask>=3.1.3

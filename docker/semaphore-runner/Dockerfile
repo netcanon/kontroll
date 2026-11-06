@@ -14,7 +14,12 @@
 # (deploy-stack.yml does both). Never hand-edit the lockfile.
 #
 # Built by ansible/playbooks/deploy-stack.yml. Build context = repo root.
-FROM semaphoreui/semaphore:latest
+#
+# The base is pinned by tag AND digest: the digest is what is pulled, the tag is the label a reader checks it
+# against. Never pin a Semaphore older than the one a live box already runs — Semaphore migrates its database
+# forward on start, so an older pin is a downgrade over a migrated schema. A bump follows docker/README.md
+# § Refreshing a pin, which re-derives the apk constraints and requirements.txt below from the new base.
+FROM semaphoreui/semaphore:v2.19.17@sha256:008dacd9f1adbd92e8a048f1786ae1dd9bed2a352aca2eb30b9837de5706e7f7
 
 USER root
 
@@ -24,7 +29,12 @@ USER root
 # of an OpenWrt AP's dnsmasq lease file). Absent, the relevant transport raises FileNotFoundError and the source is
 # mis-recorded `unreachable` on a baked deploy (net-snmp was live-caught absent on the .52 container). Pinned by
 # tests/unit/test_publish_images.py (test_control_image_ships_net_snmp_cli / _ships_openssh_client).
-RUN apk add --no-cache age sops net-snmp-tools openssh-client
+# Each package carries apk's `~=` constraint, the major.minor the pinned base's Alpine branch ships: a patch
+# revision inside it may still move (an Alpine branch keeps only its newest revision, so an exact pin would fail
+# the next rebuild), and any other version fails the build. The version lines record in the build log what was
+# baked. Held by tests/unit/test_image_pins.py.
+RUN apk add --no-cache "age~=1.2" "sops~=3.9" "net-snmp-tools~=5.9" "openssh-client~=9.9" \
+ && age --version && sops --disable-version-check --version && snmpbulkwalk -V && ssh -V
 
 # The #125 retention-prune (ansible/playbooks/backup-configs.yml) re-roots the local captures history with
 # `git filter-branch` (core git; no git-filter-repo dep). Some distros split filter-branch out, so assert it is
@@ -44,11 +54,20 @@ RUN VENV="$(dirname "$(ls /opt/semaphore/apps/ansible/*/venv/bin/ansible-galaxy)
         "$VENV/python" /tmp/k/scripts/install-collections.py \
  && rm -rf /tmp/k
 
-# network_cli (Cisco IOS) connects over paramiko, which the base image lacks.
-# Prebuilt musllinux wheels — no build toolchain needed.
-# flask: the onboarding GUI (gui/app.py); fastapi+uvicorn: the typed API (api/). Both are thin
-# surfaces over the kontroll service layer and reuse this image's ansible/sops/age/collections toolchain.
-RUN /opt/semaphore/apps/ansible/*/venv/bin/pip install --no-cache-dir paramiko flask fastapi uvicorn
+# The Python packages the base's ansible venv lacks: flask for the onboarding GUI (gui/app.py), fastapi + uvicorn
+# for the typed API (api/), and their dependencies. Both are thin surfaces over the kontroll service layer and
+# reuse this image's ansible/sops/age/collections toolchain. requirements.txt is the whole set, one exact pin
+# each: `--no-deps` installs nothing it does not name and `pip check` fails the build if the set is incomplete
+# or conflicts with the base. The base already ships paramiko (network_cli's transport for Cisco IOS) and
+# PyYAML; the import line fails the build if a new base stops shipping either, so the file gains them by a
+# re-derive (docker/README.md § Refreshing a pin), never by pip quietly moving a base library. Prebuilt
+# musllinux wheels — no build toolchain needed.
+COPY docker/semaphore-runner/requirements.txt /tmp/k/requirements.txt
+RUN VENV="$(dirname "$(ls /opt/semaphore/apps/ansible/*/venv/bin/pip)")" \
+ && "$VENV/pip" install --no-cache-dir --no-deps -r /tmp/k/requirements.txt \
+ && "$VENV/pip" check \
+ && "$VENV/python" -c "import paramiko, yaml, flask, fastapi, uvicorn" \
+ && rm -rf /tmp/k
 
 # The local canonical bare repo (instance source of truth) is operator-owned (uid
 # 1000) but cloned by the runner (uid 1001) → git's dubious-ownership guard. Trust any

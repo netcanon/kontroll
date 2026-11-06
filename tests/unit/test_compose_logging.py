@@ -422,7 +422,7 @@ def _probe(command, port):
 def test_vector_health_check_runs_a_program_its_image_ships():
     """Vector's compose health check is run by bash (exec form), never by wget or curl, and it asks Vector's own
     loopback API (127.0.0.1:8686, the address Vector's own config gives its API) for /health; and the image it
-    runs in is a Debian tag.
+    runs in is a Debian tag (read without the `@sha256:` digest the tag is pinned to).
 
     Why: the Vector image is Debian with neither wget nor curl. The check was `wget -qO- …/health`, which failed
     with `wget: not found` on every run, so every box showed Vector `unhealthy` from its first deploy on —
@@ -438,7 +438,7 @@ def test_vector_health_check_runs_a_program_its_image_ships():
     assert "/dev/tcp/127.0.0.1/8686" in command and "GET /health " in command, \
         "the check asks Vector's loopback API (8686, never published) for /health"
     image = re.search(r":-([^}]+)}", _load("docker/services/vector.yaml")["services"]["vector"]["image"]).group(1)
-    assert image.endswith("-debian"), "the health check runs bash; a non-Debian tag (%s) ships none" % image
+    assert image.split("@", 1)[0].endswith("-debian"), "the health check runs bash; a non-Debian tag (%s) ships none" % image
     assert _load("docker/vector/vector.yaml")["api"]["address"] == "127.0.0.1:8686", \
         "the health check asks 127.0.0.1:8686 — move both together"
 

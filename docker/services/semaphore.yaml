@@ -4,7 +4,7 @@
 
 services:
   semaphore-db:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine
     container_name: semaphore-db
     restart: unless-stopped
     environment:
