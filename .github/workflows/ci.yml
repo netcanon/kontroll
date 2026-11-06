@@ -116,9 +116,11 @@ jobs:
 
       - name: Install the Docker SDK (for the fresh-node check's deploy passes, as the installer image has it)
         # deploy-stack looks at images and networks through community.docker, whose library is the `docker` package,
-        # in the Python Ansible runs localhost with; in check mode the runner's daemon is only read.
+        # in the Python Ansible runs localhost with; in check mode the runner's daemon is only read. The version is
+        # the installer image's own pin, read from its pin file, so a bump there moves this step too (a line that
+        # is not there leaves `pip install ""`, which fails).
         if: ${{ !vars.KONTROLL_RUNS_ON }}
-        run: pip install --quiet "docker==7.1.0"
+        run: pip install --quiet "$(grep -x 'docker==[0-9.]*' docker/installer/requirements.txt)"
 
       - name: fresh-node check (a new node's install and the fleet plays, evaluated in check mode)
         # tests/fresh-node-check.sh: every gate above reads the plays or parses them; this one has Ansible EVALUATE

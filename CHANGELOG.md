@@ -60,7 +60,8 @@ classes.
   exact output, which still fails without one. `unit/test_bootstrap_summary_lockfile.py` evaluates the summary's two
   expressions from the play, with no lockfile (no lookup made, and the line says why) and with one.
   `unit/test_ci_workflows.py` holds the validate job to running it, after the gate, the collections and the steps that
-  install `age` and the `docker` library, unsoftened.
+  install `age` and the `docker` library, unsoftened; the library is the installer image's own pin, read from
+  `docker/installer/requirements.txt`, so a bump there moves the step too.
 - **Docs.** tests/README.md (the layer, how to run it, the extending step, the listing),
   docs/qa-and-release-pipeline.md (§0, §1, §5, the rollout), docs/testing-standards.md §1,
   docs/engineering-standards.md §1, the backend_raw_ssh and routeros role READMEs (their backup in check mode).

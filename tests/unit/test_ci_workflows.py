@@ -2253,12 +2253,29 @@ def test_validate_job_runs_the_fresh_node_check():
     age = [j for j, r in enumerate(runs) if r == "bash .github/scripts/apt-install.sh age"]
     collections = [j for j, r in enumerate(runs) if "ansible-galaxy collection install" in r]
     gate = [j for j, r in enumerate(runs) if r == "bash tests/validate.sh --strict"]
-    sdk = [j for j, r in enumerate(runs) if r.startswith("pip install") and '"docker==' in r]
+    sdk = [j for j, r in enumerate(runs) if r.startswith("pip install") and "docker/installer/requirements.txt" in r]
     assert len(age) == 1 and len(collections) == 1 and len(gate) == 1 and len(sdk) == 1
     assert collections[0] < i and gate[0] < i and age[0] < i and sdk[0] < i
     for j in (age[0], sdk[0], i):
         assert steps[j].get("if") == "${{ !vars.KONTROLL_RUNS_ON }}", steps[j]
         assert "continue-on-error" not in steps[j] and "|| true" not in runs[j], steps[j]
+
+
+def test_the_fresh_node_check_installs_the_installer_images_docker_library():
+    """The validate job's Docker SDK step installs `docker` at the version docker/installer/requirements.txt pins,
+    read from that file (`grep -x 'docker==[0-9.]*'`), and that file holds exactly one such line. Why: the step
+    exists so the fresh-node check's deploy passes see the library the installer image has; it named 7.1.0 as a
+    literal, and T29 pinned the installer's at 7.2.0, so the step's own comment was false the day T27 met main. A
+    literal drifts on every bump of the pin file (Dependabot's included); a read of the file cannot. A file with no
+    such line leaves `pip install ""`, which fails, and two would install both: the count holds it to one."""
+    steps = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]["steps"]
+    sdk = [s for s in steps if str(s.get("name", "")).startswith("Install the Docker SDK")]
+    assert len(sdk) == 1, [s.get("name") for s in steps]
+    assert str(sdk[0]["run"]).strip() == (
+        'pip install --quiet "$(grep -x \'docker==[0-9.]*\' docker/installer/requirements.txt)"'), sdk[0]["run"]
+    pins = [ln for ln in _read("docker/installer/requirements.txt").splitlines()
+            if re.fullmatch(r"docker==[0-9.]*", ln)]
+    assert len(pins) == 1 and re.fullmatch(r"docker==\d+\.\d+\.\d+", pins[0]), pins
 
 
 def _run_helper(tmp_path, plan, args=("gawk", "mawk"), tries=4, delay="0"):
