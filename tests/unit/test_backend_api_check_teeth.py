@@ -27,9 +27,19 @@ highest-blast-radius device in the fleet:
 Together these meant the edge-firewall check was incapable of either passing honestly or failing
 informatively. These tests pin the fix and, just as importantly, pin that the fix did not print a secret to
 get there: the response body is device configuration and the request carries the token.
+
+  I-7         The 401/403 remedy named `_api_recipe.auth.token_var`, which a `basic` recipe does not have, so a
+              basic-auth 401 failed on its own message ("object of type 'dict' has no attribute 'token_var'")
+              instead of saying the credential was refused; and any other answer (a 404, a 500) was reported as
+              "did not answer the API port". The remedy is now a hint per auth type, and the message is rendered
+              here for each type and each kind of failure.
 """
 import os
+import re
 
+import jinja2
+import jinja2.meta
+import pytest
 import yaml
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -71,6 +81,25 @@ def _module_of(task):
     return None
 
 
+def _refusal():
+    """The check's refusal: its message and the auth hint (a task var) the message's 401/403 branch prints."""
+    task = _named(_CHECK, "Refuse unless the API actually answered")
+    return str(task["ansible.builtin.fail"]["msg"]), str((task.get("vars") or {}).get("_api_auth_hint", ""))
+
+
+def _render(auth, status, host="fw-1"):
+    """The refusal's message as the task renders it for a recipe with `auth` and a GET that registered `status`
+    (None: no status at all). Undefined is strict, as ansible-core's is for a missing attribute: the I-7 fault
+    raises here as it did in the run."""
+    msg, hint = _refusal()
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    ctx = {"inventory_hostname": host, "backend_api_recipe": "probe",
+           "_api_recipe": {"auth": auth, "check": {"path": "/api/status"}},
+           "_api_check": {"changed": False} if status is None else {"changed": False, "status": status}}
+    ctx["_api_auth_hint"] = env.from_string(hint).render(**ctx)
+    return env.from_string(msg).render(**ctx)
+
+
 # --------------------------------------------------------------- F-CANTFAIL: the check must be able to fail
 
 def test_the_liveness_result_is_actually_evaluated():
@@ -100,24 +129,97 @@ def test_a_non_success_status_fails_the_host():
 
 def test_the_failure_message_distinguishes_auth_from_unreachable():
     """A 401/403 and a dead port need different operator actions. Collapsing them into one message is how a
-    credential problem gets misdiagnosed as an outage — which is exactly what the censored version did."""
-    msg = str(_named(_CHECK, "Refuse unless the API actually answered")["ansible.builtin.fail"]["msg"])
+    credential problem gets misdiagnosed as an outage — which is exactly what the censored version did. Since
+    I-7 the auth branch prints the hint, a task var, so both are read."""
+    msg, hint = _refusal()
     assert "401" in msg and "403" in msg, "the auth-rejection branch must be explicit"
+    assert "_api_auth_hint" in msg, "the auth branch prints the hint"
     # Assert on the BRANCH TEXT, not on "token" or the status codes: those appear in the Jinja condition
     # itself, so a mutation that gutted the auth guidance while leaving `in [401, 403]` intact still passed.
     # The two branches must each carry their own distinguishable remedy.
-    assert "rejected the credential" in msg, "the auth branch must say the credential was rejected"
+    assert "rejected the credential" in hint, "the auth branch must say the credential was rejected"
     assert "did not answer the API port" in msg, "and the transport branch must say the device never answered"
+
+
+TOKEN_HINT = ("The API rejected the credential: check that `fortios_api_token` (or, if it is empty, `fw_1_api_token`)"
+              " holds a current token with read permission.")
+BASIC_HINT = ("The API rejected the credential: check that `probe_user` and `probe_pass` hold a current username and"
+              " password with read permission.")
+NONE_HINT = "The API refused the request, and the recipe sends no credential: name one in its auth."
+DOWN = ("The device did not answer the API port, or its TLS failed — wrong address, port, certificate, or the service"
+        " is down.")
+ANSWERED = ("The API answered, but not with success (200/201/204): check the recipe check path and the device"
+            " API.")
+BEARER = {"type": "bearer", "token_var": "fortios_api_token"}
+APIKEY = {"type": "apikey_header", "header_name": "X-Api-Key", "token_var": "fortios_api_token"}
+BASIC = {"type": "basic", "username_var": "probe_user", "password_var": "probe_pass"}
+NONE = {"type": "none"}
+BASIC_NO_PASS = {"type": "basic", "username_var": "probe_user"}
+DIGEST = {"type": "digest", "username_var": "probe_user", "password_var": "probe_pass"}
+
+
+@pytest.mark.parametrize("auth, status, http, remedy", [
+    (BEARER, 401, "401", TOKEN_HINT),
+    (BEARER, 403, "403", TOKEN_HINT),
+    (APIKEY, 401, "401", TOKEN_HINT),
+    (APIKEY, 403, "403", TOKEN_HINT),
+    (BASIC, 401, "401", BASIC_HINT),     # I-7: failed on its own message ('dict' has no attribute 'token_var')
+    (BASIC, 403, "403", BASIC_HINT),
+    (NONE, 401, "401", NONE_HINT),       # failed on its own message too: a `none` recipe has no token_var either
+    (NONE, 403, "403", NONE_HINT),
+    (BASIC_NO_PASS, 401, "401", BASIC_HINT.replace("`probe_pass`", "`?`")),
+    (DIGEST, 401, "401", BASIC_HINT),    # the GET sends the vars a recipe names, whatever its type
+    (BEARER, 500, "500", ANSWERED),      # before I-7: "did not answer the API port" for an answer
+    (BASIC, 404, "404", ANSWERED),
+    (BEARER, 302, "302", ANSWERED),
+    (BEARER, -1, "-1", DOWN),            # uri's status for a refused connection, a timeout, a TLS failure
+    (BASIC, -1, "-1", DOWN),
+    (BEARER, None, "no response", DOWN),
+], ids=["bearer-401", "bearer-403", "apikey-401", "apikey-403", "basic-401", "basic-403", "none-401", "none-403",
+        "basic-no-password-var-401", "digest-named-vars-401", "bearer-500", "basic-404", "bearer-302",
+        "bearer-refused", "basic-refused", "bearer-no-status"])
+def test_the_failure_message_names_the_remedy_for_each_auth_type_and_answer(auth, status, http, remedy):
+    """The refusal's message, rendered as the task renders it, for each auth type the role builds a request for
+    and each kind of failure: a 401 or a 403 names the variables that auth reads (a basic recipe's username and
+    password vars, and any recipe's that names them, since the GET sends them whatever the type; a var the recipe
+    does not name is `?`; a token recipe's `token_var`, else the onboarded per-host name), never their values; a
+    status below 0 or none says the device did not answer or its TLS failed; any other answer says the API
+    answered, but not with success. The basic and none rows are I-7's fault: the message named `token_var`, which
+    neither has, and failed itself."""
+    expected = "fw-1: probe liveness check FAILED — HTTP %s from /api/status. %s" % (http, remedy)
+    assert _render(auth, status) == expected
 
 
 def test_the_failure_message_cannot_leak_the_token_or_the_config():
     """THE CONSTRAINT ON THE FIX. The GET carries a live API token and its response body can BE the device
     configuration (the fortios recipe's backup uses `extract: body`). Making the check informative must not
-    turn it into a disclosure — so the message may reference status and the recipe path, never `content`,
-    `json`, or the whole registered dict."""
-    msg = str(_named(_CHECK, "Refuse unless the API actually answered")["ansible.builtin.fail"]["msg"])
+    turn it into a disclosure — so the message and its auth hint may reference status, the recipe's path and
+    the NAMES its auth reads, never `content`, `json`, the whole registered dict, the token or the headers.
+    The variables both read are held to a list, `_api_check` to its status and `_api_recipe` to the names its
+    auth reads and its check path, so a new reference to a value (a credential var looked up, the response body,
+    the recipe's auth printed whole) fails here. And the task's only var is the hint: a task var outranks a host
+    var, so a second one could rebind a name the message prints (`backend_api_recipe`) to the token, and every
+    other assertion here would still pass (the I-7 read's S1, measured on both cores)."""
+    msg, hint = _refusal()
+    task = _named(_CHECK, "Refuse unless the API actually answered")
+    assert set(task.get("vars") or {}) == {"_api_auth_hint"}, \
+        "a task var on the refusal outranks a host var, so it can rebind a name the message prints"
     for leak in (".content", ".json", "_api_check }}", "_api_check}}", "_api_token", "_api_headers"):
         assert leak not in msg, "the failure message must not surface %r" % leak
+    env = jinja2.Environment()
+    names = set().union(*(jinja2.meta.find_undeclared_variables(env.parse(t)) for t in (msg, hint)))
+    assert names <= {"inventory_hostname", "backend_api_recipe", "_api_recipe", "_api_check", "_api_auth_hint"}, \
+        names
+    for text in (msg, hint):
+        assert "lookup(" not in text and "hostvars" not in text and "vars[" not in text, text
+        assert all(m.group(1) == "status" for m in re.finditer(r"_api_check\.(\w+)", text)), text
+        assert not re.search(r"_api_check(?![.\w])", text), "the registered dict itself must not be printed"
+        assert all(m.group(1) in ("auth", "check") for m in re.finditer(r"(?<!\w)_api_recipe\.(\w+)", text)), text
+        assert all(m.group(1) in ("type", "username_var", "password_var", "token_var")
+                   for m in re.finditer(r"(?<!\w)_api_recipe\.auth\.(\w+)", text)), text
+        assert all(m.group(1) == "path" for m in re.finditer(r"(?<!\w)_api_recipe\.check\.(\w+)", text)), text
+        assert not re.search(r"(?<!\w)_api_recipe(\.(auth|check))?(?![.\w])", text), \
+            "the recipe, its auth or its check must not be printed whole"
 
 
 # --------------------------------------------------- F-TOKENVAR / F-CENSORED: the credential must resolve
