@@ -86,6 +86,18 @@
       failed_when: false           # branch on status below — a censored `uri` fatal tells the operator nothing
       no_log: true                 # request carries the live API token
 
+    # `uri` has no check mode, so a --check run skips the GET and its result has no status. The dry-run reports that
+    # it did not ask, and the refusal below does not read a skipped read as a failed answer. A real run reads the
+    # status as before, and a read a real run skipped is still refused.
+    - name: Report the check endpoint as not read in a dry-run
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: the {{ backend_api_recipe }} check endpoint is not read in a dry-run (`uri` has no
+          check mode), so its API was not asked; a real run reads it.
+      when:
+        - ansible_check_mode
+        - _api_check is skipped
+
     - name: Refuse unless the API actually answered successfully
       # THE LIVENESS CHECK'S ONLY TEETH. Before this task, `_api_check` was registered with
       # `failed_when: false` and then never read again — the file ended one line below. A 200, a 401, a 403
@@ -105,4 +117,6 @@
              ' holds a current token with read permission.'
              if (_api_check.status | default(0)) in [401, 403]
              else 'The device did not answer the API port — wrong address, port, or the service is down.' }}
-      when: (_api_check.status | default(0)) not in [200, 201, 204]
+      when:
+        - not (ansible_check_mode and _api_check is skipped)
+        - (_api_check.status | default(0)) not in [200, 201, 204]

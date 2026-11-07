@@ -11,6 +11,29 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the API backend's dry-run takes a skipped read as not made (I-6, 2026-11-06)
+
+`ansible.builtin.uri` has no check mode, so a `--check` run skips the API backend's GET and its pull, and a skipped
+task's result has no status. The check's refusal and the backup's failure record read that as a failed answer, so the
+mandated dry-run failed every API-class host with a good credential: ping reported it UNREACHABLE and the backup run
+failed. The fresh-node check (T27) could take the class no further than its credential gate.
+
+- **Fixed.** `backend_api`'s check, in a `--check` run whose GET was skipped, says so ("the <recipe> check endpoint is
+  not read in a dry-run") and does not refuse; its backup previews an empty capture, as the raw-SSH and RouterOS
+  backups do, and records it. A real run reads the status as before: anything but a success is refused, a pull that
+  is not a 200 is a failed capture, and a read a real run skipped is still both. A dry-run read that answered would
+  be held to its status too. No `check_mode: false`: the read is a device's, and a dry-run never makes it.
+- **Tests.** `tests/fresh-node-check.sh` gives mock-fortigate a placeholder token in its ping and backup passes:
+  ping must say its GET was not made and end OK, and backup must record its capture, whose write the
+  empty-directory check now holds too. A pass of each for that host alone, without the token, must stop it at its
+  credential gate, for that reason. `unit/test_fresh_node_check_script.py`'s fake answers by the token and the limit,
+  and fails the script where the token is ignored, the GET goes unsaid, the host ends UNREACHABLE, its capture is
+  not recorded, or the gate passes or stops it elsewhere or for another reason.
+  `unit/test_backend_api_check_mode.py` evaluates the check's and the backup's conditions from the role files for a
+  skipped read, a success, a 401 and a refused connection, in a real run and a dry-run, and holds the report to the
+  host's and the recipe's names. `unit/test_backup_capture_check_mode.py` renders the API write as it renders the
+  others.
+
 ### test(ci): a fresh node's install and the fleet plays are evaluated in check mode (T27 / S32, 2026-11-04)
 
 Every gate read the playbooks as text or parsed them (`--syntax-check`); none had Ansible evaluate them, so a play

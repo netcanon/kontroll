@@ -63,6 +63,16 @@ Auth types: `bearer` (`Authorization: Bearer <token>`), `apikey_header`
 endpoints must be **read-only** (GET / export). Output is `no_log` — the request
 carries the token, the response the secret-bearing config.
 
+**In a dry-run (`--check`)** the credential is still resolved and refused when it is
+missing, but no request is made: `uri` has no check mode, so the GET and the pull are
+skipped. The check then says "the <recipe> check endpoint is not read in a dry-run" and
+does not refuse, so `ping.yml --check` reports the host OK without having asked it; the
+backup previews an empty capture and records it, as the raw-SSH and RouterOS backups do.
+A real run reads the status as before: anything but a success is refused, and a pull
+that is not a 200 is a failed capture. Neither read carries `check_mode: false` — a
+device's read never runs in a dry-run. Pinned by
+[`tests/unit/test_backend_api_check_mode.py`](../../../tests/unit/test_backend_api_check_mode.py).
+
 **Two ports, two owners (S28).** The recipe's `port:` governs the check and backup
 requests. The reachability probe that runs *before* them (`ping.yml`) reads the host's
 `kontroll_probe_port`, which the onboard writes from the backend descriptor's `probe_port`

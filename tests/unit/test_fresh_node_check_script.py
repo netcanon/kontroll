@@ -60,9 +60,11 @@ done
 # The fake ansible-playbook: records how it was called, what git reads of the tree above its cwd, and (for a deploy
 # naming a storage root) the mode of the onboard-gui key there; answers by FAKE_MODE. Every pass that must succeed
 # prints its landmark (the stack play's last task, bootstrap's Summary, ping's summary play) and a clean recap.
-# ping.yml rescues three hosts at their checks; backup-configs.yml answers as the real one does against the mock
-# inventory (four hosts stopped at their device's read or credential gate, every host in the recap, exit 2). A
-# `<how>:<play>` mode bends one play; `ping:<how>` and `backup:<how>` bend those two.
+# ping.yml and backup-configs.yml answer as the real ones do against the mock inventory: ping rescues two hosts at
+# their checks, backup stops three at their device's read (every host in the recap, exit 2), and mock-fortigate goes
+# past its credential gate where the pass gives it a token (ping says its GET was not made, then OK; backup records
+# its capture) and stops there where it has none. `--limit mock-fortigate` runs that host alone. A `<how>:<play>`
+# mode bends one play (`ping-gate` and `backup-gate` the limited passes); `ping:<how>` and `backup:<how>` bend those.
 _PLAYBOOK = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys
 sys.stdout.reconfigure(encoding="utf-8")
@@ -89,6 +91,13 @@ with open(os.environ["FAKE_LOG"], "a") as fh:
 mode = os.environ.get("FAKE_MODE", "")
 how, _, target = mode.partition(":")
 pb = next(a for a in args if a.startswith("playbooks/"))
+limited = "--limit" in args
+assert not limited or args[args.index("--limit") + 1] == "mock-fortigate", args
+play = {"playbooks/ping.yml": "ping-gate", "playbooks/backup-configs.yml": "backup-gate"}.get(pb) if limited else pb
+ignored = {"ping:token-ignored": "playbooks/ping.yml", "backup:token-ignored": "playbooks/backup-configs.yml"}
+token = "" if ignored.get(mode) == pb else extra.get("mock_fortigate_api_token", "")
+hosts = ["mock-fortigate"] if limited else HOSTS
+GATE = "backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"
 everything = "onboard-gui" in extra.get("stack_services", [])
 keyed = "kontroll_storage_root" in extra
 ROW = "%-26s : ok=3    changed=0    unreachable=%d    failed=%d    skipped=1    rescued=%d    ignored=0"
@@ -97,8 +106,8 @@ def recap(rows):
 ok, bad = recap([("localhost", 0, 0, 0)]), recap([("localhost", 0, 1, 0)])
 LAND = {"playbooks/deploy-stack.yml": "TASK [Report the running stack containers] ****",
         "playbooks/bootstrap.yml": "TASK [Summary] ****", "playbooks/ping.yml": "PLAY [Reachability summary] ****"}
-land = "" if how == "no-landmark" and target == ("gui" if keyed else pb) else LAND.get(pb, "")
-if how == "unresolved" and target == pb:
+land = "" if how == "no-landmark" and target == ("gui" if keyed else play) else LAND.get(pb, "")
+if how == "unresolved" and target == play:
     print("[ERROR]: couldn't resolve module/action 'community.routeros.command'. This often indicates a "
           "misspelling, missing collection, or incorrect module path." + recap([("mock-routeros", 0, 1, 0)]))
     sys.exit(2)
@@ -119,21 +128,25 @@ if everything and mode == "other-red":
 if everything:
     print("onboard-gui's age key at /opt/kontroll/gui/age.key is MISSING. deploy-stack never creates it" + bad)
     sys.exit(2)
-if how == "no-recap" and target == pb:
+if how == "no-recap" and target == play:
     sys.exit(0)
-if how == "failed-host" and target == pb:
+if how == "failed-host" and target == play:
     print(land + bad); sys.exit(0)
-if how == "unreachable-host" and target == pb:
+if how == "unreachable-host" and target == play:
     print(land + recap([("localhost", 1, 0, 0)])); sys.exit(0)
-if how == "red" and target == pb:
+if how == "red" and target == play:
     print("ERROR! the playbook could not be read"); sys.exit(4)
 if pb == "playbooks/ping.yml":
-    rescued = list(RESCUES)
+    rescued = [] if limited else list(RESCUES)
+    if not token and mode != "ping:gate-passes":
+        rescued.append(("mock-fortigate", GATE))
     if mode == "ping:none":
         rescued = []
     elif mode == "ping:other-host":
         rescued.append(("mock-hv", "proxmox : SSH liveness ping"))
     elif mode == "ping:other-task":
+        rescued[0] = ("mock-switch", "backend_netcommon_cli : Read the version")
+    elif mode == "ping:gate-other-task" and limited:
         rescued[0] = ("mock-fortigate", "backend_api : GET the check endpoint")
     why = {"mock-fortigate": "mock-fortigate: no API token is in scope, so this check cannot authenticate."}
     other = {"ping:other-reason": "mock-switch", "ping:other-reason-xe": "mock-xe",
@@ -144,10 +157,20 @@ if pb == "playbooks/ping.yml":
     for h, t in rescued:
         out += ["", "TASK [%s] ****" % t, 'fatal: [%s]: FAILED! => {"changed": false, "msg": "%s"}' % (
             h, why.get(h, "Connection type local is not valid for this module"))]
-    out += ["", land, recap([(h, 0, 0, any(h == s for s, _ in rescued)) for h in HOSTS])]
+    if token and mode != "ping:api-get-unsaid":
+        out += ["", "TASK [backend_api : Report the check endpoint as not read in a dry-run] ****",
+                "ok: [mock-fortigate] => {", '    "msg": "mock-fortigate: the fortios check endpoint is not read in a '
+                'dry-run (`uri` has no check mode), so its API was not asked; a real run reads it."', "}"]
+    out += ["", land, "", "TASK [Per-host reachability] ****"]
+    for h in hosts:
+        down = any(h == s for s, _ in rescued) or (mode == "ping:api-not-ok" and h == "mock-fortigate")
+        out += ["ok: [%s] => {" % h, '    "msg": "%s: %s"' % (h, "UNREACHABLE" if down else "OK"), "}"]
+    out += [recap([(h, 0, 0, any(h == s for s, _ in rescued)) for h in hosts])]
     print("\n".join(out)); sys.exit(0)
 if pb == "playbooks/backup-configs.yml":
-    stops = list(STOPS)
+    stops = [] if limited else list(STOPS)
+    if not token and mode != "backup:gate-passes":
+        stops.append(("mock-fortigate", GATE))
     if mode == "backup:pass":
         stops = []
     elif mode == "backup:other-host":
@@ -156,6 +179,8 @@ if pb == "playbooks/backup-configs.yml":
         stops[0] = ("mock-edge", "opnsense : Resolve capture filename")
     elif mode == "backup:listed-passes":
         stops = stops[:-1]
+    elif mode == "backup:gate-other-task" and limited:
+        stops[0] = ("mock-fortigate", "backend_api : Pull config via the recipe's backup endpoint")
     out = ["", "TASK [backend_netcommon_cli : A read whose failure is ignored] ****",
            'fatal: [mock-switch]: FAILED! => {"msg": "no answer"}', "...ignoring"]
     if mode == "backup:rescued-first":
@@ -183,18 +208,20 @@ if pb == "playbooks/backup-configs.yml":
         unreach.add("mock-hv")
     if mode == "backup:wrote-capture":
         open(os.path.join(extra["config_backup_dir"], "OpenWrt_192-0-2-3.cfg"), "w").close()
-    if mode != "backup:no-summary":
-        out += ["", "PLAY [Backup run summary] ****"]
+    if mode != "backup:no-summary" and not set(hosts) <= failed:  # every host failed: Ansible runs no later play
+        out += ["", "PLAY [Backup run summary] ****", "", "TASK [Per-host backup result] ****"]
+        if token and mode != "backup:api-not-captured":
+            out += ["ok: [mock-fortigate] => {",
+                    '    "msg": "mock-fortigate (fortigate): captured -> FortiGate_192-0-2-4_full-configuration.conf"',
+                    "}"]
     if mode != "backup:no-recap":
-        out += [recap([(h, h in unreach, h in failed, 0) for h in HOSTS])]
+        out += [recap([(h, h in unreach, h in failed, 0) for h in hosts])]
     print("\n".join(out)); sys.exit(2 if failed else 0)
 print(land + ok)
 '''.replace("ENV", repr(ENV)).replace("RESCUES", repr([
-    ("mock-fortigate", "backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"),
     ("mock-switch", "backend_netcommon_cli : Liveness via cli_command (network_cli)"),
     ("mock-xe", "backend_netcommon_cli : Liveness via cli_command (network_cli)")])).replace("STOPS", repr([
         ("mock-edge", "opnsense : Read /conf/config.xml"),
-        ("mock-fortigate", "backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"),
         ("mock-switch", "backend_netcommon_cli : Pull config via cli_command"),
         ("mock-xe", "backend_netcommon_cli : Pull config via cli_command")])).replace("HOSTS", repr(
             ["mock-ap", "mock-docker", "mock-edge", "mock-fortigate", "mock-hv", "mock-routeros", "mock-switch",
@@ -256,7 +283,8 @@ def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkou
     python3-apt in T27's first real run, not a fresh node's install), the caller's collections still on the
     collections path; the plays ran in order (the deploy, the deploy of every service, that again with a key, the
     three with `--diff` as the installer's `check` verb runs them, bootstrap, then ping and backup-configs against the
-    mock inventory, the captures under TMPDIR); and afterwards
+    mock inventory, each with mock-fortigate's placeholder token and then once more for that host alone without it,
+    the captures under TMPDIR); and afterwards
     the checkout is as committed (not even an ignored file), the caller's HOME is empty and TMPDIR is empty. Guards
     the script run on a configured control node writing a second instance/ into the checkout or a second age key into
     the operator's ~/.config/sops/age, and a step that runs the checkout's tree rather than the export."""
@@ -272,19 +300,26 @@ def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkou
     assert home.startswith(tmpdir) and init["env"]["SOPS_AGE_KEY_FILE"] == home + "/.config/sops/age/keys.txt"
     assert [next(a for a in c["argv"] if a.startswith("playbooks/")) for c in plays] == [
         "playbooks/deploy-stack.yml", "playbooks/deploy-stack.yml", "playbooks/deploy-stack.yml",
-        "playbooks/bootstrap.yml", "playbooks/ping.yml", "playbooks/backup-configs.yml"]
+        "playbooks/bootstrap.yml", "playbooks/ping.yml", "playbooks/ping.yml", "playbooks/backup-configs.yml",
+        "playbooks/backup-configs.yml"]
     for c in plays:
         assert c["cwd"] == init["root"] + "/ansible" and "--check" in c["argv"], c
         assert c["env"]["HOME"] == home and c["env"]["SOPS_AGE_KEY_FILE"] == init["env"]["SOPS_AGE_KEY_FILE"], c
         assert str(p["home"]) + "/.ansible/collections" in c["env"]["ANSIBLE_COLLECTIONS_PATH"].split(":"), c
     assert all("--diff" in c["argv"] for c in plays[:3]), [c["argv"] for c in plays[:3]]
-    assert [c["env"]["KONTROLL_IN_CONTAINER"] for c in plays] == ["1", "1", "1", "1", None, None]
+    assert [c["env"]["KONTROLL_IN_CONTAINER"] for c in plays] == ["1", "1", "1", "1", None, None, None, None]
     assert "-e" not in plays[0]["argv"]
     assert json.loads(plays[1]["argv"][plays[1]["argv"].index("-e") + 1]) == {"stack_services": ALL}
     for c in plays[4:]:
         assert c["argv"][c["argv"].index("-i") + 1] == "../tests/mock-inventory.yml", c
-    backup_dir = plays[5]["argv"][plays[5]["argv"].index("-e") + 1]
-    assert backup_dir.startswith("config_backup_dir=" + tmpdir), backup_dir
+    for c in (plays[4], plays[6]):
+        assert "mock_fortigate_api_token=placeholder" in c["argv"] and "--limit" not in c["argv"], c
+    for c in (plays[5], plays[7]):
+        assert c["argv"][c["argv"].index("--limit") + 1] == "mock-fortigate", c
+        assert not any("api_token" in a for a in c["argv"]), c
+    for c in plays[6:]:
+        backup_dir = next(a for a in c["argv"] if a.startswith("config_backup_dir="))
+        assert backup_dir.startswith("config_backup_dir=" + tmpdir), backup_dir
     st = subprocess.run(["git", "-C", str(p["repo"]), "status", "--porcelain", "--ignored", "--untracked-files=all"],
                         capture_output=True, text=True, check=True)
     assert st.stdout == "", st.stdout
@@ -304,7 +339,7 @@ def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_f
                                             "KONTROLL_OPERATOR_UID": "1001"})
     assert r.returncode == 0, r
     plays = _plays(calls)
-    assert len(plays) == 6, calls
+    assert len(plays) == 8, calls
     inside = str(p["tmpdir"]) + os.sep + "kontroll-fresh."
     for c in plays:
         e = c["env"]
@@ -327,7 +362,7 @@ def test_every_play_runs_in_a_repository_on_main_holding_heads_tree(tmp_path):
     head = subprocess.run(["git", "-C", str(p["repo"]), "ls-tree", "-r", "--name-only", "HEAD"],
                           capture_output=True, text=True, check=True).stdout.strip()
     plays = _plays(calls)
-    assert len(plays) == 6, calls
+    assert len(plays) == 8, calls
     for c in plays:
         g = c["git"]
         assert g["top"] and os.path.realpath(g["top"]) == os.path.realpath(os.path.dirname(c["cwd"])), c
@@ -369,10 +404,11 @@ def test_the_full_stack_pass_runs_again_with_a_throwaway_key_and_must_pass(tmp_p
 @pytest.mark.parametrize("step, play", [("deploy-check", "playbooks/deploy-stack.yml"),
                                         ("deploy-check-gui", "gui"),
                                         ("bootstrap-check", "playbooks/bootstrap.yml"),
-                                        ("ping-check", "playbooks/ping.yml")])
+                                        ("ping-check", "playbooks/ping.yml"),
+                                        ("ping-check-gate", "ping-gate")])
 def test_a_play_that_exits_0_without_a_clean_recap_fails_the_check(tmp_path, how, step, play):
-    """For each step that must pass (the deploy, the deploy with a throwaway onboard-gui key, bootstrap, ping), a
-    play that exits 0 but prints no
+    """For each step that must pass (the deploy, the deploy with a throwaway onboard-gui key, bootstrap, ping, and
+    ping for mock-fortigate alone without its token), a play that exits 0 but prints no
     PLAY RECAP (it ran no play), or whose recap names a failed or an unreachable host, fails the script at that step.
     Guards a pass read from the exit alone: a play whose hosts all fell out before the first task, or an
     `ignore_errors` or `ignore_unreachable` that hid a host's failure, would then pass the step that exists to show
@@ -384,7 +420,8 @@ def test_a_play_that_exits_0_without_a_clean_recap_fails_the_check(tmp_path, how
 @pytest.mark.parametrize("mode, step", [("no-landmark:playbooks/deploy-stack.yml", "deploy-check"),
                                         ("no-landmark:gui", "deploy-check-gui"),
                                         ("no-landmark:playbooks/bootstrap.yml", "bootstrap-check"),
-                                        ("no-landmark:playbooks/ping.yml", "ping-check")])
+                                        ("no-landmark:playbooks/ping.yml", "ping-check"),
+                                        ("no-landmark:ping-gate", "ping-check-gate")])
 def test_a_play_that_must_pass_and_never_reaches_its_end_fails_the_check(tmp_path, mode, step):
     """For each pass that must succeed, a play that exits 0 with a clean recap but never prints its landmark (the
     stack play's last task for the deploys, bootstrap's Summary task, ping's summary play) fails the script at that
@@ -397,7 +434,8 @@ def test_a_play_that_must_pass_and_never_reaches_its_end_fails_the_check(tmp_pat
 
 @pytest.mark.parametrize("step, play", [("deploy-check", "playbooks/deploy-stack.yml"),
                                         ("bootstrap-check", "playbooks/bootstrap.yml"),
-                                        ("ping-check", "playbooks/ping.yml")])
+                                        ("ping-check", "playbooks/ping.yml"),
+                                        ("ping-check-gate", "ping-gate")])
 def test_a_play_that_must_pass_and_exits_non_zero_fails_at_its_exit(tmp_path, step, play):
     """For each step that must pass, a play that exits non-zero fails the script at that step, by its exit, and the
     message prints the play's own output. Guards the step's exit check being dropped for the recap alone: the
@@ -410,18 +448,28 @@ def test_a_play_that_must_pass_and_exits_non_zero_fails_at_its_exit(tmp_path, st
 @pytest.mark.parametrize("mode, says", [
     ("ping:none", "ping-check: the hosts it rescued are not the listed ones"),
     ("ping:other-host", "'mock-hv': 'proxmox : SSH liveness ping'"),
-    ("ping:other-task", "'mock-fortigate': 'backend_api : GET the check endpoint'"),
+    ("ping:other-task", "'mock-switch': 'backend_netcommon_cli : Read the version'"),
     ("ping:other-reason", "ping-check's log does not say mock-switch was refused its network_cli connection"),
     ("ping:other-reason-xe", "ping-check's log does not say mock-xe was refused its network_cli connection"),
-    ("ping:other-reason-fortigate", "ping-check's log does not say mock-fortigate stopped at its credential gate")])
+    ("ping:token-ignored", "'mock-fortigate': 'backend_api : Refuse an unresolvable API credential"),
+    ("ping:api-get-unsaid", "ping-check's log does not say mock-fortigate's check went past its credential gate"),
+    ("ping:api-not-ok", "ping-check's log does not say mock-fortigate ended OK"),
+    ("ping:gate-passes", "ping-check-gate: the hosts it rescued are not the listed ones"),
+    ("ping:gate-other-task", "'mock-fortigate': 'backend_api : GET the check endpoint'"),
+    ("ping:other-reason-fortigate",
+     "ping-check-gate's log does not say mock-fortigate stopped at its credential gate")])
 def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp_path, mode, says):
     """ping.yml must pass, and the hosts it rescues (and reports UNREACHABLE) must be exactly the listed ones, each
-    rescued from its listed task (the class's read of its device, or the API-credential gate a fresh node cannot
-    pass) for its listed reason. None rescued, one more, a listed host rescued from another task, or one rescued at
-    its task for another reason fails the script at `ping-check`, naming what the log held. Guards a class's `check`
-    that does not evaluate passing as a device that did not answer: ping.yml's rescue catches a template error too,
-    and T27's fold-1 read passed an undefined variable in proxmox's check that way (S2); the fold-2 read passed one
-    in the very task the netcommon classes are listed at, which only the reason tells apart (its S2)."""
+    rescued from its listed task (the class's read of its device) for its listed reason; mock-fortigate, given a
+    placeholder token, must say the GET a dry-run skips was not made and end OK; and the pass for that host alone
+    without the token must rescue it at its credential gate, for that reason. None rescued, one more, a listed host
+    rescued from another task or at its task for another reason, mock-fortigate stopped at its gate though the token
+    was given, saying nothing of its GET or ending UNREACHABLE, or its gate passed or missed without the token, each
+    fails the script at that step, naming what the log held. Guards a class's `check` that does not evaluate passing
+    as a device that did not answer: ping.yml's rescue catches a template error too, and T27's fold-1 read passed an
+    undefined variable in proxmox's check that way (S2); the fold-2 read passed one in the very task the netcommon
+    classes are listed at, which only the reason tells apart (its S2). And it guards I-6: with a credential, the API
+    class's check read the GET a dry-run skips as a failed answer, and ping reported the host UNREACHABLE."""
     r, _, p = _run(tmp_path, mode)
     assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
     assert says in r.stderr, r.stderr
@@ -432,7 +480,11 @@ def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp
     ("backup:pass", "backup-check exited 0, expected fail"),
     ("backup:no-summary", "backup-check's log does not say the run reached its summary"),
     ("red:playbooks/backup-configs.yml", "backup-check's log does not say the run reached its summary"),
-    ("backup:no-token-message", "backup-check's log does not say the API class stopped at its credential gate"),
+    ("backup:no-token-message", "backup-check-gate's log does not say the API class stopped at its credential gate"),
+    ("backup:token-ignored", "'mock-fortigate': 'backend_api : Refuse an unresolvable API credential"),
+    ("backup:api-not-captured", "backup-check's log does not say mock-fortigate's capture went past its credential"),
+    ("backup:gate-passes", "backup-check-gate exited 0, expected fail"),
+    ("backup:gate-other-task", "'mock-fortigate': \"backend_api : Pull config via the recipe's backup endpoint\""),
     ("backup:no-recap", "backup-check: the hosts that failed are not the listed ones"),
     ("backup:other-host", "'mock-ap': 'backend_raw_ssh : Write capture'"),
     ("backup:other-task", "'mock-edge': 'opnsense : Resolve capture filename'"),
@@ -441,18 +493,22 @@ def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp
     ("backup:unreachable-host", "'mock-hv': 'proxmox : SSH capture'"),
     ("backup:wrote-capture", "a --check run wrote a capture under")])
 def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere_else(tmp_path, mode, says):
-    """The backup pass against the mock inventory must fail, reach its summary, say the API class stopped at its
-    credential gate, have exactly the listed hosts fail, each at its listed task (the read of its device, or the
-    API-credential gate a fresh node cannot pass), and write no capture. It passing, dying before its summary, the
-    API class stopping for another reason, printing no recap, failing one more host (in a task or in a handler, which
-    is charged to the handler and not to the task before it) or leaving one unreachable, failing a listed host at
-    another task, a listed host passing, or a capture written by the dry-run each fails the script at that step, and
-    a stop mismatch names what the log held, with the step to take. A dry-run that writes a capture would, on a real
-    fleet, overwrite the last good one with the empty preview (T27's fold-2 read planted `check_mode: false` on the
-    raw-SSH write and the step passed, N6). Guards the
+    """The backup pass against the mock inventory must fail, reach its summary, have exactly the listed hosts fail,
+    each at its listed task (the read of its device), record mock-fortigate's capture (given a placeholder token, it
+    goes past its credential gate to its write), and write no capture; the pass for that host alone without the
+    token must fail it at its credential gate, for that reason (its one host failed, so that run has no summary). It
+    passing, dying before its summary, printing no recap, failing one more host (in a task or in a handler, which is
+    charged to the handler and not to the task before it) or leaving one unreachable, failing a listed host at
+    another task, a listed host passing, mock-fortigate stopped at its gate though the token was given or recording
+    no capture, the pass without the token passing or stopping it elsewhere or for another reason, or a capture
+    written by the dry-run each fails the script at that step, and a stop mismatch names what the log held, with the
+    step to take. A dry-run that writes a capture would, on a real fleet, overwrite the last good one with the empty
+    preview (T27's fold-2 read planted `check_mode: false` on the raw-SSH write and the step passed, N6). Guards the
     step degrading to "any red is fine": backup-configs.yml rescues nothing, so under the mock's local connection
     those classes fail by design, and a host that fails anywhere else is a play that did not evaluate (T27's first
-    real run: the openwrt and RouterOS captures failed their write in every --check run)."""
+    real run: the openwrt and RouterOS captures failed their write in every --check run). And it guards I-6: with a
+    credential, the API class's capture read the pull a dry-run skips as a failed answer and failed the host; it now
+    reaches its write, which the empty-directory check holds as it holds the others."""
     r, _, p = _run(tmp_path, mode)
     assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
     assert says in r.stderr, r.stderr
@@ -515,4 +571,4 @@ def test_keep_leaves_the_directory_and_names_it(tmp_path):
     assert ("fresh-node-check: kept " + d) in r.stdout, r.stdout
     assert sorted(os.listdir(os.path.join(d, "logs"))) == sorted(
         n + ".log" for n in ("init", "deploy-check", "deploy-check-all", "deploy-check-gui", "bootstrap-check",
-                             "ping-check", "backup-check"))
+                             "ping-check", "ping-check-gate", "backup-check", "backup-check-gate"))
