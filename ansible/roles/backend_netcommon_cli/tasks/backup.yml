@@ -38,6 +38,21 @@
       changed_when: false
       no_log: true
 
+    # A command that answers nothing (no output, or only blank lines) has given no config, and a capture of it would
+    # overwrite the last good one. So that answer is recorded as a failed capture, which fails the run at its
+    # summary, and the write does not run: any earlier capture is kept. `cli_command` runs a `show` command in a
+    # --check run too (it fails any other there), so a dry-run is held to the same answer.
+    # An unreachable host (the play tolerates one) gave no answer either: it is not refused, and the summary says so.
+    - name: Record an empty capture as failed (any earlier capture is kept)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          FAILED: `{{ backend_backup_command | default('show running-config') }}` answered nothing, so no capture was
+          written and any earlier one is kept.
+        kontroll_backup_failed: true
+      when:
+        - _cfg is not unreachable
+        - _cfg.stdout | default('') | trim | length == 0
+
     - name: Write capture
       ansible.builtin.copy:
         content: "{{ _cfg.stdout }}\n"
@@ -45,7 +60,11 @@
         mode: "0640"
       delegate_to: localhost
       no_log: true
+      register: _cfg_write
+      when: _cfg.stdout | default('') | trim | length > 0
 
+    # Recorded where the write ran (in a dry-run, its preview), and only there, so "captured" never outruns the write.
     - name: Record successful capture
       ansible.builtin.set_fact:
         kontroll_backup_result: "captured -> {{ _backup_file }}"
+      when: _cfg_write is not skipped

@@ -73,7 +73,8 @@ write, so "captured" is never said for a write that did not run). Only a check-m
 is taken as not asked: it registers no `skip_reason`, which a `when` that skips the read
 adds, so a read skipped by a `when` is refused in a dry-run as in a real run. A real run
 reads the status as before: anything but a success is refused, and a pull that is not a
-200 is a failed capture. Neither read, nor a block around one, carries
+200 is a failed capture, as is a 200 whose body is empty or only blank lines: it is not
+written, so any earlier capture is kept. Neither read, nor a block around one, carries
 `check_mode: false` — a device's read never runs in a dry-run, where it would send the
 token. Pinned by
 [`tests/unit/test_backend_api_check_mode.py`](../../../tests/unit/test_backend_api_check_mode.py),

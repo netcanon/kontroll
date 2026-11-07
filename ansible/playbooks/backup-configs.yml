@@ -12,8 +12,10 @@
 # Backup-capability: each class declares `backup_capable` (roles/<class>/
 # defaults/main.yml); a class that is not capable records a logged skip instead
 # of a forced empty capture. Override per host in host_vars/<host>.yml. The final
-# play prints a per-host summary (captured / skipped / not-run) from the
-# `kontroll_backup_result` fact each role sets.
+# play prints a per-host summary (captured / skipped / FAILED / not-run) from the
+# `kontroll_backup_result` fact each role sets. The raw-SSH, CLI, RouterOS, OPNsense
+# and API backups record a read that answers nothing as a failed capture and never
+# write it, so the last good capture is kept.
 #
 # Access chain used:   control node (mgmt VLAN) -> mgmt IPs over SSH/API
 # May break:           none (read-only captures)
@@ -69,8 +71,9 @@
           {{ kontroll_backup_result | default('not run — unreachable or skipped') }}
 
     # A logged skip or an unreachable host is tolerated; a capture that actually
-    # FAILED (e.g. a permission error) must not pass silently — fail the run so a
-    # scheduled job surfaces it. This runs after every host's summary line above.
+    # FAILED (e.g. a permission error, or a read that answered nothing) must not
+    # pass silently — fail the run so a scheduled job surfaces it. This runs after
+    # every host's summary line above.
     - name: Fail the run if any capture failed
       ansible.builtin.assert:
         that: not (kontroll_backup_failed | default(false) | bool)

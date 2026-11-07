@@ -37,9 +37,24 @@
       changed_when: false
       no_log: true                       # export carries passwords/keys
 
-    # community.routeros.command has no check mode (from the collection's 3.0.0): a --check run skips it, and its
-    # result then has no stdout. The dry-run reads that as an empty capture; a real run reads the export as before
-    # (tests/fresh-node-check.sh's backup step failed here).
+    # An export with nothing in it (no output, or only blank lines) is no config, and a capture of it would overwrite
+    # the last good one. So that answer is recorded as a failed capture, which fails the run at its summary, and the
+    # write does not run: any earlier capture is kept. community.routeros.command has no check mode (from the
+    # collection's 3.0.0): a --check run skips it, and its result then has no stdout. A check-mode skip registers no
+    # `skip_reason` (a `when` that skips a task adds one), so only it is taken as not read: the dry-run previews an
+    # empty capture, as it did since T27 (tests/fresh-node-check.sh's backup step failed here), and refuses nothing
+    # it did not read.
+    # An unreachable host (the play tolerates one) gave no answer either: it is not refused, and the summary says so.
+    - name: Record an empty capture as failed (any earlier capture is kept)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          FAILED: `/export show-sensitive` answered nothing, so no capture was written and any earlier one is kept.
+        kontroll_backup_failed: true
+      when:
+        - ros_export is not unreachable
+        - not (ansible_check_mode and ros_export is skipped and ros_export.skip_reason is not defined)
+        - ros_export.stdout | default([]) | first | default('') | trim | length == 0
+
     - name: Write capture
       ansible.builtin.copy:
         content: "{{ ros_export.stdout | default([]) | first | default('') if ansible_check_mode
@@ -48,7 +63,13 @@
         mode: "0640"
       delegate_to: localhost
       no_log: true                       # content is the secret-bearing config
+      register: _ros_write
+      when: >-
+        (ros_export.stdout | default([]) | first | default('') | trim | length > 0)
+        or (ansible_check_mode and ros_export is skipped and ros_export.skip_reason is not defined)
 
+    # Recorded where the write ran (in a dry-run, its preview), and only there, so "captured" never outruns the write.
     - name: Record successful capture
       ansible.builtin.set_fact:
         kontroll_backup_result: "captured -> {{ _backup_file }} (staged/unverified)"
+      when: _ros_write is not skipped

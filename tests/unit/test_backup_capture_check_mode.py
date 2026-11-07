@@ -65,7 +65,7 @@ def test_a_real_run_writes_the_device_output_and_still_needs_it(role):
     """Outside check mode the write renders the read's output exactly as before, and a result with no `stdout` or
     `content` (a skipped read's) still fails the render. Guards the dry-run's default leaking into a real run, where
     a read that left no result would be written as an empty capture without an error. A read that returns an empty
-    `stdout` is written as one, as before T27: that is queued on its own (T27's fold-1 read, N9)."""
+    `stdout` renders as one here; since I-5 the write does not run for it (test_backup_empty_capture_refused.py)."""
     register, real, capture = ROLES[role]
     assert _render(role, real, False) == capture
     with pytest.raises(jinja2.UndefinedError):
