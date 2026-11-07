@@ -238,7 +238,7 @@ needs ping-check '^fatal: \[mock-xe\]: .*Connection type local is not valid for 
 needs ping-check '"msg": "mock-fortigate: the fortios check endpoint is not read in a dry-run' \
   "mock-fortigate's check went past its credential gate to the GET a dry-run skips"
 needs ping-check '"msg": "mock-fortigate: OK"' "mock-fortigate ended OK"
-# Without the token, mock-fortigate is rescued at its credential gate, for that reason.
+# Without the token, mock-fortigate is rescued at its credential gate, for that reason, and reported UNREACHABLE.
 step ping-check-gate pass ansible-playbook -i ../tests/mock-inventory.yml playbooks/ping.yml --check \
   --limit mock-fortigate
 recap ping-check-gate
@@ -247,12 +247,14 @@ stops ping-check-gate --rescued \
   "mock-fortigate=backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"
 needs ping-check-gate '"msg": "mock-fortigate: no API token is in scope' \
   "mock-fortigate stopped at its credential gate"
+needs ping-check-gate '"msg": "mock-fortigate: UNREACHABLE"' "mock-fortigate was reported UNREACHABLE"
 # The backup pass must FAIL, and only where the mock inventory stops it. backup-configs.yml rescues nothing (a
 # capture that fails is a failed run), so under `ansible_connection: local` a class whose capture reads its device
 # fails at that task. Every other host must pass and the run must reach its summary. A host failing anywhere else, or
 # a listed one passing or failing at another task, fails the check: a class added to the mock inventory whose backup
 # reaches a device is listed here, at that task. A listed host is held to its task, not its reason (its read is
-# `no_log`, and ansible-core 2.18 prints no reason for it). mock-fortigate must reach its capture write.
+# `no_log`, and ansible-core 2.18 prints no reason for it). mock-fortigate must say its pull was not made, and
+# record its capture, which backend_api records only where its write ran.
 step backup-check fail ansible-playbook -i ../tests/mock-inventory.yml playbooks/backup-configs.yml --check \
   -e "$api_token" -e "config_backup_dir=$tmp/backups"
 needs backup-check '^PLAY \[Backup run summary\]' "the run reached its summary"
@@ -260,6 +262,8 @@ stops backup-check \
   "mock-edge=opnsense : Read /conf/config.xml" \
   "mock-switch=backend_netcommon_cli : Pull config via cli_command" \
   "mock-xe=backend_netcommon_cli : Pull config via cli_command"
+needs backup-check '"msg": "mock-fortigate: the fortios backup endpoint is not read in a dry-run' \
+  "mock-fortigate's capture went past its credential gate to the pull a dry-run skips"
 needs backup-check '"msg": "mock-fortigate \(fortigate\): captured -> FortiGate_192-0-2-4_full-configuration\.conf"' \
   "mock-fortigate's capture went past its credential gate to its write"
 # Without the token, mock-fortigate fails at its credential gate, for that reason. The run ends there: its one host

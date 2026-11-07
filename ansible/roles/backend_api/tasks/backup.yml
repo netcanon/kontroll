@@ -103,8 +103,20 @@
       no_log: true                       # request carries the token, response the config
 
     # `uri` has no check mode: a --check run skips the pull, and its result then has no status or content. The
-    # dry-run reads that as an empty capture, as the raw-SSH and RouterOS backups do, not as a failed answer. A real
-    # run reads the status and content as before, and a pull a real run skipped is still a failed capture.
+    # dry-run reports that it did not pull and previews an empty capture, as the raw-SSH and RouterOS backups do; it
+    # does not read that skip as a failed answer. A check-mode skip registers no `skip_reason` (a `when` that skips a
+    # task adds one), so only it is taken as not pulled. A real run reads the status and content as before, and a
+    # pull a real run skipped, or a dry-run's skipped by a `when`, is still a failed capture.
+    - name: Report the backup endpoint as not read in a dry-run
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: the {{ backend_api_recipe }} backup endpoint is not read in a dry-run (`uri` has
+          no check mode), so no config was pulled and none is written; a real run pulls it.
+      when:
+        - ansible_check_mode
+        - _api_resp is skipped
+        - _api_resp.skip_reason is not defined
+
     - name: Record capture failure (reported in summary, not a hard abort)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
@@ -112,7 +124,7 @@
           backup endpoint {{ _api_recipe.backup.path }} — check the API token's permissions.
         kontroll_backup_failed: true
       when:
-        - not (ansible_check_mode and _api_resp is skipped)
+        - not (ansible_check_mode and _api_resp is skipped and _api_resp.skip_reason is not defined)
         - (_api_resp.status | default(0)) != 200
 
     - name: Write capture
@@ -122,9 +134,13 @@
         mode: "0640"
       delegate_to: localhost
       no_log: true                       # content is the secret-bearing config
-      when: (_api_resp.status | default(0)) == 200 or (ansible_check_mode and _api_resp is skipped)
+      register: _api_write
+      when: >-
+        (_api_resp.status | default(0)) == 200
+        or (ansible_check_mode and _api_resp is skipped and _api_resp.skip_reason is not defined)
 
+    # Recorded where the write ran (in a dry-run, its preview), and only there, so "captured" never outruns the write.
     - name: Record successful capture
       ansible.builtin.set_fact:
         kontroll_backup_result: "captured -> {{ _backup_file }}"
-      when: (_api_resp.status | default(0)) == 200 or (ansible_check_mode and _api_resp is skipped)
+      when: _api_write is not skipped

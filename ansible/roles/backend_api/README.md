@@ -67,11 +67,17 @@ carries the token, the response the secret-bearing config.
 missing, but no request is made: `uri` has no check mode, so the GET and the pull are
 skipped. The check then says "the <recipe> check endpoint is not read in a dry-run" and
 does not refuse, so `ping.yml --check` reports the host OK without having asked it; the
-backup previews an empty capture and records it, as the raw-SSH and RouterOS backups do.
-A real run reads the status as before: anything but a success is refused, and a pull
-that is not a 200 is a failed capture. Neither read carries `check_mode: false` — a
-device's read never runs in a dry-run. Pinned by
-[`tests/unit/test_backend_api_check_mode.py`](../../../tests/unit/test_backend_api_check_mode.py).
+backup says "the <recipe> backup endpoint is not read in a dry-run", previews an empty
+capture, as the raw-SSH and RouterOS backups do, and records it (the record follows the
+write, so "captured" is never said for a write that did not run). Only a check-mode skip
+is taken as not asked: it registers no `skip_reason`, which a `when` that skips the read
+adds, so a read skipped by a `when` is refused in a dry-run as in a real run. A real run
+reads the status as before: anything but a success is refused, and a pull that is not a
+200 is a failed capture. Neither read, nor a block around one, carries
+`check_mode: false` — a device's read never runs in a dry-run, where it would send the
+token. Pinned by
+[`tests/unit/test_backend_api_check_mode.py`](../../../tests/unit/test_backend_api_check_mode.py),
+which also holds every task that reads a registered result to the ones it evaluates.
 
 **Two ports, two owners (S28).** The recipe's `port:` governs the check and backup
 requests. The reachability probe that runs *before* them (`ping.yml`) reads the host's

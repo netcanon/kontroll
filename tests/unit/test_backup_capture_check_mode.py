@@ -23,7 +23,8 @@ import yaml
 pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SKIPPED = {"changed": False, "skipped": True, "skip_reason": "check mode"}
+# A check-mode skip's keys (its message names the module): no stdout or content, nor the `skip_reason` a `when` adds.
+SKIPPED = {"changed": False, "skipped": True, "msg": "This action does not support check mode."}
 ROLES = {  # role: (the read's register, a real run's result of that read, the capture it writes)
     "backend_api": ("_api_resp", {"status": 200, "content": "config system global\n"}, "config system global\n"),
     "backend_raw_ssh": ("_cfg", {"rc": 0, "stdout": "config system\n", "stderr": ""}, "config system\n"),

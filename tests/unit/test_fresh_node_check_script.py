@@ -163,7 +163,8 @@ if pb == "playbooks/ping.yml":
                 'dry-run (`uri` has no check mode), so its API was not asked; a real run reads it."', "}"]
     out += ["", land, "", "TASK [Per-host reachability] ****"]
     for h in hosts:
-        down = any(h == s for s, _ in rescued) or (mode == "ping:api-not-ok" and h == "mock-fortigate")
+        down = (any(h == s for s, _ in rescued) and not (mode == "ping:gate-ok" and limited)) or (
+            mode == "ping:api-not-ok" and h == "mock-fortigate")
         out += ["ok: [%s] => {" % h, '    "msg": "%s: %s"' % (h, "UNREACHABLE" if down else "OK"), "}"]
     out += [recap([(h, 0, 0, any(h == s for s, _ in rescued)) for h in hosts])]
     print("\n".join(out)); sys.exit(0)
@@ -208,6 +209,11 @@ if pb == "playbooks/backup-configs.yml":
         unreach.add("mock-hv")
     if mode == "backup:wrote-capture":
         open(os.path.join(extra["config_backup_dir"], "OpenWrt_192-0-2-3.cfg"), "w").close()
+    if token and mode != "backup:api-pull-unsaid":
+        out += ["", "TASK [backend_api : Report the backup endpoint as not read in a dry-run] ****",
+                "ok: [mock-fortigate] => {", '    "msg": "mock-fortigate: the fortios backup endpoint is not read in a '
+                'dry-run (`uri` has no check mode), so no config was pulled and none is written; a real run pulls it."',
+                "}"]
     if mode != "backup:no-summary" and not set(hosts) <= failed:  # every host failed: Ansible runs no later play
         out += ["", "PLAY [Backup run summary] ****", "", "TASK [Per-host backup result] ****"]
         if token and mode != "backup:api-not-captured":
@@ -457,19 +463,22 @@ def test_a_play_that_must_pass_and_exits_non_zero_fails_at_its_exit(tmp_path, st
     ("ping:gate-passes", "ping-check-gate: the hosts it rescued are not the listed ones"),
     ("ping:gate-other-task", "'mock-fortigate': 'backend_api : GET the check endpoint'"),
     ("ping:other-reason-fortigate",
-     "ping-check-gate's log does not say mock-fortigate stopped at its credential gate")])
+     "ping-check-gate's log does not say mock-fortigate stopped at its credential gate"),
+    ("ping:gate-ok", "ping-check-gate's log does not say mock-fortigate was reported UNREACHABLE")])
 def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp_path, mode, says):
     """ping.yml must pass, and the hosts it rescues (and reports UNREACHABLE) must be exactly the listed ones, each
     rescued from its listed task (the class's read of its device) for its listed reason; mock-fortigate, given a
     placeholder token, must say the GET a dry-run skips was not made and end OK; and the pass for that host alone
-    without the token must rescue it at its credential gate, for that reason. None rescued, one more, a listed host
-    rescued from another task or at its task for another reason, mock-fortigate stopped at its gate though the token
-    was given, saying nothing of its GET or ending UNREACHABLE, or its gate passed or missed without the token, each
-    fails the script at that step, naming what the log held. Guards a class's `check` that does not evaluate passing
-    as a device that did not answer: ping.yml's rescue catches a template error too, and T27's fold-1 read passed an
-    undefined variable in proxmox's check that way (S2); the fold-2 read passed one in the very task the netcommon
-    classes are listed at, which only the reason tells apart (its S2). And it guards I-6: with a credential, the API
-    class's check read the GET a dry-run skips as a failed answer, and ping reported the host UNREACHABLE."""
+    without the token must rescue it at its credential gate, for that reason, and report it UNREACHABLE. None
+    rescued, one more, a listed host rescued from another task or at its task for another reason, mock-fortigate
+    stopped at its gate though the token was given, saying nothing of its GET or ending UNREACHABLE, or its gate
+    passed, missed or reported OK without the token, each fails the script at that step, naming what the log held.
+    Guards a class's `check` that does not evaluate passing as a device that did not answer: ping.yml's rescue
+    catches a template error too, and T27's fold-1 read passed an undefined variable in proxmox's check that way
+    (S2); the fold-2 read passed one in the very task the netcommon classes are listed at, which only the reason
+    tells apart (its S2). And it guards I-6: with a credential, the API class's check read the GET a dry-run skips
+    as a failed answer, and ping reported the host UNREACHABLE; and a rescue widened so that host ended OK passed
+    the pass without the token (I-6's runtime read, N2)."""
     r, _, p = _run(tmp_path, mode)
     assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
     assert says in r.stderr, r.stderr
@@ -482,7 +491,10 @@ def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp
     ("red:playbooks/backup-configs.yml", "backup-check's log does not say the run reached its summary"),
     ("backup:no-token-message", "backup-check-gate's log does not say the API class stopped at its credential gate"),
     ("backup:token-ignored", "'mock-fortigate': 'backend_api : Refuse an unresolvable API credential"),
-    ("backup:api-not-captured", "backup-check's log does not say mock-fortigate's capture went past its credential"),
+    ("backup:api-pull-unsaid",
+     "backup-check's log does not say mock-fortigate's capture went past its credential gate to the pull a dry-run"),
+    ("backup:api-not-captured",
+     "backup-check's log does not say mock-fortigate's capture went past its credential gate to its write"),
     ("backup:gate-passes", "backup-check-gate exited 0, expected fail"),
     ("backup:gate-other-task", "'mock-fortigate': \"backend_api : Pull config via the recipe's backup endpoint\""),
     ("backup:no-recap", "backup-check: the hosts that failed are not the listed ones"),
@@ -494,21 +506,24 @@ def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp
     ("backup:wrote-capture", "a --check run wrote a capture under")])
 def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere_else(tmp_path, mode, says):
     """The backup pass against the mock inventory must fail, reach its summary, have exactly the listed hosts fail,
-    each at its listed task (the read of its device), record mock-fortigate's capture (given a placeholder token, it
-    goes past its credential gate to its write), and write no capture; the pass for that host alone without the
-    token must fail it at its credential gate, for that reason (its one host failed, so that run has no summary). It
-    passing, dying before its summary, printing no recap, failing one more host (in a task or in a handler, which is
-    charged to the handler and not to the task before it) or leaving one unreachable, failing a listed host at
-    another task, a listed host passing, mock-fortigate stopped at its gate though the token was given or recording
-    no capture, the pass without the token passing or stopping it elsewhere or for another reason, or a capture
-    written by the dry-run each fails the script at that step, and a stop mismatch names what the log held, with the
-    step to take. A dry-run that writes a capture would, on a real fleet, overwrite the last good one with the empty
-    preview (T27's fold-2 read planted `check_mode: false` on the raw-SSH write and the step passed, N6). Guards the
-    step degrading to "any red is fine": backup-configs.yml rescues nothing, so under the mock's local connection
-    those classes fail by design, and a host that fails anywhere else is a play that did not evaluate (T27's first
-    real run: the openwrt and RouterOS captures failed their write in every --check run). And it guards I-6: with a
-    credential, the API class's capture read the pull a dry-run skips as a failed answer and failed the host; it now
-    reaches its write, which the empty-directory check holds as it holds the others."""
+    each at its listed task (the read of its device), say mock-fortigate's pull was not made and record its capture
+    (given a placeholder token, it goes past its credential gate to the pull a dry-run skips, and to its write,
+    which the record follows), and write no capture; the pass for that host alone without the token must fail it at
+    its credential gate, for that reason (its one host failed, so that run has no summary). It passing, dying before
+    its summary, printing no recap, failing one more host (in a task or in a handler, which is charged to the
+    handler and not to the task before it) or leaving one unreachable, failing a listed host at another task, a
+    listed host passing, mock-fortigate stopped at its gate though the token was given, saying nothing of its pull
+    or recording no capture, the pass without the token passing or stopping it elsewhere or for another reason, or a
+    capture written by the dry-run each fails the script at that step, and a stop mismatch names what the log held,
+    with the step to take. A dry-run that writes a capture would, on a real fleet, overwrite the last good one with
+    the empty preview (T27's fold-2 read planted `check_mode: false` on the raw-SSH write and the step passed, N6).
+    Guards the step degrading to "any red is fine": backup-configs.yml rescues nothing, so under the mock's local
+    connection those classes fail by design, and a host that fails anywhere else is a play that did not evaluate
+    (T27's first real run: the openwrt and RouterOS captures failed their write in every --check run). And it guards
+    I-6: with a credential, the API class's capture read the pull a dry-run skips as a failed answer and failed the
+    host; it now reaches its write, which the empty-directory check holds as it holds the others. Its record
+    followed a copy of the write's condition, not the write, so a dry-run write skipped still said "captured" and
+    passed (I-6's runtime read, N1); the record now follows the write."""
     r, _, p = _run(tmp_path, mode)
     assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
     assert says in r.stderr, r.stderr
