@@ -146,34 +146,46 @@ TOKEN_HINT = ("The API rejected the credential: check that `fortios_api_token` (
 BASIC_HINT = ("The API rejected the credential: check that `probe_user` and `probe_pass` hold a current username and"
               " password with read permission.")
 NONE_HINT = "The API refused the request, and the recipe sends no credential: name one in its auth."
-DOWN = "The device did not answer the API port — wrong address, port, or the service is down."
-ANSWERED = "The API answered with an error: check the recipe check path and the device API."
+DOWN = ("The device did not answer the API port, or its TLS failed — wrong address, port, certificate, or the service"
+        " is down.")
+ANSWERED = ("The API answered, but not with success (200/201/204): check the recipe check path and the device"
+            " API.")
 BEARER = {"type": "bearer", "token_var": "fortios_api_token"}
 APIKEY = {"type": "apikey_header", "header_name": "X-Api-Key", "token_var": "fortios_api_token"}
 BASIC = {"type": "basic", "username_var": "probe_user", "password_var": "probe_pass"}
 NONE = {"type": "none"}
+BASIC_NO_PASS = {"type": "basic", "username_var": "probe_user"}
+DIGEST = {"type": "digest", "username_var": "probe_user", "password_var": "probe_pass"}
 
 
 @pytest.mark.parametrize("auth, status, http, remedy", [
     (BEARER, 401, "401", TOKEN_HINT),
+    (BEARER, 403, "403", TOKEN_HINT),
+    (APIKEY, 401, "401", TOKEN_HINT),
     (APIKEY, 403, "403", TOKEN_HINT),
     (BASIC, 401, "401", BASIC_HINT),     # I-7: failed on its own message ('dict' has no attribute 'token_var')
     (BASIC, 403, "403", BASIC_HINT),
-    (NONE, 401, "401", NONE_HINT),
+    (NONE, 401, "401", NONE_HINT),       # failed on its own message too: a `none` recipe has no token_var either
+    (NONE, 403, "403", NONE_HINT),
+    (BASIC_NO_PASS, 401, "401", BASIC_HINT.replace("`probe_pass`", "`?`")),
+    (DIGEST, 401, "401", BASIC_HINT),    # the GET sends the vars a recipe names, whatever its type
     (BEARER, 500, "500", ANSWERED),      # before I-7: "did not answer the API port" for an answer
     (BASIC, 404, "404", ANSWERED),
     (BEARER, 302, "302", ANSWERED),
     (BEARER, -1, "-1", DOWN),            # uri's status for a refused connection, a timeout, a TLS failure
     (BASIC, -1, "-1", DOWN),
     (BEARER, None, "no response", DOWN),
-], ids=["bearer-401", "apikey-403", "basic-401", "basic-403", "none-401", "bearer-500", "basic-404", "bearer-302",
+], ids=["bearer-401", "bearer-403", "apikey-401", "apikey-403", "basic-401", "basic-403", "none-401", "none-403",
+        "basic-no-password-var-401", "digest-named-vars-401", "bearer-500", "basic-404", "bearer-302",
         "bearer-refused", "basic-refused", "bearer-no-status"])
 def test_the_failure_message_names_the_remedy_for_each_auth_type_and_answer(auth, status, http, remedy):
     """The refusal's message, rendered as the task renders it, for each auth type the role builds a request for
-    and each kind of failure: a 401/403 names the variables that auth type reads (a basic recipe's username and
-    password vars; a token recipe's `token_var`, else the onboarded per-host name), never their values; a status
-    below 0 or none says the device did not answer; any other answer says the API answered. The basic rows are
-    I-7's fault: the message named `token_var`, which a basic recipe has none of, and failed itself."""
+    and each kind of failure: a 401 or a 403 names the variables that auth reads (a basic recipe's username and
+    password vars, and any recipe's that names them, since the GET sends them whatever the type; a var the recipe
+    does not name is `?`; a token recipe's `token_var`, else the onboarded per-host name), never their values; a
+    status below 0 or none says the device did not answer or its TLS failed; any other answer says the API
+    answered, but not with success. The basic and none rows are I-7's fault: the message named `token_var`, which
+    neither has, and failed itself."""
     expected = "fw-1: probe liveness check FAILED — HTTP %s from /api/status. %s" % (http, remedy)
     assert _render(auth, status) == expected
 
@@ -183,9 +195,15 @@ def test_the_failure_message_cannot_leak_the_token_or_the_config():
     configuration (the fortios recipe's backup uses `extract: body`). Making the check informative must not
     turn it into a disclosure — so the message and its auth hint may reference status, the recipe's path and
     the NAMES its auth reads, never `content`, `json`, the whole registered dict, the token or the headers.
-    The variables both read are held to a list, and `_api_check` to its status, so a new reference to a
-    value (a credential var looked up, the response body) fails here."""
+    The variables both read are held to a list, `_api_check` to its status and `_api_recipe` to the names its
+    auth reads and its check path, so a new reference to a value (a credential var looked up, the response body,
+    the recipe's auth printed whole) fails here. And the task's only var is the hint: a task var outranks a host
+    var, so a second one could rebind a name the message prints (`backend_api_recipe`) to the token, and every
+    other assertion here would still pass (the I-7 read's S1, measured on both cores)."""
     msg, hint = _refusal()
+    task = _named(_CHECK, "Refuse unless the API actually answered")
+    assert set(task.get("vars") or {}) == {"_api_auth_hint"}, \
+        "a task var on the refusal outranks a host var, so it can rebind a name the message prints"
     for leak in (".content", ".json", "_api_check }}", "_api_check}}", "_api_token", "_api_headers"):
         assert leak not in msg, "the failure message must not surface %r" % leak
     env = jinja2.Environment()
@@ -196,6 +214,12 @@ def test_the_failure_message_cannot_leak_the_token_or_the_config():
         assert "lookup(" not in text and "hostvars" not in text and "vars[" not in text, text
         assert all(m.group(1) == "status" for m in re.finditer(r"_api_check\.(\w+)", text)), text
         assert not re.search(r"_api_check(?![.\w])", text), "the registered dict itself must not be printed"
+        assert all(m.group(1) in ("auth", "check") for m in re.finditer(r"(?<!\w)_api_recipe\.(\w+)", text)), text
+        assert all(m.group(1) in ("type", "username_var", "password_var", "token_var")
+                   for m in re.finditer(r"(?<!\w)_api_recipe\.auth\.(\w+)", text)), text
+        assert all(m.group(1) == "path" for m in re.finditer(r"(?<!\w)_api_recipe\.check\.(\w+)", text)), text
+        assert not re.search(r"(?<!\w)_api_recipe(\.(auth|check))?(?![.\w])", text), \
+            "the recipe, its auth or its check must not be printed whole"
 
 
 # --------------------------------------------------- F-TOKENVAR / F-CENSORED: the credential must resolve

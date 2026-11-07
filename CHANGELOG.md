@@ -14,22 +14,26 @@ NetConfig project.
 ### fix(ansible): an API check that is refused says why, for every auth type (I-7, 2026-11-06)
 
 `backend_api`'s check, refusing a 401 or 403, named the recipe's `token_var` in its remedy. A `basic` recipe has none,
-so a basic-auth 401 failed on its own message ("object of type 'dict' has no attribute 'token_var'") instead of saying
-the credential was refused. And any other non-success answer, a 404 or a 500, was reported as "The device did not
-answer the API port". I-6's runtime read found both.
+nor has a `none` recipe, so their 401 or 403 failed on its own message ("object of type 'dict' has no attribute
+'token_var'") instead of saying the credential was refused. And any other non-success answer, a 404 or a 500, was
+reported as "The device did not answer the API port". I-6's runtime read found both.
 
-- **Fixed.** The 401/403 remedy names the variables the recipe's auth type reads, never their values: a basic recipe's
-  `username_var` and `password_var`; a token recipe's `token_var`, else the onboarded per-host `<host>_api_token`, the
-  order the role resolves them in; a recipe that sends no credential is told so. No answer (uri's status -1 for a
-  refused connection, a timeout or a TLS failure, or no status) still says the device did not answer the API port; any
-  other status says the API answered with an error. The check refuses exactly what it did before; only the message
-  changed. No shipped recipe is basic (fortios is bearer).
+- **Fixed.** The 401/403 remedy names the variables the recipe's auth reads, never their values: a basic recipe's
+  `username_var` and `password_var`, as does any recipe that names them (the GET sends them whatever the type); a
+  token recipe's `token_var`, else the onboarded per-host `<host>_api_token`, the order the role resolves them in; a
+  recipe that sends no credential is told so. No answer (uri's status -1 for a refused connection, a timeout, a TLS
+  failure or plain HTTP on the port, or no status) says the device did not answer the API port, or its TLS failed; any
+  other status says the API answered, but not with success. The check refuses exactly what it did before; only the
+  message changed. No shipped recipe is basic (fortios is bearer).
 - **Tests.** `unit/test_backend_api_check_teeth.py` renders the message as the task does, with strict undefined, for
-  each auth type and each kind of failure (a 401 and a 403 per auth type, a 302, a 404, a 500, a refused connection,
-  no status); the basic rows raised the reported error on the old message. It also holds the names the message and its
-  hint read to a list, and `_api_check` to its status. Run for real on ansible-core 2.19.4 and 2.18.19 against a TLS
-  stand-in on the loopback: the same messages, and no credential in any log.
-- **Docs.** The role's README.
+  each auth type and each kind of failure (a 401 and a 403 per auth type, a basic recipe naming one var, a digest
+  recipe naming both, a 302, a 404, a 500, a refused connection, no status); the basic and none rows raised the
+  reported error on the old message. It also holds the names the message and its hint read to a list, `_api_check` to
+  its status, `_api_recipe` to its auth's names and its check path, and the task's vars to the hint alone (a task var
+  outranks a host var, so a second one could rebind a name the message prints). Run for real on ansible-core 2.19.4
+  and 2.18.19 against a TLS stand-in on the loopback: the same messages, and no credential in any play log, plain or
+  base64, at the default verbosity, -v or -vvv.
+- **Docs.** The role's README (the refusals, and `none` among the auth types).
 
 ### fix(ansible): the observability reload's dry-run says it sent nothing (I-8, 2026-11-06)
 

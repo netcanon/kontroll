@@ -46,26 +46,29 @@ because the resolve task is `no_log`, the undefined-variable fatal arrived *cens
 Both names are now tried, an unresolvable or **empty** token is refused up front naming
 both candidates, and the liveness result is actually evaluated (it previously used
 `failed_when: false` and was never read again, so the check could not fail at all).
-A refused check says which: a 401 or 403 names the variables the recipe's auth type
-reads (a `basic` recipe's `username_var` and `password_var`; a token recipe's
-`token_var`, else the per-host name), never their values; no answer (uri's status -1:
-refused, timed out, TLS) says the device did not answer the API port; any other status
-says the API answered with an error. (A basic-auth 401 used to fail on its own message,
-which named `token_var`; a 404 or 500 was reported as no answer. I-7.)
+A refused check says which: a 401 or 403 names the variables the recipe's auth reads
+(a `basic` recipe's `username_var` and `password_var`, as does any recipe that names
+them, since the GET sends them whatever the type; a token recipe's `token_var`, else
+the per-host name; a `none` recipe is told it sends no credential), never their values;
+no answer (uri's status -1: refused, timed out, a TLS failure, plain HTTP on the port)
+says the device did not answer the API port, or its TLS failed; any other status says
+the API answered, but not with success. (A basic or `none` recipe's 401 used to fail on
+its own message, which named `token_var`; a 404 or 500 was reported as no answer. I-7.)
 Pinned by [`tests/unit/test_backend_api_check_teeth.py`](../../../tests/unit/test_backend_api_check_teeth.py).
 
 ```yaml
 name: fortios
 port: 443
 validate_certs: false
-auth:   {type: bearer, token_var: fortios_api_token}   # bearer | basic | apikey_header
+auth:   {type: bearer, token_var: fortios_api_token}   # bearer | basic | apikey_header | none
 check:  {method: GET, path: /api/v2/monitor/system/status}
 backup: {method: GET, path: /api/.../config/backup, extract: body,
          label: FortiGate, suffix: full-configuration.conf}
 ```
 
 Auth types: `bearer` (`Authorization: Bearer <token>`), `apikey_header`
-(`<header_name>: <token>`), `basic` (`username_var`/`password_var`). Backup
+(`<header_name>: <token>`), `basic` (`username_var`/`password_var`), `none` (no
+credential). Backup
 endpoints must be **read-only** (GET / export). Output is `no_log` — the request
 carries the token, the response the secret-bearing config.
 
