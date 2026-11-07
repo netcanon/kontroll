@@ -25,8 +25,9 @@ A command that answers nothing (exit 0 with no output, or only blank lines) has
 given no config. The host's backup is then recorded `FAILED`, naming the command,
 which fails the run at its summary, and nothing is written: any earlier capture is
 kept. `raw` has no check mode: a `--check` run never reads the device, the capture
-write previews an empty capture, and nothing it did not read is refused. A real run
-writes the command's output as before.
+write previews an empty capture, and nothing it did not read is refused. An
+unreachable host is not refused either: the summary says it was not run. A real
+run writes the command's output as before.
 
 ## See also
 - [../../backends/raw_ssh/backend.yml](../../backends/raw_ssh/backend.yml) — classifier metadata

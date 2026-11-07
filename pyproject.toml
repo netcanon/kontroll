@@ -9,7 +9,7 @@ addopts = "-q --strict-markers"
 testpaths = ["tests"]
 markers = [
   "unit: pure-function tests, no I/O (predicate engine, classify, record, openapi)",
-  "integration: galaxy.py/gui driven as black boxes with the shell-outs mocked — no live lab",
+  "integration: black boxes (galaxy.py, gui), shell-outs mocked; a few rows run git or ansible-playbook — no live lab",
   "e2e: full GUI browser flow (Playwright) — opt-in, never in the hermetic CI default",
   "slow: long-running; excluded from the fast pre-commit/CI subset",
 ]

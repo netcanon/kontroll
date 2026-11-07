@@ -13,8 +13,9 @@
 # defaults/main.yml); a class that is not capable records a logged skip instead
 # of a forced empty capture. Override per host in host_vars/<host>.yml. The final
 # play prints a per-host summary (captured / skipped / FAILED / not-run) from the
-# `kontroll_backup_result` fact each role sets. A read that answers nothing is a
-# failed capture and is never written, so the last good capture is kept.
+# `kontroll_backup_result` fact each role sets. The raw-SSH, CLI, RouterOS, OPNsense
+# and API backups record a read that answers nothing as a failed capture and never
+# write it, so the last good capture is kept.
 #
 # Access chain used:   control node (mgmt VLAN) -> mgmt IPs over SSH/API
 # May break:           none (read-only captures)

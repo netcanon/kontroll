@@ -22,22 +22,27 @@ with a raw-SSH `true` against a seeded good capture: a 0-byte capture, and a gre
   only blank lines before their write. The host's summary line says FAILED, naming the read (the command, the export,
   the file, or the recipe's endpoint) and nothing of its answer; `kontroll_backup_failed` fails the run at its
   summary; and the write does not run, so any earlier capture is kept and the history play commits no change for that
-  host. The other hosts' captures are written and committed as before, and "captured" is recorded where the write
-  ran, and only there. A dry-run refuses nothing it did not read: `raw`, `community.routeros.command` and `uri` have
-  no check mode, and their skipped read (a check-mode skip, with no `skip_reason`) still previews an empty capture;
-  `cli_command`'s `show` and `slurp` read in a dry-run, and are held to their answer there too. Not refused: the
-  Docker-host and Proxmox captures, which begin with a header their own script prints, and the rollback copies of the
-  log-shipping and OpenWrt discovery-key roles, where an empty file is the file's own state.
+  host. The other hosts' captures are written and committed as before, and "captured" is recorded where the write ran,
+  and only there. A dry-run refuses nothing it did not read: `raw`, `community.routeros.command` and `uri` have no
+  check mode, and their skipped read (a check-mode skip, with no `skip_reason`) still previews an empty capture;
+  `cli_command`'s `show` and `slurp` read in a dry-run, and are held to their answer there too. An unreachable host,
+  which the play tolerates, is not refused either: it gave no answer, and the summary says it was not run (before, its
+  write failed on the missing output). Not refused: the Docker-host and Proxmox captures, which begin with a header
+  their own script prints, and the rollback copies of the log-shipping and OpenWrt discovery-key roles, where an empty
+  file is the file's own state.
 - **Tests.** `unit/test_backup_empty_capture_refused.py` evaluates each backup's refusal, write and record from the
   role files, each condition held to a boolean, for a good, an empty and a blank answer in a real run and a dry-run,
   and for a skipped read where its module has no check mode: exactly one of the refusal and the write runs, the
   refusal comes before the write and fails the run, it names the read and nothing of the answer, and "captured" is
-  recorded where the write ran. It finds every task that writes under `config_backup_dir` and holds it to a refusal or
-  to an exemption whose reason it checks. `unit/test_backend_api_check_mode.py` adds an empty and a blank 200 to its
-  grids. `integration/test_backup_empty_capture_real_run.py` runs `backup-configs.yml` for real against three raw-SSH
-  hosts on a local connection, each with a good capture committed: the run fails for the empty and the blank host
-  only, their captures are kept byte for byte, and the good host's is written and is the history's only change; a
-  `--check --diff` run passes and writes and commits nothing.
+  recorded where the write ran, a write that changed nothing included. It holds each refusal to the role's one read,
+  and spares an unreachable host's. It finds every role task, at any depth under `tasks/`, whose arguments name
+  `config_backup_dir` or a fact built from it, and holds each to a refusal or to an exemption whose reason it checks
+  (a header exemption's write is the read's whole output). `unit/test_backend_api_check_mode.py` adds an empty and a
+  blank 200 to its grids. `integration/test_backup_empty_capture_real_run.py` runs `backup-configs.yml` for real
+  against three raw-SSH hosts on a local connection, each with a good capture committed, and an unreachable one: the
+  run fails for the empty and the blank host only, their captures and the unreachable host's are kept byte for byte,
+  and the good host's is written and is the history's only change; a `--check --diff` run passes and writes and
+  commits nothing. Both stamp the run id.
 
 ### fix(ansible): the API backend's dry-run takes a skipped read as not made (I-6, 2026-11-06)
 

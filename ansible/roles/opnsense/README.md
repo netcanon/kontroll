@@ -21,4 +21,5 @@ OPNsense API preferred, SSH fallback. Creds in `secrets/network.sops.yml`. See
 > in `instance/fleet.yml` at cutover (and dropping `fortigate`). A `config.xml` with
 > nothing in it (empty, or only blank lines) is recorded `FAILED`, which fails the run
 > at its summary, and is not written: any earlier capture is kept. `slurp` reads in a
-> `--check` run too, so a dry-run is held to the same answer.
+> `--check` run too, so a dry-run is held to the same answer. An unreachable host is
+> not refused: the summary says it was not run.

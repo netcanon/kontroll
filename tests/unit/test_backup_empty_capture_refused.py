@@ -8,13 +8,15 @@ recorded it captured; the history play then committed the loss as a change (T27'
 capture, which fails the run at its summary, and does not run its write, so any earlier capture is kept. A read a
 dry-run skips (`raw` and the RouterOS command have no check mode, nor has the API's `uri`) gave no answer: the dry-run
 previews an empty capture as before and refuses nothing. The reads that run in a dry-run (`cli_command`'s `show`,
-`slurp`) are held to their answer there too.
+`slurp`) are held to their answer there too. An unreachable host's read (the play tolerates one) gave no answer
+either: it is not refused, and the summary says the host was not run.
 
 The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must
 be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, `skipped` the
 test Ansible registers and `b64decode` its filter. The results are the shapes ansible-core 2.18.19 and 2.19.4
 register (measured for this change): raw's check-mode skip holds `skipped`, `changed` and `failed` alone, the RouterOS
-command's adds a `msg`, and a `when` skip adds `skip_reason` and `false_condition`.
+command's adds a `msg`, a `when` skip adds `skip_reason` and `false_condition`, and an unreachable host's read (the
+play's `ignore_unreachable`) registers `unreachable` with no output.
 """
 import base64
 import glob
@@ -64,6 +66,12 @@ SKIPS = {
 WHEN_SKIPPED = {"changed": False, "skipped": True, "skip_reason": "Conditional result was False",
                 "false_condition": False}
 WRITTEN = {"changed": True, "dest": "/backups/capture.cfg"}
+UNCHANGED = {"changed": False, "dest": "/backups/capture.cfg"}   # the nightly case: the config did not change
+UNREACHABLE = {"changed": False, "unreachable": True, "msg": "Failed to connect to the host via ssh"}
+# Each role's one read: the module whose answer the refusal and the write judge.
+READ_MODULE = {"backend_raw_ssh": "ansible.builtin.raw", "backend_netcommon_cli": "ansible.netcommon.cli_command",
+               "routeros": "community.routeros.command", "backend_api": "ansible.builtin.uri",
+               "opnsense": "ansible.builtin.slurp"}
 # What each refusal's message may name: never the read's register, which holds the device's config.
 MESSAGE_NAMES = {"backend_raw_ssh": {"backend_backup_command"}, "backend_netcommon_cli": {"backend_backup_command"},
                  "routeros": set(), "backend_api": {"backend_api_recipe", "_api_recipe"}, "opnsense": set()}
@@ -71,7 +79,7 @@ MESSAGE_NAMES = {"backend_raw_ssh": {"backend_backup_command"}, "backend_netcomm
 
 def _grid():
     """(role, check mode, the read's result, the one task that must run of the refusal, the write and, for the API,
-    its non-200 record)."""
+    its non-200 record; None where none may)."""
     for role, (_, _, good, empty, blank) in sorted(ROLES.items()):
         for check_mode in (False, True):
             yield role, check_mode, good, WRITE
@@ -83,6 +91,10 @@ def _grid():
             if role in SKIPS:
                 yield role, check_mode, SKIPS[role], (WRITE if check_mode else
                                                       FAILED if role == "backend_api" else NOTHING)
+            # An unreachable host's read gave no answer: nothing runs, and the summary says the host was not run. The
+            # API's pull runs on the control node, which is never unreachable.
+            if role != "backend_api":
+                yield role, check_mode, UNREACHABLE, None
 
 
 def _walk(tasks):
@@ -105,13 +117,17 @@ def _task(role, name):
 
 def _env():
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
-    env.tests["skipped"] = lambda r: r.get("skipped", False) if isinstance(r, dict) else _raise(r)
+    env.tests["skipped"] = lambda r: bool(_result(r, "skipped").get("skipped", False))
+    env.tests["unreachable"] = lambda r: bool(_result(r, "unreachable").get("unreachable", False))
     env.filters["b64decode"] = lambda s: base64.b64decode(s).decode()
     return env
 
 
-def _raise(value):
-    raise TypeError("the 'skipped' test expects a dictionary, not %r" % (value,))
+def _result(value, test):
+    """A registered result, as Ansible's result tests require one (they raise on anything else)."""
+    if not isinstance(value, dict):
+        raise TypeError("the '%s' test expects a dictionary, not %r" % (test, value))
+    return value
 
 
 def _runs(role, name, ctx):
@@ -133,11 +149,12 @@ def test_an_answer_with_nothing_in_it_is_refused_and_never_written(role, check_m
     skipped by a `when` or left skipped in a real run. Guards I-5 (an empty answer written over the last good
     capture and recorded captured), the refusal reaching a dry-run's skipped read (the mandated `--check` would fail
     every raw-SSH and RouterOS host, as before T27), and a dry-run that read the device passing what a real run
-    refuses."""
+    refuses. Neither runs for an unreachable host's read: it gave no answer, and the summary says the host was not
+    run (I-5's runtime read, S-1: the refusal reported it as a read that answered nothing)."""
     read = ROLES[role][0]
     tasks = [NOTHING, WRITE] + ([FAILED] if role == "backend_api" else [])
     ctx = {read: result, "ansible_check_mode": check_mode}
-    assert [t for t in tasks if _runs(role, t, ctx)] == [runs]
+    assert [t for t in tasks if _runs(role, t, ctx)] == ([runs] if runs else [])
 
 
 @pytest.mark.parametrize("role", sorted(ROLES))
@@ -145,7 +162,14 @@ def test_each_refusal_comes_before_its_write_and_fails_the_run(role):
     """Each refusal sits in the write's own task list, before it, and records a result that starts "FAILED:" with
     `kontroll_backup_failed: true`, which backup-configs.yml's summary fails the run on. Guards the refusal moving
     after the write (as a `failed_when` on the `copy`, it is evaluated after the copy has overwritten the good
-    capture) and a refusal that the summary prints but the run passes, so a scheduled backup never says it failed."""
+    capture) and a refusal that the summary prints but the run passes, so a scheduled backup never says it failed.
+    The read it judges is the role's one read: exactly one task sets the register, and it is the read module. Guards
+    a task between them that registers the same name (its answer would be judged and written instead) and a renamed
+    register (every capture refused; I-5's tests-and-docs read, N2)."""
+    read = ROLES[role][0]
+    setters = [t for t in _walk(_load(role)) if t.get("register") == read
+               or read in (t.get("ansible.builtin.set_fact") or {})]
+    assert len(setters) == 1 and READ_MODULE[role] in setters[0], (role, [t.get("name") for t in setters])
     lists = [t["block"] for t in _walk(_load(role)) if isinstance(t.get("block"), list)] + [_load(role)]
     names = next(([t.get("name") for t in ts] for ts in lists if any(t.get("name") == WRITE for t in ts)))
     assert NOTHING in names and names.index(NOTHING) < names.index(WRITE), names
@@ -168,17 +192,22 @@ def test_each_refusal_names_the_read_and_nothing_of_its_answer(role):
 @pytest.mark.parametrize("role", sorted(ROLES))
 def test_each_capture_is_recorded_where_its_write_ran_and_only_there(role):
     """The write registers its result, and "Record successful capture" reads that and nothing else: it runs for a
-    write that ran (in a dry-run, its preview) and not for one its `when` skipped. Guards "captured" following a copy
-    of the write's condition, or none: with the refusal's `when` wrong, the summary would say captured for a capture
-    never written (I-6's runtime read, N1, on the API backend)."""
+    write that ran (in a dry-run, its preview), one that found the capture unchanged included, and not for one its
+    `when` skipped; and the write neither ignores its errors nor sets its own failure, so a write that failed fails
+    the host there. Guards "captured" following a copy of the write's condition, or none: with the refusal's `when`
+    wrong, the summary would say captured for a capture never written (I-6's runtime read, N1, on the API backend);
+    "captured" said only of a changed capture, so a nightly run of an unchanged config says the host was not run
+    (I-5's tests-and-docs read, N1); and a failed write recorded as captured."""
     write = ROLES[role][1]
     assert _task(role, WRITE).get("register") == write
+    assert not {"ignore_errors", "failed_when"} & set(_task(role, WRITE)), _task(role, WRITE)
     when = _task(role, RECORD)["when"]
     names = set().union(*(jinja2.meta.find_undeclared_variables(_env().parse("{{ %s }}" % c))
                           for c in (when if isinstance(when, list) else [when])))
     assert names == {write}, names
     for check_mode in (True, False):
         assert _runs(role, RECORD, {write: WRITTEN, "ansible_check_mode": check_mode}) is True
+        assert _runs(role, RECORD, {write: UNCHANGED, "ansible_check_mode": check_mode}) is True
         assert _runs(role, RECORD, {write: WHEN_SKIPPED, "ansible_check_mode": check_mode}) is False
 
 
@@ -192,17 +221,38 @@ EXEMPT = {
 }
 
 
+def _strings(value):
+    """Every string in a task's arguments, however deep."""
+    if isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
+    elif isinstance(value, str):
+        yield value
+
+
 def _capture_writes():
-    """{(role, task name): (the task, the role's tasks)} for every task of a role's task files that writes a `dest`
-    under `config_backup_dir`."""
+    """{(role, task name): (the task, the role's tasks)} for every task of a role's task files, at any depth below
+    tasks/, whose arguments name `config_backup_dir` or a fact a set_fact in the same file builds from it: any
+    module, any argument (a `dest`, a `path`, a `dir_path`, a shell redirect). The set_facts themselves are left
+    out, and so is the `file: state=directory` that makes the directory."""
     out = {}
-    for path in sorted(glob.glob(os.path.join(ROOT, "ansible", "roles", "*", "tasks", "*.yml"))):
-        role = os.path.basename(os.path.dirname(os.path.dirname(path)))
+    pattern = os.path.join(ROOT, "ansible", "roles", "*", "tasks", "**", "*.yml")
+    for path in sorted(glob.glob(pattern, recursive=True)):
+        role = os.path.relpath(path, os.path.join(ROOT, "ansible", "roles")).split(os.sep)[0]
         with open(path, encoding="utf-8") as fh:
-            tasks = list(_walk(yaml.safe_load(fh)))
+            tasks = [t for t in _walk(yaml.safe_load(fh)) if isinstance(t, dict)]
+        facts = {k for t in tasks for k, v in (t.get("ansible.builtin.set_fact") or {}).items()
+                 if "config_backup_dir" in str(v)}
         for t in tasks:
-            if isinstance(t, dict) and any(isinstance(v, dict) and "config_backup_dir" in str(v.get("dest", ""))
-                                           for v in t.values()):
+            if "block" in t or "ansible.builtin.set_fact" in t:
+                continue
+            if (t.get("ansible.builtin.file") or {}).get("state") == "directory":
+                continue
+            args = {k: v for k, v in t.items() if k not in ("name", "when", "register", "delegate_to", "no_log")}
+            if any("config_backup_dir" in s or any(f in s for f in facts) for s in _strings(args)):
                 out[(role, t.get("name"))] = (t, tasks)
     return out
 
@@ -217,12 +267,16 @@ def _source(write, tasks):
 
 
 def test_every_capture_write_refuses_an_empty_answer_or_is_exempt_for_a_reason_it_holds():
-    """Every role task that writes a capture under `config_backup_dir` is one of the five above, which refuse an
-    empty answer, or is exempt, and its reason is checked, not just stated: a header read (Docker's and Proxmox's
-    `shell` prints a `### ` section header before each read, so its capture is never empty), or a file read (the
-    logging and OpenWrt key roles `slurp` one file before they change it, as its rollback copy, and an empty file
-    captured is the file as it was). Guards a new backup writing an empty answer over a good capture unseen, and an
-    exemption whose reason no longer holds (a Proxmox read that loses its headers can answer nothing)."""
+    """Every role task whose arguments name `config_backup_dir` (by any module or argument, in any task file of the
+    role, or through a fact built from it) is one of the five writes above, which refuse an empty answer, or is
+    exempt, and its reason is checked, not just stated: a header read (Docker's and Proxmox's `shell` prints a `### `
+    section header before each read, and the write is that output whole, so its capture is never empty), or a file
+    read (the logging and OpenWrt key roles `slurp` one file before they change it, as its rollback copy, and an
+    empty file captured is the file as it was). Guards a new backup writing an empty answer over a good capture
+    unseen, by a module, an argument, a file or a fact the net did not look at (I-5's tests-and-docs read, S1: a
+    `cli_backup`, a `lineinfile`, a shell redirect, a nested task file and a fact-built `dest` all passed), and an
+    exemption whose reason no longer holds (a Proxmox read that loses its headers, or a Docker write that filters
+    them out, can answer nothing)."""
     writes = _capture_writes()
     refusing = {(role, WRITE) for role in ROLES}
     assert set(writes) == refusing | set(EXEMPT), sorted(set(writes) ^ (refusing | set(EXEMPT)))
@@ -231,5 +285,7 @@ def test_every_capture_write_refuses_an_empty_answer_or_is_exempt_for_a_reason_i
         if reason == "header":
             script = source["ansible.builtin.shell"]
             assert script.lstrip().startswith('echo "### '), (key, script)
+            content = writes[key][0]["ansible.builtin.copy"]["content"]
+            assert content == "{{ %s.stdout }}\n" % source["register"], (key, content)
         else:
             assert "ansible.builtin.slurp" in source, (key, source.get("name"))

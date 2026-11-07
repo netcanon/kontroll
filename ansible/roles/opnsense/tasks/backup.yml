@@ -38,12 +38,15 @@
     # the last good one. So that answer is recorded as a failed capture, which fails the run at its summary, and the
     # write does not run: any earlier capture is kept. `slurp` reads in a --check run too, so a dry-run is held to the
     # same answer.
+    # An unreachable host (the play tolerates one) gave no answer either: it is not refused, and the summary says so.
     - name: Record an empty capture as failed (any earlier capture is kept)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
-          FAILED: /conf/config.xml is empty, so no capture was written and any earlier one is kept.
+          FAILED: /conf/config.xml is empty or only blank lines, so no capture was written and any earlier one is kept.
         kontroll_backup_failed: true
-      when: opn_cfg.content | default('') | b64decode | trim | length == 0
+      when:
+        - opn_cfg is not unreachable
+        - opn_cfg.content | default('') | b64decode | trim | length == 0
 
     - name: Write capture
       ansible.builtin.copy:

@@ -42,13 +42,16 @@
     # overwrite the last good one. So that answer is recorded as a failed capture, which fails the run at its
     # summary, and the write does not run: any earlier capture is kept. `cli_command` runs a `show` command in a
     # --check run too (it fails any other there), so a dry-run is held to the same answer.
+    # An unreachable host (the play tolerates one) gave no answer either: it is not refused, and the summary says so.
     - name: Record an empty capture as failed (any earlier capture is kept)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
           FAILED: `{{ backend_backup_command | default('show running-config') }}` answered nothing, so no capture was
           written and any earlier one is kept.
         kontroll_backup_failed: true
-      when: _cfg.stdout | default('') | trim | length == 0
+      when:
+        - _cfg is not unreachable
+        - _cfg.stdout | default('') | trim | length == 0
 
     - name: Write capture
       ansible.builtin.copy:

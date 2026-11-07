@@ -134,7 +134,7 @@
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
           FAILED: the {{ backend_api_recipe }} backup endpoint {{ _api_recipe.backup.path }} answered HTTP 200 with
-          an empty body, so no capture was written and any earlier one is kept.
+          nothing in its body, so no capture was written and any earlier one is kept.
         kontroll_backup_failed: true
       when:
         - (_api_resp.status | default(0)) == 200
