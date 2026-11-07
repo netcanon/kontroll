@@ -424,7 +424,7 @@ def telemetry_enact_commands(key, method, has_dashboards):
                             "ansible-playbook playbooks/deploy-stack.yml -e @/tmp/sv.yml",
                      "why": "fetch + provision the curated Grafana dashboards (operator-run — needs host Docker)"})
     cmds.append({"kind": "semaphore", "task": "reload-observability",
-                 "cmd": "ansible-playbook ansible/playbooks/reload-observability.yml",
-                 "why": "reload Prometheus so it picks up the new scrape target (Semaphore task — HTTP reload, "
-                        "no restart)"})
+                 "cmd": "ansible-playbook ansible/playbooks/reload-observability.yml --check --diff",
+                 "why": "reload Prometheus so it picks up the new scrape target (Semaphore task — tick Dry Run for "
+                        "the --check pass, which sends nothing, then apply; HTTP reload, no restart)"})
     return cmds

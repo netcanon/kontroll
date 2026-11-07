@@ -3,7 +3,8 @@
 # scrape TARGET or JOB. file-sd targets auto-reload, but a NEW job file under prometheus/jobs.d needs a config
 # reload to be picked up. POSTs Prometheus' lifecycle reload endpoint (it runs with --web.enable-lifecycle) over
 # the shared docker network — no docker socket, no restart, no host root. Bad config is rejected by Prometheus
-# (the running config is kept), so this is safe to run after any observability promote.
+# (the running config is kept), so this is safe to run after any observability promote. A --check run sends
+# nothing (`uri` has no check mode) and says the reload was not sent.
 #
 # Access chain used:   the runner (kontroll docker network) -> http://prometheus:9090/-/reload
 # May break:           nothing — a config reload only (re-reads the mounted config; rejects a bad one, keeps old)
@@ -33,6 +34,20 @@
       register: _reload
       changed_when: _reload.status == 200
 
+    # `uri` has no check mode, so a --check run skips the POST and its result has no status. The dry-run says the
+    # reload was not sent and passes; a real run reports the status as before (a reload Prometheus refuses fails the
+    # POST above). Only a check-mode skip is taken as not sent: it registers no `skip_reason`, which a `when` adds.
+    - name: Report the reload as not sent in a dry-run
+      ansible.builtin.debug:
+        msg: >-
+          Prometheus config reload not sent in a dry-run ({{ _reload_prometheus_url }}/-/reload; `uri` has no check
+          mode); a real run sends it.
+      when:
+        - ansible_check_mode
+        - _reload is skipped
+        - _reload.skip_reason is not defined
+
     - name: Reload result
       ansible.builtin.debug:
         msg: "Prometheus config reloaded ({{ _reload_prometheus_url }}/-/reload -> {{ _reload.status }})."
+      when: not (ansible_check_mode and _reload is skipped and _reload.skip_reason is not defined)

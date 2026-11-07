@@ -138,6 +138,17 @@ def test_enact_commands_carry_kind_and_never_actuate(tmp_repo):
     assert not any("kill -HUP" in c["cmd"] for c in plan["enact"])
 
 
+def test_the_reload_step_offers_its_dry_run_first(tmp_repo):
+    """The reload changes what Prometheus scrapes, so the project's rule is a `--check --diff` pass first, and the
+    step says so as the install step does: its CLI fallback is the dry-run and its rationale says to tick Dry Run, then
+    apply. Until I-8 that dry-run failed, so the step could not offer it; it now passes and sends nothing."""
+    _write_module(tmp_repo, "demo_sw", _COMMENTED)
+    plan = observe.build_telemetry_plan("demo_sw", "blackbox", params={"probe": "icmp"}, methods=METHODS)
+    reload = [c for c in plan["enact"] if c.get("task") == "reload-observability"]
+    assert reload and reload[0]["cmd"].endswith("reload-observability.yml --check --diff"), reload
+    assert "tick Dry Run" in reload[0]["why"] and "then apply" in reload[0]["why"], reload
+
+
 def test_grafana_links_deep_link_to_committed_uid(tmp_repo, monkeypatch):
     """The telemetry plan carries Grafana `links`: an 'Open Grafana' base + a `/d/<uid>` deep-link for each
     curated dashboard whose committed JSON pins a uid. WHY (#122): after observability onboarding the operator
