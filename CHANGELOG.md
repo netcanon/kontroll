@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the observability reload's dry-run says it sent nothing (I-8, 2026-11-06)
+
+`ansible/playbooks/reload-observability.yml`, the GUI's Tier-1 enact, could not pass its mandated dry-run. `uri` has
+no check mode, so a `--check` run skips the reload POST, and the skipped result has no status; the play's report read
+`_reload.status` regardless and failed ("object of type 'dict' has no attribute 'status'"). I-6's runtime read found
+it.
+
+- **Fixed.** In a `--check` run whose POST was skipped by check mode, the play says "Prometheus config reload not sent
+  in a dry-run", names the endpoint, and passes. Only a check-mode skip counts (it registers no `skip_reason`; a
+  `when` adds one). A real run is unchanged: it POSTs `/-/reload` once, reports the status, and a reload Prometheus
+  refuses still fails the run at the POST. Nothing is forced to run in a dry-run.
+- **Tests.** `integration/test_reload_observability_runs.py` runs the play against a stand-in for Prometheus on
+  127.0.0.1, pointed at it with `-e prometheus_url=…`: the dry-run sends nothing, says so and passes (it failed before
+  the fix); a real run sends one POST and reports 200; a 500 fails the real run; the run id is stamped. Measured on
+  ansible-core 2.19.4 and 2.18.19.
+- **Docs.** The play's header, the Semaphore templates README's row, tests/README.md.
+
 ### fix(ansible): a backup whose read answered nothing keeps the last good capture (I-5, 2026-11-06)
 
 A device read that answered nothing (a command that exits 0 with no output, an export or a `config.xml` with nothing
