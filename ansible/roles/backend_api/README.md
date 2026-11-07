@@ -46,6 +46,12 @@ because the resolve task is `no_log`, the undefined-variable fatal arrived *cens
 Both names are now tried, an unresolvable or **empty** token is refused up front naming
 both candidates, and the liveness result is actually evaluated (it previously used
 `failed_when: false` and was never read again, so the check could not fail at all).
+A refused check says which: a 401 or 403 names the variables the recipe's auth type
+reads (a `basic` recipe's `username_var` and `password_var`; a token recipe's
+`token_var`, else the per-host name), never their values; no answer (uri's status -1:
+refused, timed out, TLS) says the device did not answer the API port; any other status
+says the API answered with an error. (A basic-auth 401 used to fail on its own message,
+which named `token_var`; a 404 or 500 was reported as no answer. I-7.)
 Pinned by [`tests/unit/test_backend_api_check_teeth.py`](../../../tests/unit/test_backend_api_check_teeth.py).
 
 ```yaml

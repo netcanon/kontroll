@@ -111,14 +111,32 @@
       # recorded UNREACHABLE. Only `status` and the recipe's path are surfaced — the response BODY can be
       # device configuration and the request carried the token, so neither is safe to print. That is
       # precisely why this is a separate task rather than dropping `no_log` on the GET.
+      #
+      # The remedy names the variables the recipe's auth type reads, never their values: a `basic` recipe has
+      # `username_var`/`password_var` and no `token_var` (naming `token_var` failed the message itself on a basic
+      # 401, I-7), and a token recipe's token resolves from `token_var`, else the onboarded per-host name. A
+      # status below 0 (uri's "no response": refused, timed out, TLS) or none is the transport's; any other
+      # non-success status is the API's own answer.
       ansible.builtin.fail:
         msg: >-
           {{ inventory_hostname }}: {{ backend_api_recipe }} liveness check FAILED —
           HTTP {{ _api_check.status | default('no response') }} from {{ _api_recipe.check.path }}.
-          {{ 'The API rejected the credential: check that ' ~ _api_recipe.auth.token_var ~
-             ' holds a current token with read permission.'
+          {{ _api_auth_hint
              if (_api_check.status | default(0)) in [401, 403]
-             else 'The device did not answer the API port — wrong address, port, or the service is down.' }}
+             else ('The device did not answer the API port — wrong address, port, or the service is down.'
+                   if (_api_check.status | default(-1) | int) < 0
+                   else 'The API answered with an error: check the recipe check path and the device API.') }}
+      vars:
+        _api_auth_hint: >-
+          {{ ('The API rejected the credential: check that `' ~ (_api_recipe.auth.username_var | default('?'))
+              ~ '` and `' ~ (_api_recipe.auth.password_var | default('?'))
+              ~ '` hold a current username and password with read permission.')
+             if (_api_recipe.auth.type | default('')) == 'basic'
+             else (('The API rejected the credential: check that `' ~ _api_recipe.auth.token_var
+                    ~ '` (or, if it is empty, `' ~ (inventory_hostname | replace('-', '_'))
+                    ~ '_api_token`) holds a current token with read permission.')
+                   if _api_recipe.auth.token_var is defined
+                   else 'The API refused the request, and the recipe sends no credential: name one in its auth.') }}
       when:
         - not (ansible_check_mode and _api_check is skipped and _api_check.skip_reason is not defined)
         - (_api_check.status | default(0)) not in [200, 201, 204]
