@@ -4,6 +4,9 @@
 #   1. record a skip if the class is not backup-capable (defaults/main.yml),
 #   2. capture read-only into {{ config_backup_dir }},
 #   3. record `kontroll_backup_result` for the backup-configs.yml summary,
+#   4. refuse a read that answered nothing (empty, or only blank lines) before the
+#      write: record it FAILED with kontroll_backup_failed: true and skip the write,
+#      so the last good capture is kept (roles/backend_raw_ssh/tasks/backup.yml),
 #   5. carry an access-chain header; set no_log:true on any secret-bearing task.
 # See roles/cisco_ios/tasks/backup.yml for a worked example and
 # docs/engineering-standards.md §2b for the header contract.

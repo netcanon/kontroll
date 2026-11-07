@@ -13,7 +13,8 @@ The `when:` conditions are read from the role files and evaluated as Ansible eva
 be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, and `skipped`
 the test Ansible registers (a result holding `skipped: true`). The results are the shapes both cores register: a
 check-mode skip (`changed`, `msg`, `skipped`), a `when` skip (which adds `skip_reason` and `false_condition`), a
-success with content, a 401, and a refused connection, which `failed_when: false` keeps with a status of -1.
+success with content, a success whose body is empty or only blank lines (a failed capture since I-5, still a live
+check), a 401, and a refused connection, which `failed_when: false` keeps with a status of -1.
 """
 import os
 import re
@@ -31,6 +32,8 @@ SKIPPED = {"changed": False, "skipped": True, "msg": "This action (ansible.built
 WHEN_SKIPPED = {"changed": False, "skipped": True, "skip_reason": "Conditional result was False",
                 "false_condition": "probe_skip_read"}
 OK = {"changed": False, "status": 200, "content": "config system global\n"}
+EMPTY = {"changed": False, "status": 200, "content": ""}
+BLANK = {"changed": False, "status": 200, "content": "\n \n"}
 DENIED = {"changed": False, "status": 401, "content": ""}
 REFUSED = {"changed": False, "status": -1, "msg": "Status code was -1 and not [200]: Request failed"}
 WRITTEN = {"changed": True, "dest": "/backups/FortiGate_192-0-2-4_full-configuration.conf"}
@@ -38,15 +41,16 @@ WRITTEN = {"changed": True, "dest": "/backups/FortiGate_192-0-2-4_full-configura
 REFUSE = "Refuse unless the API actually answered successfully"
 REPORT = "Report the check endpoint as not read in a dry-run"
 FAILED = "Record capture failure (reported in summary, not a hard abort)"
+NOTHING = "Record an empty capture as failed (any earlier capture is kept)"
 BREPORT = "Report the backup endpoint as not read in a dry-run"
 WRITE, RECORD = "Write capture", "Record successful capture"
 # Every task of the two entrypoints that reads a registered read, and the reads themselves.
 READERS = {("check.yml", "GET the check endpoint"), ("check.yml", REPORT), ("check.yml", REFUSE),
            ("backup.yml", "Pull config via the recipe's backup endpoint"), ("backup.yml", BREPORT),
-           ("backup.yml", FAILED), ("backup.yml", WRITE), ("backup.yml", RECORD)}
+           ("backup.yml", FAILED), ("backup.yml", NOTHING), ("backup.yml", WRITE), ("backup.yml", RECORD)}
 GRID = [  # (check mode, the read's result)
     (True, SKIPPED), (False, OK), (False, DENIED), (False, REFUSED), (False, SKIPPED), (False, WHEN_SKIPPED),
-    (True, OK), (True, DENIED), (True, REFUSED), (True, WHEN_SKIPPED)]
+    (False, EMPTY), (False, BLANK), (True, OK), (True, DENIED), (True, REFUSED), (True, WHEN_SKIPPED), (True, EMPTY)]
 
 
 def _walk(tasks, forced=None):
@@ -104,15 +108,16 @@ def _names(entrypoint, name):
 @pytest.mark.parametrize("check_mode, result", GRID)
 def test_the_check_refuses_every_answer_but_a_success_and_reports_a_check_mode_skip_as_not_made(check_mode, result):
     """check.yml's refusal fires for a 401 and a refused connection, in a real run or a dry-run that answered, for a
-    read a real run left skipped and for a dry-run read a `when` skipped; never for a success, nor for the read check
-    mode skips, which the report task names instead, and only then. Guards I-6 (a dry-run failed an API host with a
-    good credential at the refusal, and ping reported it UNREACHABLE); the fix widening into a real run, where the
-    check's teeth, the only thing that tells ping a firewall did not answer (test_backend_api_check_teeth.py), must
-    still bite; and the guard taking any skip for check mode's, so that a `when` added to the GET would pass every
-    host in a dry-run without a request (I-6's runtime read, N3)."""
+    read a real run left skipped and for a dry-run read a `when` skipped; never for a success (one with an empty
+    body too: a check reads the status, and only a capture needs the body), nor for the read check mode skips, which
+    the report task names instead, and only then. Guards I-6 (a dry-run failed an API host with a good credential at
+    the refusal, and ping reported it UNREACHABLE); the fix widening into a real run, where the check's teeth, the
+    only thing that tells ping a firewall did not answer (test_backend_api_check_teeth.py), must still bite; and the
+    guard taking any skip for check mode's, so that a `when` added to the GET would pass every host in a dry-run
+    without a request (I-6's runtime read, N3)."""
     made = check_mode and result is SKIPPED
     ctx = {"_api_check": result, "ansible_check_mode": check_mode}
-    assert _runs("check.yml", REFUSE, ctx) is (not made and result is not OK)
+    assert _runs("check.yml", REFUSE, ctx) is (not made and result.get("status") not in (200, 201, 204))
     assert _runs("check.yml", REPORT, ctx) is made
 
 
@@ -120,15 +125,22 @@ def test_the_check_refuses_every_answer_but_a_success_and_reports_a_check_mode_s
 def test_the_backup_fails_every_answer_but_a_200_and_writes_and_reports_a_check_mode_skip(check_mode, result):
     """backup.yml records a failed capture (which fails the run) for a 401 and a refused connection, in a real run or
     a dry-run that answered, for a pull a real run left skipped and for a dry-run pull a `when` skipped; it writes the
-    capture for a 200, and for the pull check mode skips, which it reports as not made and previews an empty capture
-    as the raw-SSH and RouterOS writes do (test_backup_capture_check_mode.py). Never both, never neither. Guards I-6
-    (a dry-run failed an API host with a good credential, and the run with it), a real run's failed pull being
-    written or passed as a capture, and a dry-run's skipped pull going unsaid (I-6's runtime read, N4) or a `when`
-    skip passing as check mode's (N3)."""
+    capture for a 200 with a config in its body, and for the pull check mode skips, which it reports as not made and
+    previews an empty capture as the raw-SSH and RouterOS writes do (test_backup_capture_check_mode.py); and a 200
+    whose body is empty or only blank lines is a failed capture of its own (I-5), in a real run or a dry-run that
+    answered. Exactly one of the three runs. Guards I-6 (a dry-run failed an API host with a good credential, and
+    the run with it), a real run's failed pull being written or passed as a capture, a dry-run's skipped pull going
+    unsaid (I-6's runtime read, N4) or a `when` skip passing as check mode's (N3), and an empty 200 written over the
+    last good capture (I-5; test_backup_empty_capture_refused.py holds the other backends)."""
     made = check_mode and result is SKIPPED
+    answered = result.get("status") == 200
+    config = bool(str(result.get("content", "")).strip())
     ctx = {"_api_resp": result, "ansible_check_mode": check_mode}
-    assert _runs("backup.yml", FAILED, ctx) is (not made and result is not OK)
-    assert _runs("backup.yml", WRITE, ctx) is (made or result is OK)
+    runs = {name: _runs("backup.yml", name, ctx) for name in (FAILED, NOTHING, WRITE)}
+    assert runs[FAILED] is (not made and not answered)
+    assert runs[NOTHING] is (answered and not config)
+    assert runs[WRITE] is (made or (answered and config))
+    assert sum(runs.values()) == 1, runs
     assert _runs("backup.yml", BREPORT, ctx) is made
 
 

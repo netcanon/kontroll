@@ -45,8 +45,22 @@
       changed_when: false
       no_log: true
 
-    # `raw` has no check mode: a --check run skips it, and its result then has no stdout. The dry-run reads that as
-    # an empty capture; a real run reads the stdout as before (tests/fresh-node-check.sh's backup step failed here).
+    # A command that answers nothing (exit 0 with no output, or only blank lines) has given no config, and a capture
+    # of it would overwrite the last good one. So that answer is recorded as a failed capture, which fails the run at
+    # its summary, and the write does not run: any earlier capture is kept. `raw` has no check mode: a --check run
+    # skips it, and its result then has no stdout. A check-mode skip registers no `skip_reason` (a `when` that skips
+    # a task adds one), so only it is taken as not read: the dry-run previews an empty capture, as it did since T27
+    # (tests/fresh-node-check.sh's backup step failed here), and refuses nothing it did not read.
+    - name: Record an empty capture as failed (any earlier capture is kept)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          FAILED: `{{ backend_backup_command }}` answered nothing, so no capture was written and any earlier one is
+          kept.
+        kontroll_backup_failed: true
+      when:
+        - not (ansible_check_mode and _cfg is skipped and _cfg.skip_reason is not defined)
+        - _cfg.stdout | default('') | trim | length == 0
+
     - name: Write capture
       ansible.builtin.copy:
         content: "{{ _cfg.stdout | default('') if ansible_check_mode else _cfg.stdout }}"
@@ -54,7 +68,13 @@
         mode: "0640"
       delegate_to: localhost
       no_log: true
+      register: _cfg_write
+      when: >-
+        (_cfg.stdout | default('') | trim | length > 0)
+        or (ansible_check_mode and _cfg is skipped and _cfg.skip_reason is not defined)
 
+    # Recorded where the write ran (in a dry-run, its preview), and only there, so "captured" never outruns the write.
     - name: Record successful capture
       ansible.builtin.set_fact:
         kontroll_backup_result: "captured -> {{ _backup_file }}"
+      when: _cfg_write is not skipped

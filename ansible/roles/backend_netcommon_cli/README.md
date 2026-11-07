@@ -21,6 +21,12 @@ it by declaring `role: backend_netcommon_cli` + `network_os` (see
 `backup_capable` gates the capture; output is `no_log` (config carries secrets).
 This is the reusable target the capability classifier maps `cliconf` collections to.
 
+A command that answers nothing (no output, or only blank lines) has given no config:
+the backup is recorded `FAILED`, naming the command, which fails the run at its
+summary, and nothing is written, so any earlier capture is kept. `cli_command` runs a
+`show` command in a `--check` run too, so a dry-run is held to the same answer (and
+fails a backup command that is not a `show`, by `cli_command`'s own design).
+
 ## See also
 - [../../backends/netcommon_cli/backend.yml](../../backends/netcommon_cli/backend.yml) — classifier metadata
 - [../../../docs/capability-matrix.md](../../../docs/capability-matrix.md) — the design
