@@ -16,6 +16,7 @@ import http.server
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 
@@ -122,5 +123,19 @@ def test_a_reload_prometheus_refuses_fails_the_real_run(tmp_path, prometheus):
     rc, out, recap = _play(tmp_path, prometheus.url)
     assert rc != 0, out
     assert prometheus.seen == [("POST", "/-/reload")], out
+    assert "Prometheus config reloaded" not in out and "Prometheus config reload not sent" not in out, out
+    assert recap["failed"] == 1, out
+
+
+def test_a_real_run_with_no_prometheus_listening_fails(tmp_path):
+    """A real run against a Prometheus that is not there (nothing listening on the port: uri's status -1) fails at the
+    POST and claims no reload. A reload that was never received must not pass, nor be reported as made; the project's
+    "a down host is tolerated" rule is about fleet runs, and softening this POST to it would hide a reload never sent."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    url = "http://127.0.0.1:%d" % s.getsockname()[1]
+    s.close()
+    rc, out, recap = _play(tmp_path, url)
+    assert rc != 0, out
     assert "Prometheus config reloaded" not in out and "Prometheus config reload not sent" not in out, out
     assert recap["failed"] == 1, out
