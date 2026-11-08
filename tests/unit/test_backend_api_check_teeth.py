@@ -199,11 +199,14 @@ def test_the_failure_message_cannot_leak_the_token_or_the_config():
     auth reads and its check path, so a new reference to a value (a credential var looked up, the response body,
     the recipe's auth printed whole) fails here. And the task's only var is the hint: a task var outranks a host
     var, so a second one could rebind a name the message prints (`backend_api_recipe`) to the token, and every
-    other assertion here would still pass (the I-7 read's S1, measured on both cores)."""
+    other assertion here would still pass (the I-7 read's S1, measured on both cores). Nor does the task hold any
+    other key: a `loop:` prints each item with the refusal, so a loop over the response body would print the
+    config (the I-17 read's N1, the same shape there)."""
     msg, hint = _refusal()
     task = _named(_CHECK, "Refuse unless the API actually answered")
     assert set(task.get("vars") or {}) == {"_api_auth_hint"}, \
         "a task var on the refusal outranks a host var, so it can rebind a name the message prints"
+    assert set(task) <= {"name", "ansible.builtin.fail", "vars", "when"}, set(task)
     for leak in (".content", ".json", "_api_check }}", "_api_check}}", "_api_token", "_api_headers"):
         assert leak not in msg, "the failure message must not surface %r" % leak
     env = jinja2.Environment()

@@ -11,6 +11,25 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): an API backup that fails says why, for every auth type (I-17, 2026-11-07)
+
+`backend_api`'s backup recorded "FAILED: HTTP <status> from the <recipe> backup endpoint <path> — check the API
+token's permissions." for every pull that was not a 200: a basic recipe, which has no token, a 404 from a wrong backup
+path, a 500 and a device that never answered alike. That is the misdiagnosis I-7 fixed in the check; the I-7 read
+found it here.
+
+- **Fixed.** The record names its cause as the check's refusal does. A 401 or 403 prints the check's auth hint, word
+  for word: the variables the recipe's auth reads, never their values. No answer (uri's status -1, or no status) says
+  the device did not answer the API port, or its TLS failed; any other status says the API answered, but not with
+  200, the only status a backup takes. The record's prefix ("FAILED: HTTP <status> from the <recipe> backup endpoint
+  <path>") and what fails are unchanged.
+- **Tests.** `unit/test_backend_api_backup_failure_message.py` renders the record as the task does, with strict
+  undefined, for a 401 and a 403 per auth type and each kind of answer (a 201, a 302, a 404, a 500, no answer, no
+  status); holds the backup's hint to the check's, character for character; and holds what the record reads as the
+  check's test holds the refusal: the names to a list, `_api_resp` to its status, `_api_recipe` to its auth's names and
+  its backup path, the task's vars to the hint alone and the facts it sets to the result and the failed flag.
+- **Docs.** The role's README (the backup's failure).
+
 ### fix(ansible): an API check that is refused says why, for every auth type (I-7, 2026-11-06)
 
 `backend_api`'s check, refusing a 401 or 403, named the recipe's `token_var` in its remedy. A `basic` recipe has none,
