@@ -55,6 +55,12 @@ says the device did not answer the API port, or its TLS failed; any other status
 the API answered, but not with success. (A basic or `none` recipe's 401 used to fail on
 its own message, which named `token_var`; a 404 or 500 was reported as no answer. I-7.)
 Pinned by [`tests/unit/test_backend_api_check_teeth.py`](../../../tests/unit/test_backend_api_check_teeth.py).
+A failed backup pull names its cause the same way, in the record the backup summary
+prints: a 401 or 403 prints the check's hint, word for word; no answer says the device
+did not answer; any other status says the API answered, but not with 200, the only
+status a backup takes. (It used to say "check the API token's permissions" for every
+one of them. I-17.) Pinned by
+[`tests/unit/test_backend_api_backup_failure_message.py`](../../../tests/unit/test_backend_api_backup_failure_message.py).
 
 ```yaml
 name: fortios

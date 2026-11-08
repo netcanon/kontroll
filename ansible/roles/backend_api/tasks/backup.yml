@@ -117,12 +117,36 @@
         - _api_resp is skipped
         - _api_resp.skip_reason is not defined
 
+    # The failure names its cause as the check's refusal does (tasks/check.yml): a 401 or 403 prints the hint for the
+    # recipe's auth, the check's word for word, which names the variables it reads and never their values; no status,
+    # or one below 0, is a device that did not answer; any other status is an API that answered, but not with 200. The
+    # summary prints this result, so it reads only the status, the recipe's backup path and the names its auth reads,
+    # and the task's only var is the hint: a task var outranks a host var, so another could rebind a printed name.
     - name: Record capture failure (reported in summary, not a hard abort)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
           FAILED: HTTP {{ _api_resp.status | default('?') }} from the {{ backend_api_recipe }}
-          backup endpoint {{ _api_recipe.backup.path }} — check the API token's permissions.
+          backup endpoint {{ _api_recipe.backup.path }}.
+          {{ _api_auth_hint
+             if (_api_resp.status | default(0)) in [401, 403]
+             else (('The device did not answer the API port, or its TLS failed — wrong address, port, certificate,'
+                    ~ ' or the service is down.')
+                   if (_api_resp.status | default(-1) | int) < 0
+                   else ('The API answered, but not with 200: check the recipe backup path and method, and the'
+                         ~ ' device API.')) }}
         kontroll_backup_failed: true
+      vars:
+        _api_auth_hint: >-
+          {{ ('The API rejected the credential: check that `' ~ (_api_recipe.auth.username_var | default('?'))
+              ~ '` and `' ~ (_api_recipe.auth.password_var | default('?'))
+              ~ '` hold a current username and password with read permission.')
+             if (_api_recipe.auth.type | default('')) == 'basic' or _api_recipe.auth.username_var is defined
+                or _api_recipe.auth.password_var is defined
+             else (('The API rejected the credential: check that `' ~ _api_recipe.auth.token_var
+                    ~ '` (or, if it is empty, `' ~ (inventory_hostname | replace('-', '_'))
+                    ~ '_api_token`) holds a current token with read permission.')
+                   if _api_recipe.auth.token_var is defined
+                   else 'The API refused the request, and the recipe sends no credential: name one in its auth.') }}
       when:
         - not (ansible_check_mode and _api_resp is skipped and _api_resp.skip_reason is not defined)
         - (_api_resp.status | default(0)) != 200
