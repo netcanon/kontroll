@@ -231,7 +231,16 @@ different reports). It changes nothing in the canonical and it does not stop the
 a KEY — the name of a config key, of a ref, of a file — never a value. Of owners and modes it reports the ones
 that decide whether the `update` hook runs and who may replace it, and no others
 (`sudo find /srv/kontroll.git -maxdepth 1 -printf '%u:%g %m %p\n'` shows the top level); it does not look into
-the object store. A canonical that holds only what the play and the tool write prints nothing.
+the object store. A canonical that holds only what the play and the tool write prints nothing. An empty directory
+at the path is no canonical and is not audited: it is what Docker leaves when the installer binds a
+`/srv/kontroll.git` that is not there yet, so a first install through the installer has one, and its dry run says
+the real run will seed the canonical. A directory that holds entries but no `HEAD` is audited, and the dry run says
+the same of it: the root of a filesystem mounted at the path holds `lost+found`, which the audit names
+(`top-entry: lost+found`) on that deploy and every later one, since the play leaves an entry it did not make; the
+dry run's ownership pass names it too, as the real run makes it yours and gid 1001's, group-writable. A repository
+whose `HEAD` is gone (`objects` or `refs` there, and no `HEAD`) is audited (`head: HEAD`), and its dry run says that
+the real run restores `HEAD` and then judges the landing, which refuses it if the canonical holds a commit your
+checkout lacks.
 
 **A deploy audits BEFORE it writes.** The play puts a canonical right on every run — it writes `HEAD`, sets its
 own config keys, installs `hooks/update`, makes `hooks/` root's — and the audit stands in front of all of that:

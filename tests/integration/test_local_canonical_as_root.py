@@ -146,7 +146,9 @@ def test_the_deploy_after_a_landing_reports_0_changed(node):
     first left and reported `changed=1` (measured; `tests/unit/test_local_canonical.py` pins the pair's place,
     this holds what a run reports). And it guards the play as a whole being runnable in the installer's mode —
     no `sudo`, no host group gesture — which no parsed-task row can show."""
-    assert _play(node, check=True)["failed"] == 0, "the mandated dry-run of a fresh node must not fail"
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the mandated dry-run of a fresh node must not fail:\n" + dry["out"]
+    assert "holds no canonical yet (it is not there)" in dry["out"], dry["out"]
     assert not os.path.exists(node.bare), "a dry-run made the canonical"
     first = _play(node)
     assert first["changed"] > 0 and first["failed"] == 0
@@ -177,6 +179,121 @@ def test_the_deploy_after_a_landing_reports_0_changed(node):
                             text=True, env=env)
     assert pushed.returncode != 0 and "kontroll-land.py" in pushed.stderr, pushed.stderr
     assert canon.read_ref(node.bare, canon.MAIN)[0] == landed
+
+
+def test_a_first_install_whose_canonical_path_is_an_empty_directory_passes_its_dry_run_and_lands(node):
+    """The node's canonical path is an empty root-owned `0755` directory, as Docker leaves a bind source that is
+    missing (the installer's compose service binds `/srv/kontroll.git`, so after `fresh-init` a fresh node has
+    one). Its `--check --diff` does not fail, says the real run will seed the canonical, names no audit finding,
+    and leaves the directory as it found it; the first apply then lands HEAD as a first seed, and the second
+    reports 0 changed.
+
+    Guards the dry-run of every first install through the installer: the play took that directory for a
+    canonical, audited it (config-unread, head, hook-missing) and judged the landing against it, which cannot
+    read a repository that is not one, so the dry-run stopped at the refusal (measured 2026-11-07: the
+    quickstart as written, on a GitHub-hosted runner). The row above starts from no path at all, which never
+    happens through the installer."""
+    os.mkdir(node.bare)
+    os.chmod(node.bare, 0o755)
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the mandated dry-run of a first install must not fail:\n" + dry["out"]
+    assert "holds no canonical yet (it is an empty directory" in dry["out"] and "first seed" in dry["out"], dry["out"]
+    for finding in ("config-unread", "hook-missing", "head: HEAD"):
+        assert finding not in dry["out"], (finding, "an empty directory has nothing to audit")
+    assert os.listdir(node.bare) == [] and os.lstat(node.bare).st_uid == 0, "a dry-run wrote into the directory"
+    assert stat.S_IMODE(os.lstat(node.bare).st_mode) == 0o755
+    first = _play(node)
+    assert first["changed"] > 0 and first["failed"] == 0
+    assert canon.read_ref(node.bare, canon.MAIN) == (_head(node.wt), "commit", ""), first["out"]
+    second = _play(node)
+    assert second["changed"] == 0 and second["failed"] == 0, second["out"]
+
+
+def test_a_canonical_path_that_holds_entries_and_no_repository_is_audited_and_its_dry_run_passes(node):
+    """The node's canonical path is a directory that holds an entry and no repository: the root of a filesystem
+    mounted at the path, which holds `lost+found/` (root's, `0700`) and nothing else. Its `--check --diff` does not
+    fail: the audit runs and names the entry, the ownership pass names it too (the real run makes it the operator's,
+    group-writable), the dry run says the real run will seed the canonical, nothing is judged and nothing is
+    written. The first apply makes the canonical there and lands HEAD as a first seed, and the second reports 0
+    changed.
+
+    Guards the dry run of such a node. Counted as a canonical, it was also judged as a repository, which it is not,
+    so the dry run stopped at the refusal ("the canonical could not be read") while the real run landed: I-19's own
+    symptom on a path that is not empty (I-19's read B, measured on both cores). And its preview of the ownership
+    pass, which the first fold skipped with the judgement (I-19's read A)."""
+    os.mkdir(node.bare)
+    os.chmod(node.bare, 0o755)
+    lost = os.path.join(node.bare, "lost+found")
+    os.mkdir(lost)
+    os.chmod(lost, 0o700)
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the mandated dry-run must not fail:\n" + dry["out"]
+    assert "top-entry: lost+found" in dry["out"], ("the audit names what is there", dry["out"])
+    assert re.search(r"\b(owner|mode): lost\+found\b", dry["out"]), ("the ownership pass names it", dry["out"])
+    assert "holds no canonical yet (it holds entries but no repository" in dry["out"], dry["out"]
+    assert "first seed" in dry["out"] and "REFUSING to land" not in dry["out"], dry["out"]
+    assert os.listdir(node.bare) == ["lost+found"] and os.lstat(node.bare).st_uid == 0, "a dry-run wrote there"
+    first = _play(node)
+    assert first["changed"] > 0 and first["failed"] == 0, first["out"]
+    assert canon.read_ref(node.bare, canon.MAIN) == (_head(node.wt), "commit", ""), first["out"]
+    second = _play(node)
+    assert second["changed"] == 0 and second["failed"] == 0, second["out"]
+
+
+def test_a_canonical_with_a_top_level_name_that_is_not_utf8_is_audited_judged_and_deployed(node):
+    """A landed canonical with a regular file named `b"\\xff\\xfe"` planted at its top level beside `HEAD` (the
+    top level is setgid and group-writable for gid 1001, so the service's writer can make one). Its `--check --diff`
+    does not fail: the audit names the entry, escaped, the landing is judged and nothing is refused. The apply
+    after it re-owns the entry (changed) and fails nothing, and the next reports 0 changed; the entry is left there.
+
+    Guards the deploy of such a canonical. The decision listed the path with `find`, which returns every name, and
+    on both cores a name that is not UTF-8 failed the module's result (2.19: "Refusing to deserialize an invalid
+    UTF8 string value"; 2.18: "returned non UTF-8 data in the JSON response"), before the audit whose job is to name
+    it; `deploy-stack.yml` imports the play, so every deploy stopped (I-19's read A, measured on both cores). The
+    listing prints a word, never a name."""
+    first = _play(node)
+    assert first["failed"] == 0 and canon.read_ref(node.bare, canon.MAIN)[0] == _head(node.wt), first["out"]
+    odd = os.path.join(os.fsencode(node.bare), b"\xff\xfe")
+    with open(odd, "wb") as fh:
+        fh.write(b"planted\n")
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the dry run of a canonical with that name must not fail:\n" + dry["out"]
+    assert re.search(r"top-entry: \\+xff\\+xfe", dry["out"]), ("the audit names the entry", dry["out"])
+    assert "holds no canonical yet" not in dry["out"] and "REFUSING to land" not in dry["out"], dry["out"]
+    real = _play(node)
+    assert real["changed"] > 0 and real["failed"] == 0, real["out"]
+    after = _play(node)
+    assert after["changed"] == 0 and after["failed"] == 0, after["out"]
+    assert os.path.exists(odd) and canon.read_ref(node.bare, canon.MAIN)[0] == _head(node.wt)
+
+
+def test_a_canonical_whose_head_is_gone_is_said_so_by_its_dry_run_and_the_real_run_restores_it(node):
+    """A landed canonical whose `HEAD` was removed. Its `--check --diff` does not fail: the audit names the missing
+    `HEAD` (`head: HEAD`), and the note says the path holds a repository without HEAD and that the real run restores
+    HEAD and then judges the landing, not that it holds no canonical or that HEAD lands as a first seed; nothing is
+    written. The apply restores `HEAD` (`ref: refs/heads/main`), `main` stays the checkout's commit, and the next
+    apply reports 0 changed.
+
+    Guards the words of that dry run: they said "holds no canonical yet … lands HEAD as a first seed" of a repository
+    that may hold a promoted commit the worktree lacks, and its real run then refuses the landing (I-19's read A,
+    measured on both cores)."""
+    first = _play(node)
+    assert first["failed"] == 0, first["out"]
+    os.unlink(os.path.join(node.bare, "HEAD"))
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the dry run of a repository without HEAD must not fail:\n" + dry["out"]
+    assert "head: HEAD" in dry["out"], ("the audit names the missing HEAD", dry["out"])
+    assert "holds a repository without HEAD" in dry["out"], dry["out"]
+    assert "restores HEAD, then judges the landing" in dry["out"], dry["out"]
+    assert "holds no canonical yet" not in dry["out"] and "first seed" not in dry["out"], dry["out"]
+    assert not os.path.exists(os.path.join(node.bare, "HEAD")), "a dry-run wrote HEAD"
+    real = _play(node)
+    assert real["changed"] > 0 and real["failed"] == 0, real["out"]
+    with open(os.path.join(node.bare, "HEAD"), encoding="utf-8") as fh:
+        assert fh.read() == "ref: refs/heads/main\n"
+    assert canon.read_ref(node.bare, canon.MAIN)[0] == _head(node.wt)
+    after = _play(node)
+    assert after["changed"] == 0 and after["failed"] == 0, after["out"]
 
 
 def test_a_new_commit_is_landed_by_the_next_deploy_and_the_one_after_reports_0_changed(node):

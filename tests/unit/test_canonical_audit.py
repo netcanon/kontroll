@@ -532,14 +532,16 @@ def test_a_path_that_is_no_directory_is_a_usage_error_and_nothing_is_audited(tmp
 
 def test_the_play_audits_before_it_writes_shows_the_report_and_never_stops_on_it():
     """`local-canonical.yml` audits a canonical that is already there BEFORE its first task that writes into
-    one: a `stat` of the canonical's path that starts nothing on it; then — only when something is there — a
+    one: a `stat` of the canonical's path that starts nothing on it, and the decision whether that path is a
+    canonical (it is there and is not an empty directory: `tests/unit/test_local_canonical.py` holds the decision
+    itself); then — only when there is one — a
     command of `scripts/kontroll-canonical.py --audit {{ bare }}` in the worktree, read-only under `--check`
     too (`check_mode: false`), never "changed", never failing the play, as whoever runs the play; then two
     tasks whose conditions and messages are EVALUATED here, with Jinja, against what the command can register.
     The report's lines are shown when there are any (a finding, or only a note) and not for a clean canonical.
     When the audit ended with anything but 0 — or registered no status at all — a sentence says that this was
     NO REPORT, followed by what the tool or the module said. Neither is shown when there was no canonical to
-    audit. Every other task of the play that names the canonical stands after these four. And the play's own
+    audit. Every other task of the play that names the canonical stands after these six. And the play's own
     `git config` REPLACES every occurrence of a key.
 
     Guards the ways this could go wrong in a deploy: an audit that runs after the play has put the canonical
@@ -550,26 +552,28 @@ def test_the_play_audits_before_it_writes_shows_the_report_and_never_stops_on_it
     import jinja2
     tasks = _play_tasks()
     at = next(i for i, t in enumerate(tasks) if "kontroll-canonical.py" in str(t.get("ansible.builtin.command", "")))
-    before, audit, show, no_report = tasks[at - 1:at + 3]
+    before, entries, present, audit, show, no_report = tasks[at - 3:at + 3]
     assert before["ansible.builtin.stat"] == {"path": "{{ bare }}", "get_checksum": False, "get_mime": False,
                                               "get_attributes": False}
     assert set(before) == {"name", "ansible.builtin.stat", "register"}
+    assert entries.get("register") == "_canonical_listing" and "ansible.builtin.command" in entries
+    assert "_canonical_present" in present["ansible.builtin.set_fact"]
     assert audit["ansible.builtin.command"] == {
         "cmd": "python3 -B scripts/kontroll-canonical.py --audit {{ bare }}", "chdir": "{{ worktree }}"}
     assert audit["check_mode"] is False and audit["changed_when"] is False and audit["failed_when"] is False
     assert set(audit) == {"name", "ansible.builtin.command", "register", "changed_when", "failed_when", "check_mode",
                           "when"}
-    assert audit["when"] == "%s.stat.exists" % before["register"]
+    assert audit["when"] == "_canonical_present"
     assert set(show) == {"name", "ansible.builtin.debug", "when"}
     assert set(no_report) == {"name", "ansible.builtin.debug", "when", "vars"}
-    others = [i for i, t in enumerate(tasks) if not at - 1 <= i <= at + 2
+    others = [i for i, t in enumerate(tasks) if not at - 3 <= i <= at + 2
               and "bare" in yaml.safe_dump({k: v for k, v in t.items() if k != "name"})]
     assert others and min(others) > at + 2, "a task that touches the canonical stands in front of its audit"
     assert tasks[min(others)]["name"].startswith("Create the bare-repo dir"), "control: that is the first of them"
     assert " config --replace-all {{ item.key }} {{ item.value }}" in _harden()["ansible.builtin.command"]["cmd"]
 
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
-    reg, was = audit["register"], before["register"]
+    reg = audit["register"]
 
     def expression(text):
         text = text.strip()
@@ -582,7 +586,7 @@ def test_the_play_audits_before_it_writes_shows_the_report_and_never_stops_on_it
     def told(registered, canonical_there=True):
         """What the two tasks print for what the audit registered: (the report's lines, the "no report" lines)
         — None for a task that is not shown."""
-        scope = {reg: registered, was: {"stat": {"exists": canonical_there}}, "bare": "/srv/kontroll.git",
+        scope = {reg: registered, "_canonical_present": canonical_there, "bare": "/srv/kontroll.git",
                  "worktree": "/checkout"}
         scope[name] = env.from_string(sentence).render(**scope)
         return (said(**scope) if shown(**scope) else None, why(**scope) if refused(**scope) else None)

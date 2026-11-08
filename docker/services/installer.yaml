@@ -1,7 +1,8 @@
 # installer.yaml — the EPHEMERAL compose-native installer service (Phase 1, the `init` service).
 #
-# Run via the launcher scripts/kontroll-installer.sh (which derives the operator identity, MF-1, and ensures the
-# host bind targets exist), NOT raw `docker compose`. The launcher invokes:
+# Run via the launcher scripts/kontroll-installer.sh (which derives the operator identity, MF-1, and makes the
+# operator's key directories; Docker makes the canonical's path and the storage root, empty and root's), NOT raw
+# `docker compose`. The launcher invokes:
 #   docker compose -f docker/services/installer.yaml run --rm init <verb> [args…]
 #
 # DELIBERATELY a STANDALONE fragment, NOT in docker/compose.yaml's include: a pre-`.env` run (fresh-init / check

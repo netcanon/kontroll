@@ -27,7 +27,8 @@ provisioners, parsed from deploy-stack.yml via a yaml.safe_load task-graph walk:
                                                         (2026-07-28); recognising both keeps the choice between
                                                         them a readability decision, not a CI-passing one.
 Excluded: relative repo-tree binds (../), host-OS absolutes (/var/run,/var/log,/run/,/etc/), the canonical git
-(/srv/kontroll.git — provisioned by local-canonical.yml), the operator run-logs (${KONTROLL_OPERATOR_HOME}), named
+(/srv/kontroll.git — made by Docker at the installer's first run, an empty directory local-canonical.yml counts as
+none and then provisions), the operator run-logs (${KONTROLL_OPERATOR_HOME}), named
 volumes (Docker-managed; no '/' in the source), and the compose-native installer's bare storage-ROOT bind (it is
 the PROVISIONER — it binds /var/lib/kontroll to CREATE the uid-scoped tree deploy-stack populates; the root itself
 is a non-secret parent, and its secret children are each separately provisioned + guarded — a subdir bind in

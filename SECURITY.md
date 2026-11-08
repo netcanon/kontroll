@@ -976,7 +976,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   [docs/troubleshooting.md](docs/troubleshooting.md) §9.
   **What is in a canonical that the play and the tool do not write is NAMED** (`python3 -B
   scripts/kontroll-canonical.py --audit <repo>`; `local-canonical.yml` runs it on every deploy, BEFORE its first
-  write into a canonical that is already there, and prints what it names). A bare repository has many places
+  write into a canonical that is already there, and prints what it names; an empty directory at the path, which
+  Docker leaves for a bind source that is missing, holds nothing to audit and counts as none, and one that holds
+  entries but no `HEAD` is audited and is judged as no repository by the dry run). A bare repository has many places
   where one more file changes what git does there — a config key, a hook, an entry of `info/` or of
   `objects/info/`, a ref of a kind the tool does not write, a ref that names another ref, a top-level entry the
   play does not make. The tool's own git sets its own answer for the ones an environment can answer (above); the

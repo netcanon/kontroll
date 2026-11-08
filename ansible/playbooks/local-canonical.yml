@@ -104,6 +104,47 @@
         get_attributes: false
       register: _canonical_before
 
+    # An EMPTY directory there is no canonical. The installer's compose service binds /srv/kontroll.git, and Docker
+    # makes a bind source that is missing an empty root-owned directory, so after `fresh-init` every fresh node has
+    # one before this play first runs. Taken for a canonical, it was audited (three lines that are nobody's doing)
+    # and, under --check, the landing was judged against it, which cannot read a repository that is not one: the
+    # mandated dry-run of every first install through the installer failed (measured 2026-11-07 on a GitHub-hosted
+    # runner, the quickstart run as written). deploy-stack.yml's fresh-node preview probes HEAD for the same reason.
+    # One listing of the path's top level answers in a word: `empty`; `repo`, with `HEAD` among the entries;
+    # `headless`, a repository whose HEAD is gone (`objects` or `refs`, and no `HEAD`); `entries`, anything else (a
+    # filesystem mounted at the path holds `lost+found`). Anything in the directory at all, and it is a canonical to
+    # audit; and so is one this account could not list (the listing fails and says no word): the audit then says
+    # what it could not read, where counting it as none would say nothing at all. Under --check the landing is
+    # judged against `repo`, against no word and against a path that is no directory; not against `headless` or
+    # `entries`, which the judgement cannot read as a repository: the real run makes the canonical there (or
+    # restores its HEAD) and judges then. The listing prints a word and never a name. `find` returned every name,
+    # and one that is not UTF-8 (the gid-1001 writer the audit watches can make one) failed its result on both
+    # cores before the audit could name it (I-19's read A). It runs on the interpreter Ansible runs on, and it only
+    # reads, so it runs under --check too.
+    - name: List that path's top level in one word (Docker leaves an empty directory for a missing bind source)
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "-B"
+          - "-c"
+          - >-
+            import os, sys; n = set(os.listdir(sys.argv[1])); print('empty' if not n else 'repo' if 'HEAD' in n
+            else 'headless' if n & {'objects', 'refs'} else 'entries')
+          - "{{ bare }}"
+      register: _canonical_listing
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: _canonical_before.stat.isdir | default(false)
+
+    - name: Decide whether there is a canonical (not an empty directory), and a repository (HEAD among its entries)
+      ansible.builtin.set_fact:
+        _canonical_present: >-
+          {{ _canonical_before.stat.exists and (_canonical_listing.stdout | default('') | trim) != 'empty' }}
+        _canonical_repo: >-
+          {{ _canonical_before.stat.exists
+          and (_canonical_listing.stdout | default('') | trim) not in ['empty', 'headless', 'entries'] }}
+
     - name: Audit the canonical — name what is in it that this play did not put there (C10; it reports, it never stops)
       # Read-only, and it reads the repository AS FILES: it lists directories and reads `HEAD`, the ref files,
       # `packed-refs` and `hooks/update` itself, and the one process it starts (git, for the keys of the config) is
@@ -122,7 +163,7 @@
       changed_when: false
       failed_when: false
       check_mode: false
-      when: _canonical_before.stat.exists
+      when: _canonical_present
 
     - name: Show what the audit named (nothing was changed — docs/troubleshooting.md, "the audit of the canonical")
       ansible.builtin.debug:
@@ -142,7 +183,7 @@
           + (_canonical_audit.stderr_lines | default([]))
           + ([] if (_canonical_audit.rc | default(none)) is number
           else ([_canonical_audit.msg | default('')] | select | list)) }}
-      when: _canonical_before.stat.exists and (_canonical_audit.rc | default(-1)) != 0
+      when: _canonical_present and (_canonical_audit.rc | default(-1)) != 0
 
     - name: Create the bare-repo dir (operator-owned; group-writable for the privileged API — C10)
       become: true
@@ -290,9 +331,12 @@
       changed_when: false
       failed_when: _normalise_needed.rc not in [0, 3]
       check_mode: false
-      # Under the dry-run of a node that has no canonical yet there is nothing to look at (the `file` and
-      # `git init` tasks above were only simulated), so the detect is skipped, as the audit is, and so is the apply.
-      when: _canonical_before.stat.exists or not ansible_check_mode
+      # Under the dry-run of a node that has no canonical yet there is nothing to look at (the `file` and `git
+      # init` tasks above were only simulated), so the detect is skipped, and so is the apply: no path, or an empty
+      # directory. A path that holds entries is gone over, a repository or not: the real run re-owns them (the
+      # root-owned `0700 lost+found` of a filesystem mounted there becomes the operator's, group-writable), and the
+      # dry run names them first (I-19's read A).
+      when: _canonical_present or not ansible_check_mode
 
     - name: Show what the ownership pass names (what it would change; a link or a pipe it leaves as it is)
       ansible.builtin.debug:
@@ -437,19 +481,30 @@
     # it says so. On a box that ran the previous build, a tree the promote gate refuses used to be mirrored and
     # is now refused HERE, with the generator's sentence: correct it in the checkout, or
     # `python3 scripts/kontroll-land.py --skip-conflict-check` as the human's override (docs/troubleshooting.md §10).
-    - name: Say that the dry-run of a FRESH node cannot judge the landing yet (the real run seeds the canonical)
+    - name: Say why the dry-run cannot judge the landing yet (the real run seeds the canonical, or restores its HEAD)
       # The judgement below needs a canonical to judge against (`--repo {{ bare }}`), and under --check on a node
       # that has none the `file` and `git init` tasks above were only simulated: the command would exit 1 ("--repo
       # must name a bare repository on this machine") and the refusal task would stop the mandated dry-run of
       # every first install (measured 2026-10-20, in the gate image as root). So it is skipped there, as the
-      # ownership pass's detect is, and this says so instead of nothing.
+      # ownership pass's detect is, and this says so instead of nothing. "Has none" includes the empty directory
+      # the installer's bind mount leaves (above): judged against, it failed the same way (measured 2026-11-07); and
+      # a directory that holds entries and no HEAD, which the audit above named (measured 2026-11-08). A repository
+      # whose HEAD is gone is not judged either, and the note says so in its own words: the real run restores HEAD
+      # and judges the landing then, and may refuse it (a promoted commit the worktree lacks), where "a first seed"
+      # would say that it lands (I-19's read A).
       ansible.builtin.debug:
         msg: >-
-          local-canonical: {{ bare }} does not exist yet, so under --check the landing's judgement is skipped —
-          the real run creates the canonical and lands HEAD as a first seed, judged then. To judge HEAD's tree
-          now: in {{ worktree }}, `git init -q --bare /tmp/empty.git && python3 -B scripts/kontroll-land.py
+          local-canonical: {{ bare }} {{ 'holds a repository without HEAD (the audit above named it)' if _word ==
+          'headless' else 'holds no canonical yet (' ~ ('it holds entries but no repository: the audit above named
+          them' if _canonical_present else ('it is an empty directory — what Docker leaves for a bind source that is
+          missing' if _canonical_before.stat.exists else 'it is not there')) ~ ')' }}, so under --check the
+          landing's judgement is skipped — the real run {{ 'restores HEAD, then judges the landing' if _word ==
+          'headless' else 'creates the canonical and lands HEAD as a first seed, judged then' }}. To judge HEAD's
+          tree now: in {{ worktree }}, `git init -q --bare /tmp/empty.git && python3 -B scripts/kontroll-land.py
           --check --repo /tmp/empty.git`.
-      when: ansible_check_mode and not _canonical_before.stat.exists
+      vars:
+        _word: "{{ _canonical_listing.stdout | default('') | trim }}"
+      when: ansible_check_mode and not _canonical_repo
 
     - name: Judge the working tree's commit as the landing would, and say what would land (nothing is changed)
       ansible.builtin.command:
@@ -459,9 +514,10 @@
       changed_when: false
       failed_when: false
       check_mode: false
-      # Always on a real run; under --check whenever there is a canonical to judge against (the same condition
-      # as the ownership pass's detect): the one case left out is the dry-run of a fresh node, said above.
-      when: _canonical_before.stat.exists or not ansible_check_mode
+      # Always on a real run; under --check whenever there is a repository to judge against (the same condition as
+      # the detect of the ownership pass after the landing): the cases left out are the dry-run of a node with no
+      # canonical yet and of one whose HEAD is gone, said above.
+      when: _canonical_repo or not ansible_check_mode
 
     - name: Refuse to land what the promote gate refuses, or what would discard promoted work — and say which
       ansible.builtin.fail:
@@ -506,7 +562,7 @@
       changed_when: false
       failed_when: _normalise_after.rc not in [0, 3]
       check_mode: false
-      when: _canonical_before.stat.exists or not ansible_check_mode
+      when: _canonical_repo or not ansible_check_mode
 
     - name: Show what the ownership pass names after the landing
       ansible.builtin.debug:
