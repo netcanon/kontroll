@@ -26,6 +26,7 @@ test-doc + data-testid + test-after-change discipline is
 | **L2 key render run** | the per-run SSH key render and cleanup (`ansible/playbooks/_render-ssh-keys.yml`, `_cleanup-ssh-keys.yml`) around a probe play, in a real run, a dry run (`--check`, `--check --diff`) and a `--tags` run: a key-auth host's key, encrypted by the installed sops to an age recipient the row makes, is decrypted by community.sops and rendered 0600 for the host's connection, which a stand-in key-only `ssh` accepts only with it, and the dir is gone after, a dry run's being its own (`.check`), so the other mode's is kept; a `--skip-tags always` run renders none; a run that turns become on (`-b`, ANSIBLE_BECOME, an ansible.cfg's) becomes for none of their tasks, a stand-in `su` called by a control task alone; a key dir that is not a directory or holds anything but `*.key` files is refused by the render and by the cleanup, and kept; no output line, and no file under the row's dir once the run has ended, holds the key, at `-vvv`, under keep_remote_files or ANSIBLE_DEBUG, a field with no final newline or more, or wrapped in a no-break space, renders the key with one, a non-ASCII and a 251-character host name log in, an earlier file at the key path is replaced, not written through, a cut-short write's file is passed and removed, and a write that fails where the decrypt check passed is named (`integration/test_ssh_key_render_runs.py`); skipped without ansible-playbook, sops, community.sops or `cryptography` | `validate.sh` step `key-render-runtime` (a skipped row fails it) | CI (`validate --strict`), the gate container |
 | **L2 as root** | the canonical's git as the service uid, with real uids on a canonical laid out as the play leaves one (`integration/test_canon_drop.py`), the deploy's content-clone tasks run by ansible-playbook as root (`integration/test_content_clone_as_service.py`), deploy-stack's age-key gate on keys of uid or gid 1001 (`integration/test_g9_age_key_gate_real_stat.py`), and the stale-config rows that give a store file another owner (`unit/test_stale_config.py`, by node id); skipped unless root on Linux. A row there that starts a child as ANOTHER uid starts `sh` or a system program, or picks an account that can run the suite's interpreter (`_a_third_account`): a runner's Python may live where only its owner goes | `validate.sh` step `canon-drop-as-root` (directly as root, or through `sudo -n`; a skipped row fails it) | CI (`validate --strict`), the gate container |
 | **L3 GUI e2e** | the GUI in a headless browser over the real booted app | Playwright (`tests/e2e/`, `e2e` marker) | a dedicated CI job |
+| **L3 compose-up smoke** | the install guide's quickstart run as written on a fresh host (only its placeholders replaced), then every container of the stack running, never restarted and healthy where it has a healthcheck, and every published TCP port answering HTTP 2xx, 3xx or 401 — the default services; no device | `tests/smoke/stack_smoke.py --throwaway` (`.github/workflows/smoke.yml`) | nightly on the public repository, by hand, and on a pull request that changes the smoke — **not a gate** |
 | **L3 live smoke** | real fleet reachable; services respond | `playbooks/ping.yml`, post-deploy asserts | manual / Semaphore schedule |
 | **L4 idempotence** | second apply = `0 changed` | re-run the play against a scratch host (by hand — no automated harness) | per role |
 
@@ -57,6 +58,11 @@ ansible-playbook -i tests/mock-inventory.yml ../ansible/playbooks/backup-configs
 # --all-modules`, then `ansible-galaxy collection install -r <file>` — sops, age-keygen, git, and for the deploy
 # passes the `docker` Python library, buildx and a Docker daemon to read; KONTROLL_FRESH_KEEP=1 keeps it)
 bash tests/fresh-node-check.sh
+# L3 compose-up smoke, by hand: ONLY on a host nobody keeps (a scratch VM), from a fresh clone, as an account whose
+# uid is not 1001 and that is in the docker group. It installs Docker with sudo if it is missing, scaffolds instance/,
+# mints keys, brings the default stack up, checks it and takes it down with its volumes (--keep leaves it up).
+# --print shows the commands it would run and runs nothing.
+python3 tests/smoke/stack_smoke.py --throwaway
 ```
 
 ## Isolation (per layer)
@@ -65,7 +71,7 @@ bash tests/fresh-node-check.sh
 |---|---|
 | L1 | none needed — pure static analysis of files |
 | L2 | `mock-inventory.yml` with `ansible_connection: local` + RFC-5737 doc IPs — the single seam for real↔fake (our `FakeCollector`) |
-| L3 | runs against the live fleet; read-only plays only unless gated |
+| L3 | the live smoke runs against the live fleet, read-only plays only unless gated; the compose-up smoke on a throwaway host (a CI runner, a scratch VM) it is told it may install on (`--throwaway`), with no device |
 | L4 | a scratch host or VM, destroyed after |
 
 ## The single mock seam
@@ -279,6 +285,7 @@ tests/unit/          # pure functions, no I/O
   test_no_log_censor.py # I-75: the runner Dockerfile COPYs docker/semaphore-runner/no_log_censor.py and runs it as root with the base's ansible venv Python, in a RUN whose failure fails the build, with no later step that runs pip or names ansible-core; the script drops 'exception' alone from the censor's `_PRESERVE` line (the other keys in order, a tuple kept a tuple, a notice line above it, nothing written on a core without it) and refuses every other shape, 'exception' alone among them, naming where each core keeps the censor; its check, against a stand-in core, reports the marker on stdout, on stderr or in the log only, a run that passes or prints no FAILED!, no hidden-output notice, and a control that prints nothing
   test_ci_ansible_cores.py # I-94: each pytest leg of ci.yml runs a core the project ships, held to the file that decides it — the installer's pin on its Debian base's python3 and the control image's core on its venv's Python (the Dockerfile's core line) as a leg's exact pair, the validate job's pin in some leg; no leg on a core nothing ships or a Python its core does not support; the ruleset's four check names kept; each leg installs its pin and every module's collections (the generator in an export of HEAD) before pytest and hands the pin to the run; each drift, built from the live pins, named
   test_landing_guard.py # I-70: tests/_landing_guard.py — `_canonical_of` and `land_commit`, asked to land from this checkout or below it, fail the row (no process started), the guard is installed for the whole suite, the shape that landed (`_run` mocked, `land_main` not) fails on any checkout, a scratch worktree reaches the real lookup
+  test_smoke_script.py       # T34: the compose-up smoke's reading of the quickstart (one block, known commands and placeholders, refused before a key is minted) and its judgement of a stack (restarts, health, exits, an empty project), the ports it probes, its redaction
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked; the AS ROOT rows and the backup, reload, run-log-dir and journal-dir runs call the real tools
   test_local_canonical_as_root.py # C10, AS ROOT: local-canonical.yml run by ansible-playbook on a scratch node (the installer's mode: root, KONTROLL_IN_CONTAINER=1) — a fresh node's dry-run does not fail (nor one whose canonical path is the empty directory a bind mount leaves, or holds a mounted filesystem's `lost+found` and no repository, whose entries the ownership pass names, or a repository whose HEAD is gone, which its note says the real run restores, or a link to an empty directory or to nothing, which the first apply lands in the directory it names; a link to a landed canonical is audited, judged and deploys 0 changed — I-40); a canonical with a top-level name that is not UTF-8 is audited, judged and deployed, the first apply lands HEAD as a first seed and leaves the canonical the operator's, the second and third applies and a closing dry-run report 0 changed (the ownership pass runs again after the landing), a hand push of main is refused; a fresh node's dry-run prints one run id, alone and under a deploy-stack-shaped playbook (I-41)
   test_canonical_normalise_as_root.py # C10 / F-CANON, AS ROOT: the ownership pass chowns a root-made canonical to `<operator>:1001` outside hooks/ — every regular file and directory, through its descriptor; a link's own owner, what a link points at outside the tree, and hooks/ stay root's; the second run has nothing to do
@@ -318,6 +325,8 @@ tests/e2e/           # GUI in a headless browser over the REAL booted Flask app 
   test_onboard_flow.py       # search → result card → fill form → dry-run → plan renders (Playwright)
   test_paint_rule.py         # C19 in a browser: the panels and dialogs that paint foreign values show a hostile one as text
   test_script_policy.py      # C19's second layer in a browser: injected markup runs nothing; every header button still works
+tests/smoke/         # the compose-up smoke (L3; not collected by pytest): run on a throwaway host only
+  stack_smoke.py             # the quickstart as written, then the containers and the ports (smoke.yml runs it nightly)
 ```
 
 ```bash

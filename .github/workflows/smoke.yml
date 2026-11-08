@@ -1,0 +1,75 @@
+name: smoke — the compose-up smoke (nightly; not a gate)
+
+# The compose-up smoke, first version (docs/qa-and-release-pipeline.md §5): a fresh runner installs the stack by the
+# install guide's quickstart, run as written, then checks that every container of the stack came up and stayed up
+# and that every port it publishes answers. tests/smoke/stack_smoke.py does it and says how; a human can run the
+# same script on a scratch VM nobody keeps.
+#
+# NOT A GATE. No push runs it and no required check names it: registry rate limits and dropped schedules will give
+# red nights that are not the tree's fault. It runs nightly on the default branch, by hand (workflow_dispatch), and on
+# a pull request that changes this file or the smoke script, so a change to the smoke proves itself before it lands
+# (a schedule runs only the default branch's copy, and a dispatch needs the file there). A red run, or no run for two
+# days, is a leading indicator in STATUS.md; GitHub notifies a scheduled run's failure to whoever last changed its
+# cron line.
+#
+# ALWAYS GitHub-hosted, and only on the public repository. The job runs the installer with sudo and a root-equivalent
+# Docker socket, so it must never land on a shared self-hosted runner: `runs-on` is hard-coded, not the
+# KONTROLL_RUNS_ON variable (see ci.yml "RUNNERS"), and the job is skipped where that variable is set or the
+# repository is private (the private instance repository inherits this file through its sync, and sets the variable).
+# It holds no secret: the contents permission is read-only, and the control key, the break-glass recipient and the
+# passwords are minted on the runner and die with it. The log is public, so the script redacts the rendered .env's
+# values and any age secret key from what it prints on a failure.
+#
+# GitHub disables a scheduled workflow in a public repository after 60 days with no repository activity. Re-enable it
+# from the Actions tab (smoke → Enable workflow); STATUS.md's "no run for two days" row is what shows it stopped.
+
+on:
+  schedule:
+    - cron: '23 4 * * *'        # nightly, early UTC, off the top of the hour
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/smoke.yml'
+      - 'tests/smoke/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  smoke:
+    name: compose-up smoke (the quickstart, the containers, the ports)
+    # Public repository, GitHub-hosted runner only (the header). `!= true` rather than `== false`: an event whose
+    # payload carries no repository object still runs on the public repository, and the variable is the private one's
+    # lock.
+    if: ${{ !vars.KONTROLL_RUNS_ON && github.event.repository.private != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install age (the smoke mints its throwaway break-glass recipient with age-keygen)
+        run: bash .github/scripts/apt-install.sh age
+
+      - name: An operator account (the runner's own has uid 1001, the network service's, which the install refuses)
+        # A login with sudo and the docker group, as an operator has after the quickstart's first line and a new
+        # login, and its own copy of the checkout. useradd picks the next free uid, never the runner's 1001.
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --groups docker --shell /bin/bash kontroll-op
+          echo 'kontroll-op ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/kontroll-op > /dev/null
+          sudo chmod 0440 /etc/sudoers.d/kontroll-op
+          sudo cp -a . /home/kontroll-op/kontroll
+          sudo chown -R kontroll-op: /home/kontroll-op/kontroll
+          id kontroll-op
+
+      - name: Smoke (the quickstart as written, then every container and every published port)
+        run: sudo -u kontroll-op -H bash -c 'cd ~/kontroll && python3 -B tests/smoke/stack_smoke.py --throwaway'

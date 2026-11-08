@@ -1,8 +1,8 @@
 # CI — the OFFLINE correctness gate. Runs the exact same tests/validate.sh used locally
 # and on the control VM (single source of truth for "is it green"), hermetically: the
 # live lab is NEVER in CI (docs/qa-and-release-pipeline.md). The validate job also runs
-# the plays in check mode on a fresh node (tests/fresh-node-check.sh); the compose-up smoke
-# lands here as the QA plan rolls out.
+# the plays in check mode on a fresh node (tests/fresh-node-check.sh). The compose-up smoke, which brings the stack
+# up for real, is not here: it is smoke.yml, nightly and not a gate.
 #
 # RUNNERS (public-split, 2026-10-08): every job's `runs-on` is the repository/organization variable
 # KONTROLL_RUNS_ON — a JSON string — and defaults to GitHub-hosted `ubuntu-latest` when the variable is unset.
