@@ -58,10 +58,10 @@ ansible-playbook -i tests/mock-inventory.yml ../ansible/playbooks/backup-configs
 # --all-modules`, then `ansible-galaxy collection install -r <file>` — sops, age-keygen, git, and for the deploy
 # passes the `docker` Python library, buildx and a Docker daemon to read; KONTROLL_FRESH_KEEP=1 keeps it)
 bash tests/fresh-node-check.sh
-# L3 compose-up smoke, by hand: ONLY on a host nobody keeps (a scratch VM), from a fresh clone, as an account whose
-# uid is not 1001 and that is in the docker group. It installs Docker with sudo if it is missing, scaffolds instance/,
-# mints keys, brings the default stack up, checks it and takes it down with its volumes (--keep leaves it up).
-# --print shows the commands it would run and runs nothing.
+# L3 compose-up smoke, by hand: ONLY on a host nobody keeps (a scratch VM), from a fresh full clone (no --depth: a
+# shallow one cannot be landed), as an account whose uid is not 1001 and that is in the docker group. It installs
+# Docker with sudo if it is missing, scaffolds instance/, mints keys, brings the default stack up, checks it and takes
+# it down with its volumes (--keep leaves it up). --print shows the commands it would run and runs nothing.
 python3 tests/smoke/stack_smoke.py --throwaway
 ```
 

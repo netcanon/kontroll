@@ -221,7 +221,8 @@ protection is one mis-click from a merge). A public repository has no such branc
   written (only its placeholders replaced: `127.0.0.1`, `example.test`, a break-glass recipient minted for
   the run; the `$EDITOR` line dropped), with the default services (Semaphore and Homepage), as an operator
   account the job makes (the runner's own account has uid 1001, the network service's, which the install
-  refuses). Then every
+  refuses), from a checkout of the whole history as the guide's clone has (a shallow one's commit cannot be
+  landed whole on the canonical). Then every
   container of the stack's compose project must be running, never restarted and healthy where it has a
   healthcheck (a no-restart one-shot that exited 0 passes; an empty project fails), and every TCP port a
   container publishes must answer HTTP with 2xx, 3xx or 401. The layer the fault ledger says would have

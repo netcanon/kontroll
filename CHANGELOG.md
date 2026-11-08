@@ -26,7 +26,9 @@ passed every check until an operator met it.
   (a placeholder or a command it does not know, or a known command carrying another through a shell operator, an
   expansion or a redirection) is refused before anything runs. The job runs it as an operator account it makes (sudo,
   the docker group): the runner's own account has uid 1001, the network service's, which the install refuses at its
-  dry run (the first run found it; the smoke now refuses uid 1001 itself, before anything runs). Then, after a settle
+  dry run (the first run found it; the smoke now refuses uid 1001 itself, before anything runs). It checks out the
+  whole history, as the guide's clone has: a shallow checkout's commit cannot be landed whole on the canonical (the
+  third run found it). Then, after a settle
   window, every
   container of the stack's compose project must be running, never restarted and healthy where it has a healthcheck
   (a no-restart one-shot that exited 0 passes; an empty project fails), and every TCP port a running container

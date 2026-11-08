@@ -55,6 +55,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # The whole history, as the guide's `git clone` has. A shallow checkout's commit names a parent that was
+          # never fetched, and the install's landing refuses a commit that is not whole in the canonical.
+          fetch-depth: 0
 
       - name: Install age (the smoke mints its throwaway break-glass recipient with age-keygen)
         run: bash .github/scripts/apt-install.sh age

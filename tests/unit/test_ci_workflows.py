@@ -2213,6 +2213,16 @@ def test_the_smoke_holds_no_secret_and_read_only_permissions():
 SMOKE_RUN = "sudo -u kontroll-op -H bash -c 'cd ~/kontroll && python3 -B tests/smoke/stack_smoke.py --throwaway'"
 
 
+def test_the_smoke_checks_out_the_whole_history():
+    """smoke.yml's checkout fetches the whole history (`fetch-depth: 0`), as the guide's `git clone` does. The
+    checkout's default is one commit, a shallow repository: its commit names a parent that was never fetched, and
+    the install's first landing packs the worktree's HEAD into the canonical and refuses it there as not whole ("an
+    object it names is missing there"), so the quickstart's fourth line fails on every run for a reason that is the
+    smoke's own (the third run on the pull request found it). Guards the depth being dropped back to the default."""
+    checkouts = [s for s in _smoke_job()["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert len(checkouts) == 1 and checkouts[0]["with"].get("fetch-depth") == 0, checkouts
+
+
 def test_the_smoke_runs_as_an_operator_whose_uid_is_not_the_services():
     """smoke.yml makes an operator account (sudo, the docker group, its own copy of the checkout) and runs the smoke as
     it. The runner's own account has uid 1001, the network service's, and the install refuses such an operator at its
