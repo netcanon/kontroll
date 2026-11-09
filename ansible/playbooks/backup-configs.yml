@@ -1,6 +1,6 @@
 ---
 # Pull a fresh config from each device into {{ config_backup_dir }} and commit a
-# timestamped snapshot into that dir's LOCAL git history (the final play), so every
+# timestamped snapshot into that dir's LOCAL git history (the snapshot play), so every
 # device's config is diffable over time. Mirrors the migration repo's
 # ops/backup-procedure.md intent for the new stack.
 #
@@ -11,7 +11,7 @@
 #
 # Backup-capability: each class declares `backup_capable` (roles/<class>/
 # defaults/main.yml); a class that is not capable records a logged skip instead
-# of a forced empty capture. Override per host in host_vars/<host>.yml. The final
+# of a forced empty capture. Override per host in host_vars/<host>.yml. The summary
 # play prints a per-host summary (captured / skipped / FAILED / not-run) from the
 # `kontroll_backup_result` fact each role sets. The raw-SSH, CLI, RouterOS, OPNsense
 # and API backups record a read that answers nothing as a failed capture and never
@@ -29,7 +29,7 @@
   hosts: localhost
   gather_facts: false
   tasks:
-    # config_backup_dir is referenced fifteen times below and defined in instance/inventory/group_vars/all.yml.
+    # config_backup_dir is referenced throughout this playbook and defined in instance/inventory/group_vars/all.yml.
     # instance.example/ shipped NO group_vars until 2026-07-28, so every box built by `kontroll-init --fresh`
     # had it UNDEFINED and this play died on an undefined-variable error that named a template, not a remedy.
     # New boxes now scaffold the default; boxes built BEFORE that fix still need this message. Cheap, and it

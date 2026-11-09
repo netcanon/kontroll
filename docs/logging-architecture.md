@@ -135,7 +135,7 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   `internal-error` audit row with the same id. A
   Homepage overlay write that fails logs `homepage-write-failed kontroll_run_id=<id>` the same way. Never the
   exception's message (SECURITY.md C23; the reading: [troubleshooting.md](troubleshooting.md) §12).
-- ✅ **Capture history** — `backup-configs.yml`'s final play commits a timestamped
+- ✅ **Capture history** — `backup-configs.yml`'s snapshot play commits a timestamped
   snapshot of the captures dir into a **local-only git history** (no remote, inside the
   0700/uid-1001 dir, never pushed — as protected as the captures). `git diff` now answers
   "what changed on this device?" (G3). **Verified live** via a real Semaphore backup run:

@@ -1,10 +1,9 @@
 """A freshly scaffolded instance can actually run backup-configs.yml.
 
-F-BACKUPDIR (2026-07-28 fleet-restore review). `config_backup_dir` is referenced fifteen times in
-ansible/playbooks/backup-configs.yml — starting with the directory it writes captures into — and was defined
-in exactly ONE place repo-wide: `instance/inventory/group_vars/all.yml`. But `instance.example/inventory/`
-shipped only `hosts.yml`, so **every** box built by `kontroll-init --fresh` had it undefined and the nightly
-config backup could never run there.
+F-BACKUPDIR (2026-07-28 fleet-restore review). `config_backup_dir` is referenced throughout
+ansible/playbooks/backup-configs.yml — starting with the directory it writes captures into — and its only inventory
+default was `instance/inventory/group_vars/all.yml`. But `instance.example/inventory/` shipped only `hosts.yml`, so
+**every** box built by `kontroll-init --fresh` had it undefined and the nightly config backup could never run there.
 
 The defect was invisible for the worst possible reason: the workstation checkout HAS the file (the homelab
 tine commits a real instance/ overlay), so it works everywhere a developer looks and fails only on a real
