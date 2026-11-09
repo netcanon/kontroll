@@ -164,17 +164,21 @@ def test_prune_writer_is_not_check_mode_false_and_changed_when_is_conditional():
 def test_prune_runs_after_the_snapshot_commit_play_and_before_cleanup():
     """The prune play must come AFTER the 'Snapshot the captures into local history' play and BEFORE the
     `_cleanup-ssh-keys.yml` import. WHY: pruning only makes sense post-commit (a prune before the snapshot would
-    run against a stale HEAD); and the SSH-key cleanup must stay the LAST import (MF-4). Pins both edges."""
+    run against a stale HEAD); and the SSH-key cleanup must stay the LAST import (MF-4). Pins both edges. The
+    cleanup is found by either spelling of `import_playbook` and must be there: until I-9 this row read the short
+    key only, the playbook writes `ansible.builtin.import_playbook`, and a guard skipped the second edge when the
+    import was not found, so that edge was never checked."""
     plays = _plays()
     def _idx(pred):
         return next((i for i, p in enumerate(plays) if isinstance(p, dict) and pred(p)), None)
     snap = _idx(lambda p: "snapshot the captures" in str(p.get("name", "")).lower())
     prune = _idx(_is_prune_play)
-    cleanup = _idx(lambda p: "_cleanup-ssh-keys" in str(p.get("import_playbook", "")))
+    cleanup = _idx(lambda p: "_cleanup-ssh-keys" in str(p.get("ansible.builtin.import_playbook",
+                                                              p.get("import_playbook", ""))))
     assert snap is not None and prune is not None, "missing snapshot or prune play"
+    assert cleanup is not None, "missing the _cleanup-ssh-keys import"
     assert snap < prune, "the prune must run AFTER the snapshot-commit play (post-commit only)"
-    if cleanup is not None:
-        assert prune < cleanup, "the prune must run BEFORE the _cleanup-ssh-keys import (it must stay last, MF-4)"
+    assert prune < cleanup, "the prune must run BEFORE the _cleanup-ssh-keys import (it must stay last, MF-4)"
 
 
 # ----------------------------------------------------------------------------------------------------------------

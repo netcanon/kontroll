@@ -11,6 +11,26 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a backup run whose every capture failed still removes its SSH keys (I-9, 2026-11-09)
+
+`backup-configs.yml`'s summary play fails each host whose capture failed, and when that is every host Ansible ends
+the playbook at that play. The capture history, the retention prune and the per-run SSH-key cleanup came after it, so
+such a run left the run's key-auth hosts' `0600` keys in their per-run directory until the next run or a reboot, a
+residue SECURITY.md accepts for a hard-aborted run only. Since I-5 one device that answers nothing is enough to cause
+it: a one-host scheduled backup.
+
+- **Fixed.** The summary is the playbook's last play, after the history, the prune and the key cleanup. It connects
+  to nothing (a `debug` and an `assert`, on the local connection), so it can follow the cleanup, which stays the last
+  import (MF-4). The run still fails at its summary for each host whose capture failed, with the same lines;
+  `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row say so.
+- **Tests.** `unit/test_backup_summary_is_last.py` holds the order: the one play that fails a host for a failed
+  capture is the last, after the snapshot, the prune and the cleanup import, and it holds only controller-side tasks.
+  `integration/test_backup_failed_run_cleans_up.py` runs the playbook for real with one host that answers nothing and
+  a stale key in the run's key directory: the run fails at its summary, the history play commits, and the key
+  directory is gone. `unit/test_backup_prune.py`'s order row never checked its second edge (it looked for
+  `import_playbook`, the playbook writes `ansible.builtin.import_playbook`, and a guard skipped the edge when nothing
+  was found); it now finds either spelling and requires the import.
+
 ### fix(ansible): a link at the canonical's path is read as the directory it names (I-40, 2026-11-09)
 
 `local-canonical.yml` looked at the canonical's path without following a link there, so a link read as no

@@ -64,28 +64,6 @@
         name: "{{ device_role }}"
         tasks_from: backup
 
-- name: Backup run summary
-  hosts: all
-  gather_facts: false
-  connection: local
-  tasks:
-    - name: Per-host backup result
-      ansible.builtin.debug:
-        msg: >-
-          {{ inventory_hostname }} ({{ device_role | default('?') }}):
-          {{ kontroll_backup_result | default('not run — unreachable or skipped') }}
-
-    # A logged skip or an unreachable host is tolerated; a capture that actually
-    # FAILED (e.g. a permission error, or a read that answered nothing) must not
-    # pass silently — fail the run so a scheduled job surfaces it. This runs after
-    # every host's summary line above.
-    - name: Fail the run if any capture failed
-      ansible.builtin.assert:
-        that: not (kontroll_backup_failed | default(false) | bool)
-        fail_msg: "{{ inventory_hostname }}: config-backup capture FAILED (see summary above)."
-        quiet: true
-      when: kontroll_backup_failed | default(false) | bool
-
 # Keep a per-run, diffable HISTORY of every device's config instead of overwriting
 # (docs/logging-architecture.md Layer 0, G3 — answers "what changed on this device?").
 # The store is LOCAL-ONLY: it lives inside the already-0700/uid-1001 captures dir, has
@@ -355,6 +333,34 @@
         msg: "retention prune ({{ _retention }}): {{ _prune.stdout | default('(skipped)') }}"
       when: _retention_days | int > 0
 
-# Post-run: remove the per-run ephemeral SSH key dir (imported LAST — after the fleet connections; MF-4).
+# Post-run: remove the per-run ephemeral SSH key dir. It is the last import, after the fleet connections (MF-4), and
+# it comes before the summary below, whose assert may fail every host (I-9).
 - name: Clean up the per-run ephemeral SSH key dir
   ansible.builtin.import_playbook: _cleanup-ssh-keys.yml
+
+# The summary is the last play. Its assert fails each host whose capture failed, and when that is every host,
+# Ansible ends the playbook there: a play after it would not run. Before I-9 the history, the prune and the key
+# cleanup came after it, so a run whose every capture failed (since I-5, one device that answers nothing) left the
+# run's SSH keys on disk. It connects to nothing (a debug and an assert run on the controller), so it can follow
+# the key cleanup.
+- name: Backup run summary
+  hosts: all
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Per-host backup result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ({{ device_role | default('?') }}):
+          {{ kontroll_backup_result | default('not run — unreachable or skipped') }}
+
+    # A logged skip or an unreachable host is tolerated; a capture that actually
+    # FAILED (e.g. a permission error, or a read that answered nothing) must not
+    # pass silently — fail the run so a scheduled job surfaces it. This runs after
+    # every host's summary line above.
+    - name: Fail the run if any capture failed
+      ansible.builtin.assert:
+        that: not (kontroll_backup_failed | default(false) | bool)
+        fail_msg: "{{ inventory_hostname }}: config-backup capture FAILED (see summary above)."
+        quiet: true
+      when: kontroll_backup_failed | default(false) | bool
