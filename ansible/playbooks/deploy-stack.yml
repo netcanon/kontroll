@@ -3,8 +3,9 @@
 # Idempotent: installs Docker (once), renders docker/.env from the SOPS service
 # domains, and brings up the named service(s) via docker compose.
 #
-# Phased rollout: pass -e stack_services='["semaphore"]' (default) to bring up
-# just Semaphore now; later phases add homepage/prometheus/grafana to the list.
+# Phased rollout: pass -e '{"stack_services":["semaphore"]}' to bring up just
+# Semaphore now (a JSON list: a key=value -e passes a string, which the play refuses);
+# later phases add homepage/prometheus/grafana to the list.
 # This playbook never hard-codes the service list into a god file — it's data.
 #
 # Access chain used:   runs locally on the control node (connection: local)
@@ -213,6 +214,22 @@
       {{ (_instance.device_trust | default({}, true)).values()
          | map(attribute='ssh_known_hosts_file') | select('string') | list }}
   tasks:
+    - name: Refuse a stack_services that is not a list of compose service names (I-32)
+      # Every service the play renders, gates and brings up is found by `'<name>' in stack_services`, and the `up`
+      # joins the list with spaces. So a string (a key=value -e passes one, read below a character at a time), a
+      # mapping, a blank name (the `up` then names none, and compose brings up every service) or a name with spaces
+      # in it or around it (` onboard-gui` brings onboard-gui up with its G9 gate skipped) would each run a stack
+      # the gates never judged. Refused before anything is rendered or brought up, with the form that works.
+      ansible.builtin.assert:
+        that:
+          - stack_services is sequence and stack_services is not string and stack_services is not mapping
+          - stack_services | select('string') | list | length == stack_services | length
+          - stack_services | reject('match', '^[A-Za-z0-9][A-Za-z0-9._-]*$') | list | length == 0
+        fail_msg: >-
+          stack_services must be a JSON list of compose service names (-e '{"stack_services":["semaphore"]}');
+          got {{ stack_services | to_json }}
+        quiet: true
+
     - name: Resolve the instance secrets dir through the overlay seam (deploy READ == GUI onboarding WRITE; M4)
       # Single source of truth: the SAME resolver (scripts/kontroll/paths.py) the service layer uses, so a future
       # instance/ relocation can't split deploy-stack's secret READ path from the GUI's WRITE path (secrets.py).
@@ -1265,15 +1282,16 @@
              | unique | list }}
 
     - name: Say there is no service to bring up
-      # An empty list is an empty stack_services, or one naming only snmp-exporter on a node without its credentials
-      # (dropped above). `up -d` with no service named starts EVERY service in the stack, onboard-gui among them with
-      # its G9 gate skipped (the gate runs only when onboard-gui is in stack_services), so the up below is skipped
-      # instead (I-32, 2026-11-08). Not a failure: a node with nothing to bring up yet is not a broken one.
+      # The list is empty when stack_services is empty or names only snmp-exporter on a node without its
+      # credentials (dropped above), and the node does not run Caddy (tls_mode acme adds caddy). `up -d` with no
+      # service named starts EVERY service in the stack, onboard-gui among them with its G9 gate skipped (the gate
+      # runs only when onboard-gui is in stack_services), so the up below is skipped instead (I-32, 2026-11-08).
+      # Not a failure: a node with nothing to bring up yet is not a broken one.
       ansible.builtin.debug:
         msg: >-
-          no service to bring up on this node (stack_services is {{ stack_services | to_json }}; snmp-exporter is
-          dropped while it has no credentials), so `docker compose up` is not run: with no service named it would
-          start every service in the stack
+          no service to bring up on this node ({{ 'stack_services is empty' if stack_services | length == 0 else
+          'stack_services names only snmp-exporter, which is not brought up while it has no credentials' }}), so
+          `docker compose up` is not run: with no service named it would start every service in the stack
       when: _up_services | length == 0
 
     # docker compose CLI directly, NOT community.docker.docker_compose_v2: that module's post-up

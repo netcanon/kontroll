@@ -505,7 +505,7 @@ def _enact_commands(key, method, module):
         cmds.append("ansible-playbook ansible/playbooks/install-%s.yml -e target=%s" % (role.replace("_", "-"), grp))
     elif method["kind"] == "proxy-exporter":
         cmds.append("# provision the exporter container + render its secret into .env, then reload:")
-        cmds.append("ansible-playbook ansible/playbooks/deploy-stack.yml -e 'stack_services=[prometheus,grafana]'")
+        cmds.append("ansible-playbook ansible/playbooks/deploy-stack.yml -e '{\"stack_services\":[\"prometheus\",\"grafana\"]}'")
     cmds.append("python3 scripts/fetch-dashboards.py    # fetch + provision the curated dashboard(s)")
     # NB (item F): the real builder emits the reload as a kind:'semaphore' step (the reload-observability task
     # POSTs /-/reload — no docker socket), not this kill -HUP sketch; the host-agent install is a Semaphore task too.

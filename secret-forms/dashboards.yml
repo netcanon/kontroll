@@ -10,7 +10,7 @@ recipients: base          # informational: /.sops.yaml key_group (base = control
 # `rotatable: true` opts a field into the Secrets-dialog rotation UX (overwrite-confirm + an actuation
 # hand-off). The `actuation:` block is pure DATA describing how a NEW value goes LIVE on the running service
 # (a POST-promote operator/Semaphore step — the GUI never runs it). kind is a closed enum:
-#   recreate        → re-render .env + `deploy-stack -e stack_services=[<service>]` (env read at process start)
+#   recreate        → re-render .env + `deploy-stack -e '{"stack_services":["<service>"]}'` (env read at process start)
 #   grafana-cli     → `docker exec -i <service> <exec>` (Grafana honours its env only at first DB init)
 #   semaphore-admin → recreate THEN env-ferried `semaphore users change-by-login` (Semaphore sets the admin only
 #                     at first-run setup; see secret-forms/semaphore.yml)

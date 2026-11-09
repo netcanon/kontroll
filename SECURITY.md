@@ -525,7 +525,11 @@ crown jewel — protect it where it lives, not at a remote.
   stood for the owner read bit, and the group bits were never read (a root:1001 0640 key the GUI can read was
   refused, a 0604 one it cannot read passed) (I-22; `tests/unit/test_g9_age_key_refusal.py`, and the gate's own
   tasks on each shape in `tests/integration/test_g9_age_key_gate_real_stat.py`, its rows of uid or gid 1001 in
-  validate.sh's as-root step). The stat reads none of the key's bytes (no checksum).
+  validate.sh's as-root step). The stat reads none of the key's bytes (no checksum). The guard runs when
+  onboard-gui is in `stack_services`, so the play refuses a `stack_services` that is not a list of compose service
+  names, and never runs `up -d` with no service named, which compose reads as every service: until 2026-11-09 a
+  name with a space before it (` onboard-gui`) brought onboard-gui up with the guard skipped, and an empty list or
+  a blank name brought up the whole stack (I-32; `tests/integration/test_up_services_empty.py`).
 - `scripts/make-bundle.sh` strips the **entire `instance/` overlay** (recipients, all `*.sops.yml`,
   inventory IPs, fleet, dashboards) + the internal `docs/reviews/` snapshots, shipping only the
   `instance.example/` stub; `scripts/state-snapshot.sh` excludes the age key by design — a leaked

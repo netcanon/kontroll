@@ -11,21 +11,29 @@ NetConfig project.
 
 ## [Unreleased]
 
-### fix(ansible): an empty service list brings up nothing, not the whole stack (I-32, 2026-11-08)
+### fix(ansible): an empty or malformed service list brings up nothing, not the whole stack (I-32, 2026-11-08)
 
 deploy-stack brings the stack up with `docker compose ... up -d <the services>`, and compose reads `up -d` with no
-service named as every service in the stack. The list is empty when stack_services is, or names only snmp-exporter
-on a node without its credentials (dropped so it does not crash-loop), so such a run started everything, onboard-gui
-among it with its G9 age-key gate skipped (the gate runs only when onboard-gui is in stack_services). Found by the
-I-22 read.
+service named as every service in the stack. The list is empty when stack_services is empty, or names only
+snmp-exporter on a node without its credentials (dropped so it does not crash-loop), and the node runs no Caddy
+(tls_mode acme adds caddy). Such a run started everything, onboard-gui among it with its G9 age-key gate skipped
+(the gate runs only when onboard-gui is in stack_services). A blank name did the same, and a name with a space
+before it (` onboard-gui`) brought onboard-gui up with the gate skipped. Found by the I-22 read; the blank and
+spaced names by this change's review.
 
-- **Fixed.** On an empty list the `up` is skipped and the play says there is no service to bring up and why. The run
-  does not fail: a node with nothing to bring up yet is not a broken one.
-- **Tests.** The new `integration/test_up_services_empty.py` runs the playbook's own three tasks (compute the list,
-  the note, the `up`) by ansible-playbook with a stand-in docker on PATH: an empty list, and snmp-exporter alone
-  without its credentials, call docker never and print the note; a service, snmp-exporter with its credentials, a
-  list with snmp-exporter dropped and caddy added, and caddy alone are each brought up as computed, the note skipped.
-- **Docs.** docker/README.md, tests/README.md.
+- **Fixed.** On an empty list the `up` is skipped and the play says there is no service to bring up and why (an
+  empty stack_services, or only snmp-exporter without its credentials). The run does not fail: a node with nothing
+  to bring up yet is not a broken one. A stack_services that is not a JSON list of compose service names (a string,
+  as a key=value `-e` passes; a mapping; a name that is not a string, is blank, or has spaces in or around it) is
+  refused before anything is rendered, and the message gives the JSON form.
+- **Tests.** The new `integration/test_up_services_empty.py` runs the playbook's own four tasks (the refusal,
+  compute the list, the note, the `up`) by ansible-playbook with a stand-in docker on PATH: an empty list, and
+  snmp-exporter alone without its credentials, call docker never and print the note with its reason; a service,
+  snmp-exporter with its credentials, a list with snmp-exporter dropped and caddy added, and caddy alone are each
+  brought up as computed, the note skipped; each malformed list is refused, docker never called.
+- **Docs.** docker/README.md, SECURITY.md (the age-key guard), tests/README.md; the `-e` examples in
+  deploy-stack.yml, docker/installer/entrypoint.sh, docs/observability/gui-actuatable-flow.md and secret-forms/
+  now use the JSON form.
 
 ### fix(ansible): the dry run of a first install through the installer no longer refuses to land (I-19, 2026-11-07)
 

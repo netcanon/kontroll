@@ -50,7 +50,7 @@ new value for an already-set key). Two guards apply, both as DATA:
 - **Actuation hand-off (NOT a GUI action).** Staging a new value does not make it live. The optional
   `actuation:` block tells `secrets.actuation_enact_commands` which **command STRINGS** to surface for the
   operator/Semaphore to run *after promote* — the GUI/API execute none of them (no docker socket). `kind` is a
-  closed enum: `recreate` (re-render `.env` + `deploy-stack -e stack_services=[<service>]`), `grafana-cli`
+  closed enum: `recreate` (re-render `.env` + `deploy-stack -e '{"stack_services":["<service>"]}'`), `grafana-cli`
   (`docker exec -i <service> <exec>` — Grafana honours its admin env only at first DB init), `semaphore-admin`
   (recreate **then** an env-ferried `semaphore users change-by-login` — Semaphore sets the admin only at
   first-run setup, so recreate-alone can't rotate an existing admin; the CLI reads login+password from the
