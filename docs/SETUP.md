@@ -28,9 +28,9 @@ installer container, so the host distro is otherwise irrelevant.
 > The steps below are the legacy host-ansible path, still valid after `install-prereqs.sh --with-host-ansible`.
 
 On the compose-native path this is the quickstart's `sudo bash scripts/install-prereqs.sh` — Docker, compose and
-git, the whole host floor — and you follow the quickstart from there, as the account that will operate the node:
-not one with uid 1001, the network service's, which install-prereqs.sh and the installer refuse (troubleshooting.md
-§10). The commands in §4, §5 and §7 below belong
+git, the C10 group and a missing storage root, the whole host floor — and you follow the quickstart from there,
+as the account that will operate the node: not one with uid 1001, the network service's, which install-prereqs.sh
+and the installer refuse (troubleshooting.md §10). The commands in §4, §5 and §7 below belong
 to the legacy host-ansible path, which needs Ansible, sops and age on the host as well:
 
 ```bash
@@ -229,7 +229,11 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > A root you make yourself (a mount, a directory on another disk) must be a directory of root's that neither its
 > group nor others may write and that others may pass through, with every directory above it passable too —
 > `sudo chown root:root <root>` and `sudo chmod 0711 <root>`; a deploy that brings up `api` or `onboard-gui`
-> refuses another ([troubleshooting.md](troubleshooting.md) §9). A root you leave missing, the deploy makes so.
+> refuses another ([troubleshooting.md](troubleshooting.md) §9). A root you leave missing is made so: by
+> `install-prereqs.sh`, before the installer's first `up` (the installer binds the root, so otherwise Docker makes
+> it `root:root 0755` there first and the deploy, finding it, leaves it), and by a host deploy. Name a relocated
+> root to it the way the deploy reads it: `sudo KONTROLL_STORAGE_ROOT=<root> bash scripts/install-prereqs.sh`. A
+> root Docker already made is closed by `sudo chmod 0711 <root>`.
 
 ## 7. Distribute access + prove connectivity
 

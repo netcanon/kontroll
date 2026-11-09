@@ -26,7 +26,7 @@
 > #   a release bundle:  mkdir src && tar xzf kontroll-<version>.tar.gz -C src     # the scripts are inside the bundle
 > #                      sudo bash src/scripts/install-prereqs.sh                  # the next line needs git
 > #                      bash src/scripts/install.sh kontroll-<version>.tar.gz && cd kontroll   # a local git tree, no remote
-> sudo bash scripts/install-prereqs.sh                                  # Docker + compose + git + the C10 gid-1001 group
+> sudo bash scripts/install-prereqs.sh                                  # Docker + compose + git + the C10 gid-1001 group + the storage root
 > #   If it says it added you to the docker group, log out and back in before the next line.
 > # On ANOTHER machine first: age-keygen -o ~/kontroll-breakglass.key — keep that file offline, bring only the
 > #   age1… value it prints after `Public key:` (the break-glass key, §1; docs/break-glass.md).
@@ -58,7 +58,8 @@
 
 ## 0. System dependencies — **[A]** `scripts/install-prereqs.sh` (idempotent; `./bootstrap.sh` shims it)
 
-`sudo bash scripts/install-prereqs.sh` installs the host floor in one idempotent pass — Docker, compose and git;
+`sudo bash scripts/install-prereqs.sh` installs the host floor in one idempotent pass — Docker, compose and git,
+the C10 canonical group (gid 1001) and a missing storage root (root's 0711; one that is there is left);
 `--with-host-ansible` adds the rest of the table (the legacy host toolchain). It is
 **nixflavor-agnostic**: it auto-detects your package manager (apt/dnf/zypper/pacman) and installs the host
 floor accordingly — on apt it uses Docker's deb822 repo (matching the image + deploy-stack), elsewhere it uses

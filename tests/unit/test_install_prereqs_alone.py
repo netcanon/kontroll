@@ -58,3 +58,18 @@ def test_with_only_one_lib_beside_it_it_names_the_other(tmp_path):
     r = subprocess.run([BASH, alone.as_posix()], capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
     assert r.returncode == 1, "expected exit 1, got %r: %s" % (r.returncode, r.stderr)
     assert "lib/canonical-group.sh not found" in r.stderr, r.stderr
+
+
+@needs_bash
+def test_without_the_storage_root_lib_it_names_it_before_installing_anything(tmp_path):
+    """With lib/pkg.sh and lib/canonical-group.sh beside it but not lib/storage-root.sh, the script exits 1 naming
+    storage-root.sh. Why: it sources that one last, after the packages and the group (I-24), so only the check at
+    the top stops a copy without it from installing everything and then dying on the bare error."""
+    alone = tmp_path / "install-prereqs.sh"
+    shutil.copyfile(PREREQS, alone)
+    (tmp_path / "lib").mkdir()
+    for lib in ("pkg.sh", "canonical-group.sh"):
+        shutil.copyfile(os.path.join(ROOT, "scripts", "lib", lib), tmp_path / "lib" / lib)
+    r = subprocess.run([BASH, alone.as_posix()], capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
+    assert r.returncode == 1, "expected exit 1, got %r: %s" % (r.returncode, r.stderr)
+    assert "lib/storage-root.sh not found" in r.stderr, r.stderr

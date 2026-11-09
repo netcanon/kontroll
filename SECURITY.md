@@ -964,7 +964,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   anybody else may write (a writer of the parent could exchange the clone for something else between the look
   and root's git), and that anybody may pass through (armed, the service's git — uid and gid 1001, no supplementary
   group — reaches its clone through both, and that file through the storage root, by the bit for others). The play
-  makes a missing storage root root's, `0711`, before any store is made in it: Ansible's `file` gives the parents it
+  makes a missing storage root root's, `0711`, before any store is made in it, and on the installer path, whose
+  container binds the root so that Docker would make it `0755` before the play looks, `scripts/install-prereqs.sh`
+  makes it so on the host first (I-24; `tests/unit/test_storage_root_floor.py`): Ansible's `file` gives the parents it
   creates the owner and mode of the path it was asked for, so the first store would otherwise make the root its own. A
   root that exists is not changed; one that is not root's alone, or that others may not pass through, is refused, with
   the fix. Under a `0711` root every local account reaches a store below it by its name, so a store's own mode is what
@@ -972,8 +974,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   the age key `0600`, and `config-loaded.json`, root's `0600`: a digest of each service's bound config, which covers
   the rendered `snmp.yml`, Vector's SSH key and the GUI's age key, so one would test guesses at the SNMP
   credentials), and those the containers read by the bit for others — the audit dirs and the Ansible run-log dir,
-  `0755` — are open to every local account, as they already were under an installer-mode root (Docker makes it
-  `0755`) and were not under a root an earlier build's first store made `0700`. A clone that is not wholly the owner
+  `0755` — are open to every local account, as they already were under an installer-mode root Docker made (`0755`,
+  as every one was before install-prereqs.sh made it first) and were not under a root an earlier build's first store
+  made `0700`. A clone that is not wholly the owner
   the flag names — anything in it the service can write while unarmed (every entry is looked at, not the top alone),
   anything not the service's (root's, another uid's) or not a directory while armed — is removed (Python's rmtree,
   from open directories: a directory exchanged for a link is refused, a link at the top is unlinked, not followed) and

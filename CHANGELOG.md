@@ -11,6 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): the host floor makes the storage root 0711 before the installer can (I-24, 2026-11-08)
+
+deploy-stack makes a missing `KONTROLL_STORAGE_ROOT` root's 0711 (passable, listed and written by nobody else), but on
+the installer path the installer container binds the root, so Docker had already made it root:root 0755 when the play
+looked, and the play leaves a root that exists as it is. Every installer-path node had a 0755 root, any local account
+could list its stores, and docs/SETUP.md and docker/.env.example said a missing root is made 0711. The I-19 read found
+it in the compose smoke's log (the play's make-the-root task: skipping).
+
+- **Fixed.** `scripts/install-prereqs.sh`, which runs as root on the host before the first installer `up`, makes a
+  missing storage root (`KONTROLL_STORAGE_ROOT`, default `/var/lib/kontroll`) and each missing parent root's 0711
+  through the new `scripts/lib/storage-root.sh`, and leaves one that is there as it is. It refuses `/` and a relative
+  path as the deploy's assert does. A relocated root is named to it as `sudo KONTROLL_STORAGE_ROOT=<root> bash
+  scripts/install-prereqs.sh`. A root Docker already made is closed by `sudo chmod 0711 <root>` (docs/SETUP.md).
+- **Tests.** The new `unit/test_storage_root_floor.py` runs the helper: a missing root and its parents are made
+  exactly 0711 and root's, an inherited group and setgid bit given back (as root); a directory, a file and a link
+  that are there are left; `/` and relative paths are refused; a parent that is a file fails with the reason;
+  install-prereqs.sh calls it with the deploy's variable before it says done; the default root is the installer's
+  and the deploy's. `unit/test_install_prereqs_alone.py` gains the row for a copy without the new library.
+- **Docs.** docs/SETUP.md (pre-provisioning storage; the host floor), docker/.env.example, SECURITY.md C10,
+  docs/install-from-scratch.md (the quickstart; §0), scripts/README.md, docker/installer/README.md, tests/README.md.
+
 ### fix(scripts): an operator with uid 1001 is told so before anything is installed or made (I-18, 2026-11-09)
 
 The canonical's grant and hook tell the network service from everyone else by one number, uid 1001, so the deploy's

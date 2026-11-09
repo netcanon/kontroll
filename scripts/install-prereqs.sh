@@ -27,7 +27,7 @@ done
 # or copied alone (`cat install-prereqs.sh | ssh host sudo bash`) it would die on a bare "No such file": say what is
 # missing and where to run it, before anything else (no root needed to learn that).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-for lib in pkg.sh canonical-group.sh; do
+for lib in pkg.sh canonical-group.sh storage-root.sh; do
   if [ ! -r "$SCRIPT_DIR/lib/$lib" ]; then
     echo "install-prereqs.sh: $SCRIPT_DIR/lib/$lib not found. It needs the scripts/lib/ beside it:" >&2
     echo "run it from a kontroll checkout or the unpacked launch kit (sudo bash scripts/install-prereqs.sh)," >&2
@@ -155,6 +155,17 @@ echo "==> The C10 canonical group (gid 1001) + the operator's membership…"
 canonical_group_ensure "${SUDO_USER:-root}" || \
   echo "    (could not provision the gid-1001 group automatically — see SECURITY.md C10 / docs/install-from-scratch.md)" >&2
 
+# The storage root (I-24): deploy-stack makes a missing one root's 0711, but on the installer path the installer's own
+# bind of it has Docker make it root:root 0755 first, and the play leaves a root that exists as it is. So the host
+# floor makes it here, before the first installer `up`, and leaves one that is there. A relocated root is named the
+# way the deploy reads it: `sudo KONTROLL_STORAGE_ROOT=<root> bash scripts/install-prereqs.sh` (sudo drops the
+# operator's own environment). See scripts/lib/storage-root.sh, SECURITY.md C10.
+echo "==> The storage root, root's 0711 unless it is there already…"
+# shellcheck source=scripts/lib/storage-root.sh
+. "$SCRIPT_DIR/lib/storage-root.sh"
+storage_root_ensure "${KONTROLL_STORAGE_ROOT:-}" || \
+  echo "    (could not make it — docs/SETUP.md \"Pre-provisioning storage\" says how to make it by hand)" >&2
+
 # ── OPTIONAL: the legacy host toolchain (rollback) ───────────────────────────────────────────────────────────
 if [ "$WITH_HOST_ANSIBLE" -eq 1 ]; then
   echo "==> --with-host-ansible: installing the legacy host toolchain (ansible-core + sops + age + python)…"
@@ -199,7 +210,7 @@ if [ "$COMPOSE_OK" -eq 0 ]; then
 fi
 cat <<'NEXT'
 
-==> Done (idempotent — safe to re-run). The C10 canonical group (gid 1001) was provisioned above.
+==> Done (idempotent — safe to re-run). The C10 group (gid 1001) and a missing storage root were made above.
   Next, from your kontroll/ directory — after logging out and back in, if this run added you to the docker group:
     scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated --break-glass-recipient <age1…>
   (from a launch kit: ./kontroll in place of scripts/kontroll-installer.sh; <age1…> is the public half of a key you
