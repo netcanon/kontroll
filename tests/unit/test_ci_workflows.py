@@ -1,7 +1,8 @@
 """Text pins on the CI workflows the public split changed (publish target, the zizmor SARIF seat, Dependabot
 strategy, third-party action pins) and on the gate wiring (the `homelab*` push trigger, the Windows shim), plus the
 package-install helper every workflow step that runs apt goes through (.github/scripts/apt-install.sh), run against
-a fake apt.
+a fake apt, and the download helper every release file a workflow fetches goes through
+(.github/scripts/fetch-pinned.sh), run with the real curl against a local server.
 
 WHY — a workflow file has no unit test of its own, so a behaviour the 2026-10-09 review fixed can quietly come back
 in a later edit: the publish target hard-coded to one org again, the SARIF seat scanning `.github/` (every alert URI
@@ -2414,3 +2415,130 @@ def test_the_helper_runs_a_command_that_runs_apt_itself_the_same_way(tmp_path):
     for name, args in (("bare-run", ("--run",)), ("nothing", ())):
         rc, out, calls, _, _ = run(name, [], args)
         assert rc == 2 and "usage" in out and calls == [], (args, out)
+
+
+_FETCH = os.path.join(ROOT, ".github", "scripts", "fetch-pinned.sh")
+_BODY = b"a pinned release file\n"
+_DOWNLOADER = re.compile(r"\b(curl|wget)\b")
+# A pinned download in a workflow: `fetch <url> <sha256>` (ci.yml's wrapper) or `…/fetch-pinned.sh" <url> <sha256>`,
+# the words apart by spaces, newlines and line continuations.
+_FETCHED = re.compile(r'(?:\bfetch|fetch-pinned\.sh")[\s\\]+"?(https://[^"\s]+)"?[\s\\]+([0-9a-f]{64})\b')
+
+
+def _run_fetch(tmp_path, plan, digest=None, args=None):
+    """Run fetch-pinned.sh with the real curl against a local HTTP server that answers each request from `plan` in
+    turn ("504": a gateway timeout, as the mirror answered; "short": headers that promise more than the body it then
+    sends before the connection closes; a spent plan: the whole file), in an empty home (no `.curlrc`), with no
+    proxy, the default tries and FETCH_PINNED_DELAY 1 (curl's least). Returns (rc, output, requests, the file's bytes
+    or None)."""
+    import hashlib
+    import http.server
+    import shutil
+    import threading
+    bash, curl, sha = shutil.which("bash"), shutil.which("curl"), shutil.which("sha256sum")
+    if os.name == "nt" or not (bash and curl and sha):
+        pytest.skip("needs a POSIX bash, curl and sha256sum")
+    answers, served = list(plan), []
+
+    class Mirror(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — the name http.server calls
+            served.append(self.path)
+            answer = answers.pop(0) if answers else "whole"
+            if answer == "504":
+                self.send_error(504)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(_BODY) + (100 if answer == "short" else 0)))
+            self.end_headers()
+            self.wfile.write(_BODY[:5] if answer == "short" else _BODY)
+
+        def log_message(self, *_):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mirror)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FETCH_PINNED_") and "proxy" not in k.lower()}
+    env.update({"HOME": str(home), "CURL_HOME": str(home), "XDG_CONFIG_HOME": str(home), "FETCH_PINNED_DELAY": "1"})
+    try:
+        url = "http://127.0.0.1:%d/releases/tool-1.2.3.tar.gz" % server.server_address[1]
+        if args is None:
+            args = [url, digest or hashlib.sha256(_BODY).hexdigest()]
+        r = subprocess.run([bash, _FETCH, *args], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        server.shutdown()
+        server.server_close()
+    out = tmp_path / "tool-1.2.3.tar.gz"
+    return r.returncode, r.stdout + r.stderr, served, out.read_bytes() if out.exists() else None
+
+
+def test_the_fetch_retries_a_server_error_the_mirror_answers_once(tmp_path):
+    """A 504, then the file: the helper asks again after its delay, and the step succeeds with the whole file. One
+    release download in the validate job got a 504 from the mirror and failed the job, which passed when that job
+    alone was re-run on the same commit (2026-11-08, I-28). Guards the retry: a bare curl fails on the first 504
+    (curl's `--retry` reads the status with or without `-f`)."""
+    rc, out, served, got = _run_fetch(tmp_path, ["504"])
+    assert rc == 0, out
+    assert len(served) == 2 and got == _BODY, (served, got)
+
+
+def test_the_fetch_retries_a_body_cut_short_and_starts_the_file_again(tmp_path):
+    """A connection that closes before the body its headers promise, then the file: the helper asks again, and the
+    file holds the whole body once, so the digest passes. Guards `--retry-all-errors` (curl's own `--retry` takes a
+    cut-short body as final) and `-o` (curl truncates the file it writes before each retry, where a pipe would hand
+    its reader the first bytes twice: security.yml piped curl into tar until 2026-11-08)."""
+    rc, out, served, got = _run_fetch(tmp_path, ["short"])
+    assert rc == 0, out
+    assert len(served) == 2 and got == _BODY, (served, got)
+
+
+def test_the_fetch_gives_up_after_three_retries_and_names_the_status(tmp_path):
+    """A mirror that answers 504 every time: four requests (the first and three retries), then the step fails on
+    curl's report of the status, and no file is left. Guards the bound (a retry with no end would hold a runner until
+    the job's timeout) and `-f`: without it curl saves the last error page as the file and exits 0, and the step
+    fails only on the digest check, which names no status (measured: the retries are the same either way)."""
+    rc, out, served, got = _run_fetch(tmp_path, ["504"] * 10)
+    assert rc != 0 and len(served) == 4, (rc, served, out)
+    assert "returned error: 504" in out and got is None, (out, got)
+
+
+def test_the_fetch_fails_a_file_whose_digest_is_not_the_pin(tmp_path):
+    """A whole file whose sha256 is not the one the workflow pins: one request (a transfer that succeeded is not
+    retried), then the step fails with sha256sum's report. Guards the digest check as the gate, the helper's reason
+    to exist beside a bare curl: a retry may fetch again, but only the pinned bytes pass."""
+    rc, out, served, _ = _run_fetch(tmp_path, [], digest="0" * 64)
+    assert rc != 0 and len(served) == 1, (rc, served, out)
+    assert "FAILED" in out, out
+
+
+def test_the_fetch_refuses_a_call_without_its_digest_before_it_downloads(tmp_path):
+    """`fetch-pinned.sh <url>` alone exits 2 with its usage and requests nothing. Guards a call that lost its digest
+    in an edit: without the count check the download runs, and only then does the unset digest fail the step."""
+    rc, out, served, got = _run_fetch(tmp_path, [], args=["http://127.0.0.1:9/never.tar.gz"])
+    assert rc == 2 and "usage: fetch-pinned.sh <url> <sha256>" in out, (rc, out)
+    assert served == [] and got is None
+
+
+def test_every_workflow_download_goes_through_the_pinned_fetch():
+    """No workflow runs curl or wget itself: every release file a job downloads goes through
+    .github/scripts/fetch-pinned.sh with its URL and a sha256 beside it, and a URL has one digest in every workflow
+    that fetches it. Guards a new download written the old way (security.yml's gitleaks install had no retry and no
+    digest check until 2026-11-08) and a version bump that changes one workflow's digest and not the other's (both
+    install gitleaks). The helper's bounds, three retries five seconds apart, are pinned here, and no workflow
+    overrides them."""
+    pins, seen = {}, {}
+    for name in sorted(os.listdir(WF)):
+        text = _read(os.path.join(".github", "workflows", name))
+        assert not _DOWNLOADER.search(text), "%s runs a downloader itself; use .github/scripts/fetch-pinned.sh" % name
+        assert "FETCH_PINNED_" not in text, name
+        for url, digest in _FETCHED.findall(text):
+            pins.setdefault(url, set()).add(digest)
+            seen.setdefault(url, set()).add(name)
+    assert all(len(digests) == 1 for digests in pins.values()), pins
+    gitleaks = [url for url in pins if "/gitleaks/releases/" in url]
+    assert len(gitleaks) == 1 and seen[gitleaks[0]] == {"ci.yml", "security.yml"}, seen
+    assert len(pins) >= 4, "the pinned downloads are gone — if they moved, move this test with them"
+    helper = _read(".github/scripts/fetch-pinned.sh")
+    assert '--retry "${FETCH_PINNED_TRIES:-3}" --retry-all-errors --retry-delay "${FETCH_PINNED_DELAY:-5}"' in helper
+    assert '-o "$file" "$1"' in helper and "| sha256sum -c --quiet" in helper

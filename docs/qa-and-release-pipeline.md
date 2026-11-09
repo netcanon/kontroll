@@ -159,6 +159,11 @@ waits 60 s for dpkg's locks, then fails. The helper runs the step again on any o
 (apt's `E:` line, in the C locale it sets), a bounded number of times, and fails at once with apt's
 own status on any other failure. `tests/unit/test_ci_workflows.py` holds every workflow step that
 runs apt to the helper, and pins its bounds.
+A release file a job downloads (the gate's sops, gitleaks, promtool and vector; the history scan's
+gitleaks) goes through `.github/scripts/fetch-pinned.sh <url> <sha256>`: curl retries a transient
+error (a 5xx, a dropped connection, a short body) three times, five seconds apart, into a file,
+never a pipe, and the publisher's sha256 is the gate. The same test file runs it against a local
+server and holds every workflow to it, with one digest per URL across the workflows.
 
 The four gating workflows run on every push to `main` **and to any `homelab*` branch**: the private
 instance repository's permissive tine is a long-lived branch that is never merged to `main`, so it is
@@ -194,7 +199,8 @@ protection is one mis-click from a merge). A public repository has no such branc
   assertion. Always GitHub-hosted. The required check *No leaked personal identifiers* (SECURITY.md C21).
 
 ### `security.yml` — on `[pull_request, push:{branches:[main, homelab*]}, schedule: weekly]`
-- gitleaks (full history, 8.30.x) · pip-audit (the gui · api · tests floors, and the image pins with `--no-deps`).
+- gitleaks (full history, 8.30.x: the release `ci.yml` pins, sha256-verified) · pip-audit (the gui · api ·
+  tests floors, and the image pins with `--no-deps`).
   ⬜ bandit · trivy (images).
 
 ### `zizmor.yml` — on `[pull_request, push:{branches:[main, homelab*]}]` for `.github/` paths + weekly; workflow-security lint, advisory (log-only; plus a SARIF upload to code scanning where the repository variable `KONTROLL_CODE_SCANNING=true`).
