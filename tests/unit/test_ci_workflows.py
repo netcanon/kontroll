@@ -2419,26 +2419,37 @@ def test_the_helper_runs_a_command_that_runs_apt_itself_the_same_way(tmp_path):
 
 _FETCH = os.path.join(ROOT, ".github", "scripts", "fetch-pinned.sh")
 _BODY = b"a pinned release file\n"
-_DOWNLOADER = re.compile(r"\b(curl|wget)\b")
-# A pinned download in a workflow: `fetch <url> <sha256>` (ci.yml's wrapper) or `…/fetch-pinned.sh" <url> <sha256>`,
-# the words apart by spaces, newlines and line continuations.
-_FETCHED = re.compile(r'(?:\bfetch|fetch-pinned\.sh")[\s\\]+"?(https://[^"\s]+)"?[\s\\]+([0-9a-f]{64})\b')
+_FETCH_LIMIT = 45   # seconds a run of the helper is given here: a stall it does not give up on fails the test
+# A program that downloads by itself, in a workflow step or a script one runs: every one goes through the helper.
+_DOWNLOADER = re.compile(r"\b(?:curl|wget|aria2c|urlretrieve|urlopen|Invoke-WebRequest)\b|\bgh\s+release\s+download\b",
+                         re.I)
+# ci.yml's wrapper, the one form a step may define `fetch` in; a pinned download is a command of its own, `fetch <url>
+# <sha256>` or `bash "…/fetch-pinned.sh" <url> <sha256>`, read from the step's script (its comments cut).
+_WRAPPER = 'fetch() { bash "$GITHUB_WORKSPACE/.github/scripts/fetch-pinned.sh" "$@"; }'
+_DEFINES_FETCH = re.compile(r"(?<![\w.-])fetch\s*\(\s*\)|\bfunction\s+fetch\b")
+_FETCH_COMMAND = re.compile(r'(fetch|bash "\$GITHUB_WORKSPACE/\.github/scripts/fetch-pinned\.sh")'
+                            r'\s+"?(https://[^"\s]+)"?\s+([0-9a-f]{64})')
 
 
 def _run_fetch(tmp_path, plan, digest=None, args=None):
     """Run fetch-pinned.sh with the real curl against a local HTTP server that answers each request from `plan` in
     turn ("504": a gateway timeout, as the mirror answered; "short": headers that promise more than the body it then
-    sends before the connection closes; a spent plan: the whole file), in an empty home (no `.curlrc`), with no
-    proxy, the default tries and FETCH_PINNED_DELAY 1 (curl's least). Returns (rc, output, requests, the file's bytes
-    or None)."""
+    sends before the connection closes; "stall": the request read and nothing sent, the connection held open;
+    "stall-mid": the headers and the body's first bytes, then nothing, the connection held open; "retry-after": a 503
+    that asks for an hour's wait; "redirect": a 302 to the file at another path; a spent plan: the whole file), in an
+    empty home (no `.curlrc`), with no proxy, the default tries, FETCH_PINNED_DELAY 1 (curl's least) and
+    FETCH_PINNED_STALL 2. A held connection is let go when the run ends. A run past `_FETCH_LIMIT` seconds fails the
+    test, its process group killed: a curl that waits out a stall or a Retry-After would otherwise hold the suite.
+    Returns (rc, output, requests, the file's bytes or None)."""
     import hashlib
     import http.server
     import shutil
+    import signal
     import threading
     bash, curl, sha = shutil.which("bash"), shutil.which("curl"), shutil.which("sha256sum")
     if os.name == "nt" or not (bash and curl and sha):
         pytest.skip("needs a POSIX bash, curl and sha256sum")
-    answers, served = list(plan), []
+    answers, served, release = list(plan), [], threading.Event()
 
     class Mirror(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 — the name http.server calls
@@ -2447,40 +2458,96 @@ def _run_fetch(tmp_path, plan, digest=None, args=None):
             if answer == "504":
                 self.send_error(504)
                 return
+            if answer == "stall":
+                release.wait(2 * _FETCH_LIMIT)
+                return
+            if answer in ("retry-after", "redirect"):
+                self.send_response(503 if answer == "retry-after" else 302)
+                self.send_header("Retry-After" if answer == "retry-after" else "Location",
+                                 "3600" if answer == "retry-after" else "/moved" + self.path)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            cut = answer in ("short", "stall-mid")
             self.send_response(200)
             self.send_header("Content-Length", str(len(_BODY) + (100 if answer == "short" else 0)))
             self.end_headers()
-            self.wfile.write(_BODY[:5] if answer == "short" else _BODY)
+            self.wfile.write(_BODY[:5] if cut else _BODY)
+            if answer == "stall-mid":
+                self.wfile.flush()
+                release.wait(2 * _FETCH_LIMIT)
 
         def log_message(self, *_):
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mirror)
+    server.handle_error = lambda *_: None   # a held connection curl closed fails its write when let go
     threading.Thread(target=server.serve_forever, daemon=True).start()
     home = tmp_path / "home"
     home.mkdir()
     env = {k: v for k, v in os.environ.items() if not k.startswith("FETCH_PINNED_") and "proxy" not in k.lower()}
-    env.update({"HOME": str(home), "CURL_HOME": str(home), "XDG_CONFIG_HOME": str(home), "FETCH_PINNED_DELAY": "1"})
+    env.update({"HOME": str(home), "CURL_HOME": str(home), "XDG_CONFIG_HOME": str(home), "FETCH_PINNED_DELAY": "1",
+                "FETCH_PINNED_STALL": "2"})
     try:
         url = "http://127.0.0.1:%d/releases/tool-1.2.3.tar.gz" % server.server_address[1]
         if args is None:
             args = [url, digest or hashlib.sha256(_BODY).hexdigest()]
-        r = subprocess.run([bash, _FETCH, *args], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+        p = subprocess.Popen([bash, _FETCH, *args], cwd=tmp_path, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        try:
+            out, _ = p.communicate(timeout=_FETCH_LIMIT)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)   # curl too, which holds the pipe a kill of bash alone leaves open
+            out, _ = p.communicate()
+            pytest.fail("the fetch still ran after %d s (requests %s): %s" % (_FETCH_LIMIT, served, out))
     finally:
+        release.set()
         server.shutdown()
         server.server_close()
-    out = tmp_path / "tool-1.2.3.tar.gz"
-    return r.returncode, r.stdout + r.stderr, served, out.read_bytes() if out.exists() else None
+    file = tmp_path / "tool-1.2.3.tar.gz"
+    return p.returncode, out, served, file.read_bytes() if file.exists() else None
 
 
 def test_the_fetch_retries_a_server_error_the_mirror_answers_once(tmp_path):
-    """A 504, then the file: the helper asks again after its delay, and the step succeeds with the whole file. One
-    release download in the validate job got a 504 from the mirror and failed the job, which passed when that job
-    alone was re-run on the same commit (2026-11-08, I-28). Guards the retry: a bare curl fails on the first 504
-    (curl's `--retry` reads the status with or without `-f`)."""
+    """A 504, then the file: the helper asks again after its delay, says so in the log, and the step succeeds with the
+    whole file. One release download in the validate job got a 504 from the mirror and failed the job, which passed
+    when that job alone was re-run on the same commit (2026-11-08, I-28). Guards the retry: a bare curl fails on the
+    first 504 (curl's `--retry` reads the status with or without `-f`); and curl's "Will retry" warning, which `-s`
+    mutes, so a job that passed on a retry shows it did (read 2026-11-09, N3)."""
     rc, out, served, got = _run_fetch(tmp_path, ["504"])
     assert rc == 0, out
     assert len(served) == 2 and got == _BODY, (served, got)
+    assert "Will retry" in out, out
+
+
+def test_the_fetch_gives_up_on_a_stall_and_asks_again(tmp_path):
+    """A mirror that takes the request and sends nothing, then one that sends the headers and the body's first bytes
+    and stops, each holding the connection open, then the file: the helper gives up on each stall after its stall
+    time (2 s here, 60 s in CI), asks again, and the file holds the whole body once. Guards the stall bound
+    (`--speed-limit`/`--speed-time`): `--retry` bounds the tries and not the wait, so a stalled transfer held the job
+    until its 360-minute default (read 2026-11-09, I-34 S1); without the bound this run is killed at
+    `_FETCH_LIMIT`."""
+    rc, out, served, got = _run_fetch(tmp_path, ["stall", "stall-mid"])
+    assert rc == 0, out
+    assert len(served) == 3 and got == _BODY, (served, got, out)
+
+
+def test_the_fetch_refuses_a_retry_after_past_its_cap(tmp_path):
+    """A 503 that asks for an hour's wait: the helper does not wait it out (curl refuses a Retry-After that would run
+    past `--retry-max-time`), asks nothing more, and the step fails with no file. Guards the cap: a Retry-After
+    replaces `--retry-delay` with whatever the mirror asks (read 2026-11-09, I-34 S1), and the digest check as the
+    last line, since a curl that refuses the wait can exit 0 with no file (curl 8.14, measured)."""
+    rc, out, served, got = _run_fetch(tmp_path, ["retry-after"])
+    assert rc != 0 and len(served) == 1 and got is None, (rc, served, out)
+
+
+def test_the_fetch_follows_a_redirect_to_the_file(tmp_path):
+    """A 302 to the file at another path, then the file: the helper follows it and keeps the file's own name. Guards
+    `-L`: GitHub serves a release file by a redirect, and without `-L` curl saves the redirect's empty body as the file
+    and exits 0, and only the digest check fails the step (read 2026-11-09, N1)."""
+    rc, out, served, got = _run_fetch(tmp_path, ["redirect"])
+    assert rc == 0, out
+    assert served == ["/releases/tool-1.2.3.tar.gz", "/moved/releases/tool-1.2.3.tar.gz"] and got == _BODY, served
 
 
 def test_the_fetch_retries_a_body_cut_short_and_starts_the_file_again(tmp_path):
@@ -2520,25 +2587,120 @@ def test_the_fetch_refuses_a_call_without_its_digest_before_it_downloads(tmp_pat
     assert served == [] and got is None
 
 
+def download_faults(workflows, scripts):
+    """(faults, {url: {sha256}}, {url: {workflow}}) of the download rules, read from each step's `run:` with its
+    comments cut (`_script`), and from each script in `scripts` ({name: text}): no step or script runs a downloader
+    of its own (`_DOWNLOADER`); a step defines `fetch` only as `_WRAPPER`, once, where it calls `fetch`; every
+    `/releases/download/` the step names is in a fetch command, and each such command stands alone (no `||`, `|` or
+    `&` after it, no `&&` before it), so its failure fails the step."""
+    faults, pins, seen = [], {}, {}
+    for name, workflow in sorted(workflows.items()):
+        for job_name, job in sorted((workflow.get("jobs") or {}).items()):
+            for step in job.get("steps") or []:
+                if "run" not in step:
+                    continue
+                script, where = _script(step["run"]), "%s, job %s, step %r" % (name, job_name, step.get("name"))
+                if _DOWNLOADER.search(script):
+                    faults.append("%s runs a downloader itself; use .github/scripts/fetch-pinned.sh" % where)
+                calls = [(m, before, after) for m, before, after in
+                         ((_FETCH_COMMAND.fullmatch(c), b, a) for c, b, a in commands(script)) if m]
+                if any(m.group(1) == "fetch" for m, _, _ in calls) and (
+                        script.count(_WRAPPER) != 1 or len(_DEFINES_FETCH.findall(script)) != 1):
+                    faults.append("%s defines `fetch` other than once, as `%s`" % (where, _WRAPPER))
+                if script.count("/releases/download/") != sum(m.group(2).count("/releases/download/")
+                                                               for m, _, _ in calls):
+                    faults.append("%s downloads a release file other than by `fetch <url> <sha256>`" % where)
+                for m, before, after in calls:
+                    if before not in ("", ";") or after not in ("", ";"):
+                        faults.append("%s runs a fetch whose failure need not fail the step: %s" % (where, m.group(0)))
+                    pins.setdefault(m.group(2), set()).add(m.group(3))
+                    seen.setdefault(m.group(2), set()).add(name)
+    for name, text in sorted(scripts.items()):
+        if _DOWNLOADER.search(_script(text)):
+            faults.append("%s runs a downloader itself; use .github/scripts/fetch-pinned.sh" % name)
+    return faults, pins, seen
+
+
+_REL = "https://example.invalid/o/t/releases/download/v1/t.tar.gz"
+_PIN = "%s %s" % (_REL, "a" * 64)
+
+
+@pytest.mark.parametrize("run, scripts, fault", [
+    ("set -euo pipefail\n%s\nfetch %s \\\n      %s\n" % (_WRAPPER, _REL, "a" * 64), {}, None),
+    ('set -euo pipefail\nbash "$GITHUB_WORKSPACE/.github/scripts/fetch-pinned.sh" \\\n  ' + _PIN, {}, None),
+    ("# curl was the old way\n%s\nfetch %s  # pinned\n" % (_WRAPPER, _PIN), {}, None),
+    ('fetch() { python3 -c "import sys, urllib.request as u; u.urlretrieve(sys.argv[1], \'t.tar.gz\')" "$@"; }\n'
+     "fetch " + _PIN, {}, "runs a downloader itself"),
+    ('fetch() { bash "$GITHUB_WORKSPACE/.github/scripts/other.sh" "$@"; }\nfetch ' + _PIN, {}, "defines `fetch`"),
+    ("%s\nfetch() { cp /tmp/t.tar.gz .; }\nfetch %s" % (_WRAPPER, _PIN), {}, "defines `fetch`"),
+    ("fetch " + _PIN, {}, "defines `fetch`"),
+    ("# fetch %s\ngh release download v1 -R o/t -p t.tar.gz" % _PIN, {}, "runs a downloader itself"),
+    ("# fetch %s\npython3 get.py %s" % (_PIN, _REL), {}, "other than by `fetch"),
+    ("%s\necho fetch %s" % (_WRAPPER, _PIN), {}, "other than by `fetch"),
+    ("%s\nif fetch %s; then :; fi" % (_WRAPPER, _PIN), {}, "other than by `fetch"),
+    ("%s\nfetch %s || true" % (_WRAPPER, _PIN), {}, "need not fail the step"),
+    ("bash .github/scripts/get.sh", {"get.sh": "#!/bin/bash\ncurl -fsSLO %s\n" % _REL}, "get.sh runs a downloader"),
+    ("bash .github/scripts/get.sh", {"get.sh": "#!/bin/bash\n# no curl, no wget\nexit 0\n"}, None),
+    ("Invoke-WebRequest -Uri %s -OutFile t.tar.gz" % _REL, {}, "runs a downloader itself"),
+])
+def test_the_download_rules_catch_a_download_around_the_helper(run, scripts, fault):
+    """`download_faults` passes the two pinned forms (ci.yml's wrapper and the helper called by path), a comment that
+    names curl, and a script that downloads nothing; and names a wrapper that no longer calls the helper (here a python
+    urlretrieve), a second definition of `fetch`, a `fetch` with no definition, a `gh release download` or a release
+    URL handed to another program while a comment names the pin, a fetch in an `echo` or an `if` condition, one
+    followed by `|| true`, a curl in a script a step runs, and PowerShell's Invoke-WebRequest. Guards the scan the
+    download test runs: read on 2026-11-09 (I-34 S3), it passed every one of these, since it matched words anywhere in
+    the file, comments included, and read no script."""
+    faults, _, _ = download_faults({"w.yml": {"jobs": {"j": {"steps": [{"name": "s", "run": run}]}}}}, scripts)
+    if fault is None:
+        assert faults == [], faults
+    else:
+        assert any(fault in f for f in faults), faults
+
+
 def test_every_workflow_download_goes_through_the_pinned_fetch():
-    """No workflow runs curl or wget itself: every release file a job downloads goes through
-    .github/scripts/fetch-pinned.sh with its URL and a sha256 beside it, and a URL has one digest in every workflow
-    that fetches it. Guards a new download written the old way (security.yml's gitleaks install had no retry and no
-    digest check until 2026-11-08) and a version bump that changes one workflow's digest and not the other's (both
-    install gitleaks). The helper's bounds, three retries five seconds apart, are pinned here, and no workflow
-    overrides them."""
-    pins, seen = {}, {}
+    """Every release file a workflow names by its `/releases/download/` URL goes through
+    .github/scripts/fetch-pinned.sh with a sha256 beside it, and nothing else downloads by itself, in a step or in a
+    script under .github/scripts/ (`download_faults`); a URL has one digest in every workflow that fetches it; both
+    gitleaks installs put it in `$RUNNER_TEMP/kontroll-tools` on the PATH, with no sudo. Guards a new download
+    written the old way (security.yml's gitleaks install had no retry and no digest check until 2026-11-08), a
+    version bump that changes one workflow's digest and not the other's, and the history scan's install, which said
+    "as ci.yml installs it" and ran `sudo tar` into /usr/local/bin (read 2026-11-09, N4). The helper's bounds are
+    pinned here as words, the flags the runtime rows above cannot reach (the connect timeout, the retry cap's 300 s),
+    and no workflow overrides them. Not covered, and said so in SECURITY.md C6: Playwright's browser and the snmp
+    generator's source, which their own tools fetch, and the installer image's two downloads, digest-checked with no
+    retry."""
+    workflows, texts = {}, {}
     for name in sorted(os.listdir(WF)):
-        text = _read(os.path.join(".github", "workflows", name))
-        assert not _DOWNLOADER.search(text), "%s runs a downloader itself; use .github/scripts/fetch-pinned.sh" % name
-        assert "FETCH_PINNED_" not in text, name
-        for url, digest in _FETCHED.findall(text):
-            pins.setdefault(url, set()).add(digest)
-            seen.setdefault(url, set()).add(name)
+        texts[name] = _read(os.path.join(".github", "workflows", name))
+        workflows[name] = yaml.safe_load(texts[name])
+        assert "FETCH_PINNED_" not in texts[name], name
+    scripts = {name: _read(os.path.join(".github", "scripts", name))
+               for name in sorted(os.listdir(os.path.join(ROOT, ".github", "scripts")))
+               if name.endswith(".sh") and name != "fetch-pinned.sh"}
+    assert "apt-install.sh" in scripts, "the scripts the steps run are gone — if they moved, move this test with them"
+    faults, pins, seen = download_faults(workflows, scripts)
+    assert faults == [], faults
     assert all(len(digests) == 1 for digests in pins.values()), pins
     gitleaks = [url for url in pins if "/gitleaks/releases/" in url]
     assert len(gitleaks) == 1 and seen[gitleaks[0]] == {"ci.yml", "security.yml"}, seen
     assert len(pins) >= 4, "the pinned downloads are gone — if they moved, move this test with them"
+    for name in ("ci.yml", "security.yml"):
+        installs = [_script(s["run"]) for job in workflows[name]["jobs"].values() for s in job.get("steps") or []
+                    if gitleaks[0] in str(s.get("run"))]
+        assert len(installs) == 1, (name, installs)
+        for words in ('bin="$RUNNER_TEMP/kontroll-tools"', '-C "$bin" gitleaks', 'echo "$bin" >> "$GITHUB_PATH"'):
+            assert words in installs[0], (name, words)
+        assert not re.search(r"\bsudo\b", installs[0]), name
     helper = _read(".github/scripts/fetch-pinned.sh")
-    assert '--retry "${FETCH_PINNED_TRIES:-3}" --retry-all-errors --retry-delay "${FETCH_PINNED_DELAY:-5}"' in helper
-    assert '-o "$file" "$1"' in helper and "| sha256sum -c --quiet" in helper
+    lines = helper.rstrip("\n").splitlines()
+    starts = [i for i, ln in enumerate(lines) if ln.startswith("curl ")]
+    assert len(starts) == 1, "the helper runs one curl"
+    end = next(i for i in range(starts[0], len(lines)) if not lines[i].endswith("\\"))
+    curl = " ".join(ln.rstrip("\\").strip() for ln in lines[starts[0]:end + 1])
+    for flags in ("curl -fSL --no-progress-meter --connect-timeout 30 --speed-limit 1024",
+                  '--speed-time "${FETCH_PINNED_STALL:-60}"',
+                  '--retry "${FETCH_PINNED_TRIES:-3}" --retry-all-errors --retry-delay "${FETCH_PINNED_DELAY:-5}"',
+                  '--retry-max-time 300 -o "$file" "$1"'):
+        assert flags in curl, (flags, curl)
+    assert lines[-1] == 'echo "$2  $file" | sha256sum -c --quiet', "the digest check must be the helper's last line"
