@@ -112,7 +112,8 @@ def test_mutating_tasks_are_not_check_mode_false():
         # `--fleet-check`) are resolvers, not writers — e.g. gen-image-digests.py --env reads the lock to feed the
         # .env pin (C0), and gen-requirements.py --fleet-check reads the fleet list and resolves nothing.
         # stale-config.py is the same: its find reads (check_mode:false, so a dry-run names the stale services);
-        # its `--write` records.
+        # its `--write` records. Its `--forget` (the G9 gate's, I-31) only drops a record, so the next apply
+        # restarts that service once: it can add a restart, never hide one, and it runs in a dry-run too.
         mutates = (("compose" in cmd and ("up" in cmd or " restart " in cmd)) or _gen_writes(cmd)
                    or ("stale-config.py" in cmd and "--write" in cmd))
         if mutates and t.get("check_mode") is False:

@@ -8,8 +8,10 @@ other-readable, so the gate passed it, and the remedy it prints, run against tha
 it. And a stat that does not follow a link describes the link, whose own mode is 0777, so a link to a key uid 1001
 cannot read passed the other-readable leg, while Docker mounts the link's target. And "uid 1001 owns it" stood in
 for the mode, passing a key whose owner read bit is off and refusing a root:1001 0640 key the GUI can read. Each row
-here makes one shape on disk; one play runs the two tasks, copied from the playbook as they are (not rewritten),
-once per shape, and records what the gate did and what the stat said.
+here makes one shape on disk, with a stand-in of the deploy's config stamp beside it; one play runs the three tasks
+(the stat, the forget that drops the GUI's record when the key is refused (I-31), the assert), copied from the
+playbook as they are (not rewritten), once per shape, and records what the gate did, what the stat said and what the
+stamp holds after.
 
 Every row runs as an ordinary user except the rows whose key has uid or gid 1001, which need root: they run where the
 suite is run as root (tests/validate.sh's as-root step runs this file) and are skipped elsewhere. The two whose key
@@ -81,13 +83,18 @@ def _tasks(node):
 
 
 def _gate_tasks():
-    """The stat and the assert, as deploy-stack.yml has them."""
+    """The stat, the forget and the assert, as deploy-stack.yml has them."""
     with open(DEPLOY, encoding="utf-8") as fh:
         tasks = list(_tasks(yaml.safe_load(fh.read())))
     stat = [t for t in tasks if str(t.get("name", "")).startswith("Stat the onboard-gui age key")]
+    forget = [t for t in tasks if str(t.get("name", "")).startswith("Forget what onboard-gui last loaded")]
     gate = [t for t in tasks if "the actual remedy" in str(t.get("name", ""))]
-    assert len(stat) == 1 and len(gate) == 1, "the G9 stat or assert moved — move this test with it"
-    return stat[0], gate[0]
+    assert len(stat) == 1 and len(forget) == 1 and len(gate) == 1, "the G9 tasks moved — move this test with them"
+    return stat[0], forget[0], gate[0]
+
+
+# the deploy's config stamp, as a stand-in: the GUI's record beside another service's
+_STAMP = {"caddy": "c", "onboard-gui": "g"}
 
 
 def _write(path, mode, data=_BYTES):
@@ -135,22 +142,27 @@ def _make(directory, shape):
         assert shape == "missing", shape
 
 
-@pytest.fixture(scope="module")
-def gate_run(tmp_path_factory):
-    """One ansible-playbook run: for each shape, the two tasks in a block whose rescue records the refusal; returns
-    {shape: {"result": "PASSED" or the refusal's message, "stat": what the stat registered}}."""
-    base = tmp_path_factory.mktemp("g9-age-key")
-    shapes = [s for s in _EXPECT if (s not in _ROOT_ONLY or os.geteuid() == 0) and
-              (s not in _OTHER_UID or os.geteuid() != RUNTIME_UID)]
+def _run_gate(base, shapes, check=False):
+    """One ansible-playbook run (`--check` if `check`): for each shape, the three tasks in a block whose rescue
+    records the refusal; returns {shape: {"result": "PASSED" or the refusal's message, "stat": what the stat
+    registered, "stamp": the stand-in stamp after}}. The play sits two levels down from a copy of the script, as
+    deploy-stack.yml sits from scripts/, so the forget's own command line runs it."""
     for shape in shapes:
         _make(str(base / "shapes" / shape), shape)
-    stat_task, gate_task = _gate_tasks()
+        store = base / "stores" / shape
+        store.mkdir(parents=True)
+        (store / "config-loaded.json").write_text(json.dumps(_STAMP), encoding="utf-8")
+        os.chmod(store / "config-loaded.json", 0o600)
+    (base / "scripts").mkdir()
+    shutil.copy(os.path.join(ROOT, "scripts", "stale-config.py"), str(base / "scripts"))
+    stat_task, forget_task, gate_task = _gate_tasks()
     one_shape = [{
         "name": "One shape, through the gate's own tasks",
         "block": [
             stat_task,
             {"name": "Record what the stat said",
              "ansible.builtin.set_fact": {"_stats": "{{ _stats | combine({shape: _gui_age_key.stat}) }}"}},
+            forget_task,
             gate_task,
             {"name": "Record a pass",
              "ansible.builtin.set_fact": {"_results": "{{ _results | combine({shape: 'PASSED'}) }}"}},
@@ -172,13 +184,17 @@ def gate_run(tmp_path_factory):
              "ansible.builtin.include_tasks": str(base / "one-shape.yml"),
              "loop": shapes,
              "loop_control": {"loop_var": "shape"},
-             "vars": {"kontroll_gui_dir": str(base / "shapes") + "/{{ shape }}"}},
+             "vars": {"kontroll_gui_dir": str(base / "shapes") + "/{{ shape }}",
+                      "kontroll_storage_root": str(base / "stores") + "/{{ shape }}"}},
             {"name": "Write down what happened",
              "ansible.builtin.copy": {"content": "{{ {'results': _results, 'stats': _stats} | to_json }}",
-                                      "dest": str(results), "mode": "0600"}},
+                                      "dest": str(results), "mode": "0600"},
+             "check_mode": False},
         ],
     }]
-    (base / "play.yml").write_text(yaml.safe_dump(play, sort_keys=False), encoding="utf-8")
+    playbooks = base / "ansible" / "playbooks"
+    playbooks.mkdir(parents=True)
+    (playbooks / "play.yml").write_text(yaml.safe_dump(play, sort_keys=False), encoding="utf-8")
     home = base / "ansible-home"
     home.mkdir()
     cfg = home / "ansible.cfg"
@@ -193,12 +209,23 @@ interpreter_python = auto_silent
     env.update(ANSIBLE_CONFIG=str(cfg), ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"),
                ANSIBLE_NOCOLOR="1", ANSIBLE_DEPRECATION_WARNINGS="0", ANSIBLE_LOCALHOST_WARNING="0",
                PYTHONDONTWRITEBYTECODE="1")
-    p = subprocess.run(["ansible-playbook", "-i", str(base / "hosts.yml"), str(base / "play.yml")], cwd=str(base),
-                       env=env, capture_output=True, text=True, timeout=300)
+    argv = ["ansible-playbook", "-i", str(base / "hosts.yml"), str(playbooks / "play.yml")] + (["--check"] if check
+                                                                                              else [])
+    p = subprocess.run(argv, cwd=str(base), env=env, capture_output=True, text=True, timeout=300)
     assert p.returncode == 0 and results.exists(), p.stdout + p.stderr
     got = json.loads(results.read_text(encoding="utf-8"))
     assert sorted(got["results"]) == sorted(shapes), (shapes, got["results"])
-    return {s: {"result": got["results"][s], "stat": got["stats"].get(s)} for s in shapes}
+    return {s: {"result": got["results"][s], "stat": got["stats"].get(s),
+                "stamp": json.loads((base / "stores" / s / "config-loaded.json").read_text(encoding="utf-8"))}
+            for s in shapes}
+
+
+@pytest.fixture(scope="module")
+def gate_run(tmp_path_factory):
+    """Every shape this suite's uid can make, through one run of the gate (see `_run_gate`)."""
+    shapes = [s for s in _EXPECT if (s not in _ROOT_ONLY or os.geteuid() == 0) and
+              (s not in _OTHER_UID or os.geteuid() != RUNTIME_UID)]
+    return _run_gate(tmp_path_factory.mktemp("g9-age-key"), shapes)
 
 
 @pytest.mark.parametrize("shape", sorted(_EXPECT))
@@ -257,6 +284,27 @@ def test_the_real_stat_reports_the_shapes_the_unit_rows_assume_and_reads_no_byte
         assert stats[link]["islnk"] is False and stats[link]["isreg"] is True, (link, stats[link])
         assert stats[link]["roth"] is mode_roth, (link, stats[link])
     assert stats["fifo-0644"]["isfifo"] is True and stats["fifo-0644"]["roth"] is True, stats["fifo-0644"]
+
+
+def test_a_refused_key_drops_the_guis_record_and_a_passed_one_keeps_it(gate_run):
+    """After each shape, the stand-in stamp: a shape the gate refused has lost onboard-gui's record and kept the other
+    service's; one it passed keeps both. So the first deploy past the gate after a refusal finds no record of the GUI,
+    which is stale, and restarts a running GUI whatever key came back (I-31's two reads: the record was always of a
+    key the gate passed, which the printed install puts back exactly, so the re-run named nothing). Run by the real
+    task, on the real stat of each shape, through its own command line."""
+    for shape, run in gate_run.items():
+        want = dict(_STAMP) if _EXPECT[shape] == "PASSED" else {"caddy": "c"}
+        assert run["stamp"] == want, (shape, run["result"], run["stamp"])
+
+
+def test_a_dry_runs_refusal_drops_the_record_too(tmp_path):
+    """The same tasks in `--check`: a refused key's record is dropped and a passed one's kept, as in an apply. The
+    mandated flow is a dry-run first; were the forget skipped there, a dry-run that refused, the key then put right,
+    a passing dry-run and its apply would never drop the record, and the apply would restart nothing (I-31's two
+    reads). Dropping a record can only add a restart, never hide one."""
+    got = _run_gate(tmp_path, ["missing", "file-0644"], check=True)
+    assert got["missing"]["result"] != "PASSED" and got["missing"]["stamp"] == {"caddy": "c"}, got["missing"]
+    assert got["file-0644"]["result"] == "PASSED" and got["file-0644"]["stamp"] == _STAMP, got["file-0644"]
 
 
 def test_the_rows_that_need_root_run_in_the_gate_as_root():

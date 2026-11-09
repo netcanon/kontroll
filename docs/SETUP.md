@@ -201,8 +201,10 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > on the installer path a link out of it is judged in the installer's own filesystem), and "readable" by the mode
 > bits as the kernel reads them for the GUI's process (uid and gid 1001, no other group; an ACL is not read): the
 > owner bits when uid 1001 owns the key, the group bits when gid 1001 does, else the other bits. If onboard-gui is
-> already running when you put the key right, restart it (`sudo docker restart onboard-gui`): a file bind keeps
-> the file it started with. The simplest correct answer is a copy of the control key:
+> already running when you put the key right, the re-run restarts it: a file bind keeps the file it started with,
+> so the refusal dropped the deploy's record of the config the GUI last loaded, and the first deploy past the gate
+> restarts it, whatever key you put back. The simplest correct answer
+> is a copy of the control key:
 >
 > ```bash
 > sudo install -m 0600 -o 1001 -g 1001 ~/.config/sops/age/keys.txt /var/lib/kontroll/onboard-gui/age.key

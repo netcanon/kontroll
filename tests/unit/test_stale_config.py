@@ -6,18 +6,19 @@ its service definition changed. On both boxes' redeploy (2026-10-22) the new Vec
 rules reached the disk and not the services: the apply reported success, and Vector kept logging the warnings the
 build had fixed until both were restarted by hand. scripts/stale-config.py names the services whose config
 changed, as `docker compose config` resolves their binds; deploy-stack.yml restarts them and records what they
-loaded. These rows hold what counts as config (the tree's read-only binds, the files the deploy renders under the
-storage root, never a store or a bind the service reloads itself), the digest to content (the generators rewrite
-their files every run, so an mtime would restart every service on every deploy and break the second apply's 0
-changed), the stamp to what the services loaded (merged, so a one-service deploy does not make the next full one
-restart everything), the output to names (the rendered snmp.yml holds credentials, and a digest of it tests
-guesses), and the tasks to their order and to never acting in a dry-run.
+loaded. These rows hold what counts as config (the tree's read-only binds, the files under the storage root, never a
+store or a bind the service reloads itself), the digest to content and, for a storage-root file, its mode and owner
+(the generators rewrite their files every run, so an mtime would restart every service on every deploy and break the
+second apply's 0 changed), the stamp to what the services loaded (merged, so a one-service deploy does not make the
+next full one restart everything; a service forgotten is stale), the output to names (the rendered snmp.yml holds
+credentials, and a digest of it tests guesses), and the tasks to their order and to never recording in a dry-run.
 """
 import importlib.util
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -203,6 +204,150 @@ def test_a_source_that_is_a_link_is_followed_to_its_content(tmp_path):
     assert _run(tmp_path, "linked") == ["linked"]
 
 
+_ROOT_ONLY = pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
+                                reason="giving a file to another owner takes root (the gate image runs as root)")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX's")
+@pytest.mark.parametrize("change", ["mode", "owner-bits", pytest.param("owner", marks=_ROOT_ONLY),
+                                    pytest.param("group", marks=_ROOT_ONLY)])
+def test_a_store_files_mode_or_owner_changed_makes_its_service_stale(tmp_path, change):
+    """A file under the storage root adds its mode, owner and group to the digest, so a change to any of them, the
+    bytes the same, makes the service that binds it stale, once: recorded, it is not stale again. `owner-bits`
+    changes the owner's bits alone (0400 to 0600), which a digest of the group and other bits would miss (I-31's read
+    B, N-5); the file stays readable to its owner, so the row runs as any uid (the deploy reads as root, where a key
+    without its owner read bit digests as well). Guards I-31: a file bind keeps the file its container started with,
+    so the GUI's age key put back readable with the same bytes left the running GUI on the one it could not read, and
+    the deploy, reading bytes only, ended green."""
+    _repo, store, _cfg = _tree(tmp_path)
+    f = store / "caddy" / "Caddyfile"
+    os.chmod(f, 0o400 if change == "owner-bits" else 0o600)
+    _run(tmp_path, "--write", *_ALL)
+    if change in ("mode", "owner-bits"):
+        os.chmod(f, 0o600 if change == "owner-bits" else 0o640)
+    else:
+        st = os.stat(f)
+        os.chown(f, st.st_uid + 1 if change == "owner" else -1, st.st_gid + 1 if change == "group" else -1)
+    assert _run(tmp_path, *_ALL) == ["caddy"]
+    _run(tmp_path, "--write", *_ALL)
+    assert _run(tmp_path, *_ALL) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="links and file modes as a POSIX tree holds them")
+def test_a_store_file_put_back_with_the_same_bytes_is_a_change_only_with_another_mode(tmp_path):
+    """The I-31 shape: the bound path was a link to the key, and the remedy put a regular file there with the same
+    bytes and the mode the GUI needs. The link is followed, so the mode compared is the target's, the file the
+    container was given: a chmod of the target is a change, and so is the new file's other mode. A file put back
+    with the same bytes, mode and owner serves the container as the old one did: not stale, so a key re-installed as
+    it was restarts nothing. It is moved over the old one here, as an atomic writer (`mv`, Ansible's copy) leaves
+    it, so its inode differs from the recorded file's and a check that read the inode would call it stale; GNU
+    `install` instead unlinks the old file and writes a new one at the path, which takes the freed number when
+    nothing holds the old file (I-31's reads, measured)."""
+    _repo, store, cfg = _tree(tmp_path)
+    (store / "gui").mkdir()
+    (store / "keys").mkdir()
+    (store / "keys" / "k").write_text("AGE-KEY\n")
+    os.chmod(store / "keys" / "k", 0o640)
+    os.symlink(store / "keys" / "k", store / "gui" / "age.key")
+    _add_service(cfg, "gui", _bind(store / "gui" / "age.key", "/keys.txt"))
+    _run(tmp_path, "--write", "gui")
+    os.chmod(store / "keys" / "k", 0o644)
+    assert _run(tmp_path, "gui") == ["gui"]
+    _run(tmp_path, "--write", "gui")
+    (store / "gui" / "age.key").unlink()
+    (store / "gui" / "age.key").write_text("AGE-KEY\n")
+    os.chmod(store / "gui" / "age.key", 0o600)
+    assert _run(tmp_path, "gui") == ["gui"]
+    _run(tmp_path, "--write", "gui")
+    recorded = os.stat(store / "gui" / "age.key").st_ino
+    new = store / "gui" / "age.key.new"
+    new.write_text("AGE-KEY\n")
+    os.chmod(new, 0o600)
+    os.replace(new, store / "gui" / "age.key")
+    assert os.stat(store / "gui" / "age.key").st_ino != recorded, "the row must put a new inode at the path"
+    assert _run(tmp_path, "gui") == []
+
+
+@_ROOT_ONLY
+def test_a_link_targets_owner_changed_makes_its_service_stale(tmp_path):
+    """The bound path is a link, and the file behind it changes owner, its group, the link and the bytes staying as
+    they were: the service is stale, once. The owner read is the target's, the file the container was given, never the
+    link's own (a link's owner is its maker's, root's here, whichever file it points at): I-31's read B, N-5, whose
+    mutant read the owner through `lstat` and passed every row. The group is kept, so the change is the owner's alone:
+    a row that changed both passed that mutant through the group (I-31 fold 1's checks)."""
+    _repo, store, cfg = _tree(tmp_path)
+    (store / "gui").mkdir()
+    (store / "keys").mkdir()
+    (store / "keys" / "k").write_text("AGE-KEY\n")
+    os.chmod(store / "keys" / "k", 0o600)
+    os.symlink(store / "keys" / "k", store / "gui" / "age.key")
+    _add_service(cfg, "gui", _bind(store / "gui" / "age.key", "/keys.txt"))
+    _run(tmp_path, "--write", "gui")
+    os.chown(store / "keys" / "k", 1001, -1)
+    assert _run(tmp_path, "gui") == ["gui"]
+    _run(tmp_path, "--write", "gui")
+    assert _run(tmp_path, "gui") == []
+
+
+def _forget(stamp, *args):
+    r = subprocess.run([sys.executable, "-B", _SCRIPT, "--stamp", str(stamp), *args], capture_output=True, text=True,
+                       timeout=60)
+    return r.returncode, r.stdout.split(), r.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX's")
+def test_a_forgotten_service_is_stale_whatever_comes_back(tmp_path):
+    """I-31's two reads: the deploy records only a key its G9 gate passed, so the install the refusal prints puts
+    back exactly the recorded mode and owner, and a GUI left holding a key it cannot read (here the recorded file
+    made unreadable in place, then a new one installed as it was) matched the record: the check named nothing, and
+    the deploy ended green on it. `--forget` drops that service's record and no other, so the next check names it
+    whatever came back; it reads no compose and no stack (the gate runs it before either is resolved), keeps the
+    stamp 0600, and with nothing to drop says `unchanged` and writes nothing, so a fresh node's dry-run makes no
+    stamp. It takes one or more services and not `--write`, and every other run still needs its stack."""
+    _repo, store, cfg = _tree(tmp_path)
+    (store / "gui").mkdir()
+    key = store / "gui" / "age.key"
+    key.write_text("AGE-KEY\n")
+    os.chmod(key, 0o600)
+    _add_service(cfg, "gui", _bind(key, "/keys.txt"))
+    _run(tmp_path, "--write", "gui", *_ALL)
+    os.chmod(key, 0o000)                     # the file the running GUI holds, made unreadable: no deploy records it
+    key.unlink()
+    key.write_text("AGE-KEY\n")              # the printed install: a new file, the same bytes, mode and owner
+    os.chmod(key, 0o600)
+    assert _run(tmp_path, "gui", *_ALL) == [], "the record cannot tell: the reason the gate forgets"
+    stamp = tmp_path / "stamp.json"
+    before = json.loads(stamp.read_text(encoding="utf-8"))
+    assert _forget(stamp, "--forget", "gui")[:2] == (0, ["forgotten"])
+    after = json.loads(stamp.read_text(encoding="utf-8"))
+    assert after == {k: v for k, v in before.items() if k != "gui"} and "caddy" in after, after
+    assert stat.S_IMODE(os.stat(stamp).st_mode) == 0o600
+    assert _run(tmp_path, "gui", *_ALL) == ["gui"]
+    assert _forget(stamp, "--forget", "gui")[:2] == (0, ["unchanged"])
+    none = tmp_path / "none" / "stamp.json"
+    assert _forget(none, "--forget", "gui")[:2] == (0, ["unchanged"]) and not none.parent.exists()
+    assert _forget(stamp, "--forget")[0] == 2 and _forget(stamp, "--forget", "--write", "gui")[0] == 2
+    assert _forget(stamp, "gui")[0] == 2, "a check or a record without its stack must still be refused"
+    _run(tmp_path, "--write", "gui", *_ALL)
+    assert _run(tmp_path, "gui", *_ALL) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX's")
+def test_a_tree_files_mode_is_not_read(tmp_path):
+    """Mode and owner are read for the storage root's files only: the ones the deploy renders, setting both on every
+    run, and the GUI's age key, the operator's. A tree file's are the checkout's (git's, and the umask the copy was
+    made under), so a mode changed there, the bytes the same, makes nothing stale: a checkout re-made under another
+    umask restarts no service. The new mode is the old one with the group and other read bits flipped, so it differs
+    under any umask (under 077 a fixed 0600 was the mode already, and the row proved nothing)."""
+    repo, _store, _cfg = _tree(tmp_path)
+    _run(tmp_path, "--write", *_ALL)
+    for f in (repo / "rules.yml", repo / "app" / "conf.d" / "one.yml"):
+        old = stat.S_IMODE(os.stat(f).st_mode)
+        os.chmod(f, old ^ 0o044)             # another mode whatever the umask made it (I-31's read B, N-2)
+        assert stat.S_IMODE(os.stat(f).st_mode) != old
+    assert _run(tmp_path, *_ALL) == []
+
+
 @pytest.mark.parametrize("store_rel,tree_rel", [("repo/local/store", "repo"), ("store", "store/checkout")])
 def test_a_root_inside_the_other_classifies_by_the_deeper_one(tmp_path, store_rel, tree_rel):
     """A storage root inside the checkout holds stores, not tree config: its dirs (audit logs, run logs, TLS) grow
@@ -371,7 +516,9 @@ def test_the_deploy_finds_restarts_and_records_in_that_order_after_up():
     only when this run found them, so a run started past the find records nothing it did not restart; and never in
     a dry-run, where the restart is skipped: a record with no restart behind it is the defect itself. Both script
     runs use the playbook's own Python (the play is local, so the interpreter running it is one known to be there)
-    over one stamp under the storage root."""
+    over one stamp under the storage root. The find has no `when` and spares only the containers `up` printed
+    `Started` for: the G9 refusal's "the re-run restarts it" rests on both (I-31's read B, N-3: a find skipped for
+    the GUI, or a `_started` that always held it, passed every row)."""
     tasks = _tasks()
     at, names = _named(tasks)
     assert at["up"] < at["find"] < at["restart"] < at["record"], at
@@ -387,6 +534,10 @@ def test_the_deploy_finds_restarts_and_records_in_that_order_after_up():
     assert find["changed_when"] == "ansible_check_mode and (_stale_config.stdout_lines | length > 0)"
     assert find["failed_when"] == "_stale_config.rc != 0 and not ansible_check_mode"
     assert "--started {{ _started | join(',') | quote }}" in " ".join(find["ansible.builtin.command"]["cmd"].split())
+    assert "when" not in find, "the find runs on every deploy past `up` (the G9 refusal's re-run rests on it)"
+    assert " ".join(find["vars"]["_started"].split()) == (
+        "{{ _up_lines | select('search', '^ *Container +[^ ]+ +Started') | join(' ') "
+        "| regex_findall('Container +([^ ]+) +Started') }}"), "only what `up` started is spared"
     assert restart["when"] == "(_stale_config.stdout_lines | default([])) | length > 0"
     rcmd = " ".join(restart["ansible.builtin.command"]["cmd"].split())
     assert "--env-file {{ stack_dir }}/.env restart {{ _stale_config.stdout_lines | join(' ') }}" in rcmd
@@ -412,3 +563,14 @@ def test_the_deploy_reads_the_containers_up_started_from_its_lines():
              " Container grafana Recreated ", " Container grafana Started ", " Container loki Running "]
     found = re.findall(pattern, " ".join(ln for ln in lines if re.search(select, ln)))
     assert found == ["vector", "caddy", "grafana"]
+
+
+def test_the_owner_rows_run_in_the_gate_as_root():
+    """The rows that give a file another owner need root and are skipped elsewhere, and the public CI runs the suite
+    as an ordinary user, so they ran in no CI (I-31's read B, N-1). tests/validate.sh's as-root step runs the rows
+    that need root and fails `--strict` on any skip; it must name these two."""
+    with open(os.path.join(_ROOT, "tests", "validate.sh"), encoding="utf-8") as fh:
+        step = fh.read().split("step canon-drop-as-root", 1)[1].split("\n  fi\n", 1)[0]
+    for row in ("test_a_store_files_mode_or_owner_changed_makes_its_service_stale",
+                "test_a_link_targets_owner_changed_makes_its_service_stale"):
+        assert "tests/unit/test_stale_config.py::" + row in step, (row, step)

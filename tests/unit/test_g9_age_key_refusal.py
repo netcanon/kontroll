@@ -167,19 +167,71 @@ def test_the_refusal_carries_a_remedy_that_runs():
     assert "~/.config/sops/age/keys.txt" in msg, "and name the source: the control key (the accepted C10 residual)"
 
 
-def test_the_refusal_says_a_running_gui_needs_a_restart():
+def test_the_refusal_says_the_re_run_restarts_a_running_gui():
     """The printed install puts a new file at the path, and a running onboard-gui keeps the one its bind started
-    with. For a key the gate now refuses but the old one passed (a link to a key uid 1001 cannot read, a 1001-owned
-    key without its owner read bit), the installed key has the same bytes, so the re-run's stale-config check sees
-    no change and `up` leaves the container alone: the deploy ends green on a GUI that still cannot read its key
-    (reader A's S-1 on I-22). So the refusal tells the operator to restart a running GUI, by its container name."""
+    with. The re-run's stale-config check read bytes only, so a key put back with the same bytes was no change, and
+    the deploy ended green on a GUI that still could not read its key (reader A's S-1 on I-22); the refusal asked
+    the operator to restart it by hand, which they had to read to do. Since I-31 the check reads a storage-root
+    file's mode and owner too, and the gate drops the GUI's record when it refuses (the record is of a key the gate
+    passed, which the printed install puts back exactly: I-31's two reads), so the first deploy past the gate
+    restarts it and the refusal says so. Held here: the sentence, no by-hand restart beside it in any spelling
+    (`docker restart`, `docker container restart`, `docker compose restart`: I-31's read B, N-4), and the fact it
+    rests on — the GUI binds its key read-only from a FILE under the storage root, the bind the check reads."""
     for stat in (_MISSING, dict(_FILE, **_mode(1001, 1001, 0o044))):
         _, msg = _evaluate(stat)
-        assert "If onboard-gui is already running, restart it" in msg, msg
-        assert "`sudo docker restart onboard-gui`" in msg, msg
+        assert "If onboard-gui is already running, the re-run restarts it" in msg, msg
+        assert "dropped the record of the config the GUI last loaded" in msg, msg
+        assert not re.search(r"restart\b[^`]*onboard-gui", msg) and "docker restart" not in msg, msg
     with open(os.path.join(_ROOT, "docker", "services", "onboard-gui.yaml"), encoding="utf-8") as fh:
-        assert yaml.safe_load(fh)["services"]["onboard-gui"]["container_name"] == "onboard-gui", \
-            "the restart the refusal prints names the container"
+        volumes = yaml.safe_load(fh)["services"]["onboard-gui"]["volumes"]
+    assert ("${KONTROLL_STORAGE_ROOT:-/var/lib/kontroll}/onboard-gui/age.key:/home/semaphore/.config/sops/age/keys.txt"
+            ":ro") in volumes, volumes
+
+
+def _forget_task():
+    with open(_DEPLOY, encoding="utf-8") as fh:
+        tasks = list(_tasks(yaml.safe_load(fh.read())))
+    names = [str(t.get("name", "")) for t in tasks]
+    at = [i for i, n in enumerate(names) if n.startswith("Forget what onboard-gui last loaded")]
+    assert len(at) == 1, "the G9 forget moved — move this test with it"
+    stat = next(i for i, n in enumerate(names) if n.startswith("Stat the onboard-gui age key"))
+    gate = next(i for i, n in enumerate(names) if "the actual remedy" in n)
+    return tasks[at[0]], (stat, at[0], gate)
+
+
+def test_a_refused_key_drops_the_guis_record_so_the_run_past_the_gate_restarts_it():
+    """The record of what the GUI last loaded is always of a key this gate passed (the refusal stops the play before
+    the record), and the install it prints puts that key's mode and owner back, so a GUI left holding a key it cannot
+    read matched the record and was never restarted (I-31's two reads, measured). So before the assert, on the same
+    stat, a task drops the GUI's record (`stale-config.py --forget onboard-gui`, the stamp the deploy's check reads),
+    and a service the stamp does not hold is stale. Held here: its condition holds for exactly the shapes the gate
+    refuses, every hand-written one above (the forget repeats the assert's legs, negated, and a leg added to one and
+    not the other fails here); it runs only when onboard-gui is brought up, between the stat and the assert; it runs
+    in a dry-run too (`check_mode: false`: the mandated dry-run is the run that refuses first, and dropping a record
+    can only add a restart); and it reports changed only when it dropped one. The real stat on each shape, and the
+    stamp it leaves, are in tests/integration/test_g9_age_key_gate_real_stat.py."""
+    task, (stat_at, at, gate_at) = _forget_task()
+    assert stat_at < at < gate_at, (stat_at, at, gate_at)
+    whens = task["when"]
+    assert isinstance(whens, list) and len(whens) == 2 and whens[0] == "'onboard-gui' in stack_services", whens
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    for label, stat, should_pass in _CASES:
+        forgets = env.compile_expression(whens[1])(_gui_age_key={"stat": stat})
+        assert forgets is (not should_pass) and _evaluate(stat)[0] is should_pass, label
+    cmd = " ".join(task["ansible.builtin.command"]["cmd"].split())
+    assert cmd == ("{{ ansible_playbook_python }} -B {{ playbook_dir }}/../../scripts/stale-config.py "
+                   "--stamp {{ kontroll_storage_root }}/config-loaded.json --forget onboard-gui"), cmd
+    assert task.get("check_mode") is False, "the refusal a dry-run makes must drop the record too"
+    assert task.get("register") == "_gui_record_forgotten"
+    assert task["changed_when"] == "_gui_record_forgotten.stdout == 'forgotten'"
+    with open(_DEPLOY, encoding="utf-8") as fh:
+        found = [chain for t, chain in _with_parents(yaml.safe_load(fh.read()))
+                 if str(t.get("name", "")).startswith("Forget what onboard-gui last loaded")]
+    assert len(found) == 1
+    assert all(section in ("block", "tasks") for section, _ in found[0])
+    whens_above = [n["when"] for _, n in found[0] if "when" in n]
+    assert set(whens_above) <= {"'onboard-gui' in stack_services"}, whens_above
+    assert not any("tags" in n for _, n in found[0]) and "tags" not in task
 
 
 def _with_parents(node, chain=()):
