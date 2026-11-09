@@ -332,10 +332,11 @@
       ansible.builtin.debug:
         msg: >-
           PARTIAL PREVIEW — this node has no canonical at /srv/kontroll.git yet, so nothing has ever been applied
-          here. Steps that clone from the canonical or take ownership of a TLS cert are SKIPPED below: --check
-          does not create the canonical or the certs, so those steps have nothing to act on and cannot be
-          previewed. Everything else IS previewed. Run the apply (`kontroll-installer.sh init`) to create them;
-          from then on `check` previews the whole play.
+          here. Steps that clone from the canonical are SKIPPED below: --check does not create the canonical, so
+          they have nothing to act on and cannot be previewed. Nor does it make the TLS certs, so owning them is
+          skipped too, and each says so where it is. Everything else IS previewed. Run the apply
+          (`kontroll-installer.sh init`) to create them; from then on `check` previews the whole play, but for a
+          cert a service enabled later has not had made yet, which is said where it is skipped.
       when: _fresh_preview | bool
 
     - name: Derive the per-store dirs from the validated root (today-exact defaults — behaviour-preserving)
@@ -1017,6 +1018,19 @@
 
         # byo_proxy/acme terminate TLS at the edge (the operator's proxy / Caddy) — kontroll provisions
         # no cert there. Gated on the resolver so the instance frontend mode is the single source of truth.
+        - name: Look for the API's self-signed cert before it is made (a dry-run does not make it — I-27)
+          # The owner task below needs to know whether the cert was there, not whether the node is new: a node with
+          # a canonical that first enables the API in self_signed mode has no cert and no `_fresh_preview`, and its
+          # dry-run failed on owning the cert the apply would have made (I-27). Before the generator, so an apply
+          # sees "absent" too and the owner task's gate cannot stand in for the apply.
+          when: _needs_cert.stdout == "yes"
+          ansible.builtin.stat:
+            path: "{{ kontroll_api_dir }}/tls/api.crt"
+            get_checksum: false
+            get_mime: false
+          check_mode: false   # a read-only probe, as _canonical_head's
+          register: _api_crt
+
         - name: Generate a self-signed TLS cert for the API (self_signed mode only; if absent)
           when: _needs_cert.stdout == "yes"
           ansible.builtin.command:
@@ -1027,9 +1041,11 @@
             creates: "{{ kontroll_api_dir }}/tls/api.crt"
 
         - name: Own the TLS material as the runtime uid (self_signed mode; the container reads the key)
-          # `openssl req` above is check-skipped, so on a fresh-node preview the cert does not exist and `file:`
-          # fails "is absent, cannot continue" — nothing to own, nothing to preview (see _fresh_preview).
-          when: _needs_cert.stdout == "yes" and not (_fresh_preview | bool)
+          # `openssl req` above is check-skipped, so a dry-run on a node whose cert is not there yet (a new node, or
+          # one first enabling the API in self_signed mode) has nothing to own, and `file:` would fail "is absent,
+          # cannot continue". That case, in a dry-run only, is skipped, and the next task says so; an apply always
+          # runs this (I-27).
+          when: _needs_cert.stdout == "yes" and not (ansible_check_mode and not _api_crt.stat.exists)
           ansible.builtin.file:
             path: "{{ item.path }}"
             owner: "1001"
@@ -1038,6 +1054,14 @@
           loop:
             - {path: "{{ kontroll_api_dir }}/tls/api.key", mode: "0640"}
             - {path: "{{ kontroll_api_dir }}/tls/api.crt", mode: "0644"}
+
+        - name: Say that this dry-run cannot preview owning the API's cert (the apply makes it, then owns it)
+          when: _needs_cert.stdout == "yes" and ansible_check_mode and not _api_crt.stat.exists
+          ansible.builtin.debug:
+            msg: >-
+              NOT PREVIEWED — {{ kontroll_api_dir }}/tls/api.crt is not there yet. --check does not make the
+              self-signed cert, so giving it and its key to uid 1001 is skipped in this dry-run; the apply makes
+              both and owns them.
 
     - name: Provision the onboard-gui host artifacts (RO content clone; the age key stays host-provisioned)
       # Mirrors the API block: onboard-gui (Flask) is the SAME network-service trust tier — it serves the
@@ -1139,6 +1163,16 @@
             quiet: true
           when: "'onboard-gui' in stack_services"
 
+        - name: Look for onboard-gui's self-signed cert before it is made (a dry-run does not make it — I-27)
+          # As the API's: the owner task needs to know whether the cert was there, not whether the node is new.
+          when: _needs_cert.stdout == "yes"
+          ansible.builtin.stat:
+            path: "{{ kontroll_gui_dir }}/tls/gui.crt"
+            get_checksum: false
+            get_mime: false
+          check_mode: false   # a read-only probe, as _canonical_head's
+          register: _gui_crt
+
         - name: Generate a self-signed TLS cert for onboard-gui (self_signed mode only; if absent)
           # The GUI serves HTTPS on :8443 and load_cert_chain's /tls/gui.crt+gui.key at startup — without them it
           # CRASH-LOOPS. Mirror the API block's self-signed cert-gen (byo_proxy/acme terminate TLS at the edge, so
@@ -1153,8 +1187,9 @@
             creates: "{{ kontroll_gui_dir }}/tls/gui.crt"
 
         - name: Own the onboard-gui TLS material as the runtime uid (self_signed mode; the container reads the key)
-          # Same as the API's: the cert generator is check-skipped, so a fresh-node preview has nothing to own.
-          when: _needs_cert.stdout == "yes" and not (_fresh_preview | bool)
+          # Same as the API's: the cert generator is check-skipped, so a dry-run on a node whose cert is not there
+          # yet has nothing to own. That case, in a dry-run only, is skipped and said; an apply always runs this.
+          when: _needs_cert.stdout == "yes" and not (ansible_check_mode and not _gui_crt.stat.exists)
           ansible.builtin.file:
             path: "{{ item.path }}"
             owner: "1001"
@@ -1163,6 +1198,14 @@
           loop:
             - {path: "{{ kontroll_gui_dir }}/tls/gui.key", mode: "0640"}
             - {path: "{{ kontroll_gui_dir }}/tls/gui.crt", mode: "0644"}
+
+        - name: Say that this dry-run cannot preview owning onboard-gui's cert (the apply makes it, then owns it)
+          when: _needs_cert.stdout == "yes" and ansible_check_mode and not _gui_crt.stat.exists
+          ansible.builtin.debug:
+            msg: >-
+              NOT PREVIEWED — {{ kontroll_gui_dir }}/tls/gui.crt is not there yet. --check does not make the
+              self-signed cert, so giving it and its key to uid 1001 is skipped in this dry-run; the apply makes
+              both and owns them.
 
         - name: Make or update the onboard-gui content clone — root's unarmed, the service uid's armed (C10)
           # The same file as the API's clone: one rule, one copy of it.

@@ -11,8 +11,11 @@ the first apply (live-caught 2026-07-28 standing up the floating-prod box). That
 inconvenience: CLAUDE.md mandates `--check --diff` before any state-changing apply, and an operator who learns
 the dry-run always fails the first time is one who will skip it when it counts.
 
-The fix is one narrow fact, `_fresh_preview` = check mode AND no canonical yet, gating the handful of tasks
-whose inputs provably cannot exist. Two properties make it safe, and both are pinned here:
+The fix is one narrow fact, `_fresh_preview` = check mode AND no canonical yet, gating the tasks whose inputs
+provably cannot exist: the content clones. The TLS owner tasks gate on narrower facts of their own, check mode AND
+no cert yet, each read by a `stat` before its cert is made: "no canonical" never meant "no cert", and a node with a
+canonical that first enabled a self_signed service failed its dry-run on the cert the apply would make (I-27,
+2026-11-08). Two properties make each gate safe, and both are pinned here:
 
   * It is NARROW. On an already-provisioned box it is false, so the dry-run keeps FULL fidelity exactly where
     fidelity is worth something — previewing a change against a system that already holds state.
@@ -140,10 +143,52 @@ def test_the_gates_cover_the_tasks_that_actually_failed():
     """The four live-caught sites, by name, so a rename or a re-ordering that drops a gate is caught here rather
     than on the next fresh box. Each one failed a real fresh-node dry-run before this fix. The two clone sites
     are one task file now (tasks/content-clone.yml, imported for the API and for onboard-gui): its two git tasks,
-    root's and the service uid's."""
+    root's and the service uid's. The two TLS owner sites gate on their own cert's probe in a dry-run and not on
+    `_fresh_preview`, which was false on a node with a canonical and no cert yet (I-27)."""
     for fragment in ("Unarmed — clone/update the local canonical into the content tree",
-                     "Armed — clone/update the local canonical into the content tree",
-                     "Own the TLS material as the runtime uid",
-                     "Own the onboard-gui TLS material"):
+                     "Armed — clone/update the local canonical into the content tree"):
         conds = " ".join(_when_of(_named(fragment)))
         assert "_fresh_preview" in conds, "%r lost its fresh-node gate — a fresh dry-run will fail here" % fragment
+    for fragment, probe in (("Own the TLS material as the runtime uid", "_api_crt"),
+                            ("Own the onboard-gui TLS material", "_gui_crt")):
+        conds = " ".join(_when_of(_named(fragment)))
+        assert "not (ansible_check_mode and not %s.stat.exists)" % probe in conds, \
+            "%r lost its no-cert-yet gate — a dry-run before its cert is made will fail here" % fragment
+        assert "_fresh_preview" not in conds, \
+            "%r is gated on the node being new again, not on its cert (I-27)" % fragment
+
+
+def _block_tasks(fragment):
+    """The tasks of the deploy block whose name contains `fragment`, in order."""
+    for task in _all_tasks():
+        if fragment in str(task.get("name", "")) and "block" in task:
+            return task["block"]
+    raise AssertionError("no block whose name contains %r" % fragment)
+
+
+def test_each_cert_probe_reads_the_generators_own_path_before_it_runs_and_the_skip_is_said():
+    """For the API and for onboard-gui: a `stat` of exactly the path the cert generator's `creates` names, marked
+    `check_mode: false` as the canonical's probe is (a read-only probe says outright that it reads in a dry-run),
+    registered as the owner task's probe, and placed BEFORE the generator, so in an apply it reads "absent" as well
+    and the gate's check-mode term is all that keeps an apply owning what it made; then a note, fired on exactly the
+    case the owner task skips, says the owning was not previewed. Guards a probe of another path (the gate would
+    judge a file the generator does not look at), a probe moved after the generator (an apply's gate would then
+    pass without its check-mode term and nothing would notice it gone), and a skip nothing reports (a dry-run that
+    silently covers less than it appears to)."""
+    for block, probe in (("Provision the API host artifacts", "_api_crt"),
+                         ("Provision the onboard-gui host artifacts", "_gui_crt")):
+        tasks = _block_tasks(block)
+        names = [str(t.get("name", "")) for t in tasks]
+        gen = next(i for i, t in enumerate(tasks) if "Generate a self-signed TLS cert" in names[i])
+        look = next(i for i, t in enumerate(tasks) if t.get("register") == probe)
+        own = next(i for i, t in enumerate(tasks) if "TLS material as the runtime uid" in names[i])
+        say = next(i for i, t in enumerate(tasks) if "cannot preview owning" in names[i])
+        assert look < gen < own < say, (block, names)
+        stat_task, gen_task = tasks[look], tasks[gen]
+        assert stat_task.get("check_mode") is False, "%s must read in a dry-run" % probe
+        assert stat_task["ansible.builtin.stat"]["path"] == gen_task["ansible.builtin.command"]["creates"], \
+            "%s must look at the cert the generator makes" % probe
+        assert _when_of(stat_task) == ['_needs_cert.stdout == "yes"'], "probe on exactly the generator's gate"
+        assert _when_of(tasks[say]) == ['_needs_cert.stdout == "yes" and ansible_check_mode and not %s.stat.exists'
+                                       % probe], "the note must fire on exactly the skipped case"
+        assert "NOT PREVIEWED" in str(tasks[say]["ansible.builtin.debug"]["msg"])

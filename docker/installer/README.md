@@ -37,7 +37,8 @@ installer carries only the fleet-independent control-plane base (sops/general/do
 > Same verbs, same playbooks — only build→pull differs. See [docker/README.md](../README.md) § Publishing images.
 
 > **`check` on a brand-new node** is a partial preview, and says so: `--check` does not create the canonical or
-> the certificates, so the steps that depend on them are skipped. Everything else is previewed, and it still fails
+> the certificates, so the steps that depend on them are skipped (a cert a service enabled later has not had made
+> yet is skipped the same way, on any node, and said so where it is). Everything else is previewed, and it still fails
 > on a real precondition you have not met — which is the point of running it before `init`. The onboard-gui age key
 > is such a precondition once you name that service: a host gesture the operator makes once (the G9 guard fails the
 > deploy closed until the key exists — the control key copied to `${KONTROLL_STORAGE_ROOT}/onboard-gui/age.key`,

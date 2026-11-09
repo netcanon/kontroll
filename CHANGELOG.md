@@ -11,6 +11,26 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a dry-run before a service's self-signed cert is made passes on any node (I-27, 2026-11-08)
+
+In self_signed mode the deploy makes each service's cert with `openssl req`, which `--check` skips, then gives the cert
+and its key to uid 1001. The owner task was skipped in a dry-run only on a node with no canonical yet
+(`_fresh_preview`), so on a node that has a canonical and first enables the API or onboard-gui in self_signed mode the
+mandated `--check --diff` failed with "file (…/tls/api.key) is absent, cannot continue", where the apply would have
+made the cert and owned it. The I-19 read found it.
+
+- **Fixed.** Each owner task gates on its own cert: a `stat` of the path the generator's `creates` names, read before
+  the generator (in a dry-run too), and the task is skipped only in a dry-run that found no cert. An apply always runs
+  it. A note, `NOT PREVIEWED — <dir>/tls/<svc>.crt is not there yet`, says so where it is skipped, and the fresh-node
+  banner no longer counts the certs as its own.
+- **Tests.** The new `integration/test_tls_owner_dry_run.py` runs both services' four TLS tasks from the playbook: a
+  dry-run with no certs yet, on a node with a canonical and on a fresh one, passes, skips the owner tasks, prints both
+  notes and makes nothing; a dry-run with the certs there previews owning them and changes nothing; an apply (as root)
+  makes both, gives them to 1001:1001 (key 0640, cert 0644), and a second apply changes nothing.
+  `unit/test_fresh_node_preview.py` holds the gates to the probes, not `_fresh_preview`, and each probe to the
+  generator's path, `check_mode: false`, its place before the generator and its note.
+- **Docs.** `docker/installer/README.md` (a cert a service enabled later has not had made yet).
+
 ### fix(ansible): the onboard-gui age-key gate takes only a key file, judged as Docker mounts it (I-22, 2026-11-08)
 
 deploy-stack's G9 gate asked whether `<storage root>/onboard-gui/age.key` existed and whether uid 1001 could read it.
