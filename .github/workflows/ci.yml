@@ -66,10 +66,8 @@ jobs:
         run: |
           set -euo pipefail
           bin="$RUNNER_TEMP/kontroll-tools"; mkdir -p "$bin"; cd "$RUNNER_TEMP"
-          fetch() { # url sha256 -> file in cwd
-            curl -fsSL -o "$(basename "$1")" "$1"
-            echo "$2  $(basename "$1")" | sha256sum -c --quiet
-          }
+          # url sha256 -> file in cwd, retried on a transient error, then held to its digest
+          fetch() { bash "$GITHUB_WORKSPACE/.github/scripts/fetch-pinned.sh" "$@"; }
           fetch https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 \
                 620a9d7e3352ababeca6908cea24a6e8b14ce89a448ddbd3f94f1ef3398f470a
           install -m 0755 sops-v3.13.1.linux.amd64 "$bin/sops"

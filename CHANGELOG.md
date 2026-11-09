@@ -11,6 +11,23 @@ NetConfig project.
 
 ## [Unreleased]
 
+### ci: a release download is retried, and every one is checked (I-28, 2026-11-08)
+
+The validate job fetched each pinned release binary with one `curl` and no retry: on public #118 one fetch got an HTTP
+504 from the release mirror after 2m40s and failed the job, and a re-run of that job alone, on the same commit, passed.
+`security.yml`'s gitleaks install had no retry either, and piped curl into tar with no digest check at all.
+
+- **Fixed.** Every release file a workflow downloads goes through `.github/scripts/fetch-pinned.sh <url> <sha256>`: curl
+  with `--retry 3 --retry-all-errors --retry-delay 5`, writing a file (never a pipe, which a retry would hand the bytes
+  it already had), then `sha256sum -c` as the gate. The history scan's gitleaks is held to the digest `ci.yml` pins for
+  the same release.
+- **Tests.** `unit/test_ci_workflows.py` runs the helper with the real curl against a local server: a 504 then the file,
+  a body cut short then the file (the file holds the body once), a 504 every time (four requests, then a failure that
+  names the status), a wrong digest (one request, then a failure) and a call without its digest (its usage, no request).
+  It holds every workflow to the helper: no `curl` or `wget` of its own, one digest per URL across the workflows, the
+  bounds as pinned.
+- **Docs.** `docs/qa-and-release-pipeline.md` §5 (the helper; the history scan's gitleaks); SECURITY.md C6.
+
 ### fix(ansible): an API backup that fails says why, for every auth type (I-17, 2026-11-07)
 
 `backend_api`'s backup recorded "FAILED: HTTP <status> from the <recipe> backup endpoint <path> — check the API
