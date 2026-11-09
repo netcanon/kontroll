@@ -33,6 +33,14 @@ get there: the response body is device configuration and the request carries the
               instead of saying the credential was refused; and any other answer (a 404, a 500) was reported as
               "did not answer the API port". The remedy is now a hint per auth type, and the message is rendered
               here for each type and each kind of failure.
+
+  I-16        A basic recipe's username and password were looked up in the GET's own arguments, and only by the
+              recipe's names: a name not in scope failed the GET under its `no_log` before `failed_when: false`
+              applied, CENSORED, so the refusal was never reached; and the onboard wrote the pair as `ansible_user`
+              and `ansible_password`, which the role never read. The pair now resolves as the token does (the
+              recipe's var, else the onboarded per-host `<host>_api_username` and `_api_password`, under no_log
+              with `default=''`), is refused by name before the request, and is what the request sends; the hint
+              names each var with its per-host fallback.
 """
 import os
 import re
@@ -143,8 +151,12 @@ def test_the_failure_message_distinguishes_auth_from_unreachable():
 
 TOKEN_HINT = ("The API rejected the credential: check that `fortios_api_token` (or, if it is empty, `fw_1_api_token`)"
               " holds a current token with read permission.")
-BASIC_HINT = ("The API rejected the credential: check that `probe_user` and `probe_pass` hold a current username and"
-              " password with read permission.")
+BASIC_HINT = ("The API rejected the credential: check that `probe_user` (or, if it is empty, `fw_1_api_username`) and"
+              " `probe_pass` (or, if it is empty, `fw_1_api_password`) hold a current username and password with read"
+              " permission.")
+# A var the recipe does not name: its per-host name alone is named.
+NO_PASS_HINT = BASIC_HINT.replace("`probe_pass` (or, if it is empty, `fw_1_api_password`)", "`fw_1_api_password`")
+TYPE_ONLY_HINT = NO_PASS_HINT.replace("`probe_user` (or, if it is empty, `fw_1_api_username`)", "`fw_1_api_username`")
 NONE_HINT = "The API refused the request, and the recipe sends no credential: name one in its auth."
 DOWN = ("The device did not answer the API port, or its TLS failed — wrong address, port, certificate, or the service"
         " is down.")
@@ -167,7 +179,7 @@ DIGEST = {"type": "digest", "username_var": "probe_user", "password_var": "probe
     (BASIC, 403, "403", BASIC_HINT),
     (NONE, 401, "401", NONE_HINT),       # failed on its own message too: a `none` recipe has no token_var either
     (NONE, 403, "403", NONE_HINT),
-    (BASIC_NO_PASS, 401, "401", BASIC_HINT.replace("`probe_pass`", "`?`")),
+    (BASIC_NO_PASS, 401, "401", NO_PASS_HINT),
     (DIGEST, 401, "401", BASIC_HINT),    # the GET sends the vars a recipe names, whatever its type
     (BEARER, 500, "500", ANSWERED),      # before I-7: "did not answer the API port" for an answer
     (BASIC, 404, "404", ANSWERED),
@@ -181,8 +193,9 @@ DIGEST = {"type": "digest", "username_var": "probe_user", "password_var": "probe
 def test_the_failure_message_names_the_remedy_for_each_auth_type_and_answer(auth, status, http, remedy):
     """The refusal's message, rendered as the task renders it, for each auth type the role builds a request for
     and each kind of failure: a 401 or a 403 names the variables that auth reads (a basic recipe's username and
-    password vars, and any recipe's that names them, since the GET sends them whatever the type; a var the recipe
-    does not name is `?`; a token recipe's `token_var`, else the onboarded per-host name), never their values; a
+    password vars, and any recipe's that names them, since the GET sends them whatever the type, each else its
+    onboarded per-host name, which alone is named for a var the recipe does not name (I-16); a token recipe's
+    `token_var`, else the onboarded per-host name), never their values; a
     status below 0 or none says the device did not answer or its TLS failed; any other answer says the API
     answered, but not with success. The basic and none rows are I-7's fault: the message named `token_var`, which
     neither has, and failed itself."""
@@ -287,3 +300,173 @@ def test_the_backend_doc_no_longer_claims_the_planner_resolves_it():
     assert "Nothing resolves a recipe's `token_var` at onboard time" in text, "the correction must stay"
     token = next(e for e in yaml.safe_load(text)["auth"] if e["field"] == "api_token")
     assert token["maps_to"] == "{cred_key}_api_token", "the per-host name the role reads, stated as data"
+
+
+# ------------------------------------------- I-16: the basic-auth pair resolves, and is refused, as the token is
+
+PAIR = "Resolve the basic-auth pair"
+PAIR_REFUSE = "Refuse an unresolvable basic-auth pair"
+GET = {_CHECK: "GET the check endpoint", _BACKUP: "Pull config via the recipe's backup endpoint"}
+_MISSING = object()
+
+
+def _ansible_env(**hostvars):
+    """Core Jinja with StrictUndefined, and `lookup('vars', name, default=...)` as ansible-core's vars lookup answers
+    it: the host's var, else the default, else an error (AnsibleUndefinedVariable, the censored fatal I-16 found)."""
+    def lookup(kind, name, default=_MISSING):
+        assert kind == "vars", kind
+        if name in hostvars:
+            return hostvars[name]
+        if default is _MISSING:
+            raise LookupError("No variable named %r was found" % name)
+        return default
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    env.globals["lookup"] = lookup
+    return env
+
+
+def _resolve(path, auth, host="fw-1", **hostvars):
+    """The pair as the resolve task sets it, for a recipe with `auth`, a host named `host` holding `hostvars`."""
+    facts = _named(path, PAIR)["ansible.builtin.set_fact"]
+    env = _ansible_env(**hostvars)
+    ctx = {"inventory_hostname": host, "_api_recipe": {"auth": auth}}
+    return tuple(env.from_string(str(facts[k])).render(**ctx) for k in ("_api_username", "_api_password"))
+
+
+def _when(task, auth):
+    """A task's `when` (one expression), evaluated for a recipe with `auth` as Ansible evaluates a conditional."""
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    cond = " ".join(str(task["when"]).split())
+    return env.from_string("{%% if %s %%}yes{%% else %%}no{%% endif %%}" % cond).render(
+        _api_recipe={"auth": auth}) == "yes"
+
+
+def test_both_names_of_the_basic_pair_are_tried_and_neither_lookup_can_raise():
+    """In the check and in the backup, the resolve task sets `_api_username` and `_api_password`, each from the
+    recipe's var, else the onboarded per-host name (`<host with - as _>_api_username`, `_api_password`), with
+    `default=''` on every lookup, under no_log. Guards I-16: the recipe's names alone were tried, in the request's
+    own arguments, where a name not in scope raised under the request's no_log, censored."""
+    for path in (_CHECK, _BACKUP):
+        task = _named(path, PAIR)
+        facts = task["ansible.builtin.set_fact"]
+        assert set(facts) == {"_api_username", "_api_password"}, (path, set(facts))
+        assert task.get("no_log") is True, "%s: the pair's resolve must stay no_log" % path
+        for fact, var in (("_api_username", "username_var"), ("_api_password", "password_var")):
+            expr = str(facts[fact])
+            assert "_api_recipe.auth.%s" % var in expr, (path, fact)
+            assert "replace('-', '_') ~ '%s'" % fact in expr, (path, fact)
+            assert expr.count("default='')") == 2 and expr.count("lookup('vars'") == 2, (path, fact)
+
+
+@pytest.mark.parametrize("auth, hostvars, expected", [
+    (BASIC, {"probe_user": "u-recipe", "probe_pass": "p-recipe"}, ("u-recipe", "p-recipe")),
+    (BASIC, {"probe_user": "u-recipe", "probe_pass": "p-recipe",
+             "fw_1_api_username": "u-host", "fw_1_api_password": "p-host"}, ("u-recipe", "p-recipe")),
+    (BASIC, {"probe_user": "", "probe_pass": "", "fw_1_api_username": "u-host", "fw_1_api_password": "p-host"},
+     ("u-host", "p-host")),
+    (BASIC, {"fw_1_api_username": "u-host", "fw_1_api_password": "p-host"}, ("u-host", "p-host")),
+    (BASIC_NO_PASS, {"probe_user": "u-recipe", "probe_pass": "p-unnamed", "fw_1_api_password": "p-host"},
+     ("u-recipe", "p-host")),
+    ({"type": "basic"}, {"fw_1_api_username": "u-host", "fw_1_api_password": "p-host"}, ("u-host", "p-host")),
+    (BASIC, {}, ("", "")),
+    (BASIC, {"probe_user": "", "fw_1_api_username": ""}, ("", "")),
+], ids=["recipe-names", "recipe-names-first", "recipe-names-empty", "onboarded-names", "a-var-the-recipe-omits",
+        "type-only", "none", "all-empty"])
+def test_the_basic_pair_resolves_as_the_token_does(auth, hostvars, expected):
+    """The resolve task's two expressions, EVALUATED for each case, in the check and in the backup: the recipe's var
+    when it holds something, else the onboarded per-host name; a var the recipe does not name is the per-host one
+    alone (a recipe's other names are not read); nothing in scope, or only empty values, resolves to empty, which the
+    refusal takes. Guards the precedence (the recipe's first, as for the token), the empty-value fallback (an absent
+    or undecryptable SOPS domain yields an empty value), and the lookups not raising."""
+    for path in (_CHECK, _BACKUP):
+        assert _resolve(path, auth, **hostvars) == expected, path
+
+
+@pytest.mark.parametrize("auth, resolved", [
+    (BASIC, True), (BASIC_NO_PASS, True), ({"type": "basic"}, True), (DIGEST, True),
+    ({"type": "bearer", "token_var": "t", "password_var": "p"}, True),
+    (BEARER, False), (APIKEY, False), (NONE, False),
+], ids=["basic", "basic-no-password-var", "type-only", "digest-named-vars", "bearer-naming-a-password-var",
+        "bearer", "apikey", "none"])
+def test_the_pair_is_resolved_and_refused_for_exactly_the_recipes_whose_request_sends_it(auth, resolved):
+    """The resolve task and the refusal run for a `basic` recipe and for any that names either var, and for no
+    other, in the check and in the backup: the request sends the pair for those (`force_basic_auth` for a basic
+    one), and a token or `none` recipe must not be refused for a pair it never sends. The refusal's condition is
+    the resolve's, so a pair is never sent unrefused."""
+    for path in (_CHECK, _BACKUP):
+        resolve, refuse = _named(path, PAIR), _named(path, PAIR_REFUSE)
+        assert refuse["when"] == resolve["when"], path
+        assert _when(resolve, auth) is resolved, (path, auth)
+
+
+def _refusal_msg(path, auth, host="fw-1"):
+    task = _named(path, PAIR_REFUSE)
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    return env.from_string(str(task["ansible.builtin.assert"]["fail_msg"])).render(
+        inventory_hostname=host, backend_api_recipe="probe", _api_recipe={"auth": auth})
+
+
+REFUSAL = ("fw-1: the API username or password (the failed assertion says which) is not in scope, so this %s cannot "
+           "authenticate. The probe recipe reads %s and %s; the onboard writes `fw_1_api_username` and "
+           "`fw_1_api_password`. Neither name is defined, or both are empty. Define them in the host's inventory "
+           "drop-in as inline community.sops lookups into its SOPS domain.")
+
+
+@pytest.mark.parametrize("auth, names", [
+    (BASIC, ("`probe_user`", "`probe_pass`")),
+    (BASIC_NO_PASS, ("`probe_user`", "no password var")),
+    ({"type": "basic"}, ("no username var", "no password var")),
+], ids=["basic", "basic-no-password-var", "type-only"])
+def test_an_unresolvable_basic_pair_is_refused_by_name_before_the_request(auth, names):
+    """The refusal is an `assert` that is not no_log, holds each of the pair to a non-empty value, and runs before
+    the request; its message, RENDERED for each shape of basic recipe, names the recipe's vars (or says it names
+    none) and the onboarded per-host names, never a value, in the check and in the backup. Guards I-16: a basic
+    host with no pair in scope failed inside the no_log request, censored, where a token host is told which names
+    to define. The message's names are held to the host's, the recipe's and its auth's: it reads no value."""
+    for path, what in ((_CHECK, "check"), (_BACKUP, "capture")):
+        task = _named(path, PAIR_REFUSE)
+        assert _module_of(task) == "ansible.builtin.assert" and task.get("no_log") is not True, path
+        assert task["ansible.builtin.assert"]["that"] == ["_api_username | default('') | length > 0",
+                                                          "_api_password | default('') | length > 0"], path
+        names_in = [t.get("name") for t in _tasks(path)]
+        assert names_in.index(task["name"]) < names_in.index(_named(path, GET[path])["name"]), path
+        assert names_in.index(_named(path, PAIR)["name"]) < names_in.index(task["name"]), path
+        assert _refusal_msg(path, auth) == REFUSAL % ((what,) + names), path
+        read = jinja2.meta.find_undeclared_variables(jinja2.Environment().parse(
+            str(task["ansible.builtin.assert"]["fail_msg"])))
+        assert read <= {"inventory_hostname", "backend_api_recipe", "_api_recipe"}, (path, read)
+
+
+def test_the_request_sends_the_resolved_pair_and_looks_nothing_up():
+    """The check's GET and the backup's pull send `_api_username` and `_api_password`, the resolved facts, or omit
+    them, and template no lookup of their own. Guards the lookup moving back into the request's arguments, where a
+    name not in scope fails the request under its no_log, censored, before `failed_when: false` applies (I-16)."""
+    for path in (_CHECK, _BACKUP):
+        uri = _named(path, GET[path])["ansible.builtin.uri"]
+        assert uri["url_username"] == "{{ _api_username if _api_username is defined else omit }}", path
+        assert uri["url_password"] == "{{ _api_password if _api_password is defined else omit }}", path
+        assert "lookup(" not in str(uri), "%s: the request must look nothing up" % path
+
+
+def test_the_check_and_the_backup_resolve_and_refuse_the_pair_alike():
+    """The resolve task is the same in both entrypoints, and so is the refusal but for the word naming what cannot
+    authenticate. Guards one drifting from the other, as the check's hint once did from the backup's (I-17)."""
+    for name in (PAIR, PAIR_REFUSE):
+        check, backup = dict(_named(_CHECK, name)), dict(_named(_BACKUP, name))
+        if name == PAIR_REFUSE:
+            for task, what in ((check, "check"), (backup, "capture")):
+                body = dict(task["ansible.builtin.assert"])
+                body["fail_msg"] = str(body["fail_msg"]).replace("so this %s cannot" % what, "so this X cannot")
+                task["ansible.builtin.assert"] = body
+        assert check == backup, name
+
+
+def test_the_onboard_writes_the_basic_pair_under_the_names_the_role_reads():
+    """The api backend's `username` and `password` entries name the per-host vars the role's second candidates read
+    (`<cred key>_api_username`, `<cred key>_api_password`, the cred key being the host name with `-` as `_`).
+    Guards I-16's other half: the onboard wrote the pair as `ansible_user` and `ansible_password`, which the role
+    never read, so an onboarded basic host could not authenticate; a fallback to those connection vars instead
+    would send whatever a group sets for SSH to the API."""
+    text = open(os.path.join(_ROOT, "ansible", "backends", "api", "backend.yml"), encoding="utf-8").read()
+    entries = {e["field"]: e["maps_to"] for e in yaml.safe_load(text)["auth"]}
+    assert entries["username"] == "{cred_key}_api_username" and entries["password"] == "{cred_key}_api_password"

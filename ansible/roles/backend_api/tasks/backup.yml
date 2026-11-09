@@ -11,7 +11,7 @@
 # Fallback required:   no
 # Blast radius:        none — pure read
 # Idempotence:         capture file overwritten each run; no device state changes
-# no_log:              the token (request) and the returned config (response) are secret
+# no_log:              the token or basic-auth pair (request) and the returned config (response) are secret
 
 - name: Record skip when this class is not backup-capable
   ansible.builtin.set_fact:
@@ -63,6 +63,44 @@
         success_msg: "{{ inventory_hostname }}: API token resolved"
       when: _api_recipe.auth.token_var is defined
 
+    - name: Resolve the basic-auth pair — the recipe's username_var and password_var, else the per-host names
+      # The token's two-name rule for the basic pair, and the reason it is resolved here and not in the pull's own
+      # arguments, as tasks/check.yml says: a name not in scope failed the pull under its `no_log`, censored, so the
+      # nightly backup failed with nothing to go on.
+      ansible.builtin.set_fact:
+        _api_username: >-
+          {{ (lookup('vars', _api_recipe.auth.username_var, default='') if _api_recipe.auth.username_var is defined
+          else '') | default(lookup('vars', inventory_hostname | replace('-', '_') ~ '_api_username', default=''),
+          true) }}
+        _api_password: >-
+          {{ (lookup('vars', _api_recipe.auth.password_var, default='') if _api_recipe.auth.password_var is defined
+          else '') | default(lookup('vars', inventory_hostname | replace('-', '_') ~ '_api_password', default=''),
+          true) }}
+      when: >-
+        (_api_recipe.auth.type | default('')) == 'basic' or _api_recipe.auth.username_var is defined
+        or _api_recipe.auth.password_var is defined
+      no_log: true
+
+    - name: Refuse an unresolvable basic-auth pair (var NAMES only — never the values)
+      # As for the token: a capture that authenticates as nobody would write an error page into the config store
+      # and commit it as this device's backup. Fail before the request instead.
+      ansible.builtin.assert:
+        that:
+          - _api_username | default('') | length > 0
+          - _api_password | default('') | length > 0
+        fail_msg: >-
+          {{ inventory_hostname }}: the API username or password (the failed assertion says which) is not in scope,
+          so this capture cannot authenticate. The {{ backend_api_recipe }} recipe reads {{ ('`' ~
+          _api_recipe.auth.username_var ~ '`') if _api_recipe.auth.username_var is defined else 'no username var' }}
+          and {{ ('`' ~ _api_recipe.auth.password_var ~ '`') if _api_recipe.auth.password_var is defined else 'no
+          password var' }}; the onboard writes `{{ inventory_hostname | replace('-', '_') }}_api_username` and `{{
+          inventory_hostname | replace('-', '_') }}_api_password`. Neither name is defined, or both are empty. Define
+          them in the host's inventory drop-in as inline community.sops lookups into its SOPS domain.
+        success_msg: "{{ inventory_hostname }}: API username and password resolved"
+      when: >-
+        (_api_recipe.auth.type | default('')) == 'basic' or _api_recipe.auth.username_var is defined
+        or _api_recipe.auth.password_var is defined
+
     - name: Build request headers (bearer / apikey_header)
       ansible.builtin.set_fact:
         _api_headers: "{{ {(_api_recipe.auth.header_name | default('Authorization')):
@@ -87,12 +125,8 @@
         url: "https://{{ ansible_host }}:{{ _api_recipe.port | default(443) }}{{ _api_recipe.backup.path }}"
         method: "{{ _api_recipe.backup.method | default('GET') }}"
         headers: "{{ _api_headers | default({}) }}"
-        url_username: >-
-          {{ lookup('vars', _api_recipe.auth.username_var)
-             if _api_recipe.auth.username_var is defined else omit }}
-        url_password: >-
-          {{ lookup('vars', _api_recipe.auth.password_var)
-             if _api_recipe.auth.password_var is defined else omit }}
+        url_username: "{{ _api_username if _api_username is defined else omit }}"
+        url_password: "{{ _api_password if _api_password is defined else omit }}"
         force_basic_auth: "{{ _api_recipe.auth.type == 'basic' }}"
         validate_certs: "{{ _api_recipe.validate_certs | default(false) }}"
         return_content: true
@@ -137,9 +171,16 @@
         kontroll_backup_failed: true
       vars:
         _api_auth_hint: >-
-          {{ ('The API rejected the credential: check that `' ~ (_api_recipe.auth.username_var | default('?'))
-              ~ '` and `' ~ (_api_recipe.auth.password_var | default('?'))
-              ~ '` hold a current username and password with read permission.')
+          {{ ('The API rejected the credential: check that '
+              ~ (('`' ~ _api_recipe.auth.username_var ~ '` (or, if it is empty, `')
+                 if _api_recipe.auth.username_var is defined else '`')
+              ~ (inventory_hostname | replace('-', '_')) ~ '_api_username`'
+              ~ (')' if _api_recipe.auth.username_var is defined else '') ~ ' and '
+              ~ (('`' ~ _api_recipe.auth.password_var ~ '` (or, if it is empty, `')
+                 if _api_recipe.auth.password_var is defined else '`')
+              ~ (inventory_hostname | replace('-', '_')) ~ '_api_password`'
+              ~ (')' if _api_recipe.auth.password_var is defined else '')
+              ~ ' hold a current username and password with read permission.')
              if (_api_recipe.auth.type | default('')) == 'basic' or _api_recipe.auth.username_var is defined
                 or _api_recipe.auth.password_var is defined
              else (('The API rejected the credential: check that `' ~ _api_recipe.auth.token_var

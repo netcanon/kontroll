@@ -7,7 +7,7 @@
 # Access chain used:   control node (localhost) -> device REST API (HTTPS)
 # May break:           none (read-only GET)
 # Blast radius:        none — pure read
-# no_log:              the request carries the API token
+# no_log:              the request carries the API token or the basic-auth pair
 
 - name: Load the API recipe
   ansible.builtin.set_fact:
@@ -60,6 +60,51 @@
         success_msg: "{{ inventory_hostname }}: API token resolved"
       when: _api_recipe.auth.token_var is defined
 
+    - name: Resolve the basic-auth pair — the recipe's username_var and password_var, else the per-host names
+      # The token's two-name rule, for a recipe that is `basic` or names either var (the GET sends the pair whatever
+      # the type, I-7). A recipe derived from an OpenAPI spec reads `<recipe>_username` and `<recipe>_password`
+      # (service/openapi.py); the onboard writes `<host with - as _>_api_username` and `_api_password`, the `maps_to`
+      # templates of backends/api/backend.yml. Until I-16 nothing read the onboard's pair (it was written as
+      # `ansible_user` and `ansible_password`), and the recipe's was looked up in the GET's own arguments: a name
+      # not in scope failed the GET's templating before its `failed_when: false` could apply, so under its `no_log`
+      # the fatal arrived censored (2.19 adds an [ERROR] that names the var; 2.18 says no more), and the refusal of
+      # a rejected credential below was never reached. Resolved here instead, under `no_log` and with `default=''`
+      # for the token's reason, and refused by name in the next task.
+      ansible.builtin.set_fact:
+        _api_username: >-
+          {{ (lookup('vars', _api_recipe.auth.username_var, default='') if _api_recipe.auth.username_var is defined
+          else '') | default(lookup('vars', inventory_hostname | replace('-', '_') ~ '_api_username', default=''),
+          true) }}
+        _api_password: >-
+          {{ (lookup('vars', _api_recipe.auth.password_var, default='') if _api_recipe.auth.password_var is defined
+          else '') | default(lookup('vars', inventory_hostname | replace('-', '_') ~ '_api_password', default=''),
+          true) }}
+      when: >-
+        (_api_recipe.auth.type | default('')) == 'basic' or _api_recipe.auth.username_var is defined
+        or _api_recipe.auth.password_var is defined
+      no_log: true
+
+    - name: Refuse an unresolvable basic-auth pair (var NAMES only — never the values)
+      # The token's refusal, for the pair: not no_log, since silence was the fault, and the message names
+      # variables, never their values (`assert` reports the condition that failed, not what it evaluated to). An
+      # empty value is refused as an empty token is: an absent or undecryptable SOPS domain yields one.
+      ansible.builtin.assert:
+        that:
+          - _api_username | default('') | length > 0
+          - _api_password | default('') | length > 0
+        fail_msg: >-
+          {{ inventory_hostname }}: the API username or password (the failed assertion says which) is not in scope,
+          so this check cannot authenticate. The {{ backend_api_recipe }} recipe reads {{ ('`' ~
+          _api_recipe.auth.username_var ~ '`') if _api_recipe.auth.username_var is defined else 'no username var' }}
+          and {{ ('`' ~ _api_recipe.auth.password_var ~ '`') if _api_recipe.auth.password_var is defined else 'no
+          password var' }}; the onboard writes `{{ inventory_hostname | replace('-', '_') }}_api_username` and `{{
+          inventory_hostname | replace('-', '_') }}_api_password`. Neither name is defined, or both are empty. Define
+          them in the host's inventory drop-in as inline community.sops lookups into its SOPS domain.
+        success_msg: "{{ inventory_hostname }}: API username and password resolved"
+      when: >-
+        (_api_recipe.auth.type | default('')) == 'basic' or _api_recipe.auth.username_var is defined
+        or _api_recipe.auth.password_var is defined
+
     - name: Build request headers (bearer / apikey_header)
       ansible.builtin.set_fact:
         _api_headers: "{{ {(_api_recipe.auth.header_name | default('Authorization')):
@@ -72,12 +117,8 @@
         url: "https://{{ ansible_host }}:{{ _api_recipe.port | default(443) }}{{ _api_recipe.check.path }}"
         method: "{{ _api_recipe.check.method | default('GET') }}"
         headers: "{{ _api_headers | default({}) }}"
-        url_username: >-
-          {{ lookup('vars', _api_recipe.auth.username_var)
-             if _api_recipe.auth.username_var is defined else omit }}
-        url_password: >-
-          {{ lookup('vars', _api_recipe.auth.password_var)
-             if _api_recipe.auth.password_var is defined else omit }}
+        url_username: "{{ _api_username if _api_username is defined else omit }}"
+        url_password: "{{ _api_password if _api_password is defined else omit }}"
         force_basic_auth: "{{ _api_recipe.auth.type == 'basic' }}"
         validate_certs: "{{ _api_recipe.validate_certs | default(false) }}"
       delegate_to: localhost
@@ -114,8 +155,9 @@
       #
       # The remedy names the variables the recipe's auth reads, never their values: a `basic` recipe has
       # `username_var`/`password_var` and no `token_var` (naming `token_var` failed the message itself on a basic
-      # 401, I-7), and so does any recipe that names either (the GET sends them whatever the type); a token
-      # recipe's token resolves from `token_var`, else the onboarded per-host name. A status below 0 (uri's "no
+      # 401, I-7), and so does any recipe that names either (the GET sends the pair whatever the type), each
+      # resolved, as a token is, from the recipe's var, else the onboarded per-host name (I-16); a token recipe's
+      # token resolves from `token_var`, else the onboarded per-host name. A status below 0 (uri's "no
       # response": refused, timed out, a TLS failure, plain HTTP on the port) or none is the transport's; any
       # other status but a success is the API's own answer. The task's only var is the hint: a task var
       # outranks a host var, so another could rebind a name the message prints.
@@ -132,9 +174,16 @@
                          ~ ' the device API.')) }}
       vars:
         _api_auth_hint: >-
-          {{ ('The API rejected the credential: check that `' ~ (_api_recipe.auth.username_var | default('?'))
-              ~ '` and `' ~ (_api_recipe.auth.password_var | default('?'))
-              ~ '` hold a current username and password with read permission.')
+          {{ ('The API rejected the credential: check that '
+              ~ (('`' ~ _api_recipe.auth.username_var ~ '` (or, if it is empty, `')
+                 if _api_recipe.auth.username_var is defined else '`')
+              ~ (inventory_hostname | replace('-', '_')) ~ '_api_username`'
+              ~ (')' if _api_recipe.auth.username_var is defined else '') ~ ' and '
+              ~ (('`' ~ _api_recipe.auth.password_var ~ '` (or, if it is empty, `')
+                 if _api_recipe.auth.password_var is defined else '`')
+              ~ (inventory_hostname | replace('-', '_')) ~ '_api_password`'
+              ~ (')' if _api_recipe.auth.password_var is defined else '')
+              ~ ' hold a current username and password with read permission.')
              if (_api_recipe.auth.type | default('')) == 'basic' or _api_recipe.auth.username_var is defined
                 or _api_recipe.auth.password_var is defined
              else (('The API rejected the credential: check that `' ~ _api_recipe.auth.token_var

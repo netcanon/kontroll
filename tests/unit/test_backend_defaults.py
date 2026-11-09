@@ -90,15 +90,19 @@ def test_backend_data_reproduces_the_former_code_rules_for_an_api_device(probed,
     `-` as `_`) bound to the SOPS lookup of the same key, `creds_to_set` keyed the same, the basic-auth pair beside
     it, no `backend_params`, and the domain `network`. Guards the token var's move from a branch on the field's
     name to the descriptor's `maps_to` template: the upper-case, dotted and IP-literal names are the ones a template
-    whose output rule were an identifier would refuse."""
+    whose output rule were an identifier would refuse.
+
+    One deliberate change to what the former rules wrote (I-16): the basic pair's host vars are
+    `<cred key>_api_username` and `<cred key>_api_password`, the per-host names roles/backend_api reads, where they
+    were `ansible_user` and `ansible_password`, which it never read. The SOPS keys are as they were."""
     probed(**HTTPAPI)
     plan = _plan(host_name, creds={"api_token": "t", "username": "u", "password": "p"})
     ck = host_name.replace("-", "_")
     expected = [("ansible_host", "192.0.2.50"), ("device_role", "backend_api"), ("ansible_connection", "local"),
                 ("kontroll_probe_port", 443),
                 (ck + "_api_token", _former_lookup(ck + "_api_token")),
-                ("ansible_user", _former_lookup(ck + "_username")),
-                ("ansible_password", _former_lookup(ck + "_password"))]
+                (ck + "_api_username", _former_lookup(ck + "_username")),
+                (ck + "_api_password", _former_lookup(ck + "_password"))]
     assert plan["error"] is None and plan["backend"] == "api"
     assert _host_vars(plan, host_name) == expected
     assert plan["host_text"] == yaml.safe_dump({"edge_router": {"hosts": {host_name: dict(expected)}}},
@@ -200,14 +204,19 @@ def test_every_shipped_backend_names_a_default_domain():
 @pytest.mark.parametrize("host_name", HOST_NAMES)
 def test_every_templated_maps_to_renders_for_every_host_name_shape(host_name):
     """Every `maps_to` template the registry or the generic union ships renders, for the credential key of each
-    shape of host name the boundary accepts, to `<cred key>_api_token`. Guards MF-03: an output rule narrower than
-    the host names would refuse an onboard that works today."""
+    shape of host name the boundary accepts, to its own field's name: a token's to `<cred key>_api_token`, and the
+    api backend's basic pair's to `<cred key>_api_username` and `<cred key>_api_password` (I-16), the names
+    roles/backend_api reads. Guards MF-03: an output rule narrower than the host names would refuse an onboard that
+    works today; and a template whose rendered name is not the one the role reads."""
     ck = host_name.replace("-", "_")
-    templates = [e["maps_to"] for b in REGISTRY for e in (b.get("auth") or []) if "{" in str(e.get("maps_to"))]
-    templates.append(authspec.union_field("api_token")["maps_to"])
-    assert len(templates) == 2, "the api backend's token and the generic union's: a new one needs its own row"
-    for tmpl in templates:
-        assert catalog.render_template(tmpl, {"cred_key": ck}, catalog.MAPS_TO_RE) == ck + "_api_token"
+    templates = [(e["field"], e["maps_to"]) for b in REGISTRY for e in (b.get("auth") or [])
+                 if "{" in str(e.get("maps_to"))]
+    templates.append(("api_token", authspec.union_field("api_token")["maps_to"]))
+    rendered = {"api_token": "_api_token", "username": "_api_username", "password": "_api_password"}
+    assert sorted(field for field, _ in templates) == ["api_token", "api_token", "password", "username"], \
+        "the api backend's token and basic pair, and the generic union's token: a new one needs its own row"
+    for field, tmpl in templates:
+        assert catalog.render_template(tmpl, {"cred_key": ck}, catalog.MAPS_TO_RE) == ck + rendered[field]
 
 
 @pytest.mark.parametrize("tmpl, ctx", [
@@ -627,17 +636,41 @@ def test_a_backend_this_install_does_not_ship_is_named_as_such_in_the_refusal():
 
 def test_only_a_templated_backend_maps_to_is_a_default_by_field_name(probed, monkeypatch):
     """A TIER-B field that brings no `maps_to` and is named like a backend `auth:` entry whose `maps_to` is a LITERAL
-    (`password` → `ansible_password` on the api backend) is stored in SOPS with no host var; only a templated entry
-    (`api_token`) is a default by name.
+    (`password` → `ansible_password`) is stored in SOPS with no host var; only a templated entry (the api backend's
+    `api_token` and, since I-16, its basic pair) is a default by name.
 
     Guards the by-name default widening from the registry's templates to every literal it declares (mutant A of
-    T18's read, D14): a field read from a module's argument spec would then reach a connection var."""
+    T18's read, D14): a field read from a module's argument spec would then reach a connection var. TIER-B runs
+    only for a local-connection backend, and the api backend, the one shipped, has no literal since I-16, so the
+    row's own descriptor has a local connection and the literal the api backend's `password` had."""
     probed(**HTTPAPI)
     monkeypatch.setattr(catalog, "local_installed", lambda: {"acme.edgeos": "1.0.0"})
     monkeypatch.setattr(authspec, "auth_fields_from_argspec", lambda coll, modules, **kw: [
         {"field": "password", "kind": "password", "label": "password", "sops_stem": "password", "secret": True,
          "required": True, "derivation": "no_log", "auth_set": "edgeos"}])
-    plan = _plan("h1", creds={"password": "p"}, deep=True)
+    plan = _lab_plan(_lab(connection={"ansible_connection": "local"}, default_secrets_domain="network"),
+                     creds={"password": "p"}, deep=True)
     assert plan["cred_source"] == "deep"
     assert plan["creds_to_set"] == {"h1_password": "p"}
     assert "ansible_password" not in dict(_host_vars(plan, "h1"))
+
+
+def test_a_tier_b_basic_pair_on_the_api_backend_gets_the_per_host_vars_the_role_reads(probed, monkeypatch):
+    """A `username` and a `password` derived from a module's argument spec (TIER-B, no `maps_to`) on the api backend
+    land as `<cred key>_api_username` and `<cred key>_api_password`, each bound to its SOPS key: the backend's
+    templates, applied by field name as `api_token`'s is. Guards I-16's onboard half for the deep path: a pair the
+    form takes for an api class reaches the names roles/backend_api reads, never a connection var."""
+    probed(**HTTPAPI)
+    monkeypatch.setattr(catalog, "local_installed", lambda: {"acme.edgeos": "1.0.0"})
+    monkeypatch.setattr(authspec, "auth_fields_from_argspec", lambda coll, modules, **kw: [
+        {"field": "username", "kind": "identity", "label": "username", "sops_stem": "username", "secret": False,
+         "required": True, "derivation": "name", "auth_set": "edgeos"},
+        {"field": "password", "kind": "password", "label": "password", "sops_stem": "password", "secret": True,
+         "required": True, "derivation": "no_log", "auth_set": "edgeos"}])
+    plan = _plan("SW-Core-1", creds={"username": "u", "password": "p"}, deep=True)
+    assert plan["cred_source"] == "deep"
+    host_vars = dict(_host_vars(plan, "SW-Core-1"))
+    assert host_vars["SW_Core_1_api_username"] == _former_lookup("SW_Core_1_username")
+    assert host_vars["SW_Core_1_api_password"] == _former_lookup("SW_Core_1_password")
+    assert not {"ansible_user", "ansible_password"} & set(host_vars)
+    assert plan["creds_to_set"] == {"SW_Core_1_username": "u", "SW_Core_1_password": "p"}

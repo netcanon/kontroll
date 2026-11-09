@@ -666,15 +666,16 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
         if not isinstance(stem, str) or not _STEM_RE.fullmatch(stem):
             raise paths.RepositoryDataError(
                 "credential field", "a credential field %s has a name that is not an identifier" % _where)
-        # A `maps_to` holding a placeholder is a TEMPLATE (S27 — the api backend's `{cred_key}_api_token`): rendered
-        # with this host's credential key and held to catalog.MAPS_TO_RE, the charset of every host name the request
-        # boundary accepts, so an upper-case, dotted or IP-literal host keeps the var it had. The host name cannot
-        # make the render fail; the template's own text can, so a failure is the declaring file's. Only the backend
-        # registry and the generic union declare one: a template lets the request's host name choose WHICH var the
-        # lookup lands in, so a module file's `auth:` entry — curated, but not the registry — names its var as
-        # written. It may repeat, for the same field, the template its backend's registry entry or the generic union
-        # declares (today only `api_token`'s `{cred_key}_api_token`); any other template is refused once a value is
-        # given (T18's read, F1; its fold read, N2).
+        # A `maps_to` holding a placeholder is a TEMPLATE (S27 — the api backend's `{cred_key}_api_token`, and since
+        # I-16 its basic pair's `{cred_key}_api_username` and `{cred_key}_api_password`): rendered with this host's
+        # credential key and held to catalog.MAPS_TO_RE, the charset of every host name the request boundary
+        # accepts, so an upper-case, dotted or IP-literal host keeps the var it had. The host name cannot make the
+        # render fail; the template's own text can, so a failure is the declaring file's. Only the backend registry
+        # and the generic union declare one: a template lets the request's host name choose WHICH var the lookup
+        # lands in, so a module file's `auth:` entry — curated, but not the registry — names its var as written. It
+        # may repeat, for the same field, the template its backend's registry entry or the generic union declares
+        # (the api backend's, above, and the generic union's `{cred_key}_api_token`); any other template is refused
+        # once a value is given (T18's read, F1; its fold read, N2).
         maps_to = cf.get("maps_to")
         if isinstance(maps_to, str) and "{" in maps_to:
             if maps_to not in (templated.get(cf["field"]), (authspec.union_field(cf["field"]) or {}).get("maps_to")):
@@ -724,7 +725,8 @@ def build_onboard_plan(collection, key, group, host, host_name=None, secrets=Non
             # domain cred (proxmox exporter token) has NO maps_to — it is read from the SOPS domain by its consumer
             # (deploy-stack renders it into the exporter .env via the class's secret_env_map), not via a hostvar.
             # An API token is one of these since S27: its var is the api backend's `{cred_key}_api_token` template,
-            # rendered above. roles/backend_api reads that name, or the recipe's own `token_var` when one is in scope.
+            # rendered above. roles/backend_api reads that name, or the recipe's own `token_var` when one is in scope;
+            # and so for a basic pair since I-16 (`{cred_key}_api_username`, `{cred_key}_api_password`).
             creds_to_set[sops_key] = val
             if maps_to:
                 hostvars[maps_to] = _sops_ref(_sops, sops_key)

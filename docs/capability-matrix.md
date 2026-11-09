@@ -180,7 +180,8 @@ when the request names none — a request's domain wins over it, a reused class'
 rendered from the class's collection; a param the backend requires but does not derive
 is the operator's to set at run time, and one its `connection:` block reads refuses the
 plan as `repository_data`) and a **templated** `maps_to` on an `auth:` field (the api
-backend's `{cred_key}_api_token`: the host var a token is written under, rendered per
+backend's `{cred_key}_api_token`, and its basic pair's `{cred_key}_api_username` and
+`{cred_key}_api_password`: the host var each credential is written under, rendered per
 host). A template is a closed grammar — `{name}` placeholders from a fixed set
 (`collection`, `namespace`, `name` for a param; `cred_key` for a `maps_to`), no
 attribute access, no Jinja — and its result is held to a charset

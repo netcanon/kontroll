@@ -24,7 +24,7 @@ requires: []
 default_secrets_domain: network
 role: backend_api
 # Onboarded api hosts are reached by localhost-delegated `uri`, not SSH/httpapi —
-# so the host connection is local. The recipe (backend_api_recipe) + its token var
+# so the host connection is local. The recipe (backend_api_recipe) + its credential vars
 # carry everything else.
 #
 # TOKEN VAR — an onboarded api host's token var is `<host with - as _>_api_token`: this file's `api_token` entry
@@ -33,6 +33,12 @@ role: backend_api
 # neither is in scope. Nothing resolves a recipe's `token_var` at onboard time — a comment here once claimed the
 # planner did, and the mismatch silently reported a healthy FortiGate as UNREACHABLE for the life of the class
 # (fixed 2026-07-28).
+#
+# BASIC-AUTH PAIR — the same rule (I-16): the `username` and `password` entries below write
+# `<host with - as _>_api_username` and `_api_password`, and roles/backend_api reads the recipe's `username_var` and
+# `password_var` first, then those, refusing by name before the request if either resolves to nothing. They were
+# `ansible_user` and `ansible_password`, which the role never read, so an onboarded basic host could not
+# authenticate; and a fallback to those connection vars would send whatever a group sets for SSH to the API.
 connection:
   ansible_connection: local
 # The TCP port ping.yml's reachability probe uses for a host of this backend (S28): the planner writes it into the
@@ -42,11 +48,11 @@ connection:
 probe_port: 443
 # Self-describing credential SHAPE (F1 TIER-A): a REST/httpapi device authenticates with an API TOKEN (or basic
 # auth) — NOT an SSH key. Deriving exactly these fields stops the form showing dead SSH boxes for a REST device (the
-# operator's headline gap). The token's host var is the `maps_to` template below (the TOKEN VAR note above); the
-# planner also gives it, by field name, to an `api_token` that a module's argument spec derives without one (TIER-B).
+# operator's headline gap). Each host var is a `maps_to` template below (the notes above); the planner also gives each,
+# by field name, to a field of the same name that a module's argument spec derives without one (TIER-B).
 # A template takes `{cred_key}` only. The exact multi-field API auth (e.g. proxmox api_user+api_token_id+
 # api_token_secret) is a TIER-B/Rung-1 sharpening; this is the generic REST shape. Read by scripts/kontroll/authspec.py.
 auth:
   - {field: api_token, kind: token, label: "API token / key", maps_to: "{cred_key}_api_token"}
-  - {field: username, kind: identity, label: "API username (basic auth)", maps_to: ansible_user}
-  - {field: password, kind: password, label: "API password (basic auth)", maps_to: ansible_password}
+  - {field: username, kind: identity, label: "API username (basic auth)", maps_to: "{cred_key}_api_username"}
+  - {field: password, kind: password, label: "API password (basic auth)", maps_to: "{cred_key}_api_password"}
