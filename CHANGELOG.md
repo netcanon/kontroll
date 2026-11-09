@@ -14,23 +14,28 @@ NetConfig project.
 ### ci: a stalled release download is given up on, and the download scan reads what runs (I-34, 2026-11-09)
 
 The I-28 helper bounded the tries and not the wait: a mirror that took the connection and sent nothing, or stopped
-mid-body with the socket open, held the job until its 360-minute default, and a Retry-After header replaced the delay
-with whatever the mirror asked. The test that holds every workflow to the helper matched words anywhere in the file:
-it passed a `fetch` wrapper that no longer called the helper, a comment naming a pin, a `gh release download` and a
-curl in a script a step runs.
+mid-body with the socket open, held the job until its 360-minute default, as did one that sent the body slowly (the
+fix's reads), and a Retry-After header replaced the delay with whatever the mirror asked. The test that holds every
+workflow to the helper matched words anywhere in the file: it passed a `fetch` wrapper that no longer called the
+helper, a comment naming a pin, a `gh release download` and a curl in a script a step runs.
 
-- **Fixed.** `.github/scripts/fetch-pinned.sh` gives up on a transfer under 1 KiB/s for 60 s and on a connection not
-  made in 30 s (each retried), stops retrying 300 s in and refuses a Retry-After past that; `-s` became
-  `--no-progress-meter`, so each "Will retry" shows in the log. The history scan installs gitleaks into
-  `$RUNNER_TEMP/kontroll-tools` on the PATH, as the gate does, not by sudo into /usr/local/bin.
+- **Fixed.** `.github/scripts/fetch-pinned.sh` gives up on a transfer under 1 KiB/s for 60 s, on a connection not made
+  in 30 s and on a try past 600 s (each retried), begins no new try 300 s in and refuses a Retry-After past that, so
+  one file's fetch ends within about 15 minutes; `-s` became `--no-progress-meter`, so each retry warning shows in the
+  log. The history scan installs gitleaks into `$RUNNER_TEMP/kontroll-tools` on the PATH, as the gate does, not by
+  sudo into /usr/local/bin. The gate's install step names `shell: bash`: its runner comes from a variable, and an
+  unnamed shell on a Windows runner is pwsh, which need not stop on a failed fetch.
 - **Tests.** `unit/test_ci_workflows.py`: the helper against a local server that stalls before and inside the body
-  (given up on and asked again), asks for an hour's Retry-After (refused, the step fails) and redirects (followed),
-  and a 504's "Will retry" in the log; a run past 45 s fails, its process group killed. The download scan reads each
-  step's script with its comments cut, holds the wrapper to the helper call, requires every `/releases/download/` URL
-  to be in a fetch command that stands alone, scans `.github/scripts/*.sh`, and knows `aria2c`, `urlretrieve`,
-  `urlopen`, `gh release download` and `Invoke-WebRequest`; its rows prove what it catches.
+  (given up on and asked again), trickles faster than the stall bound (given up on at the try's cap and asked again),
+  asks for an hour's Retry-After (refused, the step fails) and redirects (followed), and a 504's retry warning in the
+  log; a run past 45 s fails, its process group killed. The download scan reads each step's script with its comments
+  cut, holds the wrapper to the helper call, requires every `/releases/download/` URL to be in a fetch command that
+  stands alone, in a step whose shell stops on a failure and that leaves errexit on, refuses a release URL in an
+  `env:` or a `with:` and a local action, reads every file under `.github/scripts/`, and knows `aria2c`,
+  `urlretrieve`, `urlopen`, `gh release download` and `Invoke-WebRequest`; its rows prove what it catches. The
+  helper's curl command is pinned whole.
 - **Docs.** SECURITY.md C6 and `docs/qa-and-release-pipeline.md` §5 say what the helper covers and what it does not
-  (Playwright's browser, the snmp generator's source, the installer image's two downloads).
+  (Playwright's browser, the snmp generator's source, the installer image's sops release and Docker apt key).
 
 ### fix(ansible): an empty or malformed service list brings up nothing, not the whole stack (I-32, 2026-11-08)
 
@@ -390,10 +395,10 @@ The validate job fetched each pinned release binary with one `curl` and no retry
 504 from the release mirror after 2m40s and failed the job, and a re-run of that job alone, on the same commit, passed.
 `security.yml`'s gitleaks install had no retry either, and piped curl into tar with no digest check at all.
 
-- **Fixed.** Every release file a workflow downloads by its release URL goes through `.github/scripts/fetch-pinned.sh <url> <sha256>`: curl
-  with `--retry 3 --retry-all-errors --retry-delay 5`, writing a file (never a pipe, which a retry would hand the bytes
-  it already had), then `sha256sum -c` as the gate. The history scan's gitleaks is held to the digest `ci.yml` pins for
-  the same release.
+- **Fixed.** Every release file a workflow step's `run:` downloads by its release URL goes through
+  `.github/scripts/fetch-pinned.sh <url> <sha256>`: curl with `--retry 3 --retry-all-errors --retry-delay 5`, writing
+  a file (never a pipe, which a retry would hand the bytes it already had), then `sha256sum -c` as the gate. The
+  history scan's gitleaks is held to the digest `ci.yml` pins for the same release.
 - **Tests.** `unit/test_ci_workflows.py` runs the helper with the real curl against a local server: a 504 then the file,
   a body cut short then the file (the file holds the body once), a 504 every time (four requests, then a failure that
   names the status), a wrong digest (one request, then a failure) and a call without its digest (its usage, no request).

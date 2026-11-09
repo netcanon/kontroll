@@ -439,14 +439,16 @@ repository variable `KONTROLL_CODE_SCANNING` is set, never blocking; the hybrid 
 `.github/zizmor.yml` FLAGS an un-pinned third-party action, and the `docker/*` actions in
 `publish-images.yml` are SHA-pinned, kept so by `tests/unit/test_ci_workflows.py`); every CI checkout sets
 `persist-credentials: false`.
-Every release file a CI job downloads by its `/releases/download/` URL (the gate's sops, gitleaks, promtool
-and vector, and the history scan's gitleaks) is downloaded by `.github/scripts/fetch-pinned.sh`, with its
-tries and its wait bounded, and held to its publisher's sha256 before it runs;
-`tests/unit/test_ci_workflows.py` holds every workflow step, and every script under `.github/scripts/`, to
-it, one digest per URL. The history scan's gitleaks was installed unverified, curl piped into tar, until
-2026-11-08 (I-28). Outside the helper (I-34): Playwright's Chromium (`playwright install`) and the snmp
-generator's source (a `git clone` of its tag) are fetched by their own tools and held to no digest, and the
-installer image's sops release and Docker apt key are digest-checked with no retry.
+Every release file a workflow step's `run:` downloads by its `/releases/download/` URL (the gate's sops,
+gitleaks, promtool and vector, and the history scan's gitleaks) is downloaded by
+`.github/scripts/fetch-pinned.sh`, with its tries and its wait bounded (a stalled transfer, a connection not
+made and a try past 600 s are given up on, and no new try begins 300 s in), and held to its publisher's
+sha256 before it runs; `tests/unit/test_ci_workflows.py` holds every step's script, and every file under
+`.github/scripts/`, to it, one digest per URL, and refuses a release URL in an `env:` or a `with:` and a
+local action, whose steps it does not read. The history scan's gitleaks was installed unverified, curl piped
+into tar, until 2026-11-08 (I-28). Outside the helper (I-34): Playwright's Chromium (`playwright install`)
+and the snmp generator's source (a `git clone` of its tag) are fetched by their own tools and held to no
+digest, and the installer image's sops release and Docker apt key are digest-checked with no retry.
 **Proves:** `tests/validate` fails on any plaintext key/credential in a committable
 file (verified: a planted age key is caught); `git status` clean of secret artifacts.
 

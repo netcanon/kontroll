@@ -159,15 +159,18 @@ waits 60 s for dpkg's locks, then fails. The helper runs the step again on any o
 (apt's `E:` line, in the C locale it sets), a bounded number of times, and fails at once with apt's
 own status on any other failure. `tests/unit/test_ci_workflows.py` holds every workflow step that
 runs apt to the helper, and pins its bounds.
-A release file a job downloads by its `/releases/download/` URL (the gate's sops, gitleaks, promtool
-and vector; the history scan's gitleaks) goes through `.github/scripts/fetch-pinned.sh <url> <sha256>`:
-curl retries every error (a 5xx, a dropped connection, a short body, a 404 too) three times, five
-seconds apart, into a file, never a pipe; it gives up on a stalled transfer (under 1 KiB/s for 60 s)
-and a connection not made in 30 s, and stops retrying 300 s in, a Retry-After that asks to wait past
-that refused; and the publisher's sha256 is the gate. The same test file runs it against a local
-server and holds every workflow step, and every script under `.github/scripts/`, to it, with one
-digest per URL across the workflows. Playwright's browser and the snmp generator's source are fetched
-by their own tools, outside the helper (SECURITY.md C6).
+A release file a workflow step's `run:` downloads by its `/releases/download/` URL (the gate's sops,
+gitleaks, promtool and vector; the history scan's gitleaks) goes through
+`.github/scripts/fetch-pinned.sh <url> <sha256>`: curl retries every error (a 5xx, a dropped
+connection, a 404 too, and a short body when it knows the length) three times, into a file, never a
+pipe, five seconds apart or longer when the mirror's Retry-After asks; it gives up on a stalled
+transfer (under 1 KiB/s for 60 s), a connection not made in 30 s and a try past 600 s, and begins no
+new try 300 s in, a Retry-After that would pass that refused, so one file's fetch ends within about 15
+minutes; and the publisher's sha256 is the gate. The same test file runs it against a local server and
+holds every step's script, and every file under `.github/scripts/`, to it, with one digest per URL
+across the workflows. Playwright's browser and the snmp generator's source are fetched by their own
+tools, and the installer image's sops release and Docker apt key are digest-checked with no retry: each
+outside the helper (SECURITY.md C6).
 
 The four gating workflows run on every push to `main` **and to any `homelab*` branch**: the private
 instance repository's permissive tine is a long-lived branch that is never merged to `main`, so it is
