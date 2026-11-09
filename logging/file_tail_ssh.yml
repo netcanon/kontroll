@@ -69,6 +69,9 @@ wiring_role: logging_file_tail_ssh     # roles/logging_file_tail_ssh -- authoriz
                                        # remote host, FORCED to `journalctl -f -o json` (no shell). The matching
                                        # PRIVATE key is the logging_file_tail SOPS domain, rendered to a file and
                                        # bind-mounted RO into Vector by deploy-stack (the 3rd injection shape).
+# The connections wire-logging.yml runs the wiring role over; a host on any other is refused
+# (tasks/refuse-local-connection.yml). The role writes the host's own authorized_keys, so only ssh reaches it.
+wiring_connections: [ssh, ansible.builtin.ssh, paramiko_ssh, ansible.builtin.paramiko_ssh]
 secret_domain: logging_file_tail       # the read keypair Vector authenticates with. UNLIKE journald/syslog (no
                                        # secret) and UNLIKE proxmox_api (an env TOKEN), this is a KEY FILE: the
                                        # private key is decrypted + mounted RO into Vector, never an env var, so

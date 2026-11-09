@@ -1,0 +1,83 @@
+---
+# Refuse a host whose connection is not one this play's role is written for. A play that dispatches by GROUP runs
+# one role on every host of that group, whatever the host's own `device_role` is — wire-logging.yml runs `-e role`,
+# install-node-exporter.yml runs node_exporter. Under a connection that executes on the controller, that role's
+# tasks would run on the control node, as the runner, with inputs (role defaults) that any host var outranks. Such a
+# play imports this file as its FIRST task, with `gather_facts: false`, so a refused host has nothing run on it; the
+# host fails, and the play goes on for the others (a `meta: clear_host_errors` would revive it past the freeze; the
+# scan refuses one in the play).
+#
+# The check is an allowlist, `refusal_connections`, which the importing play passes on the import: the connections
+# its role is written for (install-node-exporter.yml: the ssh family; wire-logging.yml: the method's
+# `wiring_connections`, logging/README.md). A list of names to refuse could not be whole: ansible-core loads the
+# local plugin as `local`, `ansible.builtin.local`, `ansible.legacy.local` and
+# `[ansible.builtin.|ansible.legacy.]redirected_local`, and `network_cli`, `httpapi` and `netconf` run every module
+# that is not a network module on the controller too. An import that passes no list refuses every host, and a list
+# that holds a name of the local plugin refuses every host as well.
+#
+# `assert` is an action that runs on the controller and touches no host. For a host that sets no
+# `ansible_connection`, ansible-core fills it with the plugin it loaded: `ssh`, unless `-c`, ANSIBLE_TRANSPORT,
+# ansible.cfg's `transport` or the play's `connection:` names another (`local` under `-c local`). The `default('')`
+# fails closed should it ever be undefined.
+#
+# A host var is templated again for every task, so an `ansible_connection` that renders by context (`ssh` while
+# `refusal_connections` is defined, `local` inside a role) would pass the check and run the role on the controller. The
+# second task therefore freezes the connection. A `set_fact` outranks every inventory var and every play, role, block,
+# task and include_vars var; only a role or include parameter (written by the play's and the role's own code), a loop
+# variable (`loop_control.loop_var`), a later `set_fact` (or one that takes `module_defaults`) and an operator's `-e`
+# outrank it. The scan holds that nothing in the play after this freeze names `ansible_connection` in a form it reads,
+# and that the play holds no form it cannot read (SECURITY.md C4). It stores the allowlist's own spelling of the value
+# the check passed, which nothing templates again. A value that renders, here, to a name not on the list matches nothing
+# and is stored as '', which no connection plugin loads, so every later task on that host fails.
+#
+# The import passes the allowlist as task vars, which an include_vars, a set_fact, a registered var and an operator's
+# `-e` outrank, and the first three last for the host from one play to the next: a list that an earlier play of the run
+# left on the host (the preamble's, or a set_fact delegated to it with `delegate_facts`) would be the list checked here.
+# `hostvars` holds those, the inventory's vars and those of a vars file beside the playbooks (`group_vars/`,
+# `host_vars/`), and never the import's own vars, so the FIRST condition refuses every host of the play when the
+# `hostvars` of any of them hold a `refusal_connections` key. It finds the play's hosts by `ansible_play_hosts_all`,
+# a magic var, which ansible-core sets after every other var, `-e` included; not by `inventory_hostname`, which a
+# set_fact or an include_vars that sets the list can set beside it, to a host that holds none.
+# Only a run with such a list planted holds one, so the whole play is refused, not the hosts that hold it. It is a
+# presence test (`in`), which renders nothing: on 2.19 a test of the value renders it in the host's own context, where
+# a template that reads a play's magic var is undefined, while the second condition renders it widened, so a list
+# templated so by `-e` or an earlier play's include_vars passed and ran the role over network_cli. It comes first, so
+# a list no condition can render (a null, an `omit`) is refused by it and with its message.
+# The message names the hosts that hold the key, and no list: the list the task reads is then the outside one where
+# that outranks the import's, and the import's own where the import outranks it (the inventory's). A list that names
+# the local plugin gets a message of its own, as no host's connection is the reason.
+#
+# What a connection check cannot see (ssh to the controller's own address, an ssh option var that runs a controller
+# command, an operator's `-e`) is in SECURITY.md C4. tests/unit/test_group_dispatch_refuses_local.py holds every
+# group-dispatched play it can see (SECURITY.md C4, Proves) to this file.
+
+- name: Refuse a host whose connection is not one this play's role is written for
+  ansible.builtin.assert:
+    that:
+      - >-
+        (ansible_play_hosts_all | map('extract', hostvars) | select('contains', 'refusal_connections') | list
+        | length == 0)
+      - (ansible_connection | default('')) in (refusal_connections | default([]))
+      - >-
+        (refusal_connections | default([])) | intersect(['local', 'ansible.builtin.local', 'ansible.legacy.local',
+        'redirected_local', 'ansible.builtin.redirected_local', 'ansible.legacy.redirected_local']) | length == 0
+    fail_msg: >-
+      {{ inventory_hostname }}: {% if ansible_play_hosts_all | map('extract', hostvars)
+      | select('contains', 'refusal_connections') | list | length > 0 %}a `refusal_connections` is set outside the
+      import for a host of this play ({{ ansible_play_hosts_all | zip(ansible_play_hosts_all
+      | map('extract', hostvars)) | selectattr(1, 'contains', 'refusal_connections') | map('first') | join(', ') }};
+      by the inventory, a vars file beside the playbooks, an earlier play or -e), and only the import may name it.
+      Every host of this play is refused.{% elif (refusal_connections
+      | default([])) | intersect(['local', 'ansible.builtin.local', 'ansible.legacy.local', 'redirected_local',
+      'ansible.builtin.redirected_local', 'ansible.legacy.redirected_local']) | length > 0 %}the import's list names
+      the local plugin, so every host is refused.{% else %}ansible_connection is {{ ansible_connection |
+      default('(unset)') }}; this play runs its role only over {{ refusal_connections | default([]) | join(', ') or
+      '(none: the import passed no list, or an empty one)' }}, the connections it is written for, and never over the
+      local plugin. Refused for this host; the other hosts go on.{% endif %}
+    quiet: true
+
+- name: Freeze the connection at the allowlist's own spelling of the one just checked (no later task re-renders it)
+  ansible.builtin.set_fact:
+    ansible_connection: >-
+      {{ refusal_connections | default([]) | select('equalto', ansible_connection | default('')) | first
+      | default('') }}

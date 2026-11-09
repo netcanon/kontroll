@@ -30,6 +30,9 @@ ansible-playbook ansible/playbooks/wire-logging.yml -e role=logging_file_tail_ss
   -e logging_tail_pubkey="ssh-ed25519 AAAA… collector" --check --diff
 ```
 
+`wire-logging.yml` runs this role only over its method's `wiring_connections`
+(`logging/file_tail_ssh.yml`); a host on another connection is refused first (SECURITY.md C4).
+
 ## Entrypoints
 
 | `tasks_from:` | Does |

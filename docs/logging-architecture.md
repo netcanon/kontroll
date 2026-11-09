@@ -345,7 +345,9 @@ the store are hubs that *read* drop-ins; you never edit the hub to add a source.
 3. ✅ **§3.5 the logging CAPABILITY** — `logs:` module block + `logging/<method>.yml` descriptors + the `logging`
    capability-vector dimension + `gen-logging.py` (Vector pipelines under `docker/vector/generated/`) + the
    device-side wiring roles (`roles/logging_{syslog_push,journald_remote,file_tail_ssh}` + `wire-logging.yml`,
-   the mgmt-bound `:5514` syslog ingress) + the PROPOSE→PROMOTE→ENACT dialog — **BUILT on `feat/logging-vector`**.
+   which refuses a host whose connection is not one the wiring role is written for, the method's
+   `wiring_connections` — SECURITY.md C4; the mgmt-bound `:5514` syslog ingress) + the PROPOSE→PROMOTE→ENACT
+   dialog — **BUILT on `feat/logging-vector`**.
    `syslog_push` is end-to-end-provable; the **`journald_remote` receiver is BUILT + bench-proven to Loki** (S10):
    `systemd-journal-upload` → `roles/logging_journald_receiver` (systemd-journal-remote on the mgmt IP `:19532`) →
    Vector `exec` journalctl on `/var/log/journal-remote` (NOT an http_server — the upload is the binary export

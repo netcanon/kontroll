@@ -54,6 +54,9 @@
   gather_facts: false
   ignore_unreachable: true
   tasks:
+    - name: Refuse a host whose device_role is a fact (only the inventory names the role it dispatches by)
+      ansible.builtin.import_tasks: tasks/refuse-device-role-fact.yml
+
     - name: Run the class-specific backup entrypoint
       ansible.builtin.include_role:
         name: "{{ device_role }}"

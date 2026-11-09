@@ -24,6 +24,10 @@
   hosts: all
   gather_facts: false
   tasks:
+    # Outside the block: its rescue would report a refused host as UNREACHABLE.
+    - name: Refuse a host whose device_role is a fact (only the inventory names the role it dispatches by)
+      ansible.builtin.import_tasks: tasks/refuse-device-role-fact.yml
+
     - name: Probe reachability, then run the class check
       block:
         - name: TCP reachability probe from the control node

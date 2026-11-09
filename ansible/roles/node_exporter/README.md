@@ -18,6 +18,13 @@ inventory); this role just lands the agent so that target goes from DOWN → UP.
 ## Invocation
 - **Backfill the fleet:** `ansible-playbook playbooks/install-node-exporter.yml --check --diff` (then for real).
 - **One host (onboard):** `ansible-playbook playbooks/install-node-exporter.yml -e target=<host>`.
+- The play refuses a host whose `ansible_connection` is not of the ssh family (`ssh`, `paramiko_ssh`) before
+  anything runs on it: under `local`, or a network plugin such as `network_cli`, the agent would be installed on
+  the control node. It then freezes the connection at the one it checked, so no later task runs over another.
+  Facts are gathered after that, by the `gather_facts` action (the one the play keyword runs), so a refused host
+  has nothing run on it (SECURITY.md C4).
+- Only the play's import names that list: a `refusal_connections` set for a host anywhere else (the inventory, a
+  vars file beside the playbooks, an earlier play, `-e`) refuses the host, and the refusal says so.
 
 ## Blast radius / safety
 | Aspect | Value |

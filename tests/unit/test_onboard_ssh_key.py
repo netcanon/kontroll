@@ -7,6 +7,7 @@ data-write + the static no_log contract that keep the key off git, the inventory
 import os
 
 import pytest
+import yaml
 
 from kontroll import authspec, catalog, gitio, probe
 from kontroll.service import onboard
@@ -122,6 +123,62 @@ def test_render_and_cleanup_force_local_delegation():
     # 5 render tasks (2 asserts + file + set_fact + copy) each delegate; the comment header also names it, so >=5.
     assert render.count("delegate_to: localhost") >= 5, "every render task must delegate_to: localhost"
     assert "delegate_to: localhost" in cleanup, "the cleanup rm must delegate_to: localhost (run_once host hijack)"
+
+
+def test_every_playbook_that_renders_device_keys_removes_them_last():
+    """Every playbook under ansible/playbooks/ that imports `_fleet-preamble.yml` (which renders each key-auth host's
+    private key into the run's key dir) or `_render-ssh-keys.yml` itself, judged by the path the import runs (fold 7's
+    read B, N3: a playbook that imported the renderer directly, with no cleanup, passed; a templated or linked import is
+    refused tree-wide by the dispatch scan, `imports a playbook the scan does not read`: fold 8's read A, N1; the pin
+    reads YAML only, and a JSON-wrapped import is refused at playbook level by the gate (2.19's syntax-check,
+    ansible-lint): fold 8's read B, S2), imports the shipped `ansible/playbooks/_cleanup-ssh-keys.yml` once, as its last
+    entry. Guards a fleet play whose cleanup import is dropped, or moved above a play that still connects: no shipped
+    caller passes `kontroll_run_id`, so every run shares `kontroll-ssh-keys.manual`, and its keys would then stay there
+    after every run, not only after one an earlier play stops (SECURITY.md's accepted-risk row assumes the cleanup runs
+    last; local-refusal fold 2's read B, N3: nothing pinned it outside backup-configs.yml). The import entry carries
+    only its name: a `when:`, a `tags: [never]` or a `vars:` that renames the key dir on it left the dir in place with
+    every other test green (fold 5's read A, N2), and it names the shipped file itself, not one of its name elsewhere
+    (fold 6's read A, N2, and read B, N5: a no-op namesake under `files/` passed every test)."""
+    def imported(entry):
+        return next((str(v) for k, v in entry.items() if k == "import_playbook" or k.endswith(".import_playbook")),
+                    None) if isinstance(entry, dict) else None
+
+    found = {}
+    playbooks = os.path.join(ROOT, "ansible", "playbooks")
+    for directory, _dirs, files in os.walk(playbooks):
+        for name in files:
+            if not name.endswith((".yml", ".yaml")):
+                continue
+            with open(os.path.join(directory, name), encoding="utf-8") as fh:
+                doc = yaml.safe_load(fh)
+            imports = [imported(e) for e in doc] if isinstance(doc, list) else []
+            resolved = [os.path.relpath(os.path.realpath(os.path.join(directory, i)),
+                                        os.path.realpath(playbooks)).replace(os.sep, "/") if i else None
+                        for i in imports]
+            rel = os.path.relpath(os.path.join(directory, name), playbooks).replace(os.sep, "/")
+            if rel != "_fleet-preamble.yml" and any(r in ("_fleet-preamble.yml", "_render-ssh-keys.yml")
+                                                    for r in resolved):   # the renderer, by the path it runs
+                found[rel] = resolved
+                assert set(doc[-1]) <= {"name", "import_playbook", "ansible.builtin.import_playbook"}, (rel, doc[-1])
+    assert {"ping.yml", "backup-configs.yml", "wire-logging.yml", "install-node-exporter.yml"} <= set(found), found
+    for rel, imports in found.items():
+        assert imports[-1] == "_cleanup-ssh-keys.yml" and imports.count("_cleanup-ssh-keys.yml") == 1, (rel, imports)
+
+
+def test_the_key_cleanup_removes_the_run_key_dir_on_the_runner():
+    """`_cleanup-ssh-keys.yml` is one play of one task, `ansible.builtin.file` on `{{ kontroll_device_key_dir }}` with
+    `state: absent`, delegated to localhost, and neither carries any other keyword. Guards a `check_mode: true`, a
+    `when:` or an `ignore_errors` on the task or the play, which would leave every run's keys on disk: the
+    wire-logging runtime test runs in `--check`, so it cannot tell a cleanup that removes the dir from one that never
+    does (local-refusal fold 4's read A, N4: fold 3's mutant X6 survived every test)."""
+    with open(os.path.join(ROOT, "ansible", "playbooks", "_cleanup-ssh-keys.yml"), encoding="utf-8") as fh:
+        plays = yaml.safe_load(fh)
+    assert len(plays) == 1 and len(plays[0]["tasks"]) == 1, plays
+    play, task = plays[0], plays[0]["tasks"][0]
+    assert set(play) == {"name", "hosts", "gather_facts", "connection", "run_once", "tasks"}, play
+    assert set(task) == {"name", "ansible.builtin.file", "delegate_to"}, task
+    assert task["ansible.builtin.file"] == {"path": "{{ kontroll_device_key_dir }}", "state": "absent"}, task
+    assert task["delegate_to"] == "localhost", task
 
 
 def _api_plan(monkeypatch, **kw):

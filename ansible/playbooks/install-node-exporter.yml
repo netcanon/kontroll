@@ -8,6 +8,10 @@
 # Backfill the fleet:   ansible-playbook playbooks/install-node-exporter.yml --check --diff   (then for real)
 # One host (onboard):   ansible-playbook playbooks/install-node-exporter.yml -e target=<host>
 #
+# The play runs node_exporter on every host of the target pattern, whatever the host's device_role, so a host whose
+# connection is not of the ssh family is refused before anything runs on it (tasks/refuse-local-connection.yml).
+# Facts are gathered after that, so a refused host has nothing run on it.
+#
 # Access chain used:   control VM (mgmt VLAN) -> target hosts (SSH, root key ~/.ssh/ansible_ed25519)
 # May break:           none — additive read-only agent (:9100); no firewall/network change
 # Fallback required:   no
@@ -18,9 +22,23 @@
 
 - name: Install node_exporter on the metrics-eligible hosts
   hosts: "{{ target | default('hypervisors:docker_hosts') }}"
-  gather_facts: true              # need ansible_os_family to dispatch apt+systemd (Debian) vs apk+OpenRC (Alpine)
+  gather_facts: false             # gathered below, after the refusal: nothing runs on a refused host
   ignore_unreachable: true        # a down host is tolerated, not fatal (CLAUDE.md)
   tasks:
+    # The ssh family, bare and under `ansible.builtin.`. The `paramiko` alias and the `ansible.legacy.` spellings
+    # are refused, which fails closed. paramiko_ssh is deprecated in ansible-core 2.19 (its removal is flagged for
+    # 2.21): drop it here before the installer's ansible-core pin reaches 2.21.
+    - name: Refuse a host whose connection is not of the ssh family (node_exporter runs on the host itself)
+      ansible.builtin.import_tasks: tasks/refuse-local-connection.yml
+      vars:
+        refusal_connections: [ssh, ansible.builtin.ssh, paramiko_ssh, ansible.builtin.paramiko_ssh]
+
+    # The `gather_facts` action, as the play keyword runs it. Under a network plugin (refused above) `setup` ran on
+    # the controller and reported its facts; `gather_facts` picks the network OS's facts module instead. Untagged,
+    # like the refusal and the include: they share fate.
+    - name: Gather facts (ansible_os_family dispatches apt+systemd on Debian, apk+OpenRC on Alpine)
+      ansible.builtin.gather_facts:
+
     # include_role (dynamic), matching the repo convention (ping.yml) — resolves via roles_path at runtime
     # (cwd = ansible/, ansible.cfg roles_path=roles), and doesn't trip syntax-check's static role resolution.
     - name: Install + start node_exporter (the via:host host metrics agent)

@@ -30,6 +30,9 @@ ansible-playbook ansible/playbooks/wire-logging.yml -e role=logging_journald_rem
 ansible-playbook ansible/playbooks/wire-logging.yml -e role=logging_journald_remote -e target=<key>   # then apply
 ```
 
+`wire-logging.yml` runs this role only over its method's `wiring_connections`
+(`logging/journald_remote.yml`); a host on another connection is refused first (SECURITY.md C4).
+
 ## Entrypoints
 
 | `tasks_from:` | Does |

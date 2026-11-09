@@ -4,8 +4,8 @@
 #
 # The per-run ephemeral dir where _render-ssh-keys.yml materializes each SSH-key-auth host's PRIVATE key (0600,
 # no_log, run-uid-owned) for `ansible_ssh_private_key_file` (the unified password-OR-key seam). STABLE within a run
-# (so the render and the connection agree on the path) yet per-run-unique: keyed on kontroll_run_id when the caller
-# passes one (the Semaphore/enact path), else a fixed 'manual' suffix. Lands OUTSIDE the repo clone — the
+# (so the render and the connection agree on the path): keyed on kontroll_run_id when the caller passes one, else
+# a fixed 'manual' suffix (no shipped caller passes one, so every run shares it). Lands OUTSIDE the repo clone — the
 # C10-promotable working copy must never hold a private key (C1): $KONTROLL_SSH_KEY_DIR override, else
 # $XDG_RUNTIME_DIR (tmpfs), else /tmp. _cleanup-ssh-keys.yml removes it last.
 kontroll_device_key_dir: >-

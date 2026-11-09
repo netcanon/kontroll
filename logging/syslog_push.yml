@@ -38,9 +38,13 @@ params:
 derive_default:
   params: {transport: tcp}
 wiring_role: logging_syslog_push   # roles/logging_syslog_push — points the device's syslog at the collector
+# The connections wire-logging.yml runs the wiring role over; a host on any other is refused
+# (tasks/refuse-local-connection.yml). Its cli_config runs on the controller and talks to the device over
+# network_cli, as backend_netcommon_cli is written to; the role runs no module that is not a network module.
+wiring_connections: [network_cli, ansible.netcommon.network_cli]
 secret_domain: null                # plain syslog carries no collector cred; TLS-syslog (deferred) would name one
 access_chain:
-  chain: control VM (mgmt VLAN) -> device mgmt (network_cli/netconf) sets `logging host <collector>`
+  chain: control VM (mgmt VLAN) -> device mgmt (network_cli) sets `logging host <collector>`
   may_break: device logging config only (a wrong host = logs go nowhere; no traffic/forwarding path severed)
   fallback: "console for edge_firewall/core_switch (OPNsense HDMI / CRS310 MAC-Winbox) per CLAUDE.md; else no"
   blast_radius: "this device's syslog config (reversible — re-run with the prior host, or `no logging host`)"

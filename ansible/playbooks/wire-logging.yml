@@ -8,6 +8,10 @@
 #   then apply:                 the same command without --check --diff
 #   collector override:         add -e collector_host=<ip>  (else instance/instance.yml mgmt_ip)
 #
+# The wiring play runs `-e role` on every host of the class's group, whatever the host's device_role, so a host
+# whose connection is not one the role is written for (the method's `wiring_connections`, logging/README.md) is
+# refused before the role runs (tasks/refuse-local-connection.yml).
+#
 # Access chain used:   control VM (mgmt VLAN) -> the target class's inventory_group (per the method's role)
 # May break:           per the dispatched role's access-chain header (e.g. a device's syslog config only)
 # Fallback required:   per the dispatched role (console for edge_firewall/core_switch)
@@ -41,6 +45,34 @@
         fail_msg: "wiring role '{{ role }}' has no ansible/roles/{{ role }}/tasks/main.yml"
         quiet: true
 
+    # The loop below appends to `_wire_methods`, so a value the inventory or a vars file beside the playbooks gave it
+    # would be read as methods, and widened a role's allowlist. A set_fact outranks both; an operator's `-e` of
+    # `_wire_methods` or `_wire_connections` outranks it, and is the operator's (SECURITY.md C4).
+    - name: Start the method list empty (no `_wire_methods` the inventory or a vars file sets is read)
+      ansible.builtin.set_fact:
+        _wire_methods: []
+
+    - name: Read the logging methods (logging/<method>.yml or .yaml), to find the one whose wiring role this is
+      ansible.builtin.set_fact:
+        _wire_methods: "{{ _wire_methods | default([]) + [lookup('ansible.builtin.file', item) | from_yaml] }}"
+      loop: >-
+        {{ (query('ansible.builtin.fileglob', playbook_dir ~ '/../../logging/*.yml')
+        + query('ansible.builtin.fileglob', playbook_dir ~ '/../../logging/*.yaml')) | sort }}
+
+    - name: Resolve the connections the wiring role is written for (its method's `wiring_connections`)
+      ansible.builtin.set_fact:
+        _wire_connections: >-
+          {{ _wire_methods | default([]) | selectattr('wiring_role', 'defined')
+             | selectattr('wiring_role', 'equalto', role)
+             | map(attribute='wiring_connections', default=[]) | flatten | unique }}
+
+    - name: Fail if no method names a connection for the wiring role (the dispatch play would refuse every host)
+      ansible.builtin.assert:
+        that:
+          - _wire_connections | length > 0
+        fail_msg: "no logging/<method>.yml with wiring_role '{{ role }}' names its wiring_connections"
+        quiet: true
+
     - name: Resolve the target class's inventory group + the collector host
       ansible.builtin.set_fact:
         _wire_group: >-
@@ -58,6 +90,11 @@
   gather_facts: false             # the wiring roles need no host facts (cli_config / lineinfile / systemd)
   ignore_unreachable: true        # a down host is tolerated, not fatal (CLAUDE.md hard rule)
   tasks:
+    - name: Refuse a host whose connection is not one the wiring role is written for
+      ansible.builtin.import_tasks: tasks/refuse-local-connection.yml
+      vars:
+        refusal_connections: "{{ hostvars['localhost']._wire_connections | default([]) }}"
+
     - name: Apply the dispatched logging wiring role (collector resolved control-side)
       ansible.builtin.include_role:
         name: "{{ role }}"
