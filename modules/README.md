@@ -165,7 +165,7 @@ universal assumption. Each role declares it as a default —
 the single source of truth (runtime-available, overridable per host/group via
 Ansible var precedence). `backup-configs.yml` runs the capture for capable
 classes and records a **logged skip** for the rest (never a forced empty file);
-its final play prints a per-host `captured / skipped / FAILED / not-run` summary.
+its summary play prints a per-host `captured / skipped / FAILED / not-run` summary.
 The raw-SSH, CLI, RouterOS, OPNsense and API backups record a read that answers
 nothing as `FAILED` and never write it, so the last good capture is kept.
 

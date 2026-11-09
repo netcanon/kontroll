@@ -4,7 +4,7 @@
 #
 # WHY THIS FILE EXISTS AT ALL: `config_backup_dir` was defined only in the repo's own tracked
 # instance/inventory/group_vars/all.yml, and instance.example/ shipped no group_vars — so every box built
-# with `kontroll-init --fresh` had it UNDEFINED, and backup-configs.yml (which references it fifteen times,
+# with `kontroll-init --fresh` had it UNDEFINED, and backup-configs.yml (which references it throughout,
 # starting with the directory it writes captures into) could never run there. The defect was invisible
 # because the workstation checkout has the file and a scaffolded box does not. Live-caught 2026-07-28.
 #

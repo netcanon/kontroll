@@ -2907,7 +2907,7 @@ finding 8):
   resolves the token under BOTH names the repo ever used (the recipe's `token_var` and the onboarded
   `<host>_api_token`) and refuses an unresolvable or empty token by NAME, never value
   (`tests/unit/test_backend_api_check_teeth.py`).
-- `backup-configs.yml` referenced `config_backup_dir` fifteen times but the scaffold shipped no `group_vars`, so no
+- `backup-configs.yml` referenced `config_backup_dir` throughout but the scaffold shipped no `group_vars`, so no
   instance created by `kontroll-init --fresh` could run it. `instance.example/inventory/group_vars/all.yml` now
   ships the default (`tests/unit/test_capture_dir_scaffolded.py`).
 - SECURITY.md C1 claimed every secret is encrypted to two age recipients and that key loss is recoverable. Every
