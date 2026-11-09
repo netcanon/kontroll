@@ -597,6 +597,7 @@ def _docs(base):
     """[(relative path, directory, the document `_read` reads)] of every YAML file under `base`."""
     found = []
     for directory, _dirs, files in os.walk(base):
+        _dirs.sort()
         for name in sorted(files):
             if name.endswith((".yml", ".yaml")):
                 path = os.path.join(directory, name)
@@ -877,6 +878,8 @@ def _tree_faults(base, cfg, roles=None, others=()):
     roles path, for a role's meta dependency even with no `collections` keyword (fold 19's read A, S8)."""
     out = []
     for directory, dirs, files in os.walk(base):
+        dirs.sort()    # the walk's order, and so the faults', is the same on every filesystem
+        files.sort()
         rel = os.path.relpath(directory, base).replace(os.sep, "/")
         out += ["%s/%s: a symlinked directory" % (rel, d) for d in dirs if os.path.islink(os.path.join(directory, d))]
         out += ["%s/%s: a symlink" % (rel, f) for f in files if os.path.islink(os.path.join(directory, f))]
@@ -900,6 +903,7 @@ def _tree_faults(base, cfg, roles=None, others=()):
         out += ["roles/%s/%s: a plugin directory" % (role, d) for d in sorted(os.listdir(os.path.join(roles, role)))
                 if _plugin_dir(d) and os.path.isdir(os.path.join(roles, role, d))]
         for directory, _dirs, files in os.walk(os.path.join(roles, role)):
+            _dirs.sort()
             rel = os.path.relpath(directory, roles).replace(os.sep, "/")
             out += ["roles/%s/%s: a symlink" % (rel, f) for f in sorted(_dirs + files)
                     if os.path.islink(os.path.join(directory, f))]
@@ -993,6 +997,7 @@ def _filter_faults(directory):
     shipped filter file runs is held by its pin (`_FILTER_FILES`) and reviewed as code."""
     out = []
     for here, _dirs, files in os.walk(directory):
+        _dirs.sort()
         for f in sorted(x for x in files if x.endswith(".py")):
             rel = os.path.relpath(os.path.join(here, f), os.path.dirname(directory)).replace(os.sep, "/")
             with open(os.path.join(here, f), encoding="utf-8") as fh:
@@ -1046,7 +1051,7 @@ def _logging_faults(directory=LOGGING):
     method may hold a key those read apart (fold 9's read A, S1). And every method (`_methods`) that does not read to a
     mapping: one the reader cannot parse, or that is not UTF-8, ended the test in a traceback (fold 11's read B, N2)."""
     out = ["%s: %s" % (os.path.relpath(os.path.join(d, f), directory).replace(os.sep, "/"), why)
-           for d, _dirs, files in os.walk(directory) for f in sorted(files)
+           for d, _dirs, files in sorted(os.walk(directory)) for f in sorted(files)
            for why in _file_faults(os.path.join(d, f), device_role=False)]
     return out + ["%s: a method that does not read to a mapping" % name for name, method in _methods(directory)
                   if not isinstance(method, dict)]
@@ -1800,6 +1805,40 @@ def test_a_role_named_dot_is_refused_where_the_roles_path_comes_first(tmp_path):
     (base / "role-r.yml").write_text(yaml.safe_dump([{"ansible.builtin.include_role": {"name": "r"}}]))
     found = _small_faults(base, roles)
     assert found == ["./role-dot.yml: " + _OUT, "./role-entry-dot.yml: " + _OUT], found
+
+
+def test_the_scan_names_its_faults_in_one_order_whatever_order_a_directory_lists(tmp_path, monkeypatch):
+    """The scan names its faults in path order, and in the same order when every directory lists its entries the
+    other way round: a tree with a fault in two files at the top, in two directories below it and in two directories
+    of a role. Guards a walk that takes the filesystem's order: the public CI's runners list a directory in another
+    order than the gate's image does, and the dot-role row above, which compares two faults as a list, failed there
+    (PR #125's first CI run)."""
+    base, roles = _small_tree(tmp_path)
+    for name in ("role-dot.yml", "role-entry-dot.yml"):
+        (base / name).write_text(yaml.safe_dump([{"ansible.builtin.include_role": {"name": "."}}]))
+    for sub in ("a", "b"):
+        (base / sub).mkdir()
+        (base / sub / "play.yml").write_text(yaml.safe_dump([{"hosts": "localhost", "tasks": []}]))
+    (roles / "r" / "tasks").mkdir(parents=True)
+    task = [{"ansible.builtin.set_fact": {"device_role": "x"}}]
+    (roles / "r" / "tasks" / "main.yml").write_text(yaml.safe_dump(task))
+    (roles / "r" / "vars").mkdir()
+    (roles / "r" / "vars" / "main.yml").write_text(yaml.safe_dump({"device_role": "x"}))
+    found = _small_faults(base, roles)
+    paths = [f.split(": ", 1)[0] for f in found]
+    assert sorted(set(paths)) == ["./role-dot.yml", "./role-entry-dot.yml", "a/play.yml", "b/play.yml",
+                                  "roles/r/tasks/main.yml", "roles/r/vars/main.yml"], found
+    assert paths == sorted(paths), found
+    walk = os.walk
+
+    def reversed_walk(top, *args, **kwargs):   # the same lists, turned round before the scan sees them
+        for directory, dirs, files in walk(top, *args, **kwargs):
+            dirs.reverse()
+            files.reverse()
+            yield directory, dirs, files
+
+    monkeypatch.setattr(os, "walk", reversed_walk)
+    assert _small_faults(base, roles) == found, found
 
 
 def test_the_pin_is_held_by_its_place_not_its_name(tmp_path):

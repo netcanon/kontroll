@@ -14,7 +14,10 @@ the installed ansible-core, so a refusal that passes a host it should stop fails
 
 Nothing contacts a host: the play gathers no facts, and its only tasks are the refusal (an `assert` and a
 `set_fact`) and `debug`s, in the play and in a stub role, all actions on the controller. Every address is TEST-NET-1.
-It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image.
+It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image, on the pinned cores. ansible-core
+2.21 removed the paramiko_ssh connection plugin (2.20 deprecated it), so on a core from 2.21 on, as a CI runner may
+ship, the two hosts on it fail at the plugin load, before the refusal's condition, and the rows expect that
+(`_NO_PARAMIKO`).
 """
 import os
 import re
@@ -65,7 +68,24 @@ _HOSTS = {
     "dbl": {"ansible_connection": "{{ '{{' }} 'ssh' if refusal_connections is defined else 'local' {{ '}}' }}",
             "ansible_host": "192.0.2.43"},
 }
-_FAILS_AT_LOAD = {"drift", "dbl"}       # past the assert's condition or never at it: the plugin load fails the host
+
+
+def _core():
+    """(major, minor) of the ansible-core the `ansible-playbook` on PATH runs, read from its `--version` line
+    (`ansible-playbook [core 2.19.4]`); None where there is none or the line does not parse."""
+    if shutil.which("ansible-playbook") is None:
+        return None
+    out = subprocess.run(["ansible-playbook", "--version"], capture_output=True, text=True, timeout=300).stdout
+    m = re.search(r"\[core (\d+)\.(\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+# ansible-core 2.21 removed the paramiko_ssh connection plugin (2.20 deprecated it, `removed_in: "2.21"`): there a host
+# on it fails at the plugin load, before the refusal's condition, as `drift` and `dbl` do. The pinned cores (2.18,
+# 2.19) have it; the CI's pytest jobs run the core their runner ships. A version line that does not parse keeps the two
+# hosts, so a misread fails the rows rather than drops them.
+_NO_PARAMIKO = {"pk", "bpk"} if (_core() or (0, 0)) >= (2, 21) else set()
+_FAILS_AT_LOAD = {"drift", "dbl"} | _NO_PARAMIKO   # past the assert's condition or never at it: the load fails the host
 
 
 def _run(tmp_path, allow, *extra, before="", inv=None, files=None):
@@ -120,10 +140,16 @@ def test_only_a_host_on_an_allowlisted_connection_gets_past_the_refusal(tmp_path
     named by its FQCN) and paramiko_ssh (bare and by its FQCN) pass, and so do the two whose template renders `ssh`
     at the refusal. Every spelling of the local plugin, a templated `local`, network_cli (bare and by its FQCN),
     httpapi, netconf, chroot, `smart` and the implicit localhost are refused, and the refusal names the connection.
-    Guards a refusal that lets the role run on the control node for a host whose connection executes there (its
-    read, B1; fold 1's read B, S5: the FQCN network_cli and netconf rows)."""
+    On a core from 2.21 on, the two paramiko_ssh hosts fail at the load of a plugin that core no longer has, by that
+    message and no other. Guards a refusal that lets the role run on the control node for a host whose connection
+    executes there (its read, B1; fold 1's read B, S5: the FQCN network_cli and netconf rows); and the two hosts dropped
+    on a newer core for any reason but the plugin's removal (the public CI's pytest jobs, on the runner's core, failed
+    every row on them)."""
     passed, out = _passed(tmp_path, SSH)
-    assert passed == {"unset", "ssh", "bssh", "pk", "bpk", "toc1", "toc2"}, out
+    assert passed == {"unset", "ssh", "bssh", "pk", "bpk", "toc1", "toc2"} - _NO_PARAMIKO, out
+    for host in _NO_PARAMIKO:   # a core without the plugin fails the host at its load, never past the refusal
+        assert re.search(r"fatal: \[%s\]: FAILED! => .*the connection plugin '(ansible\.builtin\.)?paramiko_ssh' was "
+                         r"not found" % host, out), out
     for host in (set(_HOSTS) | {"localhost"}) - passed - _FAILS_AT_LOAD:   # stopped by the refusal, not otherwise
         assert "%s: ansible_connection is " % host in out, host
     assert "ansible_connection is ansible.legacy.local; this play runs its role only over ssh" in out, out
@@ -139,8 +165,9 @@ def test_every_later_task_runs_over_the_connection_the_refusal_passed(tmp_path):
     value frozen after the check, drift did, on 2.18 and 2.19 (fold 1's read A, S1)."""
     out = _run(tmp_path, SSH)
     seen = {(where, host): conn for where, host, conn in re.findall(r'"msg": "(PASSED|ROLE) (\S+) (\S*)"', out)}
-    expected = {"unset": "ssh", "ssh": "ssh", "bssh": "ansible.builtin.ssh", "pk": "paramiko_ssh",
-                "bpk": "ansible.builtin.paramiko_ssh", "toc1": "ssh", "toc2": "ssh"}
+    expected = {h: c for h, c in {"unset": "ssh", "ssh": "ssh", "bssh": "ansible.builtin.ssh", "pk": "paramiko_ssh",
+                                  "bpk": "ansible.builtin.paramiko_ssh", "toc1": "ssh", "toc2": "ssh"}.items()
+                if h not in _NO_PARAMIKO}
     assert seen == {(where, h): c for h, c in expected.items() for where in ("PASSED", "ROLE")}, out
     assert re.search(r"fatal: \[drift\]: FAILED!.*(non-empty plugin name|connection plugin '' was not found)", out), out
     assert re.search(r"fatal: \[dbl\]: FAILED!.*connection plugin .* was not found", out), out
@@ -151,7 +178,7 @@ def test_a_host_with_no_connection_is_refused_under_c_local(tmp_path):
     a host that names ssh still passes (a host var outranks `-c`). Guards the refusal reading the play context
     rather than what ansible-core puts in the host's `ansible_connection` (its read, N1)."""
     passed, out = _passed(tmp_path, SSH, "-c", "local")
-    assert passed == {"ssh", "bssh", "pk", "bpk", "toc1", "toc2"}, out
+    assert passed == {"ssh", "bssh", "pk", "bpk", "toc1", "toc2"} - _NO_PARAMIKO, out
 
 
 _NONE = ("this play runs its role only over (none: the import passed no list, or an empty one), the connections it is "
@@ -176,7 +203,8 @@ def test_an_import_with_no_list_or_a_list_naming_the_local_plugin_refuses_every_
 
 _WIDE = "[ssh, network_cli]"
 _TMPL = "{{ ['ssh', 'network_cli'] if ansible_play_name is defined else undefined_zz }}"   # undefined in `hostvars`
-_PLAIN = ["unset", "ssh", "bssh", "pk", "bpk"]   # a delegated loop stops at a host whose connection is a template
+# a delegated loop stops at a host whose connection is a template, or one whose plugin the core does not have
+_PLAIN = [h for h in ("unset", "ssh", "bssh", "pk", "bpk") if h not in _NO_PARAMIKO]
 _ELSEWHERE = {   # a list widened to network_cli, set for some hosts before the dispatching play's import reads it
     "earlier-set-fact": ("- name: Earlier\n  hosts: g\n  gather_facts: false\n  tasks:\n"
                          "    - ansible.builtin.set_fact:\n        refusal_connections: %s\n" % _WIDE, (), None,
