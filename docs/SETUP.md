@@ -191,7 +191,12 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > `${KONTROLL_STORAGE_ROOT}/onboard-gui/age.key`. deploy-stack **fails
 > closed** if that age key is absent rather than letting `up` auto-create a `root:root` directory in its place —
 > and equally if it is present but the runtime uid cannot read it, which otherwise surfaces one deploy later as an
-> opaque SOPS decrypt error. The simplest correct answer is a copy of the control key:
+> opaque SOPS decrypt error, and if the path is not a regular file at all. If `onboard-gui` was ever brought up
+> without the key (a hand `docker compose up -d`), Docker left that directory there: the refusal says so, and
+> `sudo rmdir` on the path clears it (it refuses while anything is inside). A link is judged by the file it
+> points at, which is what Docker mounts, and "readable" as the kernel judges the GUI's process (uid and gid 1001,
+> no other group): the owner bits when uid 1001 owns the key, the group bits when gid 1001 does, else the other
+> bits. The simplest correct answer is a copy of the control key:
 >
 > ```bash
 > sudo install -m 0600 -o 1001 -g 1001 ~/.config/sops/age/keys.txt /var/lib/kontroll/onboard-gui/age.key

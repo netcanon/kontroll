@@ -284,7 +284,14 @@ crown jewel — protect it where it lives, not at a remote.
   never a Docker-auto-created `root:root 0755` (world-readable) bind. Enforced fail-closed by
   **`tests/check-storage-chown.py`** (a bind source with no uid-scoped provisioner fails CI — the G9 guard); the
   same change **closed two pre-existing holes** (the onboard-gui `age.key` gained a fail-closed absence guard, the
-  `caddy/` dir gained an owner/group). An empty/`/` root is rejected by a deploy-stack assert.
+  `caddy/` dir gained an owner/group). An empty/`/` root is rejected by a deploy-stack assert. The `age.key` guard
+  admits only a **regular file** uid 1001 can read, judged on what Docker mounts (the stat follows a link) and as
+  the kernel judges a process of uid and gid 1001 with no other group (owner bits if uid 1001 owns it, group bits
+  if gid 1001 does, else other's): until 2026-11-08 a directory an earlier `up` without the key had made passed it,
+  being present and other-readable, so did a link to a key uid 1001 cannot read, and ownership alone stood for the
+  owner and group bits (I-22; `tests/unit/test_g9_age_key_refusal.py`, and the gate's own
+  tasks on each shape in `tests/integration/test_g9_age_key_gate_real_stat.py`). The stat reads none of the key's
+  bytes (no checksum).
 - `scripts/make-bundle.sh` strips the **entire `instance/` overlay** (recipients, all `*.sops.yml`,
   inventory IPs, fleet, dashboards) + the internal `docs/reviews/` snapshots, shipping only the
   `instance.example/` stub; `scripts/state-snapshot.sh` excludes the age key by design — a leaked

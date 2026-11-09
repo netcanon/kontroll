@@ -11,6 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the onboard-gui age-key gate takes only a key file, judged as Docker mounts it (I-22, 2026-11-08)
+
+deploy-stack's G9 gate asked whether `<storage root>/onboard-gui/age.key` existed and whether uid 1001 could read it.
+One `up` of onboard-gui without the key (a hand `docker compose up -d`) leaves a root:root 0755 DIRECTORY there, which
+exists and is other-readable: the gate passed it, the GUI started with its key file a directory (an opaque SOPS
+failure), and the remedy the gate prints, run against it, installed the key into the directory while the gate went on
+passing. The stat did not follow a link either, so a link to a key uid 1001 cannot read passed on the link's own 0777.
+And "readable" was ownership by uid 1001 or the other-read bit, so a 1001-owned key without its owner read bit passed
+and a root:1001 0640 key the GUI can read was refused. The I-19 read found the directory.
+
+- **Fixed.** The gate also requires a regular file, and its stat follows a link to the file Docker mounts (a link to
+  nothing is reported missing). The refusal names the case: missing (unchanged), a directory (where Docker's comes
+  from, and `sudo rmdir <path>`, which refuses while anything is inside, then the install as before), not a regular
+  file, or not readable by uid 1001. Readable is the kernel's rule for the GUI's process (uid and gid 1001, no other
+  group): the owner bits when uid 1001 owns the key, the group bits when gid 1001 does, else the other bits. The stat
+  computes no checksum and no MIME type: the gate needs none of the key's bytes, and a digest of the private key no
+  longer sits in the registered result.
+- **Tests.** `unit/test_g9_age_key_refusal.py` gains rows for Docker's directory, one uid 1001 owns, a pipe, a
+  root:1001 key at 0640 (passes) and 0604 (refused) and a 1001-owned key at 0044 (refused), the directory's wording
+  and remedy, and the stat's `follow` and no-checksum. The new `integration/test_g9_age_key_gate_real_stat.py` runs
+  the playbook's own stat and assert by ansible-playbook on each shape on disk: a 0644 file, a link to one, a 0600 key
+  uid 1001 owns and a root:1001 0640 key pass; Docker's directory, a directory a key was installed into, a pipe, a
+  link to a 0600 key of another uid, a link to nothing, a 1001-owned 0044 key and a root:1001 0604 key are refused in
+  their own words (the rows of uid or gid 1001 need root); and the real stat's results are the shapes the unit rows assume.
+- **Docs.** docs/SETUP.md (the onboard-gui prerequisite), SECURITY.md (the storage-root bullet), tests/README.md.
+
 ### fix(ansible): the run-log directory Vector binds is the operator's before any `up` (I-23, 2026-11-08)
 
 Vector binds `<operator home>/.local/state/kontroll/runs`, where the operator's scripts write their run-logs
