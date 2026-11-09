@@ -115,13 +115,19 @@ def test_every_fresh_preview_gate_on_a_working_task_is_negative():
 
 def test_the_partial_preview_is_announced():
     """A dry-run that silently covers less than it appears to is worse than one that fails: the operator reads a
-    wall of green and concludes the deploy was fully previewed. The banner must fire on exactly the flag."""
+    wall of green and concludes the deploy was fully previewed. The banner must fire on exactly the flag, and say
+    what a later `check` still skips: owning the cert of a service enabled later, said where it is. Guards the old
+    words coming back ("from then on `check` previews the whole play"), false since I-27 skips that owning on any
+    node."""
     task = _named("Say plainly that this is a partial preview")
     assert _when_of(task) == ["_fresh_preview | bool"], "the banner must fire on exactly the fresh-preview flag"
     msg = str(task["ansible.builtin.debug"]["msg"])
     assert "PARTIAL PREVIEW" in msg
     assert "SKIPPED" in msg, "it must say that steps were skipped, not merely that the node is new"
     assert "init" in msg, "and name the apply that makes the next check complete"
+    assert "previews the whole play" not in msg, "a later check still skips owning a cert not made yet (I-27)"
+    assert "a service enabled later" in msg and "said where it is skipped" in msg, \
+        "it must say which owning a later check skips, and that it is said where"
 
 
 def test_the_real_precondition_gate_is_NOT_silenced():
@@ -170,11 +176,14 @@ def test_each_cert_probe_reads_the_generators_own_path_before_it_runs_and_the_sk
     """For the API and for onboard-gui: a `stat` of exactly the path the cert generator's `creates` names, marked
     `check_mode: false` as the canonical's probe is (a read-only probe says outright that it reads in a dry-run),
     registered as the owner task's probe, and placed BEFORE the generator, so in an apply it reads "absent" as well
-    and the gate's check-mode term is all that keeps an apply owning what it made; then a note, fired on exactly the
-    case the owner task skips, says the owning was not previewed. Guards a probe of another path (the gate would
-    judge a file the generator does not look at), a probe moved after the generator (an apply's gate would then
-    pass without its check-mode term and nothing would notice it gone), and a skip nothing reports (a dry-run that
-    silently covers less than it appears to)."""
+    and the gate's check-mode term is all that keeps an apply owning what it made; then the owner task, gated on
+    exactly the generator's gate AND not (a dry-run that found no cert); then a note, fired on exactly the case the
+    owner task skips, says the owning was not previewed. Guards a probe of another path (the gate would judge a file
+    the generator does not look at), a probe moved after the generator (an apply's gate would then pass without its
+    check-mode term and nothing would notice it gone), an owner gate that loses `_needs_cert` (in byo_proxy/acme the
+    probe is skipped, so every dry-run fails evaluating it and every apply fails on a cert kontroll does not make, or
+    re-owns the operator's own), and a skip nothing reports (a dry-run that silently covers less than it appears
+    to)."""
     for block, probe in (("Provision the API host artifacts", "_api_crt"),
                          ("Provision the onboard-gui host artifacts", "_gui_crt")):
         tasks = _block_tasks(block)
@@ -189,6 +198,9 @@ def test_each_cert_probe_reads_the_generators_own_path_before_it_runs_and_the_sk
         assert stat_task["ansible.builtin.stat"]["path"] == gen_task["ansible.builtin.command"]["creates"], \
             "%s must look at the cert the generator makes" % probe
         assert _when_of(stat_task) == ['_needs_cert.stdout == "yes"'], "probe on exactly the generator's gate"
+        assert _when_of(gen_task) == ['_needs_cert.stdout == "yes"'], "the generator on exactly the resolver's answer"
+        own_when = '_needs_cert.stdout == "yes" and not (ansible_check_mode and not %s.stat.exists)' % probe
+        assert _when_of(tasks[own]) == [own_when], "the owner task on the generator's gate and its own probe, exactly"
         assert _when_of(tasks[say]) == ['_needs_cert.stdout == "yes" and ansible_check_mode and not %s.stat.exists'
                                        % probe], "the note must fire on exactly the skipped case"
         assert "NOT PREVIEWED" in str(tasks[say]["ansible.builtin.debug"]["msg"])

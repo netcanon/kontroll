@@ -9,9 +9,13 @@ now gates on a `stat` of its own cert, read before the cert is made, and only in
 previewed. These rows take the four tasks of each service from the playbook as they are (the probe, the generator,
 the owner task, the note), in the playbook's order, and run them against scratch service directories.
 
+A byo_proxy/acme row holds the other half of each gate: there kontroll makes no cert, so all four tasks are skipped,
+in a dry-run and in an apply, and an operator's own files in tls/ are left as they are.
+
 The apply row needs root (the owner task gives the files to uid 1001) and openssl, and is skipped without them; the
-dry-run rows run as any user, since a dry-run changes no owner. Needs POSIX and ansible-playbook; without them every
-row is skipped.
+dry-run rows and the byo_proxy/acme row run as any user, since none of them changes an owner. The public CI runs
+the suite as uid 1001, so tests/validate.sh's as-root step runs this file too, where a skipped row fails the gate.
+Needs POSIX and ansible-playbook; without them every row is skipped.
 """
 import json
 import os
@@ -77,10 +81,10 @@ def _service_tasks(svc):
     return picked
 
 
-def _run(tmp_path, check, fresh_node=False):
+def _run(tmp_path, check, fresh_node=False, needs_cert="yes"):
     """Run both services' TLS tasks in a play shaped as deploy-stack.yml's (become when root, no facts) with the
-    resolver's self_signed answer and `_fresh_preview` as a node with (default) or without a canonical would have
-    it; return (rc, output, {"<svc>_<role>": the task's registered result})."""
+    resolver's answer (`yes` is self_signed, `no` is byo_proxy/acme) and `_fresh_preview` as a node with (default)
+    or without a canonical would have it; return (rc, output, {"<svc>_<role>": the task's registered result})."""
     result = tmp_path / "result.json"
     tasks, regs = [], {}
     for svc in SERVICES:
@@ -94,7 +98,7 @@ def _run(tmp_path, check, fresh_node=False):
         "gather_facts": False,
         "become": os.geteuid() == 0,
         "vars": {"kontroll_api_dir": str(tmp_path / "api"), "kontroll_gui_dir": str(tmp_path / "gui"),
-                 "_needs_cert": {"stdout": "yes"}, "_fresh_preview": check and fresh_node},
+                 "_needs_cert": {"stdout": needs_cert}, "_fresh_preview": check and fresh_node},
         "tasks": tasks + [{"name": "Write down the results",
                            "ansible.builtin.copy": {"content": record, "dest": str(result), "mode": "0600"},
                            "check_mode": False}],
@@ -178,6 +182,32 @@ def test_a_dry_run_with_the_certs_there_previews_owning_them_and_changes_nothing
     assert {p: _owned(p) for p in before} == before, out
 
 
+@pytest.mark.parametrize("check", [True, False], ids=["dry-run", "apply"])
+@pytest.mark.parametrize("certs", [False, True], ids=["no-certs", "operators-own-certs"])
+def test_byo_proxy_or_acme_runs_no_tls_task_and_leaves_tls_as_it_is(tmp_path, check, certs):
+    """With the resolver answering `no` (byo_proxy or acme: TLS ends at the operator's proxy or Caddy), all four TLS
+    tasks of each service are skipped, in a dry-run and in an apply, with no certs and with an operator's own files
+    in tls/ (0600, the runner's), and those files keep their owner and mode. Guards an owner gate (or a note) that
+    loses its `_needs_cert` term: the probe is skipped there, so the dry-run fails evaluating `<probe>.stat`, an apply
+    with no certs fails "is absent, cannot continue", and an apply with the operator's certs gives them to uid 1001."""
+    _tls_dirs(tmp_path)
+    before = {}
+    if certs:
+        for svc, spec in SERVICES.items():
+            for name in (spec["key"], spec["crt"]):
+                path = tmp_path / svc / "tls" / name
+                path.write_text("the operator's own\n", encoding="utf-8")
+                os.chmod(str(path), 0o600)
+                before[str(path)] = _owned(str(path))
+    listing = {svc: sorted(os.listdir(str(tmp_path / svc / "tls"))) for svc in SERVICES}
+    rc, out, res = _run(tmp_path, check=check, needs_cert="no")
+    assert rc == 0 and res, out
+    ran = sorted(k for k, v in res.items() if not _skipped(v))
+    assert ran == [], (ran, out)
+    assert {svc: sorted(os.listdir(str(tmp_path / svc / "tls"))) for svc in SERVICES} == listing, out
+    assert {p: _owned(p) for p in before} == before, out
+
+
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0 or not shutil.which("openssl"),
                     reason="the apply gives the certs to uid 1001 (needs root) and makes them with openssl")
 def test_an_apply_makes_each_cert_owns_it_and_a_second_apply_changes_nothing(tmp_path):
@@ -198,3 +228,13 @@ def test_an_apply_makes_each_cert_owns_it_and_a_second_apply_changes_nothing(tmp
     assert rc == 0 and again, out
     changed = sorted(k for k, v in again.items() if v.get("changed"))
     assert changed == [], (changed, out)
+
+
+def test_the_rows_that_need_root_run_in_the_gate_as_root():
+    """The apply row needs root and is skipped elsewhere, and the public CI runs the suite as uid 1001, so the one
+    row that proves an apply owns the certs it makes ran nowhere but a builder's root run. tests/validate.sh's
+    as-root step runs the files that need root and fails `--strict` on any skip; it must name this one."""
+    with open(os.path.join(ROOT, "tests", "validate.sh"), encoding="utf-8") as fh:
+        text = fh.read()
+    step = text.split("step canon-drop-as-root", 1)[1].split("\n  fi\n", 1)[0]
+    assert "tests/integration/test_tls_owner_dry_run.py" in step, step

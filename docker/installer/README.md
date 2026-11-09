@@ -39,7 +39,10 @@ installer carries only the fleet-independent control-plane base (sops/general/do
 > **`check` on a brand-new node** is a partial preview, and says so: `--check` does not create the canonical or
 > the certificates, so the steps that depend on them are skipped (a cert a service enabled later has not had made
 > yet is skipped the same way, on any node, and said so where it is). Everything else is previewed, and it still fails
-> on a real precondition you have not met — which is the point of running it before `init`. The onboard-gui age key
+> on a real precondition you have not met — which is the point of running it before `init`. (One failure is not a
+> precondition: on a node applied before, an unarmed `check` that first enables the API or onboard-gui can fail at its
+> content clone, "detected dubious ownership", because the clone's git config is made by a step `--check` skips. The
+> apply goes through.) The onboard-gui age key
 > is such a precondition once you name that service: a host gesture the operator makes once (the G9 guard fails the
 > deploy closed until the key exists — the control key copied to `${KONTROLL_STORAGE_ROOT}/onboard-gui/age.key`,
 > owned `1001:1001`, mode `0600`; docs/SETUP.md §6 has the command).

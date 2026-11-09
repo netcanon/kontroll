@@ -322,7 +322,8 @@
       # The flag is deliberately NARROW — check mode AND no canonical yet. On an already-provisioned box it is
       # false, so the dry-run keeps FULL fidelity exactly where fidelity is worth something: previewing a change
       # to a system that already holds state. The only thing given up is previewing artifact-dependent steps on
-      # a node where those artifacts provably do not exist, which no dry-run could have shown anyway.
+      # a node where those artifacts provably do not exist, which no dry-run could have shown anyway. (The TLS
+      # owner tasks gate on their own cert probes instead: "no canonical" never meant "no cert", I-27.)
       ansible.builtin.set_fact:
         _fresh_preview: "{{ ansible_check_mode and not _canonical_head.stat.exists }}"
 
@@ -335,8 +336,8 @@
           here. Steps that clone from the canonical are SKIPPED below: --check does not create the canonical, so
           they have nothing to act on and cannot be previewed. Nor does it make the TLS certs, so owning them is
           skipped too, and each says so where it is. Everything else IS previewed. Run the apply
-          (`kontroll-installer.sh init`) to create them; from then on `check` previews the whole play, but for a
-          cert a service enabled later has not had made yet, which is said where it is skipped.
+          (`kontroll-installer.sh init`) to create them; from then on `check` runs the clone steps, and owning a
+          cert is skipped only for a service enabled later whose cert is not made yet, said where it is skipped.
       when: _fresh_preview | bool
 
     - name: Derive the per-store dirs from the validated root (today-exact defaults — behaviour-preserving)
@@ -1022,7 +1023,8 @@
           # The owner task below needs to know whether the cert was there, not whether the node is new: a node with
           # a canonical that first enables the API in self_signed mode has no cert and no `_fresh_preview`, and its
           # dry-run failed on owning the cert the apply would have made (I-27). Before the generator, so an apply
-          # sees "absent" too and the owner task's gate cannot stand in for the apply.
+          # reads "absent" too: the gate's check-mode term, not the probe, is what keeps an apply owning the cert it
+          # has just made.
           when: _needs_cert.stdout == "yes"
           ansible.builtin.stat:
             path: "{{ kontroll_api_dir }}/tls/api.crt"
