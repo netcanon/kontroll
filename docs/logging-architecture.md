@@ -157,7 +157,14 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   (`${XDG_STATE_HOME:-~/.local/state}/kontroll/runs`), via an `exec`-redirect (no pipe-subshell
   exit-code bug). Sourced fail-soft by `backup/update/state-snapshot/state-restore` — each
   gains a persistent "what ran, when" trail (G4). Operator-owned (these run as the operator,
-  not the uid-1001 runner).
+  not the uid-1001 runner). Vector binds the default directory, `~/.local/state/kontroll/runs` under
+  `KONTROLL_OPERATOR_HOME`, read-only; a run-log a script writes elsewhere (`XDG_STATE_HOME` or
+  `KONTROLL_RUN_LOG_DIR` set) is kept but not shipped. That directory is made, as the operator's, before any `up`
+  that binds it: by the launchers (`scripts/kontroll.sh`, `scripts/kontroll-installer.sh`) on the host, whose
+  `mkdir -p` follows the operator's umask (0755 at the usual 022), and by deploy-stack on a host deploy, at 0755.
+  Docker otherwise made it and each missing parent root's (I-23). Vector reads it through the bind, so it needs
+  `runs` and the logs readable by others, not the parents; at a umask of 077 neither is, since run-log.sh's files
+  follow the umask too.
 
 ### Layer 1 — Collection: one agent tails everything  🟡 built (`feat/logging-vector`)
 - **Vector** (vector.dev) — the collector, **DECIDED 2026-06-16** (was Alloy; the dual-purpose logging

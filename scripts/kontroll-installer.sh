@@ -31,9 +31,15 @@ export KONTROLL_OPERATOR_UID;  KONTROLL_OPERATOR_UID="$(id -u)"
 export KONTROLL_OPERATOR_GID;  KONTROLL_OPERATOR_GID="$(id -g)"
 export KONTROLL_OPERATOR_HOME="$HOME"
 
-# The :rw host binds must EXIST as operator-owned dirs before docker mounts them (a missing bind source is
-# auto-created root-owned, which would then block the operator). age + ssh = where bootstrap/fresh-init mint keys.
+# Every host bind under the operator's home must EXIST as the operator's before docker mounts it: Docker makes a
+# missing bind source, and each missing parent, root-owned, which then blocks the operator. age + ssh = where
+# bootstrap/fresh-init mint keys; .local/state/kontroll/runs = the operator scripts' run-logs, which Vector binds
+# read-only (scripts/lib/run-log.sh): unmade, the first `up` with Vector left ~/.local root's (I-23). The run-log
+# one is fail-soft, as run-log.sh is: a directory above it that is not the operator's turns the run-logs off, and
+# must not stop a verb (`shell` among them, the escape hatch).
 mkdir -p "$HOME/.config/sops/age" "$HOME/.ssh" "$HOME/.config/semaphore"
+mkdir -p "$HOME/.local/state/kontroll/runs" 2>/dev/null || echo "kontroll: cannot make ~/.local/state/kontroll/runs" \
+  "- a directory above it is not yours (docs/troubleshooting.md section 4); the run-logs are off until it is." >&2
 chmod 0700 "$HOME/.config/sops/age" "$HOME/.ssh" 2>/dev/null || true
 
 # The C10 canonical group (gid 1001): the in-container deploy (KONTROLL_IN_CONTAINER=1) SKIPS provisioning it, so
