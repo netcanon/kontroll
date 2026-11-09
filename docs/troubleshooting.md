@@ -16,7 +16,7 @@ the dashboard panels are kept in sync on purpose.
 | Surface | `source` | `service` | Notes |
 |---|---|---|---|
 | Container stdout/stderr (every stack service) | `internal` | the **container name**¹ (`vector`, `loki`, `semaphore`, `kontroll-api`, …) | from the Docker source |
-| Host journald (systemd) | `internal` | the **unit**² (`docker.service`, `sshd.service`, …), else `host` | persistent journal |
+| Host journald (systemd) | `internal` | the **unit**² (`docker.service`, `sshd.service`, …), else `host` | the persistent journal, else the volatile one³ |
 | API audit (who/when/what on the API) | `internal` | `api-audit` | kept **90d**; never the credential |
 | GUI audit (onboard-GUI actions) | `internal` | `gui-audit` | kept **90d** |
 | Ansible run-log (playbook runs) | `internal` | `ansible` | carries the `run_id` of the run |
@@ -33,6 +33,11 @@ excludes the prefix (I-1), and the deploy's own output carries what it prints.
 capability methods fold the same way. The full name stays in the body — pick one with
 `{source="internal", service="services-init"} | json | container_name="services-init-run-<hash>"` or
 `… | json | _SYSTEMD_UNIT="wg-quick@wg1.service"`.
+³ deploy-stack binds `/var/log/journal` where the control node has it, else `/run/log/journal`, and its log says
+which ("Vector reads the host journal at …"). A volatile journal holds the current boot only. After the control node
+first keeps a persistent journal (roles/logging_journald_remote sets `Storage=persistent`), re-run deploy-stack so
+Vector reads it; a node whose journald is volatile but which still has an old `/var/log/journal` sets
+`kontroll_journal_dir: /run/log/journal`.
 
 ## 2. Common LogQL queries (Grafana → Explore → Loki, or `logcli`)
 

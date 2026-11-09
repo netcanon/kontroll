@@ -78,6 +78,11 @@ export ANSIBLE_NOCOLOR=1
 # local-canonical.yml takes the caller's uid, and a GitHub-hosted runner's is 1001, the network service's uid, which
 # it refuses as an operator (Q-6). A fresh node's operator stands in; in check mode nothing is chowned to it.
 export KONTROLL_OPERATOR_USER=fresh-operator KONTROLL_OPERATOR_UID=1000 KONTROLL_OPERATOR_GID=1000
+# The launchers also read the host's journal directory, which the installer container cannot see (I-25); this host's
+# own answer stands in, as they would give it.
+if [ -d /var/log/journal ]; then KONTROLL_HOST_JOURNAL_DIR=/var/log/journal
+else KONTROLL_HOST_JOURNAL_DIR=/run/log/journal; fi
+export KONTROLL_HOST_JOURNAL_DIR
 
 git -C "$here" archive HEAD | tar -x -C "$tmp/tree"
 tree="$tmp/tree"

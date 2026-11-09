@@ -26,7 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 ALL = ["semaphore", "homepage", "prometheus", "grafana", "loki", "vector", "api", "onboard-gui"]
 ENV = ("HOME", "SOPS_AGE_KEY_FILE", "KONTROLL_IN_CONTAINER", "ANSIBLE_COLLECTIONS_PATH", "KONTROLL_OPERATOR_USER",
        "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID", "TMPDIR", "PYTHONDONTWRITEBYTECODE", "ANSIBLE_NOCOLOR",
-       "ANSIBLE_FORCE_COLOR", "ANSIBLE_CONFIG")
+       "ANSIBLE_FORCE_COLOR", "ANSIBLE_CONFIG", "KONTROLL_HOST_JOURNAL_DIR")
 
 # The stub kontroll-init: records how it was run, writes the key and instance/.sops.yaml as the real one does, and
 # ends with the real one's last line; FAKE_MODE leaves one of the three out.
@@ -267,7 +267,7 @@ def _run(tmp_path, mode="", extra_env=None):
                FAKE_LOG=str(log), FAKE_MODE=mode)
     env.pop("ANSIBLE_COLLECTIONS_PATH", None)
     for k in ("KONTROLL_FRESH_KEEP", "PYTHONDONTWRITEBYTECODE", "ANSIBLE_NOCOLOR", "KONTROLL_OPERATOR_USER",
-              "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID"):
+              "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID", "KONTROLL_HOST_JOURNAL_DIR"):
         env.pop(k, None)
     env.update(extra_env or {})
     r = subprocess.run(["bash", str(repo / "tests" / "fresh-node-check.sh")], cwd=str(repo), env=env,
@@ -354,6 +354,24 @@ def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_f
         assert e["TMPDIR"].startswith(inside) and e["TMPDIR"].endswith("/tmp"), c
         assert e["PYTHONDONTWRITEBYTECODE"] == "1" and e["ANSIBLE_NOCOLOR"] == "1", c
         assert e["ANSIBLE_CONFIG"] is None and e["ANSIBLE_FORCE_COLOR"] is None, c
+
+
+@pytest.mark.parametrize("caller", [None, "/elsewhere"])
+def test_every_play_gets_this_hosts_journal_directory_as_the_launchers_give_it(tmp_path, caller):
+    """Every `ansible-playbook` runs with KONTROLL_HOST_JOURNAL_DIR exported as this host's own answer, the one the
+    launchers give (`/var/log/journal` when that is a directory, else `/run/log/journal`), whether the caller
+    exported none or another value. Guards the deploy passes, which run with KONTROLL_IN_CONTAINER=1 as the installer
+    does: there deploy-stack.yml takes the host journal directory from this variable alone (the container cannot see
+    the host's /var/log), so without the export every pass took the NOT KNOWN path, which no launcher run takes
+    (I-25's mutant fresh-node-export-dropped survived every row); and a caller's value must not stand in for the
+    host's answer."""
+    want = "/var/log/journal" if os.path.isdir("/var/log/journal") else "/run/log/journal"
+    r, calls, p = _run(tmp_path, extra_env={"KONTROLL_HOST_JOURNAL_DIR": caller} if caller else None)
+    assert r.returncode == 0, r
+    plays = _plays(calls)
+    assert len(plays) == 8, calls
+    for c in plays:
+        assert c["env"]["KONTROLL_HOST_JOURNAL_DIR"] == want, c
 
 
 def test_every_play_runs_in_a_repository_on_main_holding_heads_tree(tmp_path):

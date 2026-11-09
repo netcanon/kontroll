@@ -11,6 +11,31 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): Vector binds the host journal the host has, and makes none (I-25, 2026-11-08)
+
+`docker/services/vector.yaml` bound `/var/log/journal` from the host. On a control node whose journald is volatile
+that path is absent: the first `up` made Docker create it (root:root 0755), and journald's default `Storage=auto` reads
+that directory as "persist" from its next start, so a deploy changed a host setting. Vector meanwhile read the empty
+directory, and its `/run/log/journal` bind was read by no source.
+
+- **Fixed.** Vector's one journal mount is `${KONTROLL_JOURNAL_DIR:-/run/log/journal}`, at the directory its journald
+  source reads. deploy-stack chooses the value and renders it into `docker/.env`: `kontroll_journal_dir` when the
+  inventory sets it, else the host's own answer, a `stat` of `/var/log/journal` on the host path and, in the installer
+  container (which cannot see the host's `/var/log`), `KONTROLL_HOST_JOURNAL_DIR`, which both launchers now read on
+  the host and `installer.yaml` passes in. With neither it binds `/run/log/journal`, which makes nothing new, and says
+  NOT KNOWN; any value but the two directories journald writes is refused. The log says which ("Vector reads the host
+  journal at …"). `KONTROLL_JOURNAL_DIR` joins the reserved platform-core names (`scripts/gen-secret-env.py`), so a
+  module's `secret_env_map` cannot shadow it. A node on which the old bind already made `/var/log/journal` keeps its
+  persistent journal; removing it is the operator's call.
+- **Tests.** `integration/test_journal_dir_choice.py` runs the four tasks from the playbook with ansible-playbook, the
+  probe pointed at a stand-in path: a directory, a symlink to one, a file and nothing, on the host path and in the
+  container, with and without a launcher's value and an override, in a dry-run and an apply; and the refusals.
+  `unit/test_installer_journal_dir.py` runs both launchers with a stand-in docker: each hands it this host's answer,
+  not the shell's. `unit/test_compose_logging.py` holds the mount to the variable, its default and the source's
+  directory, the `.env` line to the choice, and the read-only check to the mount, now that its source is a variable.
+- **Docs.** `docs/logging-architecture.md` (Layer 1), `docs/troubleshooting.md` (§1, note 3), SECURITY.md C12, the
+  `logging_journald_remote` role (re-run deploy-stack after it first makes the journal persistent).
+
 ### fix(scripts): the host floor makes the storage root 0711 before the installer can (I-24, 2026-11-08)
 
 deploy-stack makes a missing storage root (`kontroll_storage_root`) root's 0711 (passable, listed and written by

@@ -60,6 +60,7 @@ RESERVED_PLATFORM_CORE_ENV = frozenset({
     "KONTROLL_OPERATOR_HOME", "KONTROLL_STORAGE_ROOT", "KONTROLL_LOGS_DIR", "KONTROLL_BACKUPS_DIR",
     "KONTROLL_API_AUDIT_DIR", "KONTROLL_GUI_AUDIT_DIR", "KONTROLL_ANSIBLE_LOG_DIR",
     "KONTROLL_JOURNAL_GID",   # the host systemd-journal GID (deploy-stack getent) for non-root Vector's group_add
+    "KONTROLL_JOURNAL_DIR",   # the host journal directory Vector binds (deploy-stack's choice, I-25)
     "GUI_USER", "GUI_PASSWORD", "GUI_TLS_CERT", "GUI_TLS_KEY",
     "KONTROLL_API_UVICORN_EXTRA", "KONTROLL_API_TOKEN", "KONTROLL_STAGE_PUSHES", "KONTROLL_CANONICAL_MODE",
     "KONTROLL_COMMIT_TRAILER",   # the one attribution trailer on machine-made commits (gitio.commit_message_args)

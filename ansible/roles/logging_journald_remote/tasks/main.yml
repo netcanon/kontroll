@@ -1,7 +1,8 @@
 ---
 # Enable persistent systemd-journald on the target host (so the journal survives reboots and Vector reads a
 # complete journal) and OPTIONALLY ship it to the collector via systemd-journal-upload. The control-VM-LOCAL
-# journal needs NO wiring (Vector bind-mounts /var/log/journal directly — docker/services/vector.yaml); this
+# journal needs NO wiring (Vector bind-mounts the host's journal directly — docker/services/vector.yaml; deploy-stack
+# binds /var/log/journal once it exists, so a deploy after this role's first run picks it up, I-25); this
 # role guarantees persistence everywhere + handles the REMOTE-host upload (opt-in; see README + the access
 # chain below).
 #
