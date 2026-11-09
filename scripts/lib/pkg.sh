@@ -12,7 +12,7 @@
 # adding network-using, distro-branching logic here does not weaken the BRICK-1 invariant.
 #
 # POSIX sh (no bashisms) so it sources cleanly under sh or bash. Sets PKG_MGR; provides pkg_refresh / pkg_install /
-# svc_enable_now / arch_deb.
+# svc_enable_now / compose_ensure / arch_deb.
 
 # Detect the system package manager → PKG_MGR (apt|dnf|zypper|pacman|unknown). dnf is preferred over its yum alias.
 pkg_detect() {
@@ -62,6 +62,33 @@ svc_enable_now() {
   else
     echo "    no systemctl/rc-update found — start '$_svc' via your init system." >&2
   fi
+}
+
+# compose_ensure — make `docker compose` answer, since the stack and the installer run in compose (I-21). Asked
+# first, so a host whose compose already answers installs nothing. A host with the distribution's Docker (docker.io)
+# has no docker-compose-plugin candidate, since that package is in Docker's own repository; installing it
+# unconditionally printed apt's "has no installation candidate", and its `|| true` hid the case where compose was
+# missing. On apt it installs whichever compose v2 package the sources offer: Docker's docker-compose-plugin, else
+# the distribution's docker-compose-v2 (Ubuntu's name). It asks compose again after each install. Returns 1, saying
+# so and naming both packages, when compose still does not answer; the caller decides what that costs.
+compose_ensure() {
+  docker compose version >/dev/null 2>&1 && return 0
+  [ -n "${PKG_MGR:-}" ] || PKG_MGR="$(pkg_detect)"
+  if [ "$PKG_MGR" = apt ]; then
+    for _pkg in docker-compose-plugin docker-compose-v2; do
+      # `Candidate: (none)` or no entry at all: the sources do not carry it, so apt is not asked (it would print E:).
+      # No pipe into `grep -q`: under the caller's pipefail, a SIGPIPE would read as no candidate.
+      _policy="$(apt-cache policy "$_pkg" 2>/dev/null || true)"
+      case "$_policy" in *"Candidate: (none)"*|"") continue ;; *"Candidate: "*) ;; *) continue ;; esac
+      echo "    'docker compose' does not answer: installing $_pkg…"
+      pkg_install "$_pkg" && docker compose version >/dev/null 2>&1 && return 0
+    done
+  fi
+  echo "    ERROR: Docker is installed but 'docker compose' does not answer, and no compose v2 package could be" >&2
+  echo "    installed from this host's package sources. Install the distribution's compose v2 package" >&2
+  echo "    (docker-compose-v2 on Ubuntu) or docker-compose-plugin from Docker's own repository" >&2
+  echo "    (https://docs.docker.com/engine/install/), then re-run this script." >&2
+  return 1
 }
 
 # arch_deb — the Docker/sops release naming for this machine's architecture, derived from `uname -m` (portable;

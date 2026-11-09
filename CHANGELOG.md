@@ -11,6 +11,35 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): install-prereqs asks compose before installing a compose package, and fails when none can be (I-21, 2026-11-09)
+
+With Docker already installed (a GitHub-hosted runner; a host with the distribution's `docker.io`),
+install-prereqs.sh ran `pkg_install docker-compose-plugin` under `|| true`. That package is in Docker's own
+repository, so apt printed "E: Package 'docker-compose-plugin' has no installation candidate". Where compose was
+there, that read as a failure; where it was not (the distribution's Docker alone), the `|| true` hid the failed
+install, the script said "Done", and compose stayed missing until the installer failed later. The T34 smoke's fourth
+run found it.
+
+- **Fixed.** `scripts/lib/pkg.sh` gains `compose_ensure`. It asks `docker compose version` first and installs nothing
+  when compose answers. Otherwise, on apt, it installs whichever compose v2 package the sources offer: Docker's
+  `docker-compose-plugin`, else the distribution's `docker-compose-v2`. A package with no candidate is not asked
+  for, so apt prints no error, and compose is asked again after each install. When compose still does not answer,
+  it says so, naming both packages and Docker's repository. install-prereqs.sh calls it after whichever Docker path
+  ran (already there, Docker's apt repository, or get.docker.com), still installs the rest of the floor, and then
+  exits 1 before "Done", saying why.
+- **Tests.** The new `unit/test_compose_ensure.py` sources pkg.sh under `sh` with stand-in `docker`, `apt-cache` and
+  `apt-get` that record their calls:
+  - a host whose compose answers asks apt nothing;
+  - the distribution's Docker gets `docker-compose-v2`, and the plugin is never asked for;
+  - Docker's repository gets the plugin first;
+  - a `Candidate: (none)` is skipped;
+  - no package refuses by name;
+  - an install that leaves compose silent is not taken for compose;
+  - dnf, zypper and pacman refuse by name and ask apt nothing.
+
+  Two rows hold install-prereqs.sh's call and its exit before "Done".
+- **Docs.** `docs/install-from-scratch.md` (the compose row).
+
 ### fix(ansible): docker_host's container manifest is no longer printed by a dry-run's diff (I-13, 2026-11-09)
 
 Every class's capture write and its read carry `no_log: true`, because a capture is the device's configuration and

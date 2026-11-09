@@ -69,8 +69,8 @@ pkg_install git tar curl
 
 echo "==> Docker CE + the compose plugin (the stack — and the installer — run in compose)…"
 if command -v docker >/dev/null 2>&1; then
-  # Docker present — ensure the apt compose plugin too (older apt installs predate it; the other PMs' Docker ships it).
-  { [ "$PKG_MGR" = apt ] && pkg_install docker-compose-plugin; } || true
+  # Docker present: install no engine over it. Compose is asked for below, whichever way Docker came.
+  echo "    Docker is already installed: $(docker --version 2>/dev/null || echo 'its version did not answer')"
 elif [ "$PKG_MGR" = apt ]; then
   # The apt deb822 path — keyring + repo file MUST match docker/installer/Dockerfile + deploy-stack.yml EXACTLY
   # (docker.asc + a deb822 .sources) — apt errors "Conflicting values for Signed-By" if two seams disagree. The
@@ -96,6 +96,12 @@ else
   echo "    via https://get.docker.com (the official cross-distro Docker installer)…"
   curl -fsSL https://get.docker.com | sh
 fi
+
+# The stack and the installer run in compose, so `docker compose` must answer before this floor is done (I-21). Asked
+# first, so a host whose compose answers installs nothing; else the compose v2 package its sources offer is installed.
+# When neither can be, the rest of the floor is still installed and the script exits 1 at the end, naming the cause.
+COMPOSE_OK=1
+compose_ensure || COMPOSE_OK=0
 
 echo "==> Enabling + starting the Docker service…"
 svc_enable_now docker
@@ -158,6 +164,13 @@ if [ "$WITH_HOST_ANSIBLE" -eq 1 ]; then
     "ansible : $(ansible --version 2>/dev/null | head -1 || echo MISSING)" \
     "sops    : $(sops --version 2>/dev/null | head -1 || echo MISSING)" \
     "age     : $(age --version 2>/dev/null || echo MISSING)"
+fi
+if [ "$COMPOSE_OK" -eq 0 ]; then
+  echo >&2
+  echo "==> NOT done: 'docker compose' does not answer, and the stack and the installer run in compose. Install the" >&2
+  echo "    distribution's compose v2 package (docker-compose-v2 on Ubuntu) or docker-compose-plugin from Docker's own" >&2
+  echo "    repository (https://docs.docker.com/engine/install/), then re-run: sudo bash scripts/install-prereqs.sh" >&2
+  exit 1
 fi
 cat <<'NEXT'
 
