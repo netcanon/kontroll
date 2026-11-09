@@ -540,7 +540,10 @@ NOT_A_FAST_FORWARD = ("the canonical (%s) has commit(s) your worktree (%s) does 
                       "them. That is normal once propose-then-promote is in use: a promote advances canonical "
                       "`main` directly. Bring the worktree forward first — `git -C %s fetch local && git -C %s "
                       "rebase local/main` — then run again. Nothing was packed and the canonical is untouched.")
-_LAND_SECONDS = 600          # a pack of the whole shipped tree takes a second; this is the bound, not the budget
+SHALLOW = ("the worktree %s is a shallow clone (made by `git clone --depth …`), and %s. The canonical takes a commit "
+           "only with every commit under it. Fetch the rest of the history — `git -C %s fetch --unshallow` — then "
+           "run again. Nothing was packed and the canonical is untouched.")
+_LAND_SECONDS = 600         # a pack of the whole shipped tree takes a second; this is the bound, not the budget
 
 
 def _the_gate():
@@ -558,11 +561,38 @@ def _the_gate():
         raise GateCouldNotRun("this checkout has no scripts/kontroll-promote.py to judge the tree with") from None
 
 
-def _wt(worktree, argv, stdin=None, timeout=60):
+def _wt(worktree, argv, stdin=None, timeout=60, env=None):
     """Plain git in the CALLER'S OWN repository — the worktree a landing takes its commit from. Not the seam: the
     seam is for the canonical, which somebody else writes; this repository is the caller's, and git runs in it as
-    it does for the caller's own `git commit`. Returns the completed process (stdout and stderr captured)."""
-    return subprocess.run(["git", "-C", worktree] + list(argv), input=stdin, capture_output=True, timeout=timeout)
+    it does for the caller's own `git commit`. `env` adds variables to the caller's environment. Returns the
+    completed process (stdout and stderr captured)."""
+    return subprocess.run(["git", "-C", worktree] + list(argv), input=stdin, capture_output=True, timeout=timeout,
+                          env=dict(os.environ, **env) if env else None)
+
+
+def _shallow(worktree):
+    """True when the worktree is a shallow clone (`git rev-parse --is-shallow-repository`): its history stops at
+    commits whose parents were never fetched. False when git cannot say; the canonical's own read-back after the
+    pack is received still refuses a commit that is not whole there."""
+    try:
+        p = _wt(worktree, ["rev-parse", "--is-shallow-repository"], timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0 and p.stdout.strip() == b"true"
+
+
+def _whole_here(worktree, oid, base):
+    """Whether the worktree holds every object `oid` names and `base` does not, each commit's parents read as the
+    commit records them: the check the canonical makes after the pack is received (`_land_in_canonical`), made here
+    before anything is packed. The worktree's shallow list is set aside (GIT_SHALLOW_FILE, as the seam sets it for
+    the canonical), so a commit a `--depth` clone cut off from its parents is short here as the canonical would
+    find it. No lazy fetch (GIT_NO_LAZY_FETCH, git 2.45 and later): a landing uses no transport."""
+    argv = ["rev-list", "--objects", "--quiet", oid] + (["^" + base] if base else [])
+    try:
+        p = _wt(worktree, argv, timeout=_LAND_SECONDS, env={"GIT_SHALLOW_FILE": os.devnull, "GIT_NO_LAZY_FETCH": "1"})
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0
 
 
 def _pack(worktree, oid, old):
@@ -654,7 +684,8 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
     way into `refs/heads/main` that is not a promote, and the only way a proposal is made by hand (`target` a
     `refs/heads/proposed/<run id>`, created). Returns `(rc, message)`: 0 landed, or up to date, or (`check`) would
     land; 1 nothing to land as asked (not a repository, no HEAD, the canonical unreadable or its `main` not a
-    branch, not a fast-forward, the ref moved meanwhile, git failed); 2 REFUSED by the gate, or the gate could
+    branch, not a fast-forward, a shallow clone short of history the canonical lacks, the ref moved meanwhile, git
+    failed); 2 REFUSED by the gate, or the gate could
     not run — `skip_gate` is the human's override and nothing automatic passes it. After any rc but 0 the
     worktree keeps its commit, the canonical its refs, and the running stack is as it was.
 
@@ -663,9 +694,13 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
     `refs/heads/main`, read once by its full name in the seam (`canon.read_ref`; None on a first seed; a
     symbolic ref or a non-commit refuses); M must be an ancestor of C IN THE WORKTREE (`merge-base
     --is-ancestor`: rc 1 — a real divergence — and rc 128 — M never fetched — both refuse, with the sentence the
-    play printed before); `gate(C, <the worktree's git dir>, M)` judges C's tree as the promote would judge a
-    proposal's — read object by object from the CALLER'S repository, re-hashed, this checkout's generator over
-    the files — before anything touches the canonical; `check` stops here. Then `_land_in_canonical`.
+    play printed before; in a shallow worktree, with `SHALLOW`, since M may be under C below where the clone
+    stops); a shallow worktree must hold every commit and object under C that M does not name, each commit's
+    parents read as it records them (`_whole_here`), or the pack would be short in the canonical — refused with
+    `SHALLOW`, whose remedy is `git fetch --unshallow`; `gate(C, <the worktree's git dir>, M)` judges C's tree
+    as the promote would judge a proposal's — read object by object from the CALLER'S repository, re-hashed, this
+    checkout's generator over the files — before anything touches the canonical; `check` stops here. Then
+    `_land_in_canonical`.
 
     What this is not: a push. `scripts/update.sh`, `scripts/update-from-bundle.sh`, the operator CLI's onboard
     and the deploy's mirror used to `git push … HEAD:refs/heads/main`, which ran the canonical's `update` hook
@@ -710,7 +745,13 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
         except (OSError, subprocess.SubprocessError):
             behind = -1
         if behind != 0:
+            if _shallow(worktree):                         # main may be under HEAD, below where the clone stops
+                return 1, SHALLOW % (worktree, "whether the canonical's main (%s) is under HEAD cannot be told: "
+                                     "the history between them was never fetched" % main_id, worktree)
             return 1, NOT_A_FAST_FORWARD % (gitdir, worktree, worktree, worktree)
+    if _shallow(worktree) and not _whole_here(worktree, commit_id, main_id):
+        return 1, SHALLOW % (worktree, "commits under HEAD that the canonical %s were never fetched"
+                             % ("does not hold" if main_id else "would need (it has no main yet)"), worktree)
     if not skip_gate:
         try:
             verdict = (gate or _the_gate())(commit_id, wt_gitdir, main_id)

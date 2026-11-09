@@ -18,6 +18,7 @@
 > ```
 > # Get the tree and stand in it — one of:
 > #   a clone:           git clone <repo> kontroll && cd kontroll
+> #                      (all of it: a `--depth` clone cannot seed the canonical; `git fetch --unshallow` mends one)
 > #   a launch kit:      tar xzf kontroll-launch-<version>.tar.gz && cd kontroll-launch-<version>
 > #   a release bundle:  mkdir src && tar xzf kontroll-<version>.tar.gz -C src     # the scripts are inside the bundle
 > #                      sudo bash src/scripts/install-prereqs.sh                  # the next line needs git

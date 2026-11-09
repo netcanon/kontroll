@@ -11,6 +11,29 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): a landing from a shallow clone is refused before the pack, with the remedy (I-20, 2026-11-09)
+
+An operator who cloned with `git clone --depth 1` got, at the first deploy, `kontroll-land: the commit is not whole
+in the canonical after the pack was received`. The cause was right: the canonical holds every commit whole, and the
+pack carried HEAD without the parents the clone never fetched. But nothing said "shallow", or the remedy, and it was
+said only after the canonical had received the pack. A canonical whose `main` was below where the clone stops got the
+not-a-fast-forward advice instead, a rebase, which cannot mend a cut history. The T34 smoke found it.
+
+- **Fixed.** `gitio.land_commit`, the one door every landing goes through (`kontroll-land.py`, `update.sh`,
+  `update-from-bundle.sh`, the deploy's mirror, the operator CLI), asks whether the worktree is shallow. If it is,
+  it checks, before anything is packed and with `--check` too, that the worktree holds every commit and object under
+  HEAD that the canonical's `main` does not, reading each commit's parents as the commit records them (the
+  canonical's own check after the pack, made in the worktree). Where it does not, or where `main` may be below the
+  cut, the landing is refused (exit 1) with a sentence that names the shallow clone and the remedy, `git -C
+  <worktree> fetch --unshallow`. A shallow clone that only adds commits on top of `main` lands as before.
+- **Tests.** `unit/test_land.py`: a `--depth 1` clone into an empty canonical is refused, by the library, by
+  `--check` and by the command, with nothing received; into a canonical whose `main` is below the cut, the same
+  sentence and not the rebase advice; after `fetch --unshallow` it lands whole. A `--depth 1` and a `--depth 2`
+  clone of the canonical's own `main`, with a commit on top, land.
+- **Docs.** `docs/troubleshooting.md` §10 gains the sentence's row (the not-whole row now names a damaged clone);
+  the quickstart in `docs/install-from-scratch.md` says the clone is a whole one, and how to mend a `--depth` one;
+  `kontroll-land.py`'s exit codes; `tests/README.md`.
+
 ### fix(installer): a verb run from a script no longer eats the input of the command after it, when its stdin is no terminal (I-4, 2026-11-09)
 
 `docker compose run` keeps the container's stdin open and reads it. Redeploying a dev box with `ssh <node>
