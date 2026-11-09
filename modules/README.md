@@ -168,6 +168,8 @@ classes and records a **logged skip** for the rest (never a forced empty file);
 its summary play prints a per-host `captured / skipped / FAILED / not-run` summary.
 The raw-SSH, CLI, RouterOS, OPNsense and API backups record a read that answers
 nothing as `FAILED` and never write it, so the last good capture is kept.
+The Proxmox and Docker-host backups, whose scripts print a `### ` header before
+each read, do the same with an answer of the headers alone.
 
 | class | `backup_capable` | capture |
 |---|---|---|

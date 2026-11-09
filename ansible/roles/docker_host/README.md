@@ -20,3 +20,9 @@ SSH (`ansible_user: root`); container ops via `community.docker`. See
 > records a logged skip instead of forcing an empty capture. Set
 > `backup_capable: true` in `host_vars/<host>.yml` to capture a container/stack
 > **manifest** for one host (an inventory, not a full-config restore).
+
+The manifest script prints a `### ` header before each read. An answer of the
+headers alone is no manifest: it is recorded `FAILED`, which fails the run at its
+summary, and nothing is written, so any earlier manifest is kept (I-10). A
+`--check` run never runs the script (`shell` has no check mode) and previews an
+empty capture.

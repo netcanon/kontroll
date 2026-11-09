@@ -11,6 +11,28 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a Proxmox or Docker backup that answered only its headers keeps the last capture (I-10, 2026-11-09)
+
+The Proxmox and Docker-host captures run a script that prints a `### ` header before each read, so their answer was
+never empty, and I-5 below spared them its refusal for that. A Proxmox node that answered none of the reads (no
+`pveversion`, `/etc/network/interfaces` or `/etc/pve`: not a Proxmox node, or one whose cluster filesystem is not
+mounted) still exits 0 with the headers alone, and that was written over the node's last good capture, recorded
+"captured" and committed to the capture history; the run passed. Docker's script failed on its last command first,
+by the order of its reads.
+
+- **Fixed.** Both backups refuse an answer with no line but its headers (and blank lines) before their write, as the
+  other backups refuse an empty one: the summary line says FAILED, naming the reads and nothing of the answer,
+  `kontroll_backup_failed` fails the run at its summary, and the write does not run, so any earlier capture is kept.
+  "Captured" is recorded where the write ran, and only there. `shell` has no check mode: a dry-run's skipped read
+  still previews an empty capture and refuses nothing, and an unreachable host is not refused either.
+- **Tests.** `unit/test_backup_empty_capture_refused.py` holds both backups to the refusal, its place and its message
+  with the other five: their answers are built from the `### ` headers each script echoes, and `shell`'s check-mode
+  skip is the shape both cores register. The coverage row no longer lets a write go unrefused for a header. Two
+  rows of `integration/test_backup_empty_capture_real_run.py` run the Proxmox backup for real against a host with
+  no Proxmox on it (the gate's image): the run fails for that host and the good capture is kept with no commit, and
+  `--check --diff` passes and writes nothing. Where `pveversion`, `/etc/network/interfaces` or `/etc/pve` exists the
+  two rows are skipped.
+
 ### fix(ansible): an unarmed dry-run before the content clone's git configuration is written compares as the apply will (I-33, 2026-11-09)
 
 The deploy's git for a content clone reads one configuration file, `<storage root>/content-clone.gitconfig`, which names
@@ -537,14 +559,14 @@ with a raw-SSH `true` against a seeded good capture: a 0-byte capture, and a gre
   only blank lines before their write. The host's summary line says FAILED, naming the read (the command, the export,
   the file, or the recipe's endpoint) and nothing of its answer; `kontroll_backup_failed` fails the run at its
   summary; and the write does not run, so any earlier capture is kept and the history play commits no change for that
-  host. The other hosts' captures are written and committed as before, and "captured" is recorded where the write ran,
-  and only there. A dry-run refuses nothing it did not read: `raw`, `community.routeros.command` and `uri` have no
-  check mode, and their skipped read (a check-mode skip, with no `skip_reason`) still previews an empty capture;
+  host. The other hosts' captures are written and committed as before, and "captured" is recorded where the write
+  ran, and only there. A dry-run refuses nothing it did not read: `raw`, `community.routeros.command` and `uri` have
+  no check mode, and their skipped read (a check-mode skip, with no `skip_reason`) still previews an empty capture;
   `cli_command`'s `show` and `slurp` read in a dry-run, and are held to their answer there too. An unreachable host,
-  which the play tolerates, is not refused either: it gave no answer, and the summary says it was not run (before, its
-  write failed on the missing output). Not refused: the Docker-host and Proxmox captures, which begin with a header
-  their own script prints, and the rollback copies of the log-shipping and OpenWrt discovery-key roles, where an empty
-  file is the file's own state.
+  which the play tolerates, is not refused either: it gave no answer, and the summary says it was not run (before,
+  its write failed on the missing output). Not refused here: the Docker-host and Proxmox captures, which begin with a
+  header their own script prints (I-10 above refuses an answer of the headers alone), and the rollback copies of the
+  log-shipping and OpenWrt discovery-key roles, where an empty file is the file's own state.
 - **Tests.** `unit/test_backup_empty_capture_refused.py` evaluates each backup's refusal, write and record from the
   role files, each condition held to a boolean, for a good, an empty and a blank answer in a real run and a dry-run,
   and for a skipped read where its module has no check mode: exactly one of the refusal and the write runs, the
@@ -552,12 +574,12 @@ with a raw-SSH `true` against a seeded good capture: a 0-byte capture, and a gre
   recorded where the write ran, a write that changed nothing included. It holds each refusal to the role's one read,
   and spares an unreachable host's. It finds every role task, at any depth under `tasks/`, whose arguments name
   `config_backup_dir` or a fact built from it, and holds each to a refusal or to an exemption whose reason it checks
-  (a header exemption's write is the read's whole output). `unit/test_backend_api_check_mode.py` adds an empty and a
-  blank 200 to its grids. `integration/test_backup_empty_capture_real_run.py` runs `backup-configs.yml` for real
-  against three raw-SSH hosts on a local connection, each with a good capture committed, and an unreachable one: the
-  run fails for the empty and the blank host only, their captures and the unreachable host's are kept byte for byte,
-  and the good host's is written and is the history's only change; a `--check --diff` run passes and writes and
-  commits nothing. Both stamp the run id.
+  (a header exemption's write was the read's whole output, until I-10 above). `unit/test_backend_api_check_mode.py`
+  adds an empty and a blank 200 to its grids. `integration/test_backup_empty_capture_real_run.py` runs
+  `backup-configs.yml` for real against three raw-SSH hosts on a local connection, each with a good capture
+  committed, and an unreachable one: the run fails for the empty and the blank host only, their captures and the
+  unreachable host's are kept byte for byte, and the good host's is written and is the history's only change; a
+  `--check --diff` run passes and writes and commits nothing. Both stamp the run id.
 
 ### fix(ansible): the API backend's dry-run takes a skipped read as not made (I-6, 2026-11-06)
 
