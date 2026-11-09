@@ -11,6 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): inside the installer the deploy uses the storage root it binds, and refuses another (I-26, 2026-11-09)
+
+The installer binds one storage root from the host, at the same path: the one `KONTROLL_STORAGE_ROOT` names in the
+launcher's shell, `/var/lib/kontroll` when it is unset. The deploy took its root from `-e` or the instance's vars
+alone. A root named only there was made in the installer's own filesystem and gone with the container, while the
+stack's binds of it on the host got Docker's `root:root 0755` directories, and the G9 gate stat'd the container's
+path, never the key the operator installed on the host; a root named only in the shell was bound and never used. A
+store with its own knob set outside the root went the same way.
+
+- `docker/services/installer.yaml` passes the root it binds into the container as `KONTROLL_INSTALLER_STORAGE_ROOT`,
+  written as the bind's source is. deploy-stack takes it as the root's default there, so an exported
+  `KONTROLL_STORAGE_ROOT` alone relocates the root and its stores.
+- Inside the installer deploy-stack refuses, before it makes anything under the root, a root other than the bound
+  one (both named, and the `export` that makes them one), and a store set outside it (by its knob, with a mount
+  under the root as the remedy). Off the installer the variable is unset and nothing changes.
+- Docs: docs/SETUP.md (how the root and the stores are set, and through the installer), docs/troubleshooting.md §13
+  (the two refusals), docker/installer/README.md, docker/.env.example, SECURITY.md C8.
+- Tests: `tests/integration/test_installer_storage_root.py` runs the playbook's own storage-root tasks under
+  ansible-playbook with the installer's variable set or not and the operator's `-e`, and holds the refusals' place
+  before anything is made and the installer passing the root as it binds it.
+
 ### fix(tests): a row that reads the tree through git skips, with the reason, outside a checkout (I-51, 2026-11-10)
 
 - **Fixed.** The rows that read the repository through git (the executable bits from the index, the tracked list

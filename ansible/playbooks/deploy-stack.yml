@@ -272,8 +272,14 @@
       # uid-scoped BEFORE `up`, never a Docker-auto-created root:root 0755 hole (the G9 / C8 failure).
       # default(..., true) collapses an explicit-empty value to the safe default (Jinja default() is
       # empty-blind otherwise → an empty -e would derive a host-root path like /loki).
+      # Inside the installer (docker/services/installer.yaml) KONTROLL_INSTALLER_STORAGE_ROOT is the root it binds
+      # from the host at the same path, from the launcher's shell: the default there, so an exported
+      # KONTROLL_STORAGE_ROOT alone relocates the root (I-26). Unset everywhere else.
       ansible.builtin.set_fact:
-        kontroll_storage_root: "{{ kontroll_storage_root | default('/var/lib/kontroll', true) }}"
+        kontroll_storage_root: >-
+          {{ kontroll_storage_root
+             | default(lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') or '/var/lib/kontroll', true) }}
+        _installer_storage_root: "{{ lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') }}"
 
     - name: Fail closed on an unsafe storage root (must be an absolute path, never '/' — C8)
       ansible.builtin.assert:
@@ -281,6 +287,27 @@
           - kontroll_storage_root is match('^/.+')                       # absolute, at least one segment
           - "kontroll_storage_root | regex_replace('/+', '/') != '/'"    # reject '/', '//', '///'
         fail_msg: "KONTROLL_STORAGE_ROOT must be an absolute path other than '/' (got '{{ kontroll_storage_root }}')"
+
+    - name: Refuse a storage root other than the one the installer binds (I-26)
+      # Inside the installer only the root it binds is the host's. A store made under another would be made in the
+      # container's own filesystem and gone with it; the stack's binds of it on the host would get Docker's
+      # root:root 0755 directories, and the G9 gate would stat the container's path, never the key the operator
+      # installs on the host. Before anything is made under the root. Compared as written, a trailing slash and
+      # doubled slashes aside.
+      ansible.builtin.assert:
+        that:
+          - >-
+            (kontroll_storage_root ~ '/') | regex_replace('/+', '/')
+            == (_installer_storage_root ~ '/') | regex_replace('/+', '/')
+        fail_msg: >-
+          kontroll_storage_root is {{ kontroll_storage_root }} (an -e or an instance var), but this run is inside
+          the installer, which binds {{ _installer_storage_root }} from the host: the root KONTROLL_STORAGE_ROOT
+          names in the launcher's shell, /var/lib/kontroll when it is unset. A store made under the other would be
+          made in the installer's own filesystem and gone with it. Name one root: export
+          KONTROLL_STORAGE_ROOT={{ kontroll_storage_root }} before the launcher and drop the other setting, or keep
+          {{ _installer_storage_root }} and drop kontroll_storage_root. Nothing has been made under either.
+        quiet: true
+      when: _installer_storage_root | length > 0
 
     - name: Look at the storage root (a missing one is made root's below, before any store is made in it)
       ansible.builtin.stat:
@@ -373,6 +400,30 @@
         kontroll_gui_dir: "{{ kontroll_storage_root ~ '/onboard-gui' }}"
         kontroll_caddy_dir: "{{ kontroll_storage_root ~ '/caddy' }}"
         kontroll_vector_dir: "{{ kontroll_storage_root ~ '/vector' }}"   # holds the file_tail_ssh read key (S11)
+
+    - name: Refuse a store the installer does not bind, outside its storage root (I-26)
+      # The stores with their own knob may sit on another disk, but inside the installer only the bound root is
+      # the host's: one set outside it would be made in the container's own filesystem, as above. A data disk
+      # mounted under the root serves instead. Before any store is made.
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.value ~ '/') | regex_replace('/+', '/')
+            is match((kontroll_storage_root ~ '/') | regex_replace('/+', '/') | regex_escape)
+        fail_msg: >-
+          {{ item.key }} is {{ item.value }}, outside the storage root {{ kontroll_storage_root }}, and this run is
+          inside the installer, which binds only that root from the host: the store would be made in the
+          installer's own filesystem and gone with it. Mount that disk under the root (at
+          {{ kontroll_storage_root }}/{{ item.value | regex_replace('/+$', '') | basename }}, say) and point
+          {{ item.key }} there, or drop it to keep the store under the root. Nothing has been made there.
+        quiet: true
+      loop: >-
+        {{ {'kontroll_logs_dir': kontroll_logs_dir, 'kontroll_backups_dir': kontroll_backups_dir,
+            'kontroll_api_audit_dir': kontroll_api_audit_dir, 'kontroll_gui_audit_dir': kontroll_gui_audit_dir,
+            'kontroll_ansible_log_dir': kontroll_ansible_log_dir} | dict2items }}
+      loop_control:
+        label: "{{ item.key }}"
+      when: _installer_storage_root | length > 0
 
     - name: Detect whether any class declares the file_tail_ssh log method (gates the custom Vector image + key)
       # file_tail_ssh's Vector `exec` source runs `ssh ... journalctl` to PULL a remote host's journald — the

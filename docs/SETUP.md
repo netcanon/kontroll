@@ -226,6 +226,12 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > preserve today's paths, so leaving them unset changes nothing. deploy-stack **creates each dir uid-scoped, at
 > the mode SECURITY.md C8 gives it, before the stack comes up** (the chown follows the path you set); named
 > volumes (Prometheus TSDB, Grafana, Postgres, Vector buffers) are Docker-managed and not relocated by these knobs.
+> The deploy renders `docker/.env` from Ansible variables, so set them there: `kontroll_storage_root`,
+> `kontroll_logs_dir`, `kontroll_backups_dir` and the rest, in the instance's inventory vars or with `-e`. Through
+> the installer (`scripts/kontroll.sh`, `scripts/kontroll-installer.sh`), which binds only the root its shell
+> names, `export KONTROLL_STORAGE_ROOT=<root>` before the launcher instead: the deploy takes that root, and refuses
+> another one, or a store set outside it (mount a data disk under the root instead), since either would be made in
+> the installer's own filesystem and lost with it ([troubleshooting.md](troubleshooting.md) §13).
 > A root you make yourself (a mount, a directory on another disk) must be a directory of root's that neither its
 > group nor others may write and that others may pass through, with every directory above it passable too —
 > `sudo chown root:root <root>` and `sudo chmod 0711 <root>`; a deploy that brings up `api` or `onboard-gui`

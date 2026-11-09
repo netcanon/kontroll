@@ -66,6 +66,11 @@ services:
       # /var/log). deploy-stack binds Vector's journald read to it; empty without a launcher, and deploy-stack then
       # says NOT KNOWN and binds the volatile journal, which makes no directory journald reads.
       KONTROLL_HOST_JOURNAL_DIR: ${KONTROLL_HOST_JOURNAL_DIR:-}
+      # I-26: the storage root bound below, at the same path, as the launcher's shell names it. deploy-stack takes
+      # it for kontroll_storage_root when nothing else names one, and refuses another root or a store outside it:
+      # either would be made in this container's own filesystem and gone with it, and the stack's binds of it on
+      # the host would get Docker's root:root 0755 directories. Written as the bind's source is, so the two agree.
+      KONTROLL_INSTALLER_STORAGE_ROOT: ${KONTROLL_STORAGE_ROOT:-/var/lib/kontroll}
       # MF-8: ONE in-container age-key path (this container is root ⇒ ~ == /root). community.sops + sops read it;
       # SOPS_AGE_KEY_FILE (the file form), NEVER the literal SOPS_AGE_KEY env (synthesis §5.4).
       SOPS_AGE_KEY_FILE: /root/.config/sops/age/keys.txt

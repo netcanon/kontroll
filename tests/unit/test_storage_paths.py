@@ -105,8 +105,11 @@ def test_storage_sources_are_fail_closed():
 
 def test_deploy_stack_and_env_example_agree_on_root():
     """deploy-stack derives the storage root with the today-exact default AND .env.example documents the same
-    root — a no-override deploy binds + chowns exactly where it does today (behaviour-preserving)."""
+    root — a no-override deploy binds + chowns exactly where it does today (behaviour-preserving). The default is
+    the root the installer binds where the deploy runs inside it (KONTROLL_INSTALLER_STORAGE_ROOT, I-26), and
+    /var/lib/kontroll where that is unset, so a host deploy with no override is unchanged."""
     ds = open(_DEPLOY, encoding="utf-8").read()
-    assert "kontroll_storage_root" in ds and "default('/var/lib/kontroll'" in ds
+    assert "kontroll_storage_root" in ds
+    assert "default(lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') or '/var/lib/kontroll', true)" in ds
     env = open(os.path.join(paths.ROOT, "docker", ".env.example"), encoding="utf-8").read()
     assert "KONTROLL_STORAGE_ROOT=/var/lib/kontroll" in env

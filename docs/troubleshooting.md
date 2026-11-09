@@ -418,6 +418,19 @@ open failed: <type> errno=<n>; no audit row is written until the GUI restarts` o
 the file at all (the audit directory, `KONTROLL_GUI_AUDIT_DIR`, missing or not writable by the GUI). Fix the
 directory, then restart the GUI.
 
+## 13. The deploy refused the storage root, or a store, inside the installer
+
+The installer (`scripts/kontroll.sh`, `scripts/kontroll-installer.sh`) binds one storage root from the host, at the
+same path: the one `KONTROLL_STORAGE_ROOT` names in the launcher's shell, `/var/lib/kontroll` when it is unset. The
+deploy takes that root when nothing else names one, and refuses, before it makes anything under it, a root or a
+store the installer does not bind: made in the installer's own filesystem, it would be gone with the container, and
+the stack would bind Docker's `root:root 0755` directories on the host in its place (I-26).
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `kontroll_storage_root is <a> (an -e or an instance var), but this run is inside the installer, which binds <b> from the host …` | an `-e` or the instance's inventory vars name a root the launcher's shell does not | name one root: `export KONTROLL_STORAGE_ROOT=<a>` before the launcher and drop the other setting, or keep `<b>` and drop `kontroll_storage_root` |
+| `<knob> is <dir>, outside the storage root <root>, and this run is inside the installer …` | a store with its own knob (`kontroll_logs_dir`, `kontroll_backups_dir`, `kontroll_api_audit_dir`, `kontroll_gui_audit_dir`, `kontroll_ansible_log_dir`) is set outside the bound root | mount that disk under the root and point the knob there, or drop the knob to keep the store under the root |
+
 ## See also
 - [../SECURITY.md](../SECURITY.md) **C23** — an error body carries no exception text; the id that finds the details
 - [break-glass.md](break-glass.md) — the break-glass key: the choice at install and the runbook for an instance without one
@@ -425,6 +438,7 @@ directory, then restart the GUI.
 - [../SECURITY.md](../SECURITY.md) **C22** — the request boundary, the refusal that is the repository's own, and a
   fleet line that is not a class key
 - [SETUP.md](SETUP.md) §3 — the fleet file
+- [SETUP.md](SETUP.md) §6 — the storage root and its stores (the installer's refusals: §13 above)
 - [observability/logging-capability-vector.md](observability/logging-capability-vector.md) — the logging capability
 - [../SECURITY.md](../SECURITY.md) **C12** — logs are a secret surface (label hygiene, mgmt-only, at-rest)
 - `dashboards/grafana/dashboards/logs.json` — the same signals as a Grafana pane
