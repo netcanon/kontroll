@@ -117,14 +117,16 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
     echo "SKIP  canon-drop-as-root (this gate is not root and has no sudo that needs no password)"; skip=$((skip+1))
     [ "$STRICT" = "--strict" ] && fail=$((fail+1))
   else
-    echo "      canon-drop-as-root runs $how: it chowns repos and stand-in keys under /tmp, starts git as uid 1001"
+    echo "      canon-drop-as-root runs $how: it chowns repos, stand-in keys and TLS certs under /tmp," \
+         "starts git as uid 1001"
     step canon-drop-as-root 0 bash -c '
       # shellcheck disable=SC2086  # $1 is "env" or "sudo -n env": it must word-split
       out="$($1 PYTEST_ADDOPTS= PATH="$PATH" HOME="$HOME" LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}" \
              PYTHONPATH="${PYTHONPATH-}" PYTHONDONTWRITEBYTECODE=1 \
              "$0" -B -m pytest tests/integration/test_canon_drop.py tests/integration/test_content_clone_as_service.py \
                tests/integration/test_canonical_normalise_as_root.py tests/integration/test_local_canonical_as_root.py \
-               tests/integration/test_g9_age_key_gate_real_stat.py -p no:cacheprovider -rs --color=no 2>&1)"; rc=$?
+               tests/integration/test_g9_age_key_gate_real_stat.py tests/integration/test_tls_owner_dry_run.py \
+               -p no:cacheprovider -rs --color=no 2>&1)"; rc=$?
       printf "%s\n" "$out"
       [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY" "$as_root"
   fi
