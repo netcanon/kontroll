@@ -154,12 +154,13 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   instance state (state-manifest.yml), so operator/GUI additions survive updates + DR.
 - ✅ **Script run-logs** — a shared `scripts/lib/run-log.sh` (`run_log_init <name>`) tees a
   script's stdout/stderr to a timestamped, 30-day-pruned log in an operator-writable dir
-  (`${XDG_STATE_HOME:-~/.local/state}/kontroll/runs`), via an `exec`-redirect (no pipe-subshell
+  (`~/.local/state/kontroll/runs`), via an `exec`-redirect (no pipe-subshell
   exit-code bug). Sourced fail-soft by `backup/update/state-snapshot/state-restore` — each
   gains a persistent "what ran, when" trail (G4). Operator-owned (these run as the operator,
   not the uid-1001 runner). Vector binds the default directory, `~/.local/state/kontroll/runs` under
-  `KONTROLL_OPERATOR_HOME`, read-only; a run-log a script writes elsewhere (`XDG_STATE_HOME` or
-  `KONTROLL_RUN_LOG_DIR` set) is kept but not shipped. That directory is made, as the operator's, before any `up`
+  `KONTROLL_OPERATOR_HOME`, read-only. `XDG_STATE_HOME` is not read: a run-log under it was kept and never
+  shipped (I-29). With `KONTROLL_RUN_LOG_DIR` set a run-log is kept there and not shipped, and the run says so in
+  its first lines. That directory is made, as the operator's, before any `up`
   that binds it: by the launchers (`scripts/kontroll.sh`, `scripts/kontroll-installer.sh`) on the host, whose
   `mkdir -p` follows the operator's umask (0755 at the usual 022), and by deploy-stack on a host deploy, at 0755.
   Docker otherwise made it and each missing parent root's (I-23). Vector reads it through the bind, so it needs

@@ -11,6 +11,22 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): a run-log is written where Vector reads it, whatever XDG_STATE_HOME says (I-29, 2026-11-09)
+
+Vector ships the operator scripts' run-logs from one directory, `<operator home>/.local/state/kontroll/runs`, which
+docker/services/vector.yaml binds read-only and which the launchers and the deploy make. scripts/lib/run-log.sh wrote
+under `${XDG_STATE_HOME:-~/.local/state}`: an operator whose shell sets XDG_STATE_HOME kept every run-log where Vector
+never looks, with no error anywhere, and the internal_scripts stream just stayed empty. Found building I-23.
+
+- **Fixed.** run-log.sh's default is the directory Vector ships, `~/.local/state/kontroll/runs`; XDG_STATE_HOME is no
+  longer read. `KONTROLL_RUN_LOG_DIR` still keeps the run-logs elsewhere, and such a run now says in its first lines,
+  on the console and in the log, that Vector does not read that directory, and which one it ships.
+- **Tests.** The new `unit/test_run_log_dir.py` sources the helper under bash with a scratch home: with XDG_STATE_HOME
+  unset and set elsewhere the log is written where Vector's bind (read from vector.yaml) points and nothing under
+  XDG_STATE_HOME; under KONTROLL_RUN_LOG_DIR the log is kept there and says so, and set to the shipped directory itself
+  it says nothing.
+- **Docs.** `docs/logging-architecture.md` §3 and `scripts/README.md` name the one directory; the helper's header.
+
 ### ci: a stalled release download is given up on, and the download scan reads what runs (I-34, 2026-11-09)
 
 The I-28 helper bounded the tries and not the wait: a mirror that took the connection and sent nothing, or stopped
