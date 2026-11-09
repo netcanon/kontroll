@@ -18,23 +18,31 @@ Vector binds `<operator home>/.local/state/kontroll/runs`, where the operator's 
 directories only, and the storage-chown guard leaves the operator's home to them. On a node no such script had run on
 yet, the first `up` with Vector had Docker make `runs` and each missing parent (`~/.local`, `~/.local/state`,
 `…/kontroll`) root:root, so every later script ran without its run-log ("cannot write … continuing without a
-run-log"), Vector's script source shipped nothing, and the operator's other tools could not write under `~/.local`.
-The I-19 read found it.
+run-log"), Vector's script source shipped nothing, and, where Docker made `~/.local` itself, the operator's other
+tools could not write under it. The I-19 read found it, by reading.
 
-- **Fixed.** Both launchers make the directory with the others, before docker is called. A host deploy
-  (deploy-stack.yml on the control node; inside the installer the operator's home is not mounted) makes it in a task
-  before `up`, as the operator (`KONTROLL_OPERATOR_UID`/`GID`, else `USER`, as the `.env` render does), 0755 so Vector
-  reads it, each parent it creates likewise, and a parent already there untouched. A node Docker already got to: the
-  next deploy gives `runs` back to the operator; docs/troubleshooting.md §4 says how to give back the parents.
+- **Fixed.** Both launchers make the directory with the others, before docker is called, on every verb; that one is
+  fail-soft (a directory above it that is not the operator's turns the run-logs off with a message, and stops no
+  verb). A host deploy (deploy-stack.yml on the control node; inside the installer the operator's home is not
+  mounted) makes it in a task before `up`, as the operator (`KONTROLL_OPERATOR_UID`/`GID`, else `USER`, as the `.env`
+  render does): `runs` 0755, so Vector (uid 10002) reads it through the bind, which needs nothing of the parents;
+  each parent it creates the operator's and 0755 too, for the operator's own tools; a parent already there untouched.
+  A node Docker already got to: the next *host* deploy gives `runs` back. A deploy through the launchers runs in the
+  installer, where the task is skipped, and their `mkdir -p` leaves an existing `runs` as it is: there,
+  docs/troubleshooting.md §4 gives back `runs` and its parents alike.
 - **Tests.** `unit/test_launcher_operator_home_binds.py` reads every bind a service takes from the operator's home in
-  `docker/services/*.yaml` and runs each launcher, with a stand-in docker, in an empty home: each such directory
-  exists when docker is first called, the run-log one and its parents the user's and readable. The new
-  `integration/test_run_log_dir_task.py` runs the deploy's task by ansible-playbook: a fresh home gets the four
-  directories as the operator's at 0755 (as root, for uid 1000), and a second run changes nothing; an operator's
-  0700 `~/.local` keeps its mode; a `runs` Docker made root's is given back and its parents are left (as root); a
-  dry-run makes nothing; inside the installer the task is skipped.
-- **Docs.** docs/logging-architecture.md (the script run-logs: who makes the directory, and that Vector ships the
-  default one only), docs/troubleshooting.md §4, tests/README.md.
+  `docker/services/*.yaml` (the short form in each spelling compose takes, and the long form's `source`), refuses one
+  that names the home another way (`~`, `$HOME`), and runs each launcher, with a stand-in docker, in an empty home,
+  for `init`, `check`, `fresh-init`, `shell` and a playbook: each such directory exists when docker is first called,
+  as the user's, the run-log chain o+rx; with `~/.local` a file the launcher warns and goes on. It also holds the
+  deploy's task before the play's `up`. The new `integration/test_run_log_dir_task.py` runs the deploy's task by
+  ansible-playbook: as a host deploy runs it (no `KONTROLL_OPERATOR_*`: the path from `HOME`, the owner from
+  `USER`) and with the launcher's values; a fresh home gets the four directories as the operator's at 0755 (as
+  root, for uid 1000), and a second run changes nothing; an operator's 0700 `~/.local` keeps its mode; a `runs`
+  Docker made root's is given back and its parents are left (as root); a dry-run reports the directory and makes
+  nothing; inside the installer the task is skipped.
+- **Docs.** docs/logging-architecture.md (the script run-logs: who makes the directory, at which umask, and that
+  Vector ships the default one only), docs/troubleshooting.md §4, tests/README.md.
 
 ### ci: a release download is retried, and every one is checked (I-28, 2026-11-08)
 

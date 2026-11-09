@@ -4,12 +4,16 @@ WHY: Vector binds `<operator home>/.local/state/kontroll/runs` read-only, and Do
 each missing parent root's. On a host deploy (deploy-stack.yml run on the control node, not in the installer, whose
 launcher makes the directory first) nothing made it, so the first `up` with Vector left `~/.local` root's and every
 later operator script ran without its run-log (I-23, 2026-11-08). The task now makes it before `up`, as the operator.
-These rows take that task from the playbook as it is and run it, as deploy-stack.yml runs it (become, the operator's
-identity in KONTROLL_OPERATOR_*), against a scratch home: on a fresh home, a home whose `~/.local` the operator had
-already made with a mode of their own, a home Docker already got to (root only), in a dry-run, and a second time.
+These rows take that task from the playbook as it is and run it, as deploy-stack.yml runs it (become), against a
+scratch home. The operator's identity comes one of two ways, as the task reads it: from KONTROLL_OPERATOR_HOME/UID/GID,
+which the launchers and tests/fresh-node-check.sh export (most rows), or, on a host deploy run by hand where nothing
+exports them, from HOME and USER (the host-deploy row). The homes: a fresh one, one whose `~/.local` the operator had
+already made with a mode of their own, one Docker already got to (root only), a dry-run, and a second run.
 
-The owner is uid 1000 when the suite runs as root (the gate image's case: root makes the directories, and they must
-be the operator's), else the suite's own uid. Needs POSIX and ansible-playbook; without them every row is skipped.
+With KONTROLL_OPERATOR_*, the owner is uid 1000 when the suite runs as root (the gate image's case: root makes the
+directories, and they must be the operator's), else the suite's own uid. The host-deploy row names the operator by
+USER, so as root it takes a non-root account that has a group of its own name, else the suite's own user. Needs POSIX
+and ansible-playbook; without them every row is skipped.
 """
 import json
 import os
@@ -19,6 +23,12 @@ import subprocess
 
 import pytest
 import yaml
+
+try:
+    import grp
+    import pwd
+except ImportError:  # not POSIX: every row is skipped
+    grp = pwd = None
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEPLOY = os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml")
@@ -54,16 +64,41 @@ def _operator():
     return (1000, 1000) if os.geteuid() == 0 else (os.getuid(), os.getgid())
 
 
-def _run(tmp_path, home, check=False, in_container=False):
+def _named_operator():
+    """(name, uid, gid) of an account the host-deploy row can name in USER: one with a group of its own name, as the
+    task's `group: USER` needs; as root a non-root one, so a directory left root's cannot pass for the operator's."""
+    if pwd is None:
+        return None
+    if os.geteuid() != 0:
+        me = pwd.getpwuid(os.getuid())
+        try:
+            return me.pw_name, me.pw_uid, grp.getgrnam(me.pw_name).gr_gid
+        except KeyError:
+            return None
+    for entry in sorted(pwd.getpwall(), key=lambda e: e.pw_uid):
+        if entry.pw_uid == 0:
+            continue
+        try:
+            return entry.pw_name, entry.pw_uid, grp.getgrnam(entry.pw_name).gr_gid
+        except KeyError:
+            continue
+    return None
+
+
+def _run(tmp_path, home, check=False, in_container=False, user=None):
     """Run the task, registered, in a play shaped as deploy-stack.yml's (become, no facts); return (rc, output, the
-    task's result)."""
+    task's result). With `user`, the run is a host deploy by hand: no KONTROLL_OPERATOR_*, HOME the scratch home and
+    USER/LOGNAME `user`; without it, the launcher's KONTROLL_OPERATOR_HOME/UID/GID."""
     task = dict(_the_task(), register="_made")
     result = tmp_path / "result.json"
     play = [{
         "name": "The run-log dir task, as deploy-stack.yml runs it",
         "hosts": "localhost",
         "gather_facts": False,
-        "become": os.geteuid() == 0,
+        # ansible-core takes USER for the user it runs as, so with `user` it would become root by sudo, which the
+        # image lacks. The task's lookups read the controller's environment either way, and as root the module runs
+        # as root without become.
+        "become": os.geteuid() == 0 and user is None,
         "vars": {"stack_services": ["vector"], "in_container": in_container},
         "tasks": [task, {"name": "Write down the result",
                          "ansible.builtin.copy": {"content": "{{ _made | to_json }}", "dest": str(result),
@@ -84,9 +119,12 @@ interpreter_python = auto_silent
     uid, gid = _operator()
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
     env.update(ANSIBLE_CONFIG=str(cfg), ANSIBLE_HOME=str(home_a), ANSIBLE_LOCAL_TEMP=str(home_a / "tmp"),
-               ANSIBLE_NOCOLOR="1", ANSIBLE_DEPRECATION_WARNINGS="0", ANSIBLE_LOCALHOST_WARNING="0",
-               PYTHONDONTWRITEBYTECODE="1", KONTROLL_OPERATOR_HOME=str(home), KONTROLL_OPERATOR_UID=str(uid),
-               KONTROLL_OPERATOR_GID=str(gid))
+               ANSIBLE_REMOTE_TEMP=str(home_a / "rtmp"), ANSIBLE_NOCOLOR="1", ANSIBLE_DEPRECATION_WARNINGS="0",
+               ANSIBLE_LOCALHOST_WARNING="0", PYTHONDONTWRITEBYTECODE="1")
+    if user is None:
+        env.update(KONTROLL_OPERATOR_HOME=str(home), KONTROLL_OPERATOR_UID=str(uid), KONTROLL_OPERATOR_GID=str(gid))
+    else:
+        env.update(HOME=str(home), USER=user, LOGNAME=user)
     argv = ["ansible-playbook", "-i", str(tmp_path / "hosts.yml"), str(tmp_path / "play.yml")]
     p = subprocess.run(argv + (["--check", "--diff"] if check else []), cwd=str(tmp_path), env=env,
                        capture_output=True, text=True, timeout=300)
@@ -101,9 +139,11 @@ def _owned(path):
 
 def test_a_fresh_home_gets_the_run_log_dir_and_its_parents_as_the_operators(tmp_path):
     """On a home with no `~/.local`, the task makes `~/.local`, `~/.local/state`, `…/kontroll` and `…/runs`, each
-    the operator's (uid and gid) and 0755, so the operator's scripts can write their run-logs there and Vector
-    (uid 10002) can read them; and a second run changes nothing. Guards I-23 (Docker made them root's) and the
-    file module's handling of the parents it creates, which this task relies on rather than a task per parent."""
+    the operator's (uid and gid) and 0755: `runs` so the operator's scripts write their run-logs there and Vector
+    (uid 10002) reads them through the bind, which needs `runs` o+rx and nothing of the parents; the parents so the
+    operator's own tools write under `~/.local`. A second run changes nothing. Guards I-23 (Docker made them root's)
+    and the file module's handling of the parents it creates, which this task relies on rather than a task per
+    parent."""
     home = tmp_path / "home"
     home.mkdir()
     rc, out, made = _run(tmp_path, home)
@@ -136,9 +176,9 @@ def test_a_parent_the_operator_already_made_keeps_its_owner_and_mode(tmp_path):
 def test_a_run_log_dir_docker_already_made_is_given_back_and_its_parents_are_left(tmp_path):
     """On a node where Docker got there first (`~/.local` through `runs` all root:root 0755, as an `up` with Vector
     leaves them), the task gives `runs` back to the operator and leaves the parents as they are: the run-logs work
-    again on the next deploy, and the parents are the operator's own repair (docs/troubleshooting.md §4), since the
-    task never takes over directories it did not make. Guards the CHANGELOG's claim that a deploy repairs `runs`,
-    and a fix that would chown the operator's `~/.local` tree on its own."""
+    again on the next host deploy, and the parents are the operator's own repair (docs/troubleshooting.md §4), since
+    the task never takes over directories it did not make. Guards the CHANGELOG's claim that a host deploy repairs
+    `runs`, and a fix that would chown the operator's `~/.local` tree on its own."""
     home = tmp_path / "home"
     home.mkdir()
     path = str(home)
@@ -156,12 +196,15 @@ def test_a_run_log_dir_docker_already_made_is_given_back_and_its_parents_are_lef
 
 
 def test_a_dry_run_reports_the_dir_and_makes_nothing(tmp_path):
-    """`--check --diff` (the mandated dry-run before an apply) reports the directory it would make and makes none of
-    it. Guards the task changing a host in a dry-run."""
+    """`--check --diff` (the mandated dry-run before an apply) reports the directory it would make, `runs` as a
+    directory in the diff, and makes none of it. Guards the task changing a host in a dry-run, and a dry-run that
+    says "changed" without saying what it would make."""
     home = tmp_path / "home"
     home.mkdir()
     rc, out, made = _run(tmp_path, home, check=True)
     assert rc == 0 and made and made.get("changed") is True, out
+    after = (made.get("diff") or {}).get("after") or {}
+    assert after.get("state") == "directory" and str(after.get("path", "")).endswith(RUNS), made.get("diff")
     assert not (home / ".local").exists(), sorted(os.listdir(str(home)))
 
 
@@ -174,3 +217,24 @@ def test_the_task_does_not_run_inside_the_installer(tmp_path):
     rc, out, made = _run(tmp_path, home, in_container=True)
     assert rc == 0 and made and made.get("skipped") is True, out
     assert not (home / ".local").exists()
+
+
+@pytest.mark.skipif(_named_operator() is None, reason="needs an account with a group of its own name")
+def test_a_host_deploy_by_hand_takes_the_home_and_owner_from_its_shell(tmp_path):
+    """With no KONTROLL_OPERATOR_* (deploy-stack.yml run by hand on the control node, where no launcher exported
+    them), the task takes the home from HOME and the owner and group from USER: the four directories are made under
+    the scratch HOME, each that account's and 0755, and a second run changes nothing. Guards the fallbacks the host
+    deploy runs on: without HOME's the task makes `/.local/…` at the filesystem's root (or fails) and the operator's
+    home gets nothing; without USER's the directories are left the deploying root's, I-23's failure again."""
+    name, uid, gid = _named_operator()
+    home = tmp_path / "home"
+    home.mkdir()
+    rc, out, made = _run(tmp_path, home, user=name)
+    assert rc == 0 and made and made.get("changed") is True, out
+    assert str(made.get("path", "")) == os.path.join(str(home), RUNS), made.get("path")
+    path = str(home)
+    for part in RUNS.split("/"):
+        path = os.path.join(path, part)
+        assert _owned(path) == (uid, gid, 0o755), (path, _owned(path), name)
+    rc, out, again = _run(tmp_path, home, user=name)
+    assert rc == 0 and again and again.get("changed") is False, out
