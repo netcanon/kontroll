@@ -11,6 +11,38 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the onboard-gui age-key gate takes only a key file, judged as Docker mounts it (I-22, 2026-11-08)
+
+deploy-stack's G9 gate asked whether `<storage root>/onboard-gui/age.key` existed and whether uid 1001 could read it.
+onboard-gui started without the key (a hand `docker compose up -d`, or a restart after the key was removed) leaves a
+root:root 0755 DIRECTORY there, which exists and is other-readable: the gate passed it, the GUI started with its key
+file a directory (an opaque SOPS failure), and the remedy the gate prints, run against it, installed the key into the
+directory while the gate went on passing. The stat did not follow a link either, so a link to a key uid 1001 cannot
+read passed on the link's own 0777. And "readable" was ownership by uid 1001 or the other-read bit, so a 1001-owned
+key without its owner read bit passed, a root:1001 0640 key the GUI can read was refused, and a root:1001 0604 key it
+cannot read passed. An empty file passed too. The I-19 read found the directory.
+
+- **Fixed.** The gate also requires a regular file that is not empty, and its stat follows a link to the file Docker
+  mounts (a link to nothing is reported missing). The refusal names the case: missing (unchanged); a directory (where
+  Docker's comes from, and `sudo rmdir <path>`, which refuses while anything is inside: move that out first; for a
+  link to a directory, `sudo rm` the link; then the install as before); not a regular file; empty; or not readable by
+  uid 1001. It also says to restart onboard-gui if it is already running: a file bind keeps the file it started with,
+  and a key put back with the same bytes is no change the deploy restarts it for. Readable is the mode bits as the
+  kernel reads them for the GUI's process (uid and gid 1001, no other group; an ACL is not read): the owner bits when
+  uid 1001 owns the key, the group bits when gid 1001 does, else the other bits. The stat computes no checksum and no
+  MIME type: the gate needs none of the key's bytes, and a digest of the private key no longer sits in the registered
+  result.
+- **Tests.** `unit/test_g9_age_key_refusal.py` gains rows for Docker's directory, one uid 1001 owns, a pipe, two empty
+  files, a root:1001 key at 0640 (passes) and 0604 (refused) and a 1001-owned key at 0044 (refused); the directory's
+  and the empty file's wording and remedy, and the restart; the stat's `follow` and no-checksum; and the gate's place,
+  every `when` above it being onboard-gui brought up. The new `integration/test_g9_age_key_gate_real_stat.py` runs the
+  playbook's own stat and assert by ansible-playbook on each shape on disk: a 0644 file, a link to one, a 0600 key uid
+  1001 owns and a root:1001 0640 key pass; a missing path, Docker's directory, a directory a key was installed into, a
+  pipe, an empty file, a 0600 key of another uid, a link to one, a link to nothing, a 1001-owned 0044 key and a
+  root:1001 0604 key are refused in their own words; and the real stat gives every field the unit's hand-written
+  results do. Its rows of uid or gid 1001 need root, and tests/validate.sh's as-root step now runs the file.
+- **Docs.** docs/SETUP.md (the onboard-gui prerequisite), SECURITY.md (the storage-root bullet), tests/README.md.
+
 ### fix(ansible): the run-log directory Vector binds is the operator's before any `up` (I-23, 2026-11-08)
 
 Vector binds `<operator home>/.local/state/kontroll/runs`, where the operator's scripts write their run-logs

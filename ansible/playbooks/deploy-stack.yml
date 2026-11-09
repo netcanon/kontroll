@@ -1069,8 +1069,17 @@
           # root:root 0755 DIRECTORY (breaks the mount + the SOPS load). Refuse to proceed instead — the
           # fail-closed backstop the storage-chown guard keys on for the age.key bind (the parent dir above is
           # already uid-scoped). Only enforced when onboard-gui is actually being brought up.
+          #
+          # `follow`: Docker mounts a link's TARGET, so the target is what is checked. Without it the stat
+          # describes the link itself, whose 0777 mode is other-readable, and a link to a key uid 1001 cannot read
+          # passed (I-22, 2026-11-08). A link to nothing is then reported missing, as it is to the container.
+          # The gate needs the file's type, owner and mode, never its bytes: no checksum (a digest of the private
+          # key would sit in the registered result, and in a verbose run's output), no MIME probe.
           ansible.builtin.stat:
             path: "{{ kontroll_gui_dir }}/age.key"
+            follow: true
+            get_checksum: false
+            get_mime: false
           register: _gui_age_key
           when: "'onboard-gui' in stack_services"
 
@@ -1082,15 +1091,40 @@
           #
           # The readability leg exists because "present" was never the real precondition: the GUI runs as uid 1001
           # and mounts this :ro, so a root-owned 0600 key passes an exists-check and then fails at RUNTIME as an
-          # opaque SOPS decrypt error. Accepts other-read too, so a box already working that way is not newly
-          # broken by this check.
+          # opaque SOPS decrypt error. It reads the mode bits as the kernel reads them for the GUI's process, uid and
+          # gid 1001 with no other group (`user: "1001:1001"` sets none): the owner's read bit when uid 1001 owns the
+          # key, the group's when gid 1001 does, else other's. An ACL is not read (no shipped path writes one on this
+          # key). So a root-owned other-readable key (sloppy, but a box that works that way) and a root:1001 0640 one
+          # pass; a key uid 1001 owns without its owner read bit does not (I-22: "uid 1001 owns it" alone passed that
+          # one, and refused the working 0640).
+          #
+          # The regular-file leg exists because a DIRECTORY passed the other two: onboard-gui started without the
+          # key (a hand `docker compose up -d`, or a restart after the key was removed) leaves Docker's root:root
+          # 0755 directory at this path, which exists and is other-readable, so the GUI started with its key file a
+          # directory, and the remedy below, run against it, installed the key INTO the directory and the gate went
+          # on passing (I-22). The size leg refuses an empty file, on which the GUI fails as on a missing key; the
+          # stat gives the size, so no byte is read. The legs are checked in order and the first false one fails the
+          # task; fail_msg's own chain tests the same conditions in the same order, so the message names that leg,
+          # and a new leg needs its branch there too.
           ansible.builtin.assert:
             that:
               - _gui_age_key.stat.exists
-              - _gui_age_key.stat.uid | int == 1001 or _gui_age_key.stat.roth
+              - _gui_age_key.stat.isreg | default(false)
+              - _gui_age_key.stat.size | int > 0
+              - >-
+                _gui_age_key.stat.rusr if _gui_age_key.stat.uid | int == 1001
+                else _gui_age_key.stat.rgrp if _gui_age_key.stat.gid | int == 1001
+                else _gui_age_key.stat.roth
             fail_msg: >-
               onboard-gui's age key at {{ kontroll_gui_dir }}/age.key is
-              {{ 'MISSING' if not _gui_age_key.stat.exists else 'not readable by the runtime uid 1001' }}.
+              {{ 'MISSING' if not _gui_age_key.stat.exists
+              else ('a DIRECTORY (Docker makes one there when onboard-gui starts without the key): remove it with '
+              ~ '`sudo rmdir ' ~ kontroll_gui_dir ~ '/age.key` (it refuses while anything is inside, such as a key '
+              ~ 'installed into it: move that out first; if the path is a link to a directory, `sudo rm` the link), '
+              ~ 'then install the key as below') if _gui_age_key.stat.isdir | default(false)
+              else 'not a regular file' if not (_gui_age_key.stat.isreg | default(false))
+              else 'EMPTY' if not (_gui_age_key.stat.size | int > 0)
+              else 'not readable by the runtime uid 1001' }}.
               deploy-stack never creates it: a service that can mint its own decryption key is not a trust
               boundary. Provision it on the HOST, then re-run this deploy —
               `sudo install -m 0600 -o 1001 -g 1001 ~/.config/sops/age/keys.txt {{ kontroll_gui_dir }}/age.key`
@@ -1098,7 +1132,10 @@
               same domains the control node does). To give the GUI a narrower identity instead, `age-keygen` a
               fresh key, add its PUBLIC half to instance/.sops.yaml, re-wrap with
               `sops --config instance/.sops.yaml updatekeys instance/secrets/*.sops.yml`, and install the private
-              half at the path above. See docs/SETUP.md "6. Deploy the stack and open the GUI".
+              half at the path above. If onboard-gui is already running, restart it once the key is in place
+              (`sudo docker restart onboard-gui`): a file bind keeps the file it started with, and a key put back
+              with the same bytes is no change the deploy restarts it for. See docs/SETUP.md "6. Deploy the stack
+              and open the GUI".
             quiet: true
           when: "'onboard-gui' in stack_services"
 

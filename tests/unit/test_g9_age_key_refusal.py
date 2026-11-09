@@ -11,6 +11,10 @@ What was wrong was everything around it (live-caught 2026-07-28, fresh-box spin-
   2. "Exists" was never the real precondition. The GUI runs as uid 1001 and mounts the key `:ro`, so a root-owned
      0600 key PASSES an exists-check and then fails at runtime as an opaque SOPS decrypt error, one deploy later
      and far from the cause.
+  3. Nor was "readable" (I-22, 2026-11-08): one `up` of onboard-gui without the key leaves Docker's root:root 0755
+     DIRECTORY at the path, which exists and is other-readable, so the gate passed it, and its own remedy then
+     installed the key into the directory. And the stat described a link rather than the file Docker mounts. And an
+     empty file passed (its two readers, 2026-11-08), on which the GUI fails as on a missing key.
 
 Rather than string-match the playbook, these evaluate the gate's real Jinja against synthetic stat results — so
 they test the condition's BEHAVIOUR, including the deliberate other-readable escape hatch that keeps a box which
@@ -48,7 +52,10 @@ def _gate():
 
 
 def _evaluate(stat):
-    """Run the gate's real `that:` expressions against a synthetic stat result; return (passed, message)."""
+    """Run the gate's real `that:` expressions against a synthetic stat result; return (passed, message). Like
+    `ansible.builtin.assert` it stops at the first false leg. Two ways it is laxer, neither of which the shipped gate
+    meets (the integration test's pass rows run the real assert): Ansible renders `fail_msg` even when the assert
+    passes, and 2.19 refuses a leg whose result is not a boolean."""
     gate = _gate()
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     ctx = {"_gui_age_key": {"stat": stat}, "kontroll_gui_dir": _GUI_DIR}
@@ -58,20 +65,52 @@ def _evaluate(stat):
     return True, ""
 
 
+# The fields ansible.builtin.stat returns that the gate reads. A path that is not there gives `exists` alone; one that
+# is gives every type flag and its size (tests/integration/test_g9_age_key_gate_real_stat.py runs the real stat on
+# each shape and holds these to it). A regular file's size is the stand-in key's there; the gate reads a size only
+# after the regular-file leg, so the other types carry none.
+_FILE = {"exists": True, "isreg": True, "isdir": False, "islnk": False, "isfifo": False, "size": 34}
+_DIR = {"exists": True, "isreg": False, "isdir": True, "islnk": False, "isfifo": False}
+_FIFO = {"exists": True, "isreg": False, "isdir": False, "islnk": False, "isfifo": True}
+_MISSING = {"exists": False}
+
+
+def _mode(uid, gid, octal):
+    """The owner/group/mode fields a stat returns for a path with this owner, group and mode."""
+    return {"uid": uid, "gid": gid, "rusr": bool(octal & 0o400), "rgrp": bool(octal & 0o040),
+            "roth": bool(octal & 0o004)}
+
+
 # (label, stat, should_pass)
 _CASES = [
-    ("missing entirely", {"exists": False, "uid": 0, "roth": False}, False),
-    ("present and owned by the runtime uid", {"exists": True, "uid": 1001, "roth": False}, True),
-    ("present but root-owned 0600 — the runtime uid cannot read it", {"exists": True, "uid": 0, "roth": False}, False),
-    ("present, root-owned, but other-readable", {"exists": True, "uid": 0, "roth": True}, True),
+    ("missing entirely", _MISSING, False),
+    ("present and owned by the runtime uid", dict(_FILE, **_mode(1001, 1001, 0o600)), True),
+    ("present but root-owned 0600 — the runtime uid cannot read it", dict(_FILE, **_mode(0, 0, 0o600)), False),
+    ("present, root-owned, but other-readable", dict(_FILE, **_mode(0, 0, 0o644)), True),
+    ("root-owned, group 1001, 0640 — the group bits let the GUI read it", dict(_FILE, **_mode(0, 1001, 0o640)), True),
+    ("root-owned, group 1001, 0604 — the group bits apply, and give no read", dict(_FILE, **_mode(0, 1001, 0o604)),
+     False),
+    ("owned by the runtime uid without its owner read bit (0044)", dict(_FILE, **_mode(1001, 1001, 0o044)), False),
+    ("a root:root 0755 directory, as Docker makes one at an `up` without the key", dict(_DIR, **_mode(0, 0, 0o755)),
+     False),
+    ("a directory the runtime uid owns", dict(_DIR, **_mode(1001, 1001, 0o700)), False),
+    ("a named pipe the runtime uid owns", dict(_FIFO, **_mode(1001, 1001, 0o600)), False),
+    ("an empty file the runtime uid owns and can read", dict(_FILE, size=0, **_mode(1001, 1001, 0o600)), False),
+    ("an empty other-readable file", dict(_FILE, size=0, **_mode(0, 0, 0o644)), False),
 ]
 
 
 @pytest.mark.parametrize("label,stat,should_pass", _CASES, ids=[c[0] for c in _CASES])
 def test_the_gate_admits_exactly_the_states_that_work(label, stat, should_pass):
-    """A key uid 1001 can actually read is the real precondition — not merely a file that exists. The last case is
-    the deliberate escape hatch: other-readable is sloppy but it genuinely works, and a hardening check that
-    breaks a running box on the next deploy teaches operators to skip deploys."""
+    """A key uid 1001 can actually read is the real precondition — not merely a file that exists. The root-owned,
+    other-readable case is the deliberate escape hatch: other-readable is sloppy but it genuinely works, and a
+    hardening check that breaks a running box on the next deploy teaches operators to skip deploys. The rest are
+    I-22 (2026-11-08): a directory exists and its 0755 is other-readable, so the first two legs passed one, and the
+    GUI started with its key file a directory, an opaque SOPS failure; only a regular file is a key, and only a
+    non-empty one. And readability is the mode bits as the kernel reads them for a process of uid and gid 1001 with
+    no other group: owner bits when uid 1001 owns it, group bits when gid 1001 does, else other's, so a 1001-owned
+    key without its owner read bit is refused and a root:1001 0640 one passes (ownership alone decided both, the
+    wrong way)."""
     passed, _ = _evaluate(stat)
     assert passed is should_pass, "gate %s for: %s" % ("passed" if passed else "refused", label)
 
@@ -79,27 +118,105 @@ def test_the_gate_admits_exactly_the_states_that_work(label, stat, should_pass):
 def test_the_refusal_distinguishes_missing_from_unreadable():
     """Two different problems with two different fixes (put a key there vs. chown the one that is there). One
     generic message would send the operator down the wrong path for whichever case they hit."""
-    _, missing = _evaluate({"exists": False, "uid": 0, "roth": False})
-    _, unreadable = _evaluate({"exists": True, "uid": 0, "roth": False})
+    _, missing = _evaluate(_MISSING)
+    _, unreadable = _evaluate(dict(_FILE, **_mode(0, 0, 0o600)))
     assert "MISSING" in missing
     assert "not readable" in unreadable
     assert missing != unreadable
 
 
+def test_the_refusal_of_a_directory_says_so_and_how_to_clear_it():
+    """A directory needs a third remedy: the install the message gives, run against a directory, copies the key
+    INTO it and leaves the gate's path a directory still, which is how I-22's box stayed broken through its own
+    fix. So the refusal names the directory, says where it comes from, and gives `sudo rmdir` on the real path,
+    which removes only an empty directory: one a key was installed into is refused, not deleted with the key in
+    it. When it refuses, the message says to move the copy out first, and for a link to a directory, which `rmdir`
+    will not remove, to `sudo rm` the link (the two shapes its readers found the remedy did not clear). A path that is
+    neither a directory nor a regular file (a pipe, a socket) gets its own plain wording, and an empty file its
+    own."""
+    _, directory = _evaluate(dict(_DIR, **_mode(0, 0, 0o755)))
+    assert "is a DIRECTORY" in directory and "starts without the key" in directory, directory
+    assert "`sudo rmdir %s/age.key`" % _GUI_DIR in directory, directory
+    assert "move that out first" in directory and "`sudo rm` the link" in directory, directory
+    assert "install -m 0600 -o 1001 -g 1001" in directory, "the install still follows the rmdir"
+    _, fifo = _evaluate(dict(_FIFO, **_mode(1001, 1001, 0o600)))
+    assert "is not a regular file." in fifo and "rmdir" not in fifo, fifo
+    _, empty = _evaluate(dict(_FILE, size=0, **_mode(1001, 1001, 0o600)))
+    assert "is EMPTY." in empty and "rmdir" not in empty, empty
+
+
+def test_the_gate_reads_the_file_a_container_would_mount_and_none_of_its_bytes():
+    """The stat follows a link (`follow: true`): Docker binds a link's target, and without `follow` the stat
+    describes the link, whose own mode is 0777, so a link to a 0600 root-owned key passed the other-readable leg
+    (I-22). And it computes no checksum and no MIME type: the gate needs the type, owner and mode, and a digest of
+    the GUI's private key in the registered result is one a verbose run would print. The real stat, run on a link,
+    is in tests/integration/test_g9_age_key_gate_real_stat.py."""
+    with open(_DEPLOY, encoding="utf-8") as fh:
+        stat = next(t["ansible.builtin.stat"] for t in _tasks(yaml.safe_load(fh.read()))
+                    if str(t.get("name", "")).startswith("Stat the onboard-gui age key"))
+    assert stat.get("follow") is True, stat
+    assert stat.get("get_checksum") is False and stat.get("get_mime") is False, stat
+
+
 def test_the_refusal_carries_a_remedy_that_runs():
     """The whole point of the change. The message must contain a concrete command with the real target path — not
     a pointer to a doc — because this fires mid-deploy on a box the operator is standing up for the first time."""
-    _, msg = _evaluate({"exists": False, "uid": 0, "roth": False})
+    _, msg = _evaluate(_MISSING)
     assert "%s/age.key" % _GUI_DIR in msg, "the remedy must name the actual destination path"
-    assert "install -m 0600 -o 1001 -g 1001" in msg, "the remedy must set the ownership the gate itself requires"
+    assert "install -m 0600 -o 1001 -g 1001" in msg, "the remedy must give a key the gate passes"
     assert "~/.config/sops/age/keys.txt" in msg, "and name the source: the control key (the accepted C10 residual)"
+
+
+def test_the_refusal_says_a_running_gui_needs_a_restart():
+    """The printed install puts a new file at the path, and a running onboard-gui keeps the one its bind started
+    with. For a key the gate now refuses but the old one passed (a link to a key uid 1001 cannot read, a 1001-owned
+    key without its owner read bit), the installed key has the same bytes, so the re-run's stale-config check sees
+    no change and `up` leaves the container alone: the deploy ends green on a GUI that still cannot read its key
+    (reader A's S-1 on I-22). So the refusal tells the operator to restart a running GUI, by its container name."""
+    for stat in (_MISSING, dict(_FILE, **_mode(1001, 1001, 0o044))):
+        _, msg = _evaluate(stat)
+        assert "If onboard-gui is already running, restart it" in msg, msg
+        assert "`sudo docker restart onboard-gui`" in msg, msg
+    with open(os.path.join(_ROOT, "docker", "services", "onboard-gui.yaml"), encoding="utf-8") as fh:
+        assert yaml.safe_load(fh)["services"]["onboard-gui"]["container_name"] == "onboard-gui", \
+            "the restart the refusal prints names the container"
+
+
+def _with_parents(node, chain=()):
+    """Every task with the chain of (section key, block) it sits in, the play first."""
+    if isinstance(node, list):
+        for item in node:
+            yield from _with_parents(item, chain)
+    elif isinstance(node, dict):
+        yield node, chain
+        for section in ("block", "rescue", "always", "tasks", "pre_tasks", "post_tasks"):
+            if section in node:
+                yield from _with_parents(node[section], chain + ((section, node),))
+
+
+def test_the_gate_runs_whenever_onboard_gui_is_brought_up():
+    """The integration test runs the stat and the assert as they are, but not the blocks around them, so a `when`
+    on an enclosing block that never held would switch the whole gate off with every row here green (reader B's
+    mutants B10 and B11 on I-22 survived all four test files). So: the two tasks sit in `block:` sections only (not
+    a rescue or an always), and every `when` on them and on each block above them is the one condition the gate is
+    for, onboard-gui being brought up; no block above them carries `tags`."""
+    with open(_DEPLOY, encoding="utf-8") as fh:
+        found = [(task, chain) for task, chain in _with_parents(yaml.safe_load(fh.read()))
+                 if str(task.get("name", "")).startswith("Stat the onboard-gui age key")
+                 or "the actual remedy" in str(task.get("name", ""))]
+    assert len(found) == 2, "the G9 stat or assert moved — move this test with it"
+    for task, chain in found:
+        assert all(section in ("block", "tasks") for section, _ in chain), (task["name"], [s for s, _ in chain])
+        whens = [node["when"] for node in [n for _, n in chain] + [task] if "when" in node]
+        assert whens and set(whens) == {"'onboard-gui' in stack_services"}, (task["name"], whens)
+        assert not any("tags" in node for _, node in chain) and "tags" not in task, task["name"]
 
 
 def test_the_doc_pointer_in_the_refusal_actually_resolves():
     """The message cites a SETUP.md section, and the first draft cited the wrong one (§5 is secrets; the
     onboard-gui prerequisite is §6) — a pointer that sends the operator to an unrelated section is worse than no
     pointer, and section numbers move. Assert the cited heading exists verbatim in the doc."""
-    _, msg = _evaluate({"exists": False, "uid": 0, "roth": False})
+    _, msg = _evaluate(_MISSING)
     cited = re.search(r'docs/SETUP\.md "([^"]+)"', msg)
     assert cited, "the refusal should cite a SETUP.md section by NAME (numbers renumber, headings survive)"
     with open(os.path.join(_ROOT, "docs", "SETUP.md"), encoding="utf-8") as fh:
@@ -125,5 +242,5 @@ def test_the_refusal_still_refuses_to_mint_the_key():
     block = text.split("Stat the onboard-gui age key", 1)[1].split("Generate a self-signed TLS cert", 1)[0]
     assert "age-keygen" not in block.replace("`age-keygen` a", ""), \
         "the gate must not mint a key — age-keygen may appear only as advice inside the refusal text"
-    _, msg = _evaluate({"exists": False, "uid": 0, "roth": False})
+    _, msg = _evaluate(_MISSING)
     assert "never creates it" in msg, "the message should say plainly that this is a boundary, not a bug"
