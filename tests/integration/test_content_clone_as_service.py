@@ -441,6 +441,47 @@ def test_an_armed_preview_of_a_node_with_no_clone_writes_nothing(w):
     assert w.owners() == {SERVICE}
 
 
+def test_an_unarmed_preview_before_the_configuration_file_is_written_says_so_and_writes_nothing(w, monkeypatch):
+    """Unarmed, `--check --diff` as the installer's `check` verb runs it — as root with no SUDO_UID, so git trusts no
+    repository for the operator who started it — on a node with no clone and no configuration file yet (a service's
+    first enable): the preview passes, says main was not compared and why, and writes nothing (no clone, no file).
+    The deploy then makes the clone, root's, at main; and the next preview, the file now in place, runs the git module
+    and compares: main moved, so it says the clone would change, with no note, and changes nothing. Before I-33 the
+    preview's git module reached the canonical (the operator's) with no file naming it safe and failed the dry run at
+    `detected dubious ownership`, where the apply, which writes the file first, went through."""
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    conf = os.path.join(w.storage, "content-clone.gitconfig")
+    first = w.play(armed=False, check=True)
+    assert "main not compared" in first["out"] and first["changed"] > 0, first["out"]
+    assert not os.path.lexists(w.clone) and not os.path.exists(conf)
+    w.play(armed=False)
+    assert w.owners() == {0} and w.head() == "first" and os.path.exists(conf)
+    w.commit("second")
+    again = w.play(armed=False, check=True)
+    assert again["changed"] > 0 and "main not compared" not in again["out"], again["out"]
+    assert w.head() == "first"
+
+
+def test_an_unarmed_preview_of_a_clone_made_before_the_configuration_file_says_so_and_the_deploy_updates_it(
+        w, monkeypatch):
+    """Unarmed, a root clone a build made before the configuration file existed (here the file is removed after the
+    first deploy) and main moved since: the preview passes, says main was not compared, and changes nothing — the
+    clone stays at the old main, and no file is written. The deploy then writes the file and brings the clone to main,
+    and the next deploy changes nothing. Guards the I-33 failure on the upgrade path: the git module in check mode
+    reads the canonical's main from the clone's remote too (`ls-remote`), which git refused without the file."""
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    conf = os.path.join(w.storage, "content-clone.gitconfig")
+    w.play(armed=False)
+    os.remove(conf)
+    w.commit("second")
+    out = w.play(armed=False, check=True)
+    assert "main not compared" in out["out"] and "updates the clone" in out["out"], out["out"]
+    assert w.head() == "first" and not os.path.exists(conf)
+    w.play(armed=False)
+    assert w.head() == "second" and os.path.exists(conf)
+    assert w.play(armed=False)["changed"] == 0
+
+
 def test_an_armed_deploy_fails_when_the_service_cannot_read_the_canonical(w):
     """An armed clone whose canonical uid 1001 can no longer read (its mode changed): the deploy FAILS — it must
     not reset the clone to the last main it fetched and call that `ok`. Every step of the script stops it

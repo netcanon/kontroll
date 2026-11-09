@@ -169,13 +169,18 @@
     owner: "0"
     group: "0"
     mode: "0644"
+  register: _clone_gitconfig
   when: not (_fresh_preview | bool)
 
 - name: Unarmed — clone/update the local canonical into the content tree, as root — {{ _clone_service }}
   # Root-owned and world-readable: uid 1001 reads it and cannot write it (the read-only lock). In check mode a
   # clone the step above would remove is NOT looked at: the git module runs git in it even to preview, and it is
   # not root's. Skipped on a fresh-node preview: the module reaches the remote even in check mode, so with no
-  # canonical yet it fails outright rather than say what it would do (see _fresh_preview).
+  # canonical yet it fails outright rather than say what it would do (see _fresh_preview). Skipped, and said so
+  # below, on a preview whose configuration file the step above would still write (a first enable, or a box an
+  # older build deployed): the module reaches the remote in check mode too, and without that file git refuses the
+  # canonical as another uid's (I-33). A preview that finds the file as the apply writes it runs the module, and
+  # compares.
   ansible.builtin.git:
     repo: "file://{{ _clone_canonical }}"
     dest: "{{ _clone_dir }}"
@@ -188,6 +193,20 @@
     - not (_fresh_preview | bool)
     - not (api_privileged | bool)
     - not ansible_check_mode or not _clone_st.stat.exists or (_clone_keep | bool)
+    - not ansible_check_mode or _clone_gitconfig is not changed
+
+- name: Unarmed — say the preview did not compare the clone with the canonical's main — {{ _clone_service }}
+  ansible.builtin.debug:
+    msg: >-
+      {{ _clone_dir }}: main not compared — {{ kontroll_storage_root }}/content-clone.gitconfig, which names the
+      canonical safe for the deploy's git, is written by this deploy before its git runs, and a preview writes
+      nothing. The apply writes it, then {{ 'updates' if _clone_st.stat.exists else 'makes' }} the clone.
+  when:
+    - ansible_check_mode
+    - not (_fresh_preview | bool)
+    - not (api_privileged | bool)
+    - not _clone_st.stat.exists or (_clone_keep | bool)
+    - _clone_gitconfig is changed
 
 - name: Armed — make the clone's directory, empty and the service's, for the service's git — {{ _clone_service }}
   # The clone's parent is root's, so the service's git cannot make the directory itself: root makes it — a new,

@@ -11,6 +11,25 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): an unarmed dry-run before the content clone's git configuration is written passes, and says so (I-33, 2026-11-09)
+
+The deploy's git for a content clone reads one configuration file, `<storage root>/content-clone.gitconfig`, which names
+the canonical safe (git refuses to serve a repository another uid owns, and the canonical is the operator's). The deploy
+writes it just before its git runs, and a dry-run writes nothing. The armed path's preview said `main not compared` when
+the file was not there; the unarmed one ran the git module, which reaches the canonical in check mode too, and failed
+the dry-run at `detected dubious ownership`, on a service's first enable and on a clone a build made before the file
+existed. A `sudo` run hid it (git trusts a repository `SUDO_UID` owns); the installer's `check` verb runs as root with
+no `SUDO_UID`. The apply, which writes the file first, went through.
+
+- **Fixed.** `ansible/playbooks/tasks/content-clone.yml`: in check mode the unarmed git module runs only where the file
+  is as the apply writes it; otherwise a note says the clone was not compared with the canonical's main and why, and
+  whether the apply makes or updates it.
+- **Tests.** `integration/test_content_clone_as_service.py` (as root): an unarmed preview of a node with no clone and no
+  file passes, says so and writes nothing, the deploy makes the clone, and the next preview compares; an unarmed
+  preview of a clone made before the file passes, says so and changes nothing, and the deploy writes the file and
+  updates the clone.
+- **Docs.** docs/troubleshooting.md §9 (the preview's note, armed or unarmed); tests/README.md.
+
 ### fix(scripts): a run-log is written where Vector reads it, whatever XDG_STATE_HOME says (I-29, 2026-11-09)
 
 Vector ships the operator scripts' run-logs from one directory, `<operator home>/.local/state/kontroll/runs`, which
