@@ -2,19 +2,22 @@
 each shape the key's path can take on a host.
 
 WHY: tests/unit/test_g9_age_key_refusal.py evaluates the gate's expressions against stat results written by hand.
-That holds the logic, not what the real stat says about a path, and I-22 (2026-11-08) was in that gap twice. A
-directory Docker made at an `up` of onboard-gui without the key exists and is other-readable, so the gate passed
-it, and the remedy it prints, run against that directory, installs the key INTO it. And a stat that does not follow
-a link describes the link, whose own mode is 0777, so a link to a key uid 1001 cannot read passed the other-readable
-leg, while Docker mounts the link's target. And "uid 1001 owns it" stood in for the mode, passing a key whose owner
-read bit is off and refusing a root:1001 0640 key the GUI can read. Each row here makes one shape on disk; one play
-runs the two tasks, copied from the playbook as they are (not rewritten), once per shape, and records what the gate
-did and what the stat said.
+That holds the logic, not what the real stat says about a path, and I-22 (2026-11-08) was in that gap twice, and a
+third hole was in the rule itself. A directory Docker made when onboard-gui started without the key exists and is
+other-readable, so the gate passed it, and the remedy it prints, run against that directory, installs the key INTO
+it. And a stat that does not follow a link describes the link, whose own mode is 0777, so a link to a key uid 1001
+cannot read passed the other-readable leg, while Docker mounts the link's target. And "uid 1001 owns it" stood in
+for the mode, passing a key whose owner read bit is off and refusing a root:1001 0640 key the GUI can read. Each row
+here makes one shape on disk; one play runs the two tasks, copied from the playbook as they are (not rewritten),
+once per shape, and records what the gate did and what the stat said.
 
-Every row runs as an ordinary user except the four whose key has uid or gid 1001, which need root: they run where the
-suite is run as root and are skipped elsewhere. It needs POSIX and ansible-playbook (CI's validate job installs
-it); without them every row is skipped.
+Every row runs as an ordinary user except the rows whose key has uid or gid 1001, which need root: they run where the
+suite is run as root (tests/validate.sh's as-root step runs this file) and are skipped elsewhere. The two whose key
+belongs to the suite's own uid, which uid 1001 must not read, are skipped where the suite runs as uid 1001 (GitHub's
+hosted runner does: the first CI run of these rows failed there, the key being 1001's own). It needs POSIX and
+ansible-playbook (CI's validate job installs it); without them every row is skipped.
 """
+import importlib.util
 import json
 import os
 import shutil
@@ -39,6 +42,13 @@ _ROOT_ONLY = {"file-0600-runtime-uid": (RUNTIME_UID, RUNTIME_UID, 0o600),
               "file-0044-runtime-uid": (RUNTIME_UID, RUNTIME_UID, 0o044),
               "file-0640-root-group-1001": (0, RUNTIME_UID, 0o640),
               "file-0604-root-group-1001": (0, RUNTIME_UID, 0o604)}
+# a key the suite's own uid makes and owns, which uid 1001 must not read: a suite run as uid 1001 (GitHub's hosted
+# runner is) owns it as 1001, so these rows are skipped there
+_OTHER_UID = ("file-0600-other-uid", "link-to-0600-other-uid")
+# the mode each other shape is made with, its owner and group the suite's (a link's: its target's)
+_MADE_MODE = {"docker-directory": 0o755, "directory-a-key-was-installed-into": 0o755, "fifo-0644": 0o644,
+              "file-0600-other-uid": 0o600, "link-to-0600-other-uid": 0o600, "file-0644": 0o644,
+              "link-to-0644": 0o644, "empty-0644": 0o644}
 
 # shape -> what the gate must do: "PASSED", or a phrase its refusal must carry
 _EXPECT = {
@@ -47,6 +57,7 @@ _EXPECT = {
     "docker-directory": "is a DIRECTORY",
     "directory-a-key-was-installed-into": "is a DIRECTORY",
     "fifo-0644": "is not a regular file.",
+    "empty-0644": "is EMPTY.",
     "file-0600-other-uid": "is not readable by the runtime uid 1001.",
     "link-to-0600-other-uid": "is not readable by the runtime uid 1001.",
     "file-0644": "PASSED",
@@ -79,10 +90,19 @@ def _gate_tasks():
     return stat[0], gate[0]
 
 
-def _write(path, mode):
+def _write(path, mode, data=_BYTES):
     with open(path, "wb") as fh:
-        fh.write(_BYTES)
+        fh.write(data)
     os.chmod(path, mode)
+
+
+def _unit():
+    """tests/unit/test_g9_age_key_refusal.py, for its hand-written stat results."""
+    spec = importlib.util.spec_from_file_location(
+        "_g9_unit_rows", os.path.join(ROOT, "tests", "unit", "test_g9_age_key_refusal.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _make(directory, shape):
@@ -106,6 +126,8 @@ def _make(directory, shape):
         os.symlink(target, key)
     elif shape == "dangling-link":
         os.symlink(os.path.join(directory, "gone.key"), key)
+    elif shape == "empty-0644":
+        _write(key, 0o644, b"")
     elif shape == "fifo-0644":
         os.mkfifo(key)
         os.chmod(key, 0o644)                     # other-readable: only the regular-file leg can refuse it
@@ -118,9 +140,8 @@ def gate_run(tmp_path_factory):
     """One ansible-playbook run: for each shape, the two tasks in a block whose rescue records the refusal; returns
     {shape: {"result": "PASSED" or the refusal's message, "stat": what the stat registered}}."""
     base = tmp_path_factory.mktemp("g9-age-key")
-    shapes = [s for s in _EXPECT if s not in _ROOT_ONLY or os.geteuid() == 0]
-    if os.geteuid() == RUNTIME_UID:
-        shapes.remove("file-0600-other-uid")     # the suite's own uid would own it
+    shapes = [s for s in _EXPECT if (s not in _ROOT_ONLY or os.geteuid() == 0) and
+              (s not in _OTHER_UID or os.geteuid() != RUNTIME_UID)]
     for shape in shapes:
         _make(str(base / "shapes" / shape), shape)
     stat_task, gate_task = _gate_tasks()
@@ -184,12 +205,14 @@ interpreter_python = auto_silent
 def test_the_real_gate_admits_only_a_regular_file_the_runtime_uid_can_read(gate_run, shape):
     """Each shape through the gate as deploy-stack.yml runs it. A key uid 1001 can read passes (other-readable, its
     own with the owner read bit, group 1001's with the group read bit), through a link too; a directory (Docker's,
-    or one the printed remedy then installed a key into), a pipe, a link to a key uid 1001 cannot read, a link to
-    nothing, a 1001-owned key without its owner read bit and a group-1001 key whose group bits give no read are
-    refused, each with the wording that names it. Guards I-22's holes (no regular-file leg, a stat that did not
-    follow the link, ownership standing in for the mode) against a real stat, not a hand-written one."""
+    or one the printed remedy then installed a key into), a pipe, an empty file, a link to a key uid 1001 cannot
+    read, a link to nothing, a 1001-owned key without its owner read bit and a group-1001 key whose group bits give
+    no read are refused, each with the wording that names it. Guards I-22's holes (no regular-file leg, a stat that
+    did not follow the link, ownership standing in for the mode, no size leg) against a real stat, not a
+    hand-written one."""
     if shape not in gate_run:
-        pytest.skip("needs root to give the key an owner or group of %d" % RUNTIME_UID)
+        pytest.skip("needs root to give the key an owner or group of %d" % RUNTIME_UID if shape in _ROOT_ONLY else
+                    "run as uid %d, which would own the key itself" % RUNTIME_UID)
     result, want = gate_run[shape]["result"], _EXPECT[shape]
     if want == "PASSED":
         assert result == "PASSED", (shape, result)
@@ -199,13 +222,26 @@ def test_the_real_gate_admits_only_a_regular_file_the_runtime_uid_can_read(gate_
 
 
 def test_the_real_stat_reports_the_shapes_the_unit_rows_assume_and_reads_no_byte(gate_run):
-    """The unit rows' hand-written stat results are the real stat's: a path that is not there gives `exists`
-    alone, a link to nothing included (the stat follows it); one that is gives the type flags the gate reads, of
-    the link's TARGET for a link (not a link, and its target's mode); and no row's result holds a checksum or a
-    MIME type, because the stat is told to compute neither (a digest of the GUI's private key is not what a
-    verbose deploy should print)."""
+    """The unit rows' hand-written stat results are the real stat's: each shape's real result holds every field the
+    unit's own `_FILE`, `_DIR`, `_FIFO` or `_MISSING` (with `_mode` of the shape's owner, group and mode) gives, with
+    the same value, so a field the unit writes wrong, or one the stat stops returning, fails here (I-22's reader B,
+    N-6: this compared types and four shapes only). A path that is not there gives `exists` alone, a link to nothing
+    included (the stat follows it); one that is gives the type flags the gate reads, of the link's TARGET for a link
+    (not a link, and its target's mode); and no row's result holds a checksum or a MIME type, because the stat is
+    told to compute neither (a digest of the GUI's private key is not what a verbose deploy should print)."""
     stats = {shape: run["stat"] for shape, run in gate_run.items()}
     assert stats["missing"] == {"exists": False} and stats["dangling-link"] == {"exists": False}, stats
+    unit = _unit()
+    for shape, real in stats.items():
+        if shape in ("missing", "dangling-link"):
+            continue
+        uid, gid, mode = _ROOT_ONLY.get(shape) or (real["uid"], real["gid"], _MADE_MODE[shape])
+        kind = (unit._DIR if shape in ("docker-directory", "directory-a-key-was-installed-into")
+                else unit._FIFO if shape == "fifo-0644" else unit._FILE)
+        hand = dict(kind, **unit._mode(uid, gid, mode))
+        if shape == "empty-0644":
+            hand["size"] = 0
+        assert {k: real.get(k) for k in hand} == hand, (shape, hand, real)
     for shape, stat in stats.items():
         if stat == {"exists": False}:
             continue
@@ -216,6 +252,19 @@ def test_the_real_stat_reports_the_shapes_the_unit_rows_assume_and_reads_no_byte
     assert stats["docker-directory"]["isdir"] is True and stats["docker-directory"]["isreg"] is False
     assert stats["docker-directory"]["roth"] is True, "a 0755 directory is other-readable: the hole was real"
     for link, mode_roth in (("link-to-0644", True), ("link-to-0600-other-uid", False)):
+        if link not in stats:                    # skipped where the suite runs as uid 1001
+            continue
         assert stats[link]["islnk"] is False and stats[link]["isreg"] is True, (link, stats[link])
         assert stats[link]["roth"] is mode_roth, (link, stats[link])
     assert stats["fifo-0644"]["isfifo"] is True and stats["fifo-0644"]["roth"] is True, stats["fifo-0644"]
+
+
+def test_the_rows_that_need_root_run_in_the_gate_as_root():
+    """The rows of uid or gid 1001 need root and are skipped elsewhere, and the public CI runs the suite as an
+    ordinary user, so they ran nowhere: the group leg and the owner read bit against a real stat (I-22's two
+    readers, 2026-11-08). tests/validate.sh's as-root step runs the files that need root and fails `--strict` on
+    any skip; it must name this one."""
+    with open(os.path.join(ROOT, "tests", "validate.sh"), encoding="utf-8") as fh:
+        text = fh.read()
+    step = text.split("step canon-drop-as-root", 1)[1].split("\n  fi\n", 1)[0]
+    assert "tests/integration/test_g9_age_key_gate_real_stat.py" in step, step
