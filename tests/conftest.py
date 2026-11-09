@@ -113,6 +113,24 @@ def isolated_git(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
+def not_the_service_uid(tmp_path_factory, monkeypatch):
+    """A stand-in `id` first on PATH: `id -u` prints the uid running the suite, or 1000 where that is 1001, and
+    every other question goes to the real `id`. The launchers and install-prereqs.sh refuse an operator with uid
+    1001, the network service's (I-18), and a GitHub-hosted runner's own account has it: a test that runs a
+    launcher for something else would be refused there and nowhere else. For tests that run a launcher past that
+    check; the rows of the refusal itself (tests/unit/test_operator_uid_1001_refused.py) put their own `id` first."""
+    real = shutil.which("id")
+    if os.name == "nt" or real is None:
+        return
+    stub = tmp_path_factory.mktemp("not-the-service-uid")
+    uid = 1000 if os.getuid() == 1001 else os.getuid()
+    (stub / "id").write_text('#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = -u ]; then echo %d; exit 0; fi\n'
+                             'exec \'%s\' "$@"\n' % (uid, real), encoding="utf-8", newline="\n")
+    os.chmod(str(stub / "id"), 0o755)
+    monkeypatch.setenv("PATH", str(stub) + os.pathsep + os.environ["PATH"])
+
+
+@pytest.fixture
 def tmp_repo(tmp_path, monkeypatch):
     """A throwaway repo root for the file-mutating paths (enable_in_fleet, onboard
     --apply). Copies the shipped EXAMPLE fleet (the suite never reads a private overlay —

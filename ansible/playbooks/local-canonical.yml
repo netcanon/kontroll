@@ -57,8 +57,8 @@
         fail_msg: >-
           local-canonical: the operator ({{ operator }}) has uid 1001, which is the uid the network service runs as
           and the canonical's grant and hook are keyed on. The canonical cannot tell such an operator from the
-          service, so this play refuses to make a canonical for them. Deploy as an account with another uid
-          (KONTROLL_OPERATOR_UID on a launcher run). Nothing was changed.
+          service, so this play refuses to make a canonical for them (docs/troubleshooting.md section 10). Deploy as
+          an account with another uid (KONTROLL_OPERATOR_UID on a launcher run). Nothing was changed.
         quiet: true
 
     # F-CANON (#119): the canonical is group-1001 (the runtime uid:gid the privileged API/runner writes as), but a

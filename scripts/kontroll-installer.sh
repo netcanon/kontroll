@@ -33,6 +33,17 @@ export KONTROLL_OPERATOR_UID;  KONTROLL_OPERATOR_UID="$(id -u)"
 export KONTROLL_OPERATOR_GID;  KONTROLL_OPERATOR_GID="$(id -g)"
 export KONTROLL_OPERATOR_HOME="$HOME"
 
+# I-18: the canonical's grant and hook tell the network service from everyone else by one number, uid 1001, and the
+# deploy's first task refuses an operator who has it (local-canonical.yml), but only after fresh-init has
+# scaffolded instance/ and minted the control key. Say it here, before anything is made, for every verb but `shell`:
+# the escape hatch deploys nothing, so it is told and goes on.
+if [ "$KONTROLL_OPERATOR_UID" = 1001 ]; then
+  echo "kontroll: the operator ($KONTROLL_OPERATOR_USER) has uid 1001, the uid the network service runs as. The" \
+    "canonical's grant and hook are keyed on that uid and cannot tell this account from the service, so the" \
+    "deploy refuses it (docs/troubleshooting.md section 10). Use an account with another uid." >&2
+  [ "${1:-init}" = shell ] || { echo "kontroll: nothing was made or run." >&2; exit 1; }
+fi
+
 # Every host bind under the operator's home must EXIST as the operator's before docker mounts it: Docker makes a
 # missing bind source, and each missing parent, root-owned, which then blocks the operator. age + ssh = where
 # bootstrap/fresh-init mint keys; .local/state/kontroll/runs = the operator scripts' run-logs, which Vector binds

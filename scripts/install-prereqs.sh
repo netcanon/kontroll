@@ -36,6 +36,27 @@ for lib in pkg.sh canonical-group.sh; do
   fi
 done
 
+# I-18: the operator (whom the canonical group step below adds to the group) must not have uid 1001, the network
+# service's: the canonical's grant and hook tell the service from everyone else by that one number, and the deploy
+# refuses such an operator (local-canonical.yml), but only after fresh-init has scaffolded instance/ and minted the
+# control key. Say it first, before the root check, so a run without sudo is told too. As root, the operator is the
+# account that ran sudo: sudo sets SUDO_UID on every command it starts, from its invoker. Not root, it is the account
+# running this, whatever SUDO_UID its shell inherited (a `su` without `-` from a sudo shell keeps one). Run as root
+# with no sudo, the operator is not known here: on the compose-native path the launchers refuse it in turn; on the
+# legacy host path only the deploy does, after fresh-init (docs/troubleshooting.md section 10).
+if [ "$(id -u)" -eq 0 ]; then
+  _operator_uid="${SUDO_UID:-0}"; _operator="${SUDO_USER:-$(id -un)}"
+else
+  _operator_uid="$(id -u)"; _operator="$(id -un)"
+fi
+if [ "$_operator_uid" = 1001 ]; then
+  echo "install-prereqs.sh: the operator ($_operator) has uid 1001, the uid the network service runs as." \
+    "The canonical's grant and hook are keyed on that uid and cannot tell this account from the service, so the" \
+    "deploy refuses it (docs/troubleshooting.md section 10). Use an account with another uid. Nothing was" \
+    "installed." >&2
+  exit 1
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "install-prereqs.sh needs root (it installs system packages). Re-run: sudo bash $0 $*" >&2
   exit 1

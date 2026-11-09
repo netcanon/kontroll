@@ -11,6 +11,31 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): an operator with uid 1001 is told so before anything is installed or made (I-18, 2026-11-09)
+
+The canonical's grant and hook tell the network service from everyone else by one number, uid 1001, so the deploy's
+first task refuses an operator who has it. That refusal came at the quickstart's `check`, after `fresh-init` had
+scaffolded `instance/` and minted the control key, and nothing before it said so; uid 1001 is an ordinary uid (a
+host's second account, a GitHub-hosted runner's own).
+
+- `scripts/install-prereqs.sh` refuses it first, before its root check. As root, the operator is the account that
+  ran sudo (`SUDO_UID`); not root, the one running it, whatever `SUDO_UID` its shell inherited. Run as root without
+  sudo it cannot tell: on the compose-native path the launchers refuse it in turn; on the legacy host path only the
+  deploy does, after fresh-init. `bootstrap.sh`, run as root (`sudo ./bootstrap.sh`), runs it itself, so the outer
+  sudo's operator reaches it: through a second sudo it was root, which installed for a uid-1001 account and gave root
+  its docker and gid-1001 memberships.
+- `scripts/kontroll-installer.sh` and the launch kit's `kontroll` refuse it for every verb, before they make anything
+  under the home, the canonical-group step's `sudo` among it; `shell`, the escape hatch, is told and goes on. Their
+  operator is the account running them, whoever ran sudo. The deploy's own refusal stays, behind them, and now
+  names the same troubleshooting section.
+- Tests: `tests/unit/test_operator_uid_1001_refused.py`: a refusal leaves the home and the launcher's own tree as
+  they were, and the troubleshooting row's quotes are read against the sentences in the scripts and the playbook.
+  The launcher test files take `not_the_service_uid` (tests/conftest.py), a stand-in `id`, so a runner whose own uid
+  is 1001 does not decide them.
+- Docs: the quickstart, docs/SETUP.md and scripts/README.md say it; docs/troubleshooting.md §10's row quotes the
+  three sentences and where each is said, and what was made under the account after each; SECURITY.md C10 names
+  the refusal beside the hook it protects.
+
 ### fix(ansible): the installer's bootstrap no longer reports its collection install as a change (I-3, 2026-11-09)
 
 A second apply must report 0 changed, and a second `init` never did: bootstrap's `Install the selected collections`

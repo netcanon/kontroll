@@ -22,6 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 pytestmark = [
     pytest.mark.unit,
     pytest.mark.usefixtures("isolated_git"),
+    pytest.mark.usefixtures("not_the_service_uid"),   # the launchers refuse uid 1001, a hosted runner's (I-18)
     pytest.mark.skipif(os.name == "nt" or not all(shutil.which(tool) for tool in ("sh", "bash", "git", "awk")),
                        reason="runs the POSIX launchers with a stand-in docker on PATH (CI has sh, bash, git and awk)"),
 ]

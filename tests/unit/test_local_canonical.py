@@ -479,7 +479,8 @@ def test_the_play_refuses_an_operator_whose_uid_is_the_services():
     tell such an operator from the network service (the hook and the seam are keyed on that one number). Guards
     the gap the hook's reader named (Q-6): an operator whose login uid is 1001 would have the landing run "as the
     service", the hook refuse its proposals' moves, and the chown hand the service the operator's grant — each
-    failing later with a message about something else."""
+    failing later with a message about something else. It names docs/troubleshooting.md section 10, as the scripts' sentences do
+    (I-18): the row there quotes all three."""
     tasks = _tasks()
     first = tasks[0]
     m = _mod(first, "ansible.builtin.assert", "assert")
@@ -487,6 +488,8 @@ def test_the_play_refuses_an_operator_whose_uid_is_the_services():
     assert "1001" in str(m.get("that")) and "operator_uid" in str(m.get("that"))
     assert "uid 1001" in str(m.get("fail_msg")) and "cannot tell" in str(m.get("fail_msg"))
     assert "Nothing was changed" in str(m.get("fail_msg"))
+    # I-18: the scripts' sentences and this one name the troubleshooting row that quotes all three.
+    assert "(docs/troubleshooting.md section 10)" in str(m.get("fail_msg"))
 
 
 def test_the_plaintext_gate_precedes_the_instance_state_commit():

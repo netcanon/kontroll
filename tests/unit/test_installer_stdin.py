@@ -10,10 +10,11 @@ terminal. No verb but `shell` needs stdin: nothing in the installer prompts, and
 reads what is typed. A text pin can say the redirect is there; only running the launcher says which verb's compose
 reads what, for a pipe, a regular file and a terminal.
 
-These tests copy each launcher into a tree under tmp_path with the few files it reads, put a stand-in `docker` first
-on PATH, and run the launcher itself, with stdin set by the row. Nothing is pulled, built or deployed, and HOME is a
-scratch directory. `pty` is imported in the one row that uses it: Windows has no termios, so a module-level import
-would stop the whole session at collection, before this module's skip is read.
+These tests copy each launcher into a tree under tmp_path with the few files it reads, put a stand-in `docker` (and an
+`id` that keeps a uid-1001 runner from being refused) first on PATH, and run the launcher itself, with stdin set by
+the row. Nothing is pulled, built or deployed, and HOME is a scratch directory. `pty` is imported in the one row that
+uses it: Windows has no termios, so a module-level import would stop the whole session at collection, before this
+module's skip is read.
 """
 import os
 import re
@@ -44,7 +45,10 @@ KIT_IMAGE_FLAGS = ["-e", "use_published_images=true", "-e", "bake_code=true"]
 def _stub_docker(tmp_path):
     """A stand-in docker. Its `compose` appends `<its arguments>|<what it got on stdin>` to a log: `tty` when stdin is
     a terminal (read nothing, so a row cannot hang on it), else `read:` and all it read. Any other docker call (`image
-    inspect`, `pull`) reads nothing and exits 0. Returns (the PATH to run under, a function giving the lines)."""
+    inspect`, `pull`) reads nothing and exits 0. Beside it, an `id` whose `id -u` answers 1000 where the account
+    running the suite has uid 1001 (a GitHub-hosted runner's), which both launchers refuse before anything runs
+    (I-18; tests/unit/test_operator_uid_1001_refused.py holds that), and the real answer otherwise; every other
+    question goes to the real `id`. Returns (the PATH to run under, a function giving the lines)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "docker.log"
@@ -53,6 +57,12 @@ def _stub_docker(tmp_path):
         'if [ -t 0 ]; then got=tty; else got="read:$(cat)"; fi\n'
         'printf \'%%s|%%s\\n\' "$*" "$got" >> "%s"\n' % str(log).replace("\\", "/"), encoding="utf-8", newline="\n")
     os.chmod(str(bin_dir / "docker"), 0o755)
+    real_id = shutil.which("id")
+    (bin_dir / "id").write_text(
+        '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = -u ]; then\n'
+        '  u=$(\'%s\' -u); [ "$u" = 1001 ] && u=1000; echo "$u"; exit 0\nfi\n'
+        'exec \'%s\' "$@"\n' % (real_id, real_id), encoding="utf-8", newline="\n")
+    os.chmod(str(bin_dir / "id"), 0o755)
     return (str(bin_dir) + os.pathsep + os.environ["PATH"],
             lambda: log.read_text(encoding="utf-8").splitlines() if log.exists() else [])
 
