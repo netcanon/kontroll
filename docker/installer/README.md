@@ -28,6 +28,13 @@ nothing changed, but a bundle update that changes the Dockerfile is always refle
 require an installer rebuild — the device collections bake into the Semaphore runner image at deploy time; the
 installer carries only the fleet-independent control-plane base (sops/general/docker).
 
+**Stdin.** `docker compose run` keeps the container's stdin open and reads it. So both launchers run every verb
+but `shell` with stdin at `/dev/null` when stdin is no terminal: a verb run where stdin carries a later command's
+input (`ssh <node> 'scripts/kontroll-installer.sh init; bash -s' < verify.sh`) leaves that input to the later
+command (I-4). No verb but `shell` reads stdin, since nothing in the installer prompts; `shell` keeps it (`shell <
+script.sh` runs the script), and a terminal is handed over as it is. Pinned by
+[tests/unit/test_installer_stdin.py](../../tests/unit/test_installer_stdin.py).
+
 > **Published path (C1):** the installer image is also published to ghcr (public packages) and pinned by `@sha256:` digest in
 > [`../images.lock.yml`](../images.lock.yml). A fresh node can install from a **launch kit** (`scripts/make-launch-kit.sh`)
 > with no clone and no build: [`scripts/kontroll`](../../scripts/kontroll.sh) (the published sibling of

@@ -160,6 +160,15 @@ for _img in $_imgs; do
   fi
 done
 
+# A verb other than `shell` runs with stdin at /dev/null when stdin is no terminal (I-4). Compose's `run` keeps the
+# container's stdin open and reads it, so a verb run where stdin carries a later command's input (`ssh <node>
+# './kontroll init; bash -s' < verify.sh`) ate that input, and the later command ran nothing. No verb but `shell`
+# reads stdin: nothing in the installer prompts. `shell` keeps it, so `shell < script.sh` still runs the script, and a
+# terminal is handed over as it is. The redirect stands on the run line, since the launchers hold no `exec` redirect
+# (test_installer_phase1); the two run lines are one command but for it (tests/unit/test_installer_stdin.py).
 # Run the installer with a plain `run` — the image is present from the pull above, so the build: block never fires
 # (`compose run` builds only when the image is ABSENT; `--no-build` is NOT a valid `run` flag on all compose versions).
+if [ "$verb" != shell ] && [ ! -t 0 ]; then
+  exec docker compose -f docker/services/installer.yaml run --rm init "$@" </dev/null
+fi
 exec docker compose -f docker/services/installer.yaml run --rm init "$@"

@@ -64,7 +64,17 @@ case "${1:-init}" in
 esac
 export KONTROLL_INSTALLER_LOG_DRIVER
 
+# A verb other than `shell` runs with stdin at /dev/null when stdin is no terminal (I-4). Compose's `run` keeps the
+# container's stdin open and reads it, so a verb run where stdin carries a later command's input (`ssh <node>
+# 'scripts/kontroll-installer.sh init; bash -s' < verify.sh`) ate that input, and the later command ran nothing. No
+# verb but `shell` reads stdin: nothing in the installer prompts. `shell` keeps it, so `shell < script.sh` still runs
+# the script, and a terminal is handed over as it is. The redirect stands on the run line, since the launchers hold no
+# `exec` redirect (test_installer_phase1); the two run lines are one command but for it
+# (tests/unit/test_installer_stdin.py).
 # --build so a bundle update that changes the Dockerfile (new ansible-core, new collections, a new runtime dep) is
 # reflected — a plain `run` reuses the cached image and would silently run stale glue. Near-noop when nothing changed
 # (compose re-evaluates layers, almost all cached). --rm: ephemeral, no standing container (synthesis §5).
+if [ "${1:-init}" != shell ] && [ ! -t 0 ]; then
+  exec docker compose -f docker/services/installer.yaml run --build --rm init "$@" </dev/null
+fi
 exec docker compose -f docker/services/installer.yaml run --build --rm init "$@"
