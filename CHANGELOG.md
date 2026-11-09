@@ -11,6 +11,22 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): an empty service list brings up nothing, not the whole stack (I-32, 2026-11-08)
+
+deploy-stack brings the stack up with `docker compose ... up -d <the services>`, and compose reads `up -d` with no
+service named as every service in the stack. The list is empty when stack_services is, or names only snmp-exporter
+on a node without its credentials (dropped so it does not crash-loop), so such a run started everything, onboard-gui
+among it with its G9 age-key gate skipped (the gate runs only when onboard-gui is in stack_services). Found by the
+I-22 read.
+
+- **Fixed.** On an empty list the `up` is skipped and the play says there is no service to bring up and why. The run
+  does not fail: a node with nothing to bring up yet is not a broken one.
+- **Tests.** The new `integration/test_up_services_empty.py` runs the playbook's own three tasks (compute the list,
+  the note, the `up`) by ansible-playbook with a stand-in docker on PATH: an empty list, and snmp-exporter alone
+  without its credentials, call docker never and print the note; a service, snmp-exporter with its credentials, a
+  list with snmp-exporter dropped and caddy added, and caddy alone are each brought up as computed, the note skipped.
+- **Docs.** docker/README.md, tests/README.md.
+
 ### fix(ansible): the dry run of a first install through the installer no longer refuses to land (I-19, 2026-11-07)
 
 The quickstart's `check` line, `scripts/kontroll-installer.sh check`, failed on every fresh node: "local-canonical:

@@ -8,7 +8,9 @@ Deploy is codified, not manual: `ansible/playbooks/deploy-stack.yml` installs Do
 renders `docker/.env` from the SOPS `semaphore`/`dashboards`/`proxmox` domains,
 regenerates the Prometheus scrape targets from the modules+inventory
 (`scripts/gen-observability.py`), and brings up the data-driven `stack_services` list.
-Re-run it to add services as later phases enable them.
+Re-run it to add services as later phases enable them. An empty list (or one naming only
+snmp-exporter on a node without its credentials, which the play drops) brings up nothing and
+says so: `docker compose up -d` with no service named would start every service in the stack.
 
 > **Compose-native install (Phase 1):** the install glue itself now runs in an ephemeral container —
 > [`installer/`](installer/README.md) (built from `installer/Dockerfile`, run via `services/installer.yaml` +

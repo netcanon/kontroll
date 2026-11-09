@@ -1264,11 +1264,24 @@
               + (['caddy'] if _runs_caddy.stdout == 'yes' else []))
              | unique | list }}
 
+    - name: Say there is no service to bring up
+      # An empty list is an empty stack_services, or one naming only snmp-exporter on a node without its credentials
+      # (dropped above). `up -d` with no service named starts EVERY service in the stack, onboard-gui among them with
+      # its G9 gate skipped (the gate runs only when onboard-gui is in stack_services), so the up below is skipped
+      # instead (I-32, 2026-11-08). Not a failure: a node with nothing to bring up yet is not a broken one.
+      ansible.builtin.debug:
+        msg: >-
+          no service to bring up on this node (stack_services is {{ stack_services | to_json }}; snmp-exporter is
+          dropped while it has no credentials), so `docker compose up` is not run: with no service named it would
+          start every service in the stack
+      when: _up_services | length == 0
+
     # docker compose CLI directly, NOT community.docker.docker_compose_v2: that module's post-up
     # `docker compose images --format json` state query returns empty on this host's docker compose
     # (v5.1.4) and aborts the run even though the bring-up itself succeeds (a module/CLI mismatch).
     # The CLI `up -d` is reliable; state is reported by a follow-up `ps`.
     - name: Bring up the selected stack service(s)
+      when: _up_services | length > 0     # never `up -d` with no service: compose reads that as all of them
       ansible.builtin.command:  # noqa: command-instead-of-module
         cmd: >-
           docker compose --progress plain --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
