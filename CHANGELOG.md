@@ -11,6 +11,25 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the installer's bootstrap no longer reports its collection install as a change (I-3, 2026-11-09)
+
+A second apply must report 0 changed, and a second `init` never did: bootstrap's `Install the selected collections`
+reported changed whenever galaxy printed "Installing", and in the installer container every run installs afresh what
+the image does not bake, into the image's own collections path, which no bind keeps and which ends with the
+container. Each `init` said 1 changed where a re-install had changed nothing the node keeps.
+
+- **Fixed.** `ansible/playbooks/bootstrap.yml`: an install is reported changed only off the container (`and not
+  in_container`), where it stays under ansible/collections, as before. In the container a digest the L2b wrapper
+  records for the first time (`instance/trust/observed-digests.yml`, in the repo bind) is still a change: a first
+  `init`, or one after the fleet gains a collection, says so.
+- **Tests.** `integration/test_bootstrap_install_change.py` runs the task's own `changed_when` and the play's own
+  `in_container` by ansible-playbook around a stand-in for the wrapper: an install is a change on the node and none in
+  the container, a first L2b record a change on either, nothing installed none; and, from the YAML alone, the task
+  is bootstrap's own (no `when` or `vars` of its own, nothing else sets `in_container`) and the installer service
+  still sets KONTROLL_IN_CONTAINER. `unit/test_install_collections.py`: the wrapper prints `L2b recorded` on a
+  first record only.
+- **Docs.** `docker/installer/README.md` (host / container split); `tests/README.md`.
+
 ### fix(logging): Vector skips a container named `kontroll-throwaway-…`, so a deploy's short helper raises no ERROR (I-1, 2026-11-10)
 
 Vector's `docker_logs` source inspects each container that starts, then attaches to its logs. A deploy's `docker run --rm` helper (a seed, a chown, where an edition runs one) exits before Vector is done, and each cost an ERROR line, 10 to 30 a deploy: "404 No such container" if gone by the inspect, "409 … marked for removal" if dead by the attach, or, under `--log-driver none`, Vector's own "not using either the `jsonfile` or `journald` logging driver". Measured on Vector 0.56.0: a container whose name starts with an excluded entry is neither inspected nor attached, and raised none, under either driver.

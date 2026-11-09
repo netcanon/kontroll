@@ -77,7 +77,8 @@
     # Collapse onto the single-source generator (F4 / report 21 §4.6 / worked-extraction follow-on): this is the
     # SAME script deploy-stack.yml (and CI) runs, so the fleet -> collection resolution + dedup lives in ONE place
     # and can never diverge from a hand-maintained Jinja copy. changed_when:false — the install task below carries
-    # the real change signal (mirrors deploy-stack.yml's gen-requirements call).
+    # the change signal (mirrors deploy-stack.yml's gen-requirements call): an install off the container, a new L2b
+    # digest record in it. A lockfile rewrite with neither (a module removed) is reported nowhere (I-55).
     - name: Generate the collection lockfile (single-source scripts/gen-requirements.py)
       ansible.builtin.command:
         cmd: python3 scripts/gen-requirements.py
@@ -88,12 +89,19 @@
     # keyring is held, else a plain install on the pin + checksum floor (no keyring today ⇒ byte-identical
     # to the raw flat install it replaces). Forwards the galaxy stdout so the 'Installing' change signal is
     # preserved. scripts/install-collections.py.
+    # In the installer container (I-3) the install lands in the image's own collections path, which no bind keeps and
+    # which ends with the container (`--rm`): a re-install there changes nothing the node keeps and is no change.
+    # What the container's run does keep is the L2b record of a digest trusted for the first time
+    # (instance/trust/observed-digests.yml, in the repo bind; the wrapper prints `L2b recorded`), a change wherever
+    # it is written. Off the container the install stays under ansible/collections and is reported as before; a
+    # second run installs nothing (galaxy's "Nothing to do", or the wrapper's "already present")
+    # (tests/integration/test_bootstrap_install_change.py).
     - name: Install the selected collections (never-brick wrapper)
       ansible.builtin.command:
         cmd: python3 scripts/install-collections.py
         chdir: "{{ repo_root }}"
       register: galaxy
-      changed_when: "'Installing' in galaxy.stdout"
+      changed_when: "('Installing' in galaxy.stdout and not in_container) or 'L2b recorded' in galaxy.stdout"
 
     # ── 2. OS toolchain (idempotent) ─────────────────────────────────────
     - name: Install OS packages (age, guest agent, lint tools, network SSH)
