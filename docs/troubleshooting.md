@@ -132,6 +132,12 @@ file_sd targets) restarts nothing; see `scripts/stale-config.py`.
   it should read `N -> N` (the single quotes keep the message one value):
   `ansible -i instance/inventory all -m ansible.builtin.debug -a "msg='{{ mgmt_port | default(22) }} -> {{ mgmt_port
   | default(ansible_port | default(kontroll_probe_port | default(22, true), true), true) }}'"`.
+- **A script prints `run-log: cannot write … continuing without a run-log`, or `~/.local` is root's** → Docker made
+  the run-log directory Vector binds (`~/.local/state/kontroll/runs`) and its missing parents, as root, at an `up`
+  before anything had made them (I-23; the launchers and a host deploy now make it first, as the operator). A
+  deploy since then has given `runs` back to the operator; its parents stay as Docker left them. Check with
+  `ls -ld ~/.local ~/.local/state ~/.local/state/kontroll ~/.local/state/kontroll/runs`, and give each one that
+  shows `root root` back: `sudo chown "$(id -u):$(id -g)" <that directory>`.
 - **Disk filling** → metrics are bounded by `PROM_RETENTION_SIZE`/`_TIME`; logs by `LOKI_RETENTION_PERIOD`
   (+ per-stream tiers); see the storage paradigm
   ([docs/reviews/2026-06-16-storage-logging/99-synthesis.md](reviews/2026-06-16-storage-logging/99-synthesis.md)).

@@ -922,6 +922,22 @@
         mode: "0755"            # o+r so non-root Vector (10002) tails the run-log without group_add:[1001] (C12 MF-1)
       when: "'semaphore' in stack_services or 'vector' in stack_services"
 
+    - name: Ensure the operator scripts' run-log dir exists, as the operator's (Vector binds it — I-23)
+      # docker/services/vector.yaml binds <operator home>/.local/state/kontroll/runs, where the operator's scripts
+      # write their run-logs (scripts/lib/run-log.sh). Docker makes a missing bind source, and each missing parent,
+      # root:root: on a node no such script had run on yet, the first `up` with Vector left ~/.local root's, so every
+      # later script ran without its run-log and the operator's other tools could not write under ~/.local. The
+      # launchers make it on the host before the installer runs (inside the installer the operator's home is not
+      # mounted, hence `not in_container`); a host deploy makes it here. The file module gives each directory it
+      # creates this owner and mode, and leaves an existing parent as it is.
+      ansible.builtin.file:
+        path: "{{ (lookup('env', 'KONTROLL_OPERATOR_HOME') or lookup('env', 'HOME')) ~ '/.local/state/kontroll/runs' }}"
+        state: directory
+        owner: "{{ lookup('env', 'KONTROLL_OPERATOR_UID') or lookup('env', 'USER') }}"
+        group: "{{ lookup('env', 'KONTROLL_OPERATOR_GID') or lookup('env', 'USER') }}"
+        mode: "0755"            # o+rx: non-root Vector (10002) reads the run-logs, as run-log.sh's own mkdir leaves it
+      when: "'vector' in stack_services and not in_container"
+
     - name: Ensure logrotate is present (bounds the ansible run-log — G5; Debian ships it, ensured idempotently)
       ansible.builtin.apt:
         name: logrotate

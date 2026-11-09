@@ -11,6 +11,31 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the run-log directory Vector binds is the operator's before any `up` (I-23, 2026-11-08)
+
+Vector binds `<operator home>/.local/state/kontroll/runs`, where the operator's scripts write their run-logs
+(`scripts/lib/run-log.sh`), and nothing made it before `up`: the launchers made the age, ssh and semaphore
+directories only, and the storage-chown guard leaves the operator's home to them. On a node no such script had run on
+yet, the first `up` with Vector had Docker make `runs` and each missing parent (`~/.local`, `~/.local/state`,
+`…/kontroll`) root:root, so every later script ran without its run-log ("cannot write … continuing without a
+run-log"), Vector's script source shipped nothing, and the operator's other tools could not write under `~/.local`.
+The I-19 read found it.
+
+- **Fixed.** Both launchers make the directory with the others, before docker is called. A host deploy
+  (deploy-stack.yml on the control node; inside the installer the operator's home is not mounted) makes it in a task
+  before `up`, as the operator (`KONTROLL_OPERATOR_UID`/`GID`, else `USER`, as the `.env` render does), 0755 so Vector
+  reads it, each parent it creates likewise, and a parent already there untouched. A node Docker already got to: the
+  next deploy gives `runs` back to the operator; docs/troubleshooting.md §4 says how to give back the parents.
+- **Tests.** `unit/test_launcher_operator_home_binds.py` reads every bind a service takes from the operator's home in
+  `docker/services/*.yaml` and runs each launcher, with a stand-in docker, in an empty home: each such directory
+  exists when docker is first called, the run-log one and its parents the user's and readable. The new
+  `integration/test_run_log_dir_task.py` runs the deploy's task by ansible-playbook: a fresh home gets the four
+  directories as the operator's at 0755 (as root, for uid 1000), and a second run changes nothing; an operator's
+  0700 `~/.local` keeps its mode; a `runs` Docker made root's is given back and its parents are left (as root); a
+  dry-run makes nothing; inside the installer the task is skipped.
+- **Docs.** docs/logging-architecture.md (the script run-logs: who makes the directory, and that Vector ships the
+  default one only), docs/troubleshooting.md §4, tests/README.md.
+
 ### ci: a release download is retried, and every one is checked (I-28, 2026-11-08)
 
 The validate job fetched each pinned release binary with one `curl` and no retry: on public #118 one fetch got an HTTP
