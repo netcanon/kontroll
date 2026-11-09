@@ -11,6 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a run on an inventory with no hosts prints its run id (I-15, 2026-11-09)
+
+The fleet and stack playbooks import `_log-run-id.yml` first, so their output carries `kontroll_run_id=…`, the key
+that correlates one operation across the ansible log, the Semaphore job and the script run-logs. The stamp played on
+`hosts: all`, and the implicit localhost is not in `all`, so on an inventory with no hosts (`all: {}`) nothing was
+stamped while the run's localhost plays still acted: reload-observability's real run POSTed Prometheus's
+`/-/reload` with no id to find it by, on ansible-core 2.19 and 2.18 alike. Found by the I-8 read.
+
+- **Fixed.** The stamp plays on `all:localhost`. `run_once` takes the play's first host, so a fleet run is stamped
+  on its first host as before and its recap gains no localhost, a `--limit <host>` run is stamped on that host,
+  and a run on an inventory with no hosts is stamped on the implicit localhost. Measured on both cores for an
+  empty, a flat, a grouped and a localhost-holding inventory, with and without `--limit`: the stamp moved only
+  where the inventory has no hosts.
+- **Tests.** The new `integration/test_run_id_stamp_runs.py` runs `_log-run-id.yml` by ansible-playbook on an
+  empty inventory (stamped once, on localhost, a UTC id), a fleet (once, on its first host, the recap naming it
+  alone), a `--limit` (on that host) and an injected id (the one printed).
+  `integration/test_reload_observability_runs.py` gains a real run on an inventory with no hosts: one POST, the
+  stamp printed before the reload.
+- **Docs.** `docs/logging-architecture.md` (Layer 0's run correlation key: which playbooks import it, and its
+  pattern), tests/README.md.
+
 ### fix(ansible): a backup run whose every capture is recorded as failed still removes its SSH keys (I-9, 2026-11-09)
 
 `backup-configs.yml`'s summary play fails each host whose capture was recorded as failed (a read that answered

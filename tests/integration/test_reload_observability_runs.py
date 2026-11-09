@@ -63,17 +63,19 @@ def prometheus():
     server.server_close()
 
 
-def _play(tmp_path, url, check=False):
+def _play(tmp_path, url, check=False, hosts=None):
     """Run the play against `url`, with an Ansible home, configuration and inventory of the row's own; return its exit
-    code, its output and its recap's counts for localhost."""
+    code, its output and its recap's counts for localhost. The inventory names localhost unless `hosts` gives its
+    hosts (`{}`: an inventory with none, where the play runs on the implicit localhost)."""
     home = tmp_path / "ansible-home"
     home.mkdir()
     cfg = home / "ansible.cfg"
     cfg.write_text("[defaults]\nretry_files_enabled = False\ninterpreter_python = auto_silent\n", encoding="utf-8")
     inventory = tmp_path / "hosts.yml"
-    inventory.write_text(yaml.safe_dump({"all": {"hosts": {"localhost": {
-        "ansible_connection": "local", "ansible_python_interpreter": "{{ ansible_playbook_python }}"}}}}),
-        encoding="utf-8")
+    if hosts is None:
+        hosts = {"localhost": {"ansible_connection": "local",
+                               "ansible_python_interpreter": "{{ ansible_playbook_python }}"}}
+    inventory.write_text(yaml.safe_dump({"all": {"hosts": hosts} if hosts else {}}), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
     env.update(ANSIBLE_CONFIG=str(cfg), ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"),
                ANSIBLE_NOCOLOR="1", ANSIBLE_DEPRECATION_WARNINGS="0", ANSIBLE_LOCALHOST_WARNING="0",
@@ -139,3 +141,15 @@ def test_a_real_run_with_no_prometheus_listening_fails(tmp_path):
     assert rc != 0, out
     assert "Prometheus config reloaded" not in out and "Prometheus config reload not sent" not in out, out
     assert recap["failed"] == 1, out
+
+
+def test_a_real_run_on_an_inventory_with_no_hosts_is_stamped(tmp_path, prometheus):
+    """I-15: with an inventory that has no hosts (`all: {}`), the play still runs on the implicit localhost and POSTs
+    the reload, so its output must carry the run id. On `hosts: all` the stamp matched nothing (the implicit
+    localhost is not in `all`), and the reload was sent with nothing to correlate it by, by the installer and by
+    Semaphore alike."""
+    rc, out, recap = _play(tmp_path, prometheus.url, hosts={})
+    assert rc == 0, out
+    assert prometheus.seen == [("POST", "/-/reload")], out
+    assert _stamped(out), out
+    assert out.index("kontroll_run_id=") < out.index("Prometheus config reloaded"), out

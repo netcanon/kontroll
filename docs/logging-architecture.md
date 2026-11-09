@@ -96,11 +96,15 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   5 files × ~10 MB (46 MB total) vs a single unbounded 26 MB file before the restart.
 - ✅ **GUI audit-log rotation** — `gui/app.py` `_audit()` now routes through a
   `RotatingFileHandler` (5 MB × 5), format preserved, creds still excluded (test-covered) (G1).
-- ✅ **Run correlation key** — a shared `_log-run-id.yml`, imported first by the fleet
-  playbooks (ping/backup-configs/deploy-stack/promote), logs a `kontroll_run_id` at the start of
-  every run — into the ansible log AND the Semaphore job output (Postgres-backed, queryable
+- ✅ **Run correlation key** — a shared `_log-run-id.yml`, imported first by the fleet and
+  stack playbooks (directly by deploy-stack, promote and reload-observability; through
+  `_fleet-preamble.yml` by the plays that open fleet SSH), logs a `kontroll_run_id` at the start
+  of every run — into the ansible log AND the Semaphore job output (Postgres-backed, queryable
   via the task API), so one operation is greppable by id (G2/G4). Synthetic by default
-  (UTC stamp); a caller may inject `-e kontroll_run_id=…`. (Investigated: Semaphore does
+  (UTC stamp); a caller may inject `-e kontroll_run_id=…`. It plays on `all:localhost` with
+  `run_once`: a fleet run stamps its first host, a `--limit <host>` run that host, and a run on
+  an inventory with no hosts the implicit localhost (I-15: on `hosts: all` that run printed no
+  id while its localhost plays still acted; `tests/integration/test_run_id_stamp_runs.py`). (Investigated: Semaphore does
   not expose its task id as a runner env var, so an in-playbook id is the reliable mechanism;
   it co-appears with the Semaphore task id in the job output for cross-reference.)
   *Durability enhancement (since shipped):* a persistent `ANSIBLE_LOG_PATH`

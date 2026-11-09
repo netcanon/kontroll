@@ -5,12 +5,18 @@
 # one operation across the ansible log, the Semaphore job, and (ahead) the aggregated logs.
 # A caller may inject `-e kontroll_run_id=...`; otherwise a UTC timestamp is used.
 #
-# hosts: all + run_once (NOT hosts: localhost) so the stamp still fires under `--limit <host>`
-# — the onboard verify path runs `ping.yml --limit <host>`, which a localhost-only play would
-# skip, silently losing the correlation id for exactly the single-host runs. connection: local
-# keeps it a no-contact, log-only task.
+# hosts: all:localhost + run_once. It starts from `all` (NOT hosts: localhost) so the stamp still
+# fires under `--limit <host>` — the onboard verify path runs `ping.yml --limit <host>`, which a
+# localhost-only play would skip, silently losing the correlation id for exactly the single-host
+# runs. It adds localhost because the implicit localhost is not in `all`: on an inventory with no
+# hosts, `all` matches nothing and nothing was stamped, while the run's localhost plays still
+# acted (I-15: reload-observability's real run POSTed /-/reload with no id). run_once takes the
+# play's first host, which is the first inventory host when there is one, so a fleet's stamp
+# lands where it did and its recap gains no localhost (measured on ansible-core 2.19 and 2.18,
+# tests/integration/test_run_id_stamp_runs.py). connection: local keeps it a no-contact,
+# log-only task.
 - name: Stamp the run correlation id
-  hosts: all
+  hosts: all:localhost
   gather_facts: false
   connection: local
   tasks:
