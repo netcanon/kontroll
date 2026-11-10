@@ -11,20 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
-### fix(installer): a verb run from a script no longer eats the input of the command after it (I-4, 2026-11-09)
+### fix(installer): a verb run from a script no longer eats the input of the command after it, when its stdin is no terminal (I-4, 2026-11-09)
 
 `docker compose run` keeps the container's stdin open and reads it. Redeploying a dev box with `ssh <node>
 'scripts/kontroll-installer.sh init …; bash -s' < verify.sh` ran no verify: the installer read the script, and
 `bash -s` got nothing.
 
 - **Fixed.** `scripts/kontroll-installer.sh` and the launch kit's `kontroll` run every verb but `shell` with stdin at
-  /dev/null when stdin is no terminal. No verb but `shell` reads stdin (nothing in the installer prompts). `shell`
-  keeps its stdin, so `shell < script.sh` still runs the script, and a terminal is handed over as it is.
-- **Tests.** `unit/test_installer_stdin.py` runs both launchers with a stand-in docker that records its stdin: piped
-  input reaches no verb but `shell`, the command after the launcher in the same shell gets it, and a terminal (a pty)
-  reaches `init` and `shell` as a terminal; each launcher's two run lines are pinned one command but for the redirect,
-  which stands on the run line since the launchers hold no `exec` redirect.
-- **Docs.** `docker/installer/README.md` (stdin).
+  /dev/null when stdin is no terminal. No verb but `shell` needs stdin: nothing in the installer prompts. An
+  ansible-playbook flag that prompts (`--ask-vault-pass`, `--ask-become-pass`, `--ask-pass`, `--step`), forwarded to
+  `init`, `check` or a playbook, reads its answer from a terminal only; from a script, give a password as a file
+  (`--vault-password-file`, `--become-password-file`, `--connection-password-file`). `shell` keeps its stdin, so
+  `shell < script.sh` still runs the script, and a terminal is handed over as it is.
+- **Tests.** `unit/test_installer_stdin.py` runs both launchers with a stand-in docker that records its arguments and
+  its stdin. Input on a pipe or in a regular file reaches no verb but `shell`, and the command after the launcher in
+  the same shell (I-4's `;`) gets it; a terminal (a pty) reaches `init` and `shell` as a terminal; every row checks
+  the verb and arguments compose got. Each launcher runs compose `run` on two lines only, pinned one command but for
+  the redirect, which stands on the run line since the launchers hold no `exec` redirect. The file imports `pty` in
+  the one row that uses it, so it collects, and skips, on Windows.
+- **Docs.** `docker/installer/README.md` (stdin); `tests/README.md`.
+- **Not changed.** A script run under a terminal (`ssh -tt`, `script`) still hands the installer the terminal and
+  whatever is queued on it: run it with a plain `ssh`, or give the verb `</dev/null`.
 
 ### fix(ansible): a run on an inventory with no hosts prints its run id (I-15, 2026-11-09)
 
