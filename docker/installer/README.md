@@ -79,9 +79,13 @@ script), and a terminal is handed over as it is, with whatever is queued on it: 
   (no kontroll-init, no secret value printed; their log is the deploy's record), `none` for every other verb,
   whatever the operator's shell exported. So what `fresh-init` shows once (the bootstrap passwords, a minted
   break-glass key), and kontroll-init run by hand in `shell`, reach the terminal only — never `docker logs` or Loki.
+- **No root-owned bytecode in the operator's checkout.** The run is root's over the bound checkout, so the
+  environment sets `PYTHONDONTWRITEBYTECODE=1` (a literal): no generator a play runs and no filter plugin Ansible
+  loads leaves a `__pycache__` there that a later run as the operator could not replace (I-54).
 
-These are pinned in CI by [tests/unit/test_installer_phase1.py](../../tests/unit/test_installer_phase1.py) and
-[tests/unit/test_installer_log_driver.py](../../tests/unit/test_installer_log_driver.py).
+These are pinned in CI by [tests/unit/test_installer_phase1.py](../../tests/unit/test_installer_phase1.py),
+[tests/unit/test_installer_log_driver.py](../../tests/unit/test_installer_log_driver.py) and
+[tests/integration/test_installer_leaves_no_bytecode.py](../../tests/integration/test_installer_leaves_no_bytecode.py).
 
 ## Why a standalone fragment (not in `docker/compose.yaml`'s include)
 

@@ -83,6 +83,12 @@ services:
       # Keep ansible's file log off the operator-owned /repo bind (the relative ansible.cfg log_path isn't writable
       # there as root in some layouts → a noisy "log file not writeable, aborting" warning). An ephemeral path.
       ANSIBLE_LOG_PATH: /tmp/kontroll-installer-ansible.log
+      # Every Python of a run here is root's over the operator's checkout: each python3 a play runs (the generators,
+      # the frontend resolver, which import scripts/kontroll/) and ansible-playbook loading the repo's filter
+      # plugins would leave a root-owned __pycache__ in it, which a later run as the operator cannot replace or
+      # remove (I-54, the I-23 shape). Every child inherits this, so no call needs its own -B; a literal, so no
+      # exported value can turn it off.
+      PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       # The repo working tree (incl. the private instance/ overlay + instance/trust the L2b wrapper reads). :rw —
       # fresh-init scaffolds instance/, local-canonical commits the worktree. Bound at the SAME path as on the host
