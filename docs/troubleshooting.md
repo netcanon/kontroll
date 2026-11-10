@@ -241,7 +241,10 @@ the same of it: the root of a filesystem mounted at the path holds `lost+found`,
 dry run's ownership pass names it too, as the real run makes it yours and gid 1001's, group-writable. A repository
 whose `HEAD` is gone (`objects` or `refs` there, and no `HEAD`) is audited (`head: HEAD`), and its dry run says that
 the real run restores `HEAD` and then judges the landing, which refuses it if the canonical holds a commit your
-checkout lacks.
+checkout lacks. A symbolic link at the path is followed: the canonical is the directory it names, and each case
+above is of that directory. A link to nothing is no canonical yet, and the real run makes the directory it names
+and seeds a canonical there; so a link into a disk that is not mounted gets a new, empty canonical under the
+mount point, on the disk the mount point is on. Mount the disk before the deploy.
 
 **A deploy audits BEFORE it writes.** The play puts a canonical right on every run — it writes `HEAD`, sets its
 own config keys, installs `hooks/update`, makes `hooks/` root's — and the audit stands in front of all of that:

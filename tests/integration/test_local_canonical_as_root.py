@@ -209,6 +209,96 @@ def test_a_first_install_whose_canonical_path_is_an_empty_directory_passes_its_d
     assert second["changed"] == 0 and second["failed"] == 0, second["out"]
 
 
+def _elsewhere(node):
+    """A directory beside the node's canonical path, as a second disk's mount point would be — root's, `0755` —
+    and the path in it that a link at the canonical's path names (nothing is made there)."""
+    disk = os.path.join(node.base, "disk")
+    os.mkdir(disk)
+    os.chmod(disk, 0o755)
+    return os.path.join(disk, "canonical.git")
+
+
+def test_a_canonical_path_that_is_a_link_to_an_empty_directory_passes_its_dry_run_and_lands_there(node):
+    """The node's canonical path is a symbolic link to an empty root-owned `0755` directory elsewhere (the canonical
+    kept on another disk). Its `--check --diff` does not fail: it says the real run will seed the canonical (the
+    directory is empty), names no audit finding, refuses nothing and writes nothing. The first apply lands HEAD as a
+    first seed IN the directory the link names, the link left a link; the second reports 0 changed.
+
+    Guards the dry run of such a node. The play looked at the path without following it, so a link read as no
+    directory, was never listed, and was judged as a repository: the dry run refused ("the canonical could not be
+    read") while the real run, whose `file` and `git init` follow the link, landed (I-40, from I-19's read A,
+    measured on both cores)."""
+    target = _elsewhere(node)
+    os.mkdir(target)
+    os.chmod(target, 0o755)
+    os.symlink(target, node.bare)
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the mandated dry-run must not fail:\n" + dry["out"]
+    assert "holds no canonical yet (it is an empty directory" in dry["out"] and "first seed" in dry["out"], dry["out"]
+    assert "REFUSING to land" not in dry["out"], dry["out"]
+    for finding in ("config-unread", "hook-missing", "head: HEAD", "unread"):
+        assert finding not in dry["out"], (finding, "an empty directory has nothing to audit")
+    assert os.path.islink(node.bare) and os.listdir(target) == [] and os.lstat(target).st_uid == 0, \
+        "a dry-run wrote there"
+    first = _play(node)
+    assert first["changed"] > 0 and first["failed"] == 0, first["out"]
+    assert os.path.islink(node.bare) and os.readlink(node.bare) == target, "the link is left a link"
+    assert canon.read_ref(target, canon.MAIN) == (_head(node.wt), "commit", ""), first["out"]
+    second = _play(node)
+    assert second["changed"] == 0 and second["failed"] == 0, second["out"]
+
+
+def test_a_canonical_path_that_is_a_link_to_a_landed_canonical_is_audited_judged_and_deploys_0_changed(node):
+    """A landed canonical moved to a directory elsewhere, and a symbolic link to it left at its path. Its `--check
+    --diff` does not fail: the audit reads it (its message of NO REPORT is not shown), the landing is judged, nothing is refused and nothing
+    is said to be missing. The apply after it reports 0 changed, the link is left a link, and `main` stays the
+    checkout's commit.
+
+    Guards the fix going too far: before the play's look at the path followed a link, a link to a canonical was
+    audited and judged already (the audit and the landing open the path, through the link), and following it must
+    leave that so (I-40)."""
+    first = _play(node)
+    assert first["failed"] == 0 and canon.read_ref(node.bare, canon.MAIN)[0] == _head(node.wt), first["out"]
+    target = _elsewhere(node)
+    os.rename(node.bare, target)
+    os.symlink(target, node.bare)
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the dry run of a linked canonical must not fail:\n" + dry["out"]
+    for said in ("holds no canonical yet", "holds a repository without HEAD", "REFUSING to land",
+                 "local-canonical: the audit gave NO REPORT"):
+        assert said not in dry["out"], (said, dry["out"])
+    real = _play(node)
+    assert real["changed"] == 0 and real["failed"] == 0, real["out"]
+    assert os.path.islink(node.bare) and os.readlink(node.bare) == target, "the link is left a link"
+    assert canon.read_ref(target, canon.MAIN)[0] == _head(node.wt)
+
+
+def test_a_canonical_path_that_is_a_link_to_nothing_passes_its_dry_run_and_the_real_run_makes_what_it_names(node):
+    """The node's canonical path is a symbolic link to a path that is not there (the directory it names lives on a
+    disk that is not mounted, say). Its `--check --diff` does not fail: it says the path holds no canonical yet (it
+    is not there), audits nothing, refuses nothing and writes nothing (the link is left a link to nothing). The first
+    apply makes the directory the link names (`file` follows it) and lands HEAD there as a first seed; the second
+    reports 0 changed.
+
+    Guards the dry run saying what the real run does here too. Looked at without following it, the link was a path
+    that is no directory: it was audited (`unread: the top directory`) and judged as a repository, and the dry run
+    refused while the real run made the directory and landed (I-40). The real run's seeding through such a link is
+    as it was; whether the play should refuse a link to nothing is not decided."""
+    target = _elsewhere(node)
+    os.symlink(target, node.bare)
+    dry = _play(node, check=True)
+    assert dry["failed"] == 0, "the mandated dry-run must not fail:\n" + dry["out"]
+    assert "holds no canonical yet (it is not there)" in dry["out"] and "first seed" in dry["out"], dry["out"]
+    assert "REFUSING to land" not in dry["out"] and "unread" not in dry["out"], dry["out"]
+    assert os.path.islink(node.bare) and not os.path.exists(target), "a dry-run made the canonical"
+    first = _play(node)
+    assert first["changed"] > 0 and first["failed"] == 0, first["out"]
+    assert os.path.islink(node.bare) and os.readlink(node.bare) == target, "the link is left a link"
+    assert canon.read_ref(target, canon.MAIN) == (_head(node.wt), "commit", ""), first["out"]
+    second = _play(node)
+    assert second["changed"] == 0 and second["failed"] == 0, second["out"]
+
+
 def test_a_canonical_path_that_holds_entries_and_no_repository_is_audited_and_its_dry_run_passes(node):
     """The node's canonical path is a directory that holds an entry and no repository: the root of a filesystem
     mounted at the path, which holds `lost+found/` (root's, `0700`) and nothing else. Its `--check --diff` does not

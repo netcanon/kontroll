@@ -532,9 +532,11 @@ def test_a_path_that_is_no_directory_is_a_usage_error_and_nothing_is_audited(tmp
 
 def test_the_play_audits_before_it_writes_shows_the_report_and_never_stops_on_it():
     """`local-canonical.yml` audits a canonical that is already there BEFORE its first task that writes into
-    one: a `stat` of the canonical's path that starts nothing on it, and the decision whether that path is a
-    canonical (it is there and is not an empty directory: `tests/unit/test_local_canonical.py` holds the decision
-    itself); then — only when there is one — a
+    one: a `stat` of the canonical's path that starts nothing on it and follows a link there (looked at
+    unfollowed, a link to an empty directory read as no directory, so it was judged as a repository and its dry run
+    refused while its real run landed: I-40; `tests/integration/test_local_canonical_as_root.py` runs both), and
+    the decision whether that path is a canonical (it is there and is not an empty directory:
+    `tests/unit/test_local_canonical.py` holds the decision itself); then — only when there is one — a
     command of `scripts/kontroll-canonical.py --audit {{ bare }}` in the worktree, read-only under `--check`
     too (`check_mode: false`), never "changed", never failing the play, as whoever runs the play; then two
     tasks whose conditions and messages are EVALUATED here, with Jinja, against what the command can register.
@@ -553,8 +555,8 @@ def test_the_play_audits_before_it_writes_shows_the_report_and_never_stops_on_it
     tasks = _play_tasks()
     at = next(i for i, t in enumerate(tasks) if "kontroll-canonical.py" in str(t.get("ansible.builtin.command", "")))
     before, entries, present, audit, show, no_report = tasks[at - 3:at + 3]
-    assert before["ansible.builtin.stat"] == {"path": "{{ bare }}", "get_checksum": False, "get_mime": False,
-                                              "get_attributes": False}
+    assert before["ansible.builtin.stat"] == {"path": "{{ bare }}", "follow": True, "get_checksum": False,
+                                              "get_mime": False, "get_attributes": False}
     assert set(before) == {"name", "ansible.builtin.stat", "register"}
     assert entries.get("register") == "_canonical_listing" and "ansible.builtin.command" in entries
     assert "_canonical_present" in present["ansible.builtin.set_fact"]

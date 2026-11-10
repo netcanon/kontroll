@@ -11,6 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a link at the canonical's path is read as the directory it names (I-40, 2026-11-09)
+
+`local-canonical.yml` looked at the canonical's path without following a link there, so a link read as no
+directory: it was never listed, and was taken for a repository. A link to an empty directory (the canonical kept on
+another disk, made empty) was audited and judged as one, and its mandated dry run refused ("local-canonical:
+REFUSING to land (exit 1) — kontroll-land: the canonical could not be read") while its real run, whose `file` and
+`git init` follow the link, landed; a link to nothing failed the same way. Docker makes a directory at the path, not
+a link, so a node gets one only by an operator's hand.
+
+- **Fix.** The play's look at the path follows a link (`follow: true`): the canonical is the directory the link
+  names, as the real run, the audit and the landing take it. A link to an empty directory is no canonical yet, as an
+  empty directory is; a link to nothing is no path at all, and its dry run says the real run creates the canonical,
+  which it does, in the directory the link names. A link to a canonical is audited and judged as before.
+- **Tests.** `tests/integration/test_local_canonical_as_root.py` runs the play as root for a link to an empty
+  directory (the dry run passes; the first apply lands HEAD in the directory the link names and leaves the link; the
+  second reports 0 changed), a link to a landed canonical (audited and judged; the apply reports 0 changed) and a link
+  to nothing (the dry run passes and writes nothing; the apply makes the directory and lands). The stat's unit pin
+  (`tests/unit/test_canonical_audit.py`) takes the key.
+- **Docs.** `docs/troubleshooting.md` §8 and SECURITY.md's audit row: a link at the path is followed; §8 says what a
+  link to a disk that is not mounted gets.
+
 ### fix(scripts): install-prereqs asks compose before installing a compose package, and fails when none can be (I-21, 2026-11-09)
 
 With Docker already installed (a GitHub-hosted runner; a host with the distribution's `docker.io`),

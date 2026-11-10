@@ -96,9 +96,15 @@
     # canonical as this play had just left it. Here it reads the canonical as it has been since the last deploy.
     # The price is a line that is nobody's doing: an update that ships a newer hook, or sets a key this play did
     # not set before, names that hook or key once — in the run that puts it right (docs/troubleshooting.md).
+    # A link at the path is followed: the canonical is the directory it names, as the real run's `file` and `git
+    # init` below take it (and the audit and the landing, which open the path). Looked at without following, a
+    # link read as no directory, so it was never listed: a link to an empty directory was judged as a repository
+    # and its dry run refused ("the canonical could not be read") while its real run landed (I-40). A link to
+    # nothing is then no path at all, as the real run takes it: `file` makes the directory it names.
     - name: Is there a canonical already — so that it is audited BEFORE this play writes into it
       ansible.builtin.stat:
         path: "{{ bare }}"
+        follow: true            # a link there is the directory it names (above)
         get_checksum: false     # one look at the path, and nothing started on it
         get_mime: false
         get_attributes: false
