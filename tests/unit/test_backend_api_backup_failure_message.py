@@ -62,14 +62,16 @@ def _render(auth, status, host="fw-1"):
     return env.from_string(msg).render(**ctx)
 
 
-TOKEN_HINT = ("The API rejected the credential: check that `fortios_api_token` (or, if it is empty, `fw_1_api_token`)"
-              " holds a current token with read permission.")
-BASIC_HINT = ("The API rejected the credential: check that `probe_user` (or, if it is empty, `fw_1_api_username`) and"
-              " `probe_pass` (or, if it is empty, `fw_1_api_password`) hold a current username and password with read"
-              " permission.")
+TOKEN_HINT = ("The API rejected the credential: check that `fortios_api_token` (or, if that is unset or empty,"
+              " `fw_1_api_token`) holds a current token with read permission.")
+BASIC_HINT = ("The API rejected the credential: check that `probe_user` (or, if that is unset or empty,"
+              " `fw_1_api_username`) and `probe_pass` (or, if that is unset or empty, `fw_1_api_password`) hold a"
+              " current username and password with read permission.")
 # A var the recipe does not name: its per-host name alone is named.
-NO_PASS_HINT = BASIC_HINT.replace("`probe_pass` (or, if it is empty, `fw_1_api_password`)", "`fw_1_api_password`")
-TYPE_ONLY_HINT = NO_PASS_HINT.replace("`probe_user` (or, if it is empty, `fw_1_api_username`)", "`fw_1_api_username`")
+NO_PASS_HINT = BASIC_HINT.replace("`probe_pass` (or, if that is unset or empty, `fw_1_api_password`)",
+                                  "`fw_1_api_password`")
+TYPE_ONLY_HINT = NO_PASS_HINT.replace("`probe_user` (or, if that is unset or empty, `fw_1_api_username`)",
+                                      "`fw_1_api_username`")
 NONE_HINT = "The API refused the request, and the recipe sends no credential: name one in its auth."
 DOWN = ("The device did not answer the API port, or its TLS failed — wrong address, port, certificate, or the service"
         " is down.")

@@ -70,11 +70,19 @@ one of them. I-17.) Pinned by
 falls through to the per-host name, as a token's does. The pair is resolved for a
 `basic` recipe and for any recipe that names either var (the GET sends what it names,
 whatever the type), and refused before the request, by name and never by value, when
-either half resolves to nothing.
+either half resolves to nothing; so a recipe that names either var is refused unless both
+halves resolve, whatever its type. The per-host name is read only when the recipe's yields
+nothing, so a per-host value that cannot be read does not fail a host whose recipe var
+holds the pair. `default=''` covers a name that is not in scope; a name that is defined
+and whose own value fails when it is read (an inline `community.sops` lookup whose domain
+is missing, cannot be decrypted on this box, or lacks the key) fails the `no_log` resolve,
+censored, and its rescue then refuses the host by name, never by value. The token's
+resolve has the same rescue.
 
 That too is a correction (I-16). The GET used to look the two names up in its own
 arguments, so a name that was not in scope failed the request under its `no_log`, and
-the fatal arrived *censored*, as the token's once did; the 401 hint was never reached.
+the fatal arrived *censored*, as the token's once did (2.19 also printed an `[ERROR]`
+naming the recipe's var; 2.18 said nothing more); the 401 hint was never reached.
 And the onboard wrote the pair as `ansible_user` and `ansible_password`, which this role
 never read, so an onboarded basic host could not authenticate at all. The api backend's
 `username` and `password` entries now say `maps_to: "{cred_key}_api_username"` and
