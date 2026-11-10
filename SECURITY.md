@@ -146,7 +146,10 @@ OS-keyring Fernet key, with a different mechanism (documented choice, PLAN.md §
 decrypted value; `ansible.cfg` `log_path`.
 **Proves:** a grep gate in `tests/validate` flags secret-handling modules
 (`*_command`, `uri`, `*_token` vars) lacking `no_log`. Mirrors NetConfig's
-`test_logging_config.py` "credentials are never logged" guarantee.
+`test_logging_config.py` "credentials are never logged" guarantee. Every backup
+capture's write, and the read it writes, is `no_log`, since `--check --diff`
+prints a write whole: `tests/unit/test_capture_no_log.py` (I-13; its exemptions
+name the file and why it holds no credential).
 
 Scheduled jobs never run at `-vvvv` (can echo secrets despite `no_log`).
 

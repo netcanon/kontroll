@@ -19,7 +19,10 @@ SSH (`ansible_user: root`); container ops via `community.docker`. See
 > real state is app-managed appdata/compose outside this seam, so the class
 > records a logged skip instead of forcing an empty capture. Set
 > `backup_capable: true` in `host_vars/<host>.yml` to capture a container/stack
-> **manifest** for one host (an inventory, not a full-config restore).
+> **manifest** for one host (an inventory, not a full-config restore). Its read
+> and write are `no_log`, as every class's capture is: `docker ps -a` prints each
+> container's command line (truncated), where a credential passed as an argument
+> can show, and a dry-run's diff would print it.
 
 The manifest script prints a `### ` header before each read. An answer of the
 headers alone is no manifest: it is recorded `FAILED`, which fails the run at its

@@ -11,6 +11,20 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): docker_host's container manifest is no longer printed by a dry-run's diff (I-13, 2026-11-09)
+
+Every class's capture write and its read carry `no_log: true`, because a capture is the device's configuration and
+`--check --diff` prints the whole write as its diff. docker_host's opt-in container manifest had neither. Its
+`docker ps -a` prints each container's command line (truncated), and a credential passed there as an argument showed
+in the dry-run's diff, in the ansible log and the Semaphore job's output. A `-v` run showed it in the read.
+
+- `ansible/roles/docker_host/tasks/backup.yml`: the manifest's read and write are `no_log`, and the header says why.
+- Tests: `tests/unit/test_capture_no_log.py` holds every capture write, and the read it writes, to `no_log`. It finds
+  the writes as the I-5 test does (any role task that names `config_backup_dir` or a fact built from it), so a new
+  class's backup is held without being listed. Its exemptions are journald.conf, which names no credential, and the
+  authorized_keys reads (public keys); each must name a task that exists and reads that file.
+- Docs: SECURITY.md C2 and the docker_host README.
+
 ### fix(ansible): an API host's basic-auth pair is read where the onboard writes it, or refused by name (I-16, 2026-11-09)
 
 roles/backend_api sent a basic recipe's username and password by looking the recipe's `username_var` and
