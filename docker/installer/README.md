@@ -57,8 +57,10 @@ script), and a terminal is handed over as it is, with whatever is queued on it: 
 > owned `1001:1001`, mode `0600`; docs/SETUP.md §6 has the command).
 
 > **A relocated storage root** is the one `KONTROLL_STORAGE_ROOT` names in the launcher's shell: the installer binds
-> that path and no other, and the deploy takes it as its root. Export it before the launcher; an `-e` or an instance
-> var naming another root, or a store set outside it, is refused before anything is made (troubleshooting.md §13).
+> that path and no other, and the deploy takes it as its root. Export it before the launcher, in every shell that
+> runs it, and keep `kontroll_storage_root` at the same root in the instance vars, so that a shell without the
+> export is refused, not moved back to the default; an `-e` or an instance var naming another root, or a store set
+> outside it, is refused before anything is made (docs/troubleshooting.md §13).
 
 ## Security model (the floor that must hold — synthesis §5)
 

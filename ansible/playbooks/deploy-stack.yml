@@ -270,16 +270,26 @@
       # vars; default = today's /var/lib/kontroll). The SAME resolved value feeds BOTH the compose bind source
       # (the rendered .env below) AND this play's chown tasks — so a relocated store is always created
       # uid-scoped BEFORE `up`, never a Docker-auto-created root:root 0755 hole (the G9 / C8 failure).
-      # default(..., true) collapses an explicit-empty value to the safe default (Jinja default() is
-      # empty-blind otherwise → an empty -e would derive a host-root path like /loki).
+      # default(..., true) collapses an instance var's explicit-empty value to the safe default (Jinja default() is
+      # empty-blind otherwise → it would derive a host-root path like /loki). An empty -e is an extra var, which
+      # set_fact cannot override: it fails the assert below, closed.
       # Inside the installer (docker/services/installer.yaml) KONTROLL_INSTALLER_STORAGE_ROOT is the root it binds
       # from the host at the same path, from the launcher's shell: the default there, so an exported
-      # KONTROLL_STORAGE_ROOT alone relocates the root (I-26). Unset everywhere else.
+      # KONTROLL_STORAGE_ROOT alone relocates the root (I-26). Unset everywhere else. The refusals below read it
+      # inline, never through a fact: an -e beats set_fact, and could turn them off.
+      vars:
+        # The root as the operator gave it (an -e or an instance var), read before this task sets the fact: a set_fact
+        # value that names a sibling key is undefined at render, so the source line reads it through this var.
+        _root_given: "{{ kontroll_storage_root | default('', true) | string }}"
       ansible.builtin.set_fact:
         kontroll_storage_root: >-
           {{ kontroll_storage_root
              | default(lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') or '/var/lib/kontroll', true) }}
-        _installer_storage_root: "{{ lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') }}"
+        # Where the root came from, for the line after the refusals.
+        _storage_root_from: >-
+          {{ 'an -e or an instance var' if (_root_given | length > 0)
+             else ('the root the installer binds' if lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT')
+                   else 'the default') }}
 
     - name: Fail closed on an unsafe storage root (must be an absolute path, never '/' — C8)
       ansible.builtin.assert:
@@ -292,22 +302,28 @@
       # Inside the installer only the root it binds is the host's. A store made under another would be made in the
       # container's own filesystem and gone with it; the stack's binds of it on the host would get Docker's
       # root:root 0755 directories, and the G9 gate would stat the container's path, never the key the operator
-      # installs on the host. Before anything is made under the root. Compared as written, a trailing slash and
-      # doubled slashes aside.
+      # installs on the host. Before anything is made under the root. Compared as real paths, resolved here inside
+      # the installer, which binds the root at the host's own path: a `.`, a `..`, doubled slashes or a link under
+      # the root lead where they would on the host; a path through a link only the host has stays as written, and
+      # is refused.
       ansible.builtin.assert:
         that:
           - >-
-            (kontroll_storage_root ~ '/') | regex_replace('/+', '/')
-            == (_installer_storage_root ~ '/') | regex_replace('/+', '/')
+            ((kontroll_storage_root | ansible.builtin.realpath) ~ '/') | regex_replace('/+', '/')
+            == ((lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') | ansible.builtin.realpath) ~ '/')
+            | regex_replace('/+', '/')
         fail_msg: >-
           kontroll_storage_root is {{ kontroll_storage_root }} (an -e or an instance var), but this run is inside
-          the installer, which binds {{ _installer_storage_root }} from the host: the root KONTROLL_STORAGE_ROOT
-          names in the launcher's shell, /var/lib/kontroll when it is unset. A store made under the other would be
-          made in the installer's own filesystem and gone with it. Name one root: export
-          KONTROLL_STORAGE_ROOT={{ kontroll_storage_root }} before the launcher and drop the other setting, or keep
-          {{ _installer_storage_root }} and drop kontroll_storage_root. Nothing has been made under either.
+          the installer, which binds {{ lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') }} from the host: the root
+          KONTROLL_STORAGE_ROOT names in the launcher's shell, /var/lib/kontroll when it is unset. A store made
+          under the other would be made in the installer's own filesystem and gone with it. Name one root: export
+          KONTROLL_STORAGE_ROOT={{ kontroll_storage_root }} before the launcher, in every shell that runs it, and
+          keep kontroll_storage_root {{ kontroll_storage_root }} in the instance vars as well, so that a run whose
+          shell lacks the export is refused, not moved back to the default root; or keep
+          {{ lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') }} and drop kontroll_storage_root. Nothing has been
+          made under either.
         quiet: true
-      when: _installer_storage_root | length > 0
+      when: lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') | length > 0
 
     - name: Look at the storage root (a missing one is made root's below, before any store is made in it)
       ansible.builtin.stat:
@@ -404,17 +420,24 @@
     - name: Refuse a store the installer does not bind, outside its storage root (I-26)
       # The stores with their own knob may sit on another disk, but inside the installer only the bound root is
       # the host's: one set outside it would be made in the container's own filesystem, as above. A data disk
-      # mounted under the root serves instead. Before any store is made.
+      # mounted under the root serves instead: a mount, not a link, which would lead the store back out of the
+      # root. Compared as real paths, as above, so a `..` or a link out of the root is outside it. The suggested
+      # mount point is the knob's own name: no two stores are offered the same one, and none another's directory.
+      # Before any store is made.
       ansible.builtin.assert:
         that:
           - >-
-            (item.value ~ '/') | regex_replace('/+', '/')
-            is match((kontroll_storage_root ~ '/') | regex_replace('/+', '/') | regex_escape)
+            ((item.value | ansible.builtin.realpath) ~ '/') | regex_replace('/+', '/')
+            is match(((kontroll_storage_root | ansible.builtin.realpath) ~ '/') | regex_replace('/+', '/')
+            | regex_escape)
         fail_msg: >-
-          {{ item.key }} is {{ item.value }}, outside the storage root {{ kontroll_storage_root }}, and this run is
-          inside the installer, which binds only that root from the host: the store would be made in the
-          installer's own filesystem and gone with it. Mount that disk under the root (at
-          {{ kontroll_storage_root }}/{{ item.value | regex_replace('/+$', '') | basename }}, say) and point
+          {{ item.key }} is {{ item.value }}{{ (' (which leads to ' ~ (item.value | ansible.builtin.realpath) ~ ')')
+          if ((item.value | ansible.builtin.realpath) ~ '/') | regex_replace('/+', '/')
+          != (item.value ~ '/') | regex_replace('/+', '/') else '' }}, outside the storage root
+          {{ kontroll_storage_root }}, and this run is inside the installer, which binds only that root from the
+          host: the store would be made in the installer's own filesystem and gone with it. Mount that disk under
+          the root (at {{ kontroll_storage_root | regex_replace('/+$', '') }}/{{ item.key
+          | regex_replace('^kontroll_', '') | regex_replace('_dir$', '') }}, say; a mount, not a link) and point
           {{ item.key }} there, or drop it to keep the store under the root. Nothing has been made there.
         quiet: true
       loop: >-
@@ -423,7 +446,14 @@
             'kontroll_ansible_log_dir': kontroll_ansible_log_dir} | dict2items }}
       loop_control:
         label: "{{ item.key }}"
-      when: _installer_storage_root | length > 0
+      when: lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') | length > 0
+
+    - name: Say which storage root this run uses, and where it came from (I-26)
+      # The root is where every store lives, and inside the installer it can come from the launcher's shell alone:
+      # one line in the run's output, which opens with its kontroll_run_id (_log-run-id.yml), so a run that moved
+      # the stores says so.
+      ansible.builtin.debug:
+        msg: "storage root {{ kontroll_storage_root }} ({{ _storage_root_from }})"
 
     - name: Detect whether any class declares the file_tail_ssh log method (gates the custom Vector image + key)
       # file_tail_ssh's Vector `exec` source runs `ssh ... journalctl` to PULL a remote host's journald — the

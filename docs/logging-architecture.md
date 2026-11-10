@@ -220,7 +220,8 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   Loki 3.4.2 — see [reviews/2026-06-16-storage-logging/40-m1-loki-retention-dogfood.md](reviews/2026-06-16-storage-logging/40-m1-loki-retention-dogfood.md).
   The store is a **bind
   mount** at `${KONTROLL_LOGS_DIR}` (default `/var/lib/kontroll/loki`, `0750`/uid-10001 — relocatable to a data
-  disk, the chown follows the path; SECURITY.md C8) — inside the C8 crown-jewel-at-rest boundary, since
+  disk, through the installer a disk mounted under the storage root ([SETUP.md](SETUP.md) §6), the chown follows
+  the path; SECURITY.md C8) — inside the C8 crown-jewel-at-rest boundary, since
   log bodies may carry a leaked secret. **Canonical label schema** (low-cardinality, no secrets, the C12 hard
   rule): `source`, `host`, `service`, `level`, `run_id` (the Layer-0 correlation key), `device` (capability
   streams only). `service` is the container's or the unit's name less what is minted per run — a compose

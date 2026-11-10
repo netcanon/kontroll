@@ -424,12 +424,14 @@ The installer (`scripts/kontroll.sh`, `scripts/kontroll-installer.sh`) binds one
 same path: the one `KONTROLL_STORAGE_ROOT` names in the launcher's shell, `/var/lib/kontroll` when it is unset. The
 deploy takes that root when nothing else names one, and refuses, before it makes anything under it, a root or a
 store the installer does not bind: made in the installer's own filesystem, it would be gone with the container, and
-the stack would bind Docker's `root:root 0755` directories on the host in its place (I-26).
+the stack would bind Docker's `root:root 0755` directories on the host in its place (I-26). Paths are compared as
+they resolve, so a `..` or a link counts where it leads. A run that passes says which root it uses and where it
+came from: `storage root <root> (<source>)`.
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `kontroll_storage_root is <a> (an -e or an instance var), but this run is inside the installer, which binds <b> from the host …` | an `-e` or the instance's inventory vars name a root the launcher's shell does not | name one root: `export KONTROLL_STORAGE_ROOT=<a>` before the launcher and drop the other setting, or keep `<b>` and drop `kontroll_storage_root` |
-| `<knob> is <dir>, outside the storage root <root>, and this run is inside the installer …` | a store with its own knob (`kontroll_logs_dir`, `kontroll_backups_dir`, `kontroll_api_audit_dir`, `kontroll_gui_audit_dir`, `kontroll_ansible_log_dir`) is set outside the bound root | mount that disk under the root and point the knob there, or drop the knob to keep the store under the root |
+| `kontroll_storage_root is <a> (an -e or an instance var), but this run is inside the installer, which binds <b> from the host …` | an `-e` or the instance's inventory vars name a root the launcher's shell does not (a shell without the `export` binds `/var/lib/kontroll`) | name one root: `export KONTROLL_STORAGE_ROOT=<a>` before the launcher, in every shell that runs it, and keep `kontroll_storage_root: <a>` in the instance vars as well, so that a shell without the export is refused, not moved back to the default root; or keep `<b>` and drop `kontroll_storage_root` |
+| `<knob> is <dir>, outside the storage root <root>, and this run is inside the installer …` (with `(which leads to <path>)` after `<dir>` when a `..` or a link takes it elsewhere) | a store with its own knob (`kontroll_logs_dir`, `kontroll_backups_dir`, `kontroll_api_audit_dir`, `kontroll_gui_audit_dir`, `kontroll_ansible_log_dir`) is set outside the bound root, or leads out of it | mount that disk under the root (the message names a mount point from the knob's name; a mount, not a link) and point the knob there, or drop the knob to keep the store under the root |
 
 ## See also
 - [../SECURITY.md](../SECURITY.md) **C23** — an error body carries no exception text; the id that finds the details
