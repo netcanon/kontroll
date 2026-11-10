@@ -24,5 +24,5 @@ SSH (`ansible_user: root`); container ops via `community.docker`. See
 The manifest script prints a `### ` header before each read. An answer of the
 headers alone is no manifest: it is recorded `FAILED`, which fails the run at its
 summary, and nothing is written, so any earlier manifest is kept (I-10). A
-`--check` run never runs the script (`shell` has no check mode) and previews an
-empty capture.
+`--check` run never runs the script (`shell` skips it) and previews an empty
+capture.

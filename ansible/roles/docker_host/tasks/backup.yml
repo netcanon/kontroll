@@ -39,12 +39,14 @@
       changed_when: false
 
     # The script prints a `### ` header before each read, so a host that answers none of them exits with the
-    # headers alone. Today its last command's failure fails the host first; but a manifest of headers is no
-    # manifest, and it would overwrite the last good one (I-10). So an answer with no line but its headers (and
-    # blank lines) is recorded as a failed capture, which fails the run at its summary, and the write does not run:
-    # any earlier capture is kept. `shell` has no check mode: a --check run skips it with no `skip_reason` (a `when`
-    # that skips a task adds one), so only that skip is taken as not read, and the dry-run previews an empty
-    # capture. An unreachable host (the play tolerates one) gave no answer either: it is not refused.
+    # headers alone. Today its last command's failure fails the host first (the script ends on a docker read, which
+    # exits 127 without docker and 1 without its daemon); but a docker that answers nothing and exits 0 gave a
+    # manifest of headers, which is no manifest, and it overwrote the last good one (I-10). So an answer with no
+    # line but its headers (and blank lines) is recorded as a failed capture, which fails the run at its summary,
+    # and the write does not run: any earlier capture is kept. `shell` does not run its script under --check: it
+    # skips it with no `skip_reason` (a `when` that skips a task adds one), so only that skip is taken as not read,
+    # and the dry-run previews an empty capture. An unreachable host (the play tolerates one) gave no answer
+    # either: it is not refused.
     - name: Record an empty capture as failed (any earlier capture is kept)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-

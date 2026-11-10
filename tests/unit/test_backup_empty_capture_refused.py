@@ -7,7 +7,7 @@ that returns no lines, a RouterOS export with no output, an API that answers 200
 good one, and recorded it captured; the history play then committed the loss as a change (T27's runtime read, N9: a
 raw-SSH `cmd=true` against a seeded good capture left a 0-byte file and rc 0). Each now records such an answer as a
 failed capture, which fails the run at its summary, and does not run its write, so any earlier capture is kept. A
-read a dry-run skips (`raw`, `shell` and the RouterOS command have no check mode, nor has the API's `uri`) gave no
+read a dry-run skips (`raw`, `shell`, the RouterOS command and the API's `uri` do not run under `--check`) gave no
 answer: the dry-run previews an empty capture as before and refuses nothing. The reads that run in a dry-run
 (`cli_command`'s `show`, `slurp`) are held to their answer there too. An unreachable host's read (the play tolerates
 one) gave no answer either: it is not refused, and the summary says the host was not run.
@@ -42,11 +42,31 @@ def _b64(text):
     return base64.b64encode(text.encode()).decode()
 
 
+def _script(role):
+    """The role's capture script: the text of the one `shell` task of its backup.yml."""
+    with open(os.path.join(ROOT, "ansible", "roles", role, "tasks", "backup.yml"), encoding="utf-8") as fh:
+        tasks = yaml.safe_load(fh)
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "ansible.builtin.shell" in node:
+                found.append(node["ansible.builtin.shell"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+    walk(tasks)
+    assert len(found) == 1 and isinstance(found[0], str), (role, found)
+    return found[0]
+
+
 def _headers(role):
     """The `### ` section headers the role's capture script echoes before each read, in order: its whole answer when
-    no read answers (I-10)."""
-    with open(os.path.join(ROOT, "ansible", "roles", role, "tasks", "backup.yml"), encoding="utf-8") as fh:
-        found = re.findall(r'^\s*echo "(### [^"]*)"', fh.read(), re.M)
+    no read answers (I-10). `test_every_line_of_the_capture_script_that_starts_with_an_echo_is_a_header` holds that
+    none is echoed in another form."""
+    found = re.findall(r'^\s*echo "(### [^"]*)"', _script(role), re.M)
     assert len(found) >= 2, (role, found)
     return found
 
@@ -78,7 +98,7 @@ ROLES.update({
     "proxmox": ("pve_cfg", "_pve_write", _shell(_PVE[0], _PVE[1], "auto lo", *_PVE[2:]), _shell(*_PVE),
                 _shell(*(h + "\n \t" for h in _PVE))),
     "docker_host": ("dkr", "_dkr_write", _shell(*_DKR[:2], "CONTAINER ID   IMAGE   NAMES", *_DKR[2:]), _shell(*_DKR),
-                    _shell(*(h + "\n" for h in _DKR))),
+                    _shell(*(h + "\n \t" for h in _DKR))),
 })
 # The check-mode skip of each read a dry-run does not make. `cli_command` runs a `show` command in check mode (and
 # fails any other), and `slurp` reads in check mode: those two have none.
@@ -240,6 +260,23 @@ def test_each_capture_is_recorded_where_its_write_ran_and_only_there(role):
         assert _runs(role, RECORD, {write: WRITTEN, "ansible_check_mode": check_mode}) is True
         assert _runs(role, RECORD, {write: UNCHANGED, "ansible_check_mode": check_mode}) is True
         assert _runs(role, RECORD, {write: WHEN_SKIPPED, "ansible_check_mode": check_mode}) is False
+
+
+@pytest.mark.parametrize("role", ["proxmox", "docker_host"])
+def test_every_line_of_the_capture_script_that_starts_with_an_echo_is_a_header(role):
+    """Every line of the Proxmox and Docker capture scripts that starts with `echo` or `printf` is an
+    `echo "### …"` header, the one form the rows above build their answers from and the role's refusal rejects
+    (`reject('match', '### ')`); and there is one header per such line.
+
+    WHY: the rows' empty answer is built from the headers this file can read. A header renamed out of that form
+    (`echo "## images"`) or a section added in another (`echo "== volumes"`) left the rows, so the empty answer was
+    built without it and still refused, while the role, which rejects only `### ` lines, kept that line and wrote
+    the headers as the capture again: the I-10 fault, back (mutants that survived on both cores, the I-10 reads). A
+    guest's separator echoed inside a loop (`echo "--- $f"`) does not start its line, and it is config: kept."""
+    script = _script(role)
+    leading = [line.strip() for line in script.splitlines() if re.match(r"\s*(echo|printf)\b", line)]
+    assert leading and all(re.match(r'echo "### [^"]*"', line) for line in leading), (role, leading)
+    assert len(leading) == len(_headers(role)), (role, leading)
 
 
 # Every other task that writes a capture under config_backup_dir, and why an empty one is the truth there.

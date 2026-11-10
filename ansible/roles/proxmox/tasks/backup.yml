@@ -45,13 +45,15 @@
       no_log: true                       # storage creds / cloud-init passwords
 
     # The script prints a `### ` header before each read, so a node that answers none of them (no pveversion, no
-    # /etc/network/interfaces, no /etc/pve: not a Proxmox node, or one whose cluster filesystem is not mounted)
-    # still exits 0 with the headers alone. That is no config, and a capture of it would overwrite the last good
-    # one (I-10). So an answer with no line but its headers (and blank lines) is recorded as a failed capture,
-    # which fails the run at its summary, and the write does not run: any earlier capture is kept. `shell` has no
-    # check mode: a --check run skips it with no `skip_reason` (a `when` that skips a task adds one), so only that
-    # skip is taken as not read, and the dry-run previews an empty capture, as the other backups' do. An
-    # unreachable host (the play tolerates one) gave no answer either: it is not refused, and the summary says so.
+    # /etc/network/interfaces, no /etc/pve: not a Proxmox node) still exits 0 with the headers alone. That is no
+    # config, and a capture of it would overwrite the last good one (I-10). So an answer with no line but its
+    # headers (and blank lines) is recorded as a failed capture, which fails the run at its summary, and the write
+    # does not run: any earlier capture is kept. A node whose cluster filesystem is not mounted still answers
+    # pveversion and its network config (neither is under /etc/pve), so its capture is written without storage.cfg
+    # or a guest's .conf; the one before it stays in the history (I-50). `shell` does not run its script under
+    # --check: it skips it with no `skip_reason` (a `when` that skips a task adds one), so only that skip is taken
+    # as not read, and the dry-run previews an empty capture, as the other backups' do. An unreachable host (the
+    # play tolerates one) gave no answer either: it is not refused, and the summary says so.
     - name: Record an empty capture as failed (any earlier capture is kept)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
