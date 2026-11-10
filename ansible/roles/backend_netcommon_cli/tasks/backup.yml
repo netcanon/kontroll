@@ -31,17 +31,31 @@
         mode: "0700"            # deploy-stack.yml's mode: the captures hold device secrets (C8)
       delegate_to: localhost
 
+    # `cli_command` runs only a `show` command in a --check run (the module's own rule: the command starts with
+    # `show`), and fails the host on any other, so a drop-in class whose backup is `display current-configuration`
+    # failed every dry-run at its read. Such a read is not made in a dry-run: the capture is previewed empty and
+    # nothing is refused, as the raw-SSH backend's dry-run does with the read `raw` cannot make there (I-11). A
+    # real run always reads.
     - name: Pull config via cli_command
       ansible.netcommon.cli_command:
         command: "{{ backend_backup_command | default('show running-config') }}"
       register: _cfg
       changed_when: false
       no_log: true
+      when: not ansible_check_mode or (backend_backup_command | default('show running-config')) is match('show')
+
+    - name: Note a read a dry-run does not make
+      ansible.builtin.debug:
+        msg: >-
+          NOT PREVIEWED — `{{ backend_backup_command }}` is not a `show` command, and cli_command runs only
+          `show` commands in a dry-run: the capture is previewed empty; a real run reads the device.
+      when: ansible_check_mode and not ((backend_backup_command | default('show running-config')) is match('show'))
 
     # A command that answers nothing (no output, or only blank lines) has given no config, and a capture of it would
     # overwrite the last good one. So that answer is recorded as a failed capture, which fails the run at its
     # summary, and the write does not run: any earlier capture is kept. `cli_command` runs a `show` command in a
-    # --check run too (it fails any other there), so a dry-run is held to the same answer.
+    # --check run too, so a dry-run that read the device is held to the same answer; a dry-run that did not read it
+    # (a command that is not a `show`, above) refuses nothing.
     # An unreachable host (the play tolerates one) gave no answer either: it is not refused, and the summary says so.
     - name: Record an empty capture as failed (any earlier capture is kept)
       ansible.builtin.set_fact:
@@ -51,17 +65,20 @@
         kontroll_backup_failed: true
       when:
         - _cfg is not unreachable
+        - not (ansible_check_mode and not ((backend_backup_command | default('show running-config')) is match('show')))
         - _cfg.stdout | default('') | trim | length == 0
 
     - name: Write capture
       ansible.builtin.copy:
-        content: "{{ _cfg.stdout }}\n"
+        content: "{{ _cfg.stdout | default('') if ansible_check_mode else _cfg.stdout }}\n"
         dest: "{{ config_backup_dir }}/{{ _backup_file }}"
         mode: "0640"
       delegate_to: localhost
       no_log: true
       register: _cfg_write
-      when: _cfg.stdout | default('') | trim | length > 0
+      when: >-
+        (_cfg.stdout | default('') | trim | length > 0)
+        or (ansible_check_mode and not ((backend_backup_command | default('show running-config')) is match('show')))
 
     # Recorded where the write ran (in a dry-run, its preview), and only there, so "captured" never outruns the write.
     - name: Record successful capture

@@ -1,4 +1,4 @@
-"""The capture writes of the raw-SSH, RouterOS and API backup entrypoints render in a --check run.
+"""The capture writes of the raw-SSH, RouterOS, API and CLI backup entrypoints render in a --check run.
 
 WHY. Each reads the device with a task check mode skips (`raw` always; `community.routeros.command` and
 `ansible.builtin.uri`, which have no check mode), and a skipped task's result has no `stdout` or `content`. The
@@ -27,6 +27,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SKIPPED = {"changed": False, "skipped": True, "msg": "This action does not support check mode."}
 ROLES = {  # role: (the read's register, a real run's result of that read, the capture it writes)
     "backend_api": ("_api_resp", {"status": 200, "content": "config system global\n"}, "config system global\n"),
+    # the CLI backend's read is skipped in a dry-run only for a command that is not a `show` (I-11)
+    "backend_netcommon_cli": ("_cfg", {"changed": False, "stdout": "hostname sw1\n!"}, "hostname sw1\n!\n"),
     "backend_raw_ssh": ("_cfg", {"rc": 0, "stdout": "config system\n", "stderr": ""}, "config system\n"),
     "routeros": ("ros_export", {"stdout": ["/ip address\nadd address=192.0.2.5/24"]},
                  "/ip address\nadd address=192.0.2.5/24\n"),
@@ -55,9 +57,10 @@ def _render(role, result, check_mode):
 @pytest.mark.parametrize("role", sorted(ROLES))
 def test_a_dry_run_writes_an_empty_capture_where_the_read_was_skipped(role):
     """In check mode, with the read's result a skipped task's (no `stdout` or `content`), the write renders an empty
-    capture (the RouterOS one keeps its trailing newline). Guards `backup-configs.yml --check` failing every host of
-    these classes at the write, as the raw-SSH and RouterOS ones did before T27."""
-    assert _render(role, SKIPPED, True) == ("\n" if role == "routeros" else "")
+    capture (the RouterOS and CLI ones keep their trailing newline). Guards `backup-configs.yml --check` failing every
+    host of these classes at the write, as the raw-SSH and RouterOS ones did before T27, and a CLI class whose backup
+    command is not a `show` (I-11), whose dry-run now skips the read."""
+    assert _render(role, SKIPPED, True) == ("\n" if role in ("routeros", "backend_netcommon_cli") else "")
 
 
 @pytest.mark.parametrize("role", sorted(ROLES))

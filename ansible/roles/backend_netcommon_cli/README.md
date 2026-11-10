@@ -24,8 +24,11 @@ This is the reusable target the capability classifier maps `cliconf` collections
 A command that answers nothing (no output, or only blank lines) has given no config:
 the backup is recorded `FAILED`, naming the command, which fails the run at its
 summary, and nothing is written, so any earlier capture is kept. `cli_command` runs a
-`show` command in a `--check` run too, so a dry-run is held to the same answer (and
-fails a backup command that is not a `show`, by `cli_command`'s own design).
+`show` command in a `--check` run too, so a dry-run is held to the same answer. It runs
+no other command there (it would fail the host), so a backup command that does not start
+with `show` (`display current-configuration`, say) is not read in a dry-run: the run says
+`NOT PREVIEWED — … is not a show command`, previews an empty capture and refuses nothing.
+A real run always reads.
 
 ## See also
 - [../../backends/netcommon_cli/backend.yml](../../backends/netcommon_cli/backend.yml) — classifier metadata

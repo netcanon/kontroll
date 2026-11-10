@@ -11,6 +11,28 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a CLI backup whose command is not a `show` no longer fails every dry-run (I-11, 2026-11-09)
+
+The CLI backend (`backend_netcommon_cli`, the generic `network_cli` backup) reads with `ansible.netcommon.cli_command`,
+which in check mode runs only a command that starts with `show` and fails the host on any other. So a drop-in class
+whose backup command is, say, `display current-configuration` failed the mandated `--check --diff` of
+backup-configs.yml at its read, on every run. No shipped class hit it: cisco_ios, ios_xe_auto and logging_syslog_push
+use `show`. The I-5 read found it.
+
+- **Fixed.** In a dry-run the read is not made for a command that does not start with `show` (the module's own
+  rule, case and a leading space included). The run says `NOT PREVIEWED — `<command>` is not a `show` command…`,
+  previews an empty capture and refuses nothing, as the raw-SSH backend's dry-run does with the read `raw` cannot
+  make there. A `show` command is read in a dry-run as before, and a real run reads every command. The read is not
+  forced to run in check mode (`check_mode: false` on a device read stays ruled out).
+- **Not changed.** The backend's `check` (liveness, `show version` by default) runs `cli_command` the same way, and
+  a liveness command that is not a `show` would fail under `--check`; no shipped caller runs ping.yml in check mode.
+- **Tests.** The new `integration/test_backup_cli_dry_run.py` runs backup-configs.yml against a CLI host with such a
+  command on a local connection: `--check --diff` passes, says NOT PREVIEWED, records captured and writes nothing;
+  a real run makes the read. `unit/test_backup_empty_capture_refused.py` evaluates the read's, the note's, the
+  refusal's and the write's conditions for commands that are and are not a `show`, in a dry-run and a real run, and
+  holds the note to the command alone; `unit/test_backup_capture_check_mode.py` renders the CLI write's preview.
+- **Docs.** `ansible/roles/backend_netcommon_cli/README.md`.
+
 ### fix(ansible): a backup capture that fails as a task is named in the summary, and its run still removes its SSH keys (I-12, 2026-11-11)
 
 A capture that failed as a task (a read that exits non-zero or errors, a module or permission error, the API
