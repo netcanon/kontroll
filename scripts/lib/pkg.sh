@@ -12,7 +12,7 @@
 # adding network-using, distro-branching logic here does not weaken the BRICK-1 invariant.
 #
 # POSIX sh (no bashisms) so it sources cleanly under sh or bash. Sets PKG_MGR; provides pkg_refresh / pkg_install /
-# svc_enable_now / compose_ensure / arch_deb.
+# svc_enable_now / compose_version / compose_ensure / arch_deb.
 
 # Detect the system package manager → PKG_MGR (apt|dnf|zypper|pacman|unknown). dnf is preferred over its yum alias.
 pkg_detect() {
@@ -64,30 +64,60 @@ svc_enable_now() {
   fi
 }
 
-# compose_ensure — make `docker compose` answer, since the stack and the installer run in compose (I-21). Asked
-# first, so a host whose compose already answers installs nothing. A host with the distribution's Docker (docker.io)
-# has no docker-compose-plugin candidate, since that package is in Docker's own repository; installing it
-# unconditionally printed apt's "has no installation candidate", and its `|| true` hid the case where compose was
-# missing. On apt it installs whichever compose v2 package the sources offer: Docker's docker-compose-plugin, else
-# the distribution's docker-compose-v2 (Ubuntu's name). It asks compose again after each install. Returns 1, saying
-# so and naming both packages, when compose still does not answer; the caller decides what that costs.
+# compose_version [user] — print `docker compose version` and return 0 when compose answers: as root, else, given a
+# user other than root, as that user. The launcher (scripts/kontroll-installer.sh) runs compose as the operator, and
+# a plugin the operator put in their own ~/.docker/cli-plugins (Docker's per-user install) answers for them but not
+# for root, whose docker looks in root's home. runuser runs that plugin as its owner, never as root. Returns 1 when
+# neither answers.
+compose_version() {
+  docker compose version 2>/dev/null && return 0
+  [ -n "${1:-}" ] && [ "$1" != root ] && command -v runuser >/dev/null 2>&1 || return 1
+  _cv="$(runuser -u "$1" -- docker compose version 2>/dev/null)" || return 1
+  echo "$_cv (as $1; root's does not answer)"
+}
+
+# compose_ensure [user] — make `docker compose` answer, since the stack and the installer run in compose (I-21). Asked
+# first (compose_version: as root, else as <user>), so a host whose compose already answers installs nothing. A host
+# with the distribution's Docker (docker.io) has no docker-compose-plugin candidate, since that package is in Docker's
+# own repository; installing it unconditionally printed apt's "has no installation candidate", and its `|| true` hid
+# the case where compose was missing. On apt it installs the first compose v2 package the sources offer: Docker's
+# docker-compose-plugin, Ubuntu's docker-compose-v2, or Debian's docker-compose where its candidate is 2 or later
+# (Debian 13 on; before that it is the v1 tool, whose `docker-compose` is not `docker compose`). It asks compose again
+# after each install. On dnf, zypper and pacman it installs nothing: where Docker was absent, install-prereqs.sh's
+# Docker install brought the plugin with the engine (on dnf; Docker's script refuses openSUSE and Arch). Returns 1,
+# saying so and naming the packages, when compose still does not answer; the
+# caller decides what that costs.
 compose_ensure() {
-  docker compose version >/dev/null 2>&1 && return 0
+  _as="${1:-}"
+  compose_version "$_as" >/dev/null && return 0
   [ -n "${PKG_MGR:-}" ] || PKG_MGR="$(pkg_detect)"
-  if [ "$PKG_MGR" = apt ]; then
-    for _pkg in docker-compose-plugin docker-compose-v2; do
-      # `Candidate: (none)` or no entry at all: the sources do not carry it, so apt is not asked (it would print E:).
-      # No pipe into `grep -q`: under the caller's pipefail, a SIGPIPE would read as no candidate.
-      _policy="$(apt-cache policy "$_pkg" 2>/dev/null || true)"
-      case "$_policy" in *"Candidate: (none)"*|"") continue ;; *"Candidate: "*) ;; *) continue ;; esac
-      echo "    'docker compose' does not answer: installing $_pkg…"
-      pkg_install "$_pkg" && docker compose version >/dev/null 2>&1 && return 0
-    done
+  if [ "$PKG_MGR" != apt ]; then
+    echo "    ERROR: Docker is installed but 'docker compose' does not answer, and this script installs a compose" >&2
+    echo "    package only on apt. Install docker-compose-plugin from Docker's own repository" >&2
+    echo "    (https://docs.docker.com/engine/install/) with $PKG_MGR, then re-run this script." >&2
+    return 1
   fi
+  for _pkg in docker-compose-plugin docker-compose-v2 docker-compose; do
+    # The policy is read in the C locale: apt translates "Candidate:", so where apt speaks another language the word
+    # would never match and every package would be skipped. Plain C, as Ansible's apt module sets: gettext ignores
+    # LANGUAGE under the C locale. No pipe into `grep -q`: under the caller's pipefail, a SIGPIPE would read as no
+    # candidate (sed reads its input to the end).
+    _policy="$(LC_ALL=C apt-cache policy "$_pkg" 2>/dev/null || true)"
+    _cand="$(printf '%s\n' "$_policy" | sed -n 's/^ *Candidate: *//p')"
+    # `Candidate: (none)` or no entry at all: the sources do not carry it, so apt is not asked (it would print E:).
+    case "$_cand" in ""|"(none)") continue ;; esac
+    # Debian's docker-compose before Debian 13 is v1. The epoch, if any, is dropped before the major is read.
+    if [ "$_pkg" = docker-compose ]; then case "${_cand#*:}" in 0.*|1.*) continue ;; esac; fi
+    echo "    'docker compose' does not answer: installing $_pkg…"
+    # --no-remove: apt aborts rather than remove a package to make room (an engine that Conflicts with the one this
+    # package Depends on), so no engine is swapped under a host whose Docker was already there.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-remove "$_pkg" \
+      && compose_version "$_as" >/dev/null && return 0
+  done
   echo "    ERROR: Docker is installed but 'docker compose' does not answer, and no compose v2 package could be" >&2
-  echo "    installed from this host's package sources. Install the distribution's compose v2 package" >&2
-  echo "    (docker-compose-v2 on Ubuntu) or docker-compose-plugin from Docker's own repository" >&2
-  echo "    (https://docs.docker.com/engine/install/), then re-run this script." >&2
+  echo "    installed from this host's package sources. Install docker-compose-plugin from Docker's own repository" >&2
+  echo "    (https://docs.docker.com/engine/install/), or the distribution's compose v2 package (docker-compose-v2 on" >&2
+  echo "    Ubuntu; docker-compose on Debian 13 and later), then re-run this script." >&2
   return 1
 }
 

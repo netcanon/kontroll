@@ -100,8 +100,13 @@ fi
 # The stack and the installer run in compose, so `docker compose` must answer before this floor is done (I-21). Asked
 # first, so a host whose compose answers installs nothing; else the compose v2 package its sources offer is installed.
 # When neither can be, the rest of the floor is still installed and the script exits 1 at the end, naming the cause.
+# Compose is asked as the operator too (SUDO_USER): the launcher runs it as the operator, whose own plugin root's
+# docker cannot see. Not with --with-host-ansible: the legacy host deploy runs compose through ansible's become, as
+# root, so root's must answer.
+COMPOSE_AS=""
+if [ "$WITH_HOST_ANSIBLE" -eq 0 ] && [ "${SUDO_USER:-root}" != root ]; then COMPOSE_AS="$SUDO_USER"; fi
 COMPOSE_OK=1
-compose_ensure || COMPOSE_OK=0
+compose_ensure "$COMPOSE_AS" || COMPOSE_OK=0
 
 echo "==> Enabling + starting the Docker service…"
 svc_enable_now docker
@@ -157,7 +162,7 @@ echo
 echo "==> Host floor installed:"
 printf '    %s\n' \
   "docker  : $(docker --version 2>/dev/null || echo MISSING)" \
-  "compose : $(docker compose version 2>/dev/null || echo MISSING)" \
+  "compose : $(compose_version "$COMPOSE_AS" || echo MISSING)" \
   "git     : $(git --version 2>/dev/null || echo MISSING)"
 if [ "$WITH_HOST_ANSIBLE" -eq 1 ]; then
   printf '    %s\n' \
@@ -168,8 +173,7 @@ fi
 if [ "$COMPOSE_OK" -eq 0 ]; then
   echo >&2
   echo "==> NOT done: 'docker compose' does not answer, and the stack and the installer run in compose. Install the" >&2
-  echo "    distribution's compose v2 package (docker-compose-v2 on Ubuntu) or docker-compose-plugin from Docker's own" >&2
-  echo "    repository (https://docs.docker.com/engine/install/), then re-run: sudo bash scripts/install-prereqs.sh" >&2
+  echo "    compose v2 package the ERROR above names, then re-run: sudo bash $0 $*" >&2
   exit 1
 fi
 cat <<'NEXT'
