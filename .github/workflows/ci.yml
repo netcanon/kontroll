@@ -62,11 +62,13 @@ jobs:
         # User-local install dir (no sudo) so the step is identical on GitHub-hosted and self-hosted runners.
         # Versions track the compose pins: prom/prometheus:v3.5.4 -> promtool 3.5.4, timberio/vector:0.56.0 ->
         # vector 0.56.0. The digests are the publishers' release checksums; a mismatch fails the job (BRICK-1
-        # posture for the gate's own toolchain).
+        # posture for the gate's own toolchain). The runner comes from a variable (RUNNERS, above): on Windows an
+        # unnamed shell is pwsh, which need not stop on a failed fetch, so the shell is named.
+        shell: bash
         run: |
           set -euo pipefail
           bin="$RUNNER_TEMP/kontroll-tools"; mkdir -p "$bin"; cd "$RUNNER_TEMP"
-          # url sha256 -> file in cwd, retried on a transient error, then held to its digest
+          # url sha256 -> file in cwd, retried on an error, a stall given up on, then held to its digest
           fetch() { bash "$GITHUB_WORKSPACE/.github/scripts/fetch-pinned.sh" "$@"; }
           fetch https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64 \
                 620a9d7e3352ababeca6908cea24a6e8b14ce89a448ddbd3f94f1ef3398f470a
