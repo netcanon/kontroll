@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 from kontroll import canon, paths
 
@@ -581,29 +582,131 @@ def _shallow(worktree):
     return p.returncode == 0 and p.stdout.strip() == b"true"
 
 
-def _whole_here(worktree, oid, base):
-    """Whether the worktree holds every object `oid` names and `base` does not, each commit's parents read as the
-    commit records them: the check the canonical makes after the pack is received (`_land_in_canonical`), made here
-    before anything is packed. The worktree's shallow list is set aside (GIT_SHALLOW_FILE, as the seam sets it for
-    the canonical), so a commit a `--depth` clone cut off from its parents is short here as the canonical would
-    find it. No lazy fetch (GIT_NO_LAZY_FETCH, git 2.45 and later): a landing uses no transport."""
-    argv = ["rev-list", "--objects", "--quiet", oid] + (["^" + base] if base else [])
+# How the worktree's commits are read where a landing judges a shallow clone: no replace ref stands in for a commit
+# and no `info/grafts` rewrites its parents (the canonical's seam sets both aside, and the pack is made so too),
+# no lazy fetch from a promisor remote (GIT_NO_LAZY_FETCH, git 2.45 and later; `protocol.allow=never` before it), and
+# no commit-graph: parents come from the commits. The check and the pack read the worktree alike.
+_RECORDED = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull, "GIT_NO_LAZY_FETCH": "1"}
+_NO_TRANSPORT = ["-c", "protocol.allow=never", "-c", "core.commitGraph=false"]
+
+
+def _cut(worktree):
+    """The commits where a shallow worktree's history stops: its `shallow` list, found by `rev-parse --git-path
+    shallow` (a linked worktree's is its main checkout's). None when the list cannot be read or holds a line that is
+    not an object id."""
     try:
-        p = _wt(worktree, argv, timeout=_LAND_SECONDS, env={"GIT_SHALLOW_FILE": os.devnull, "GIT_NO_LAZY_FETCH": "1"})
+        p = _wt(worktree, ["rev-parse", "--path-format=absolute", "--git-path", "shallow"], timeout=10)
+        if p.returncode != 0:
+            return None
+        with open(p.stdout.decode("utf-8", "surrogateescape").strip(), "rb") as fh:
+            ids = fh.read().decode("ascii").split()
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        return None
+    return ids if all(canon.valid_oid(i) for i in ids) else None
+
+
+def _recorded_parents(worktree, oid):
+    """The parents the commit `oid` records (`cat-file commit`, no replace ref standing in for it), or None when the
+    worktree does not hold it or git cannot say."""
+    try:
+        p = _wt(worktree, _NO_TRANSPORT + ["cat-file", "commit", oid], env=_RECORDED)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return None
+    header = p.stdout.split(b"\n\n", 1)[0].decode("ascii", "replace").splitlines()
+    parents = [ln[len("parent "):] for ln in header if ln.startswith("parent ")]
+    return parents if all(canon.valid_oid(x) for x in parents) else None
+
+
+def _held_whole(gitdir, oids, base):
+    """Whether the canonical holds the commits `oids` and everything under them that `base` (its `main`; None on a
+    first seed) does not name: its own read-back (`rev-list --objects --quiet`, the ids on standard input), in the
+    seam. False when git cannot say."""
+    revs = "".join(o + "\n" for o in oids) + ("^" + base + "\n" if base else "")
+    try:
+        p = subprocess.run(["git", "rev-list", "--objects", "--quiet", "--stdin"], input=revs.encode("ascii"),
+                           capture_output=True, timeout=_LAND_SECONDS, **canon.git_kwargs(gitdir, fed=True))
+    except (OSError, subprocess.SubprocessError, canon.Unreadable):
+        return False
+    return p.returncode == 0
+
+
+def _pack_view(worktree, gitdir, oid, base):
+    """For a shallow worktree, the view the pack is made in, judged before anything is packed. Returns `(env,
+    None)`, the environment `_pack` makes the pack in, or `(None, why)` when that pack would not be whole in the
+    canonical.
+
+    A commit where the clone stops (`_cut`) stays a stop only where the canonical holds the parents it records,
+    and all under them (`_held_whole`): the pack may leave those out. Every other stop is lifted, so the walk goes on
+    into its parents; where the clone does not hold them, the walk fails. Then the canonical's own read-back,
+    `rev-list --objects --quiet oid ^base`, is made in the worktree in that view (a temporary GIT_SHALLOW_FILE
+    naming the stops kept, and `_RECORDED`). Where it passes, the pack made in the same view carries every object
+    under `oid` that `base` and the kept stops' parents do not name, and the canonical holds those: so it finds the
+    commit whole. A merge whose cut-off side rests on history the canonical holds lands; a clone short of history
+    the canonical lacks, or of an object a partial clone never fetched, is refused. Fails closed: a list that cannot
+    be read, a git that cannot run or does not finish, refuses. `why` is the clause `SHALLOW` takes, and says only
+    what was found: what git said, or that it could not judge."""
+    cut = _cut(worktree)
+    if cut is None:
+        return None, "its shallow list could not be read, so what the pack would carry cannot be told"
+    keep = []
+    for c in cut:
+        parents = _recorded_parents(worktree, c)
+        if parents is not None and (not parents or _held_whole(gitdir, parents, base)):
+            keep.append(c)
+    fd, path = tempfile.mkstemp(prefix="kontroll-cut-")
+    with os.fdopen(fd, "w", encoding="ascii", newline="\n") as fh:
+        fh.write("".join(c + "\n" for c in keep))
+    env = dict(_RECORDED, GIT_SHALLOW_FILE=path)
+    argv = _NO_TRANSPORT + ["rev-list", "--objects", "--quiet", oid] + (["^" + base] if base else [])
+    try:
+        p = _wt(worktree, argv, timeout=_LAND_SECONDS, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        os.unlink(path)
+        return None, "git could not finish judging what the pack would carry (%s)" % type(e).__name__
+    if p.returncode != 0:
+        os.unlink(path)
+        said = p.stderr.decode("utf-8", "replace").strip().splitlines()
+        return None, ("HEAD needs objects that the clone does not hold and the canonical %s (git: %s)"
+                      % ("does not either" if base else "cannot, having no main yet",
+                         said[0][:200] if said else "rc %d" % p.returncode))
+    return env, None
+
+
+def _holds(worktree, oid):
+    """Whether the worktree holds the commit `oid` (`cat-file -e`, no replace ref standing in for it, no lazy
+    fetch). False when git cannot say."""
+    try:
+        return _wt(worktree, _NO_TRANSPORT + ["cat-file", "-e", oid + "^{commit}"], env=_RECORDED).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _after_the_cut(worktree, main_id, commit_id):
+    """In a shallow worktree whose own view says `main_id` is not under `commit_id`, ask again with its stops lifted
+    (each commit's parents as it records them, `_RECORDED`): True when `main_id` is under `commit_id` after all (a
+    `--depth` clone whose HEAD sits on `main`, or a tip that a `fetch --depth` listed as a stop). False when it is
+    not, or cannot be told (the walk reaches a parent the clone does not hold)."""
+    try:
+        p = _wt(worktree, _NO_TRANSPORT + ["merge-base", "--is-ancestor", main_id, commit_id],
+                env=dict(_RECORDED, GIT_SHALLOW_FILE=os.devnull))
     except (OSError, subprocess.SubprocessError):
         return False
     return p.returncode == 0
 
 
-def _pack(worktree, oid, old):
+def _pack(worktree, oid, old, view=None):
     """Start `git pack-objects --revs --stdout` in the worktree: a pack of every object reachable from `oid` and
     not from `old` (every object, when `old` is None — a first seed), on its standard output. No `--thin`: a thin
     pack would be made of deltas against objects the packer ASSUMES the canonical holds, and nothing here reads
     the canonical's store to find out. The canonical holds `old` whole (it is its own `main`), so the pack holds
-    exactly what it lacks."""
+    exactly what it lacks. `view`, a shallow worktree's (`_pack_view`), is the environment the pack is made in:
+    the one its check walked."""
     revs = (oid + "\n" + ("^" + old + "\n" if old else "")).encode("ascii")
-    p = subprocess.Popen(["git", "-C", worktree, "pack-objects", "--revs", "--stdout", "-q"],
-                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    p = subprocess.Popen(["git", "-C", worktree] + (_NO_TRANSPORT if view else []) +
+                         ["pack-objects", "--revs", "--stdout", "-q"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, env=dict(os.environ, **view) if view else None)
     p.stdin.write(revs)
     p.stdin.close()
     return p
@@ -684,8 +787,8 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
     way into `refs/heads/main` that is not a promote, and the only way a proposal is made by hand (`target` a
     `refs/heads/proposed/<run id>`, created). Returns `(rc, message)`: 0 landed, or up to date, or (`check`) would
     land; 1 nothing to land as asked (not a repository, no HEAD, the canonical unreadable or its `main` not a
-    branch, not a fast-forward, a shallow clone short of history the canonical lacks, the ref moved meanwhile, git
-    failed); 2 REFUSED by the gate, or the gate could
+    branch, not a fast-forward, a shallow clone whose pack would not be whole in the canonical, or that cannot
+    show `main` under HEAD, the ref moved meanwhile, git failed); 2 REFUSED by the gate, or the gate could
     not run — `skip_gate` is the human's override and nothing automatic passes it. After any rc but 0 the
     worktree keeps its commit, the canonical its refs, and the running stack is as it was.
 
@@ -694,10 +797,12 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
     `refs/heads/main`, read once by its full name in the seam (`canon.read_ref`; None on a first seed; a
     symbolic ref or a non-commit refuses); M must be an ancestor of C IN THE WORKTREE (`merge-base
     --is-ancestor`: rc 1 — a real divergence — and rc 128 — M never fetched — both refuse, with the sentence the
-    play printed before; in a shallow worktree, with `SHALLOW`, since M may be under C below where the clone
-    stops); a shallow worktree must hold every commit and object under C that M does not name, each commit's
-    parents read as it records them (`_whole_here`), or the pack would be short in the canonical — refused with
-    `SHALLOW`, whose remedy is `git fetch --unshallow`; `gate(C, <the worktree's git dir>, M)` judges C's tree
+    play printed before; in a shallow worktree (`_shallow`) M may be under C below where the clone stops, so it
+    is asked again with the stops lifted (`_after_the_cut`), and where M is not in the clone, or still not seen
+    under C, refused with `SHALLOW`); in a shallow worktree the pack's own view is judged (`_pack_view`: a stop is
+    kept only where the canonical holds the parents it records, and the canonical's read-back is made in the
+    worktree in that view), or the pack would not be whole in the canonical — refused with `SHALLOW`, whose remedy
+    is `git fetch --unshallow`; `gate(C, <the worktree's git dir>, M)` judges C's tree
     as the promote would judge a proposal's — read object by object from the CALLER'S repository, re-hashed, this
     checkout's generator over the files — before anything touches the canonical; `check` stops here. Then
     `_land_in_canonical`.
@@ -735,6 +840,7 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
     main_id = main_ref[0] if main_ref else None
     if target != canon.MAIN and existing is not None:
         return 1, "%s exists already: a proposal is created once (stage a new run id)" % target
+    shallow = _shallow(worktree)
     if main_id:
         if main_id == commit_id:
             if target == canon.MAIN:
@@ -744,14 +850,32 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
             behind = _wt(worktree, ["merge-base", "--is-ancestor", main_id, commit_id]).returncode
         except (OSError, subprocess.SubprocessError):
             behind = -1
-        if behind != 0:
-            if _shallow(worktree):                         # main may be under HEAD, below where the clone stops
-                return 1, SHALLOW % (worktree, "whether the canonical's main (%s) is under HEAD cannot be told: "
-                                     "the history between them was never fetched" % main_id, worktree)
+        if behind != 0 and shallow:                        # main may be under HEAD, below where the clone stops
+            if not _holds(worktree, main_id):
+                return 1, SHALLOW % (worktree, "whether the canonical's main (%s) is under HEAD cannot be told: it "
+                                     "is not in the clone (if a promote moved it, `git -C %s fetch local && git -C "
+                                     "%s rebase local/main` brings the worktree forward instead)"
+                                     % (main_id, worktree, worktree), worktree)
+            if not _after_the_cut(worktree, main_id, commit_id):
+                return 1, SHALLOW % (worktree, "whether the canonical's main (%s) is under HEAD cannot be told: the "
+                                     "clone stops before the history that would tell" % main_id, worktree)
+        elif behind != 0:
             return 1, NOT_A_FAST_FORWARD % (gitdir, worktree, worktree, worktree)
-    if _shallow(worktree) and not _whole_here(worktree, commit_id, main_id):
-        return 1, SHALLOW % (worktree, "commits under HEAD that the canonical %s were never fetched"
-                             % ("does not hold" if main_id else "would need (it has no main yet)"), worktree)
+    view = None
+    if shallow:
+        view, why = _pack_view(worktree, gitdir, commit_id, main_id)
+        if view is None:
+            return 1, SHALLOW % (worktree, why, worktree)
+    try:
+        return _judge_and_land(worktree, gitdir, target, commit_id, main_id, wt_gitdir, skip_gate, check, gate, view)
+    finally:
+        if view:
+            os.unlink(view["GIT_SHALLOW_FILE"])
+
+
+def _judge_and_land(worktree, gitdir, target, commit_id, main_id, wt_gitdir, skip_gate, check, gate, view):
+    """`land_commit` from the gate on: the gate, `check`'s answer, then the pack (in `view`, a shallow worktree's,
+    so the pack carries what the check walked) and `_land_in_canonical`."""
     if not skip_gate:
         try:
             verdict = (gate or _the_gate())(commit_id, wt_gitdir, main_id)
@@ -767,7 +891,7 @@ def land_commit(worktree, canonical, target=canon.MAIN, skip_gate=False, check=F
         return 0, "would land %s %s (was %s); nothing was changed" % (target, commit_id,
                                                                       main_id or "nothing: a first seed")
     try:
-        packer = _pack(worktree, commit_id, main_id)
+        packer = _pack(worktree, commit_id, main_id, view)
     except OSError:
         return 1, "git could not be run in the worktree %s; nothing was landed" % worktree
     return _land_in_canonical(gitdir, target, commit_id, main_id if target == canon.MAIN else None, main_id, packer)
