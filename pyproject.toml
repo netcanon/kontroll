@@ -12,6 +12,7 @@ markers = [
   "integration: black boxes (galaxy.py, gui), shell-outs mocked; a few rows run git or ansible-playbook — no live lab",
   "e2e: full GUI browser flow (Playwright) — opt-in, never in the hermetic CI default",
   "slow: long-running; excluded from the fast pre-commit/CI subset",
+  "requires_checkout: reads this tree through git (the index, the tracked list, `git archive HEAD`); skipped with the reason where the tree is not a git checkout (a `git archive` copy, a source tarball), see tests/_checkout.py",
 ]
 
 [tool.coverage.run]

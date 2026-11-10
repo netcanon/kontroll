@@ -16,7 +16,8 @@ import pytest
 
 from kontroll import paths
 
-pytestmark = pytest.mark.integration
+# make-bundle.sh builds from `git archive HEAD`: every row here reads the tree through git (I-51).
+pytestmark = [pytest.mark.integration, pytest.mark.requires_checkout]
 
 
 def _norm(name):

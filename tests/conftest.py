@@ -33,6 +33,7 @@ os.environ.setdefault("GUI_AUDIT_LOG",
                       os.path.join(tempfile.gettempdir(), "kontroll-test-gui-audit.log"))
 
 sys.path.insert(0, os.path.join(ROOT, "tests"))      # import _hermetic (a helper beside this file)
+import _checkout  # noqa: E402
 import _hermetic  # noqa: E402
 
 # HERMETIC OVERLAY — installed at IMPORT time, before any test module is collected (several read the fleet at module
@@ -87,8 +88,17 @@ def pytest_collection_modifyitems(items):
     `catalog.local_shallow`, fails because it's been replaced by the e2e fake. Ordering e2e last means every
     non-e2e test runs against the real seams first; the e2e `live_server` fixture also restores them on
     teardown (belt-and-suspenders). `-m "not e2e"` (the standard local + CI invocation) still excludes them
-    entirely — this only makes the combined run clean. Stable sort: non-e2e order is preserved."""
+    entirely — this only makes the combined run clean. Stable sort: non-e2e order is preserved.
+
+    And a row marked `requires_checkout` is skipped, with the reason, where this tree is not a git checkout (a
+    `git archive` copy, as the container checks run on; a source tarball): it would otherwise fail with a git error
+    that says nothing of why (I-51). The probe runs once, and only when such a row was collected."""
     items.sort(key=lambda it: 1 if it.get_closest_marker("e2e") else 0)
+    marked = [it for it in items if it.get_closest_marker("requires_checkout")]
+    reason = _checkout.checkout_reason(ROOT) if marked else None
+    if reason:
+        for it in marked:
+            it.add_marker(pytest.mark.skip(reason=reason))
 
 
 @pytest.fixture

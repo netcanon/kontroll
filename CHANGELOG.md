@@ -11,6 +11,18 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(tests): a row that reads the tree through git skips, with the reason, outside a checkout (I-51, 2026-11-10)
+
+- **Fixed.** the rows that read the repository through git (the executable bits from the index, the tracked list
+  against the ignores, the portal env file's ignore, the leak guard's tree scan and overlay invariant, the bundle and
+  launch-kit builds from `git archive HEAD`) failed in a tree that is not a checkout, a `git archive` copy or a source
+  tarball, with an error that said nothing of why. They carry a new `requires_checkout` marker, and `tests/conftest.py`
+  skips them there with the reason `tests/_checkout.py` gives: not a checkout, a copy inside another repository's
+  directory, or no git on the PATH. In a checkout (the gate, CI) they run as before.
+- **Tests.** `tests/unit/test_requires_checkout.py` pins the answer and that the marked rows skip, none failing, in a
+  copy of the tree that is not a checkout.
+- **Docs.** `tests/README.md` (the marker, and when a new row takes it).
+
 ### fix(docker): Vector binds the host journal the host has, and makes none (I-25, 2026-11-08)
 
 `docker/services/vector.yaml` bound `/var/log/journal` from the host. On a control node whose journald is volatile

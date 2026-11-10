@@ -2026,6 +2026,7 @@ def test_the_filter_plugins_are_the_reviewed_ones():
     assert found == _FILTER_FILES, found
 
 
+@pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
 def test_no_tracked_file_is_one_the_repo_ignores():
     """No tracked file matches the repo's own `.gitignore` rules (`git ls-files -ci --exclude-per-directory=.gitignore`
     names none: a developer's global excludes or `.git/info/exclude` are not the repo's), git lists this file (the test

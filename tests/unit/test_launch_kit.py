@@ -197,6 +197,7 @@ def test_promote_slice_is_baked_and_kept_in_the_canonical_m8a():
 
 @pytest.mark.skipif(os.name == "nt" or not all(shutil.which(t) for t in ("bash", "git", "tar")),
                     reason="needs a POSIX bash + git + tar (on Windows `bash` resolves to the WSL stub) — runs in CI")
+@pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
 def test_launch_kit_assembles_without_instance_leak():
     """A REAL assembly (make-launch-kit.sh --allow-unpinned) must produce a tarball that contains the kontroll
     launcher + images.env + the public instance.example stub, and ZERO entries under the private instance/ overlay or

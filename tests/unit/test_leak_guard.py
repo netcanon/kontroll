@@ -140,6 +140,7 @@ def test_private_token_file_takes_precedence_via_env(tmp_path, monkeypatch):
     assert guard.token_findings("my-real-hostname", pats) == []          # word-bounded: a longer name is not a hit
 
 
+@pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
 def test_shippable_tree_is_free_of_identifiers():
     """The standing gate over the WHOLE shippable tree (every tracked file minus instance/ and local/, and minus
     docs/reviews/ only on an instance tree — the make-bundle strip set): zero structural findings and zero
@@ -153,6 +154,7 @@ def test_shippable_tree_is_free_of_identifiers():
         "%s:%d %s %s" % f for f in findings[:40])
 
 
+@pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
 def test_this_tree_satisfies_the_overlay_invariant():
     """The tree under test is in one of the two valid overlay states — PUBLIC (nothing under instance/ tracked,
     the directory ignored) or INSTANCE (tracked, every tracked path re-included by instance/.gitignore). The pytest

@@ -115,6 +115,7 @@ def test_the_stack_env_render_still_emits_no_homepage_tokens():
         ".env.example must not define HOMEPAGE_VAR_* as stack env (they live in the dashboards domain)"
 
 
+@pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
 def test_the_portal_env_file_is_git_ignored():
     """`docker/.env.homepage` holds decrypted widget tokens, so it must be ignored like `docker/.env`. Checked with
     git's own matcher (`check-ignore --no-index`), not a string search, because the existing `*.env` pattern does
