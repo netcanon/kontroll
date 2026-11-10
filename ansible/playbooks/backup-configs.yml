@@ -338,11 +338,14 @@
 - name: Clean up the per-run ephemeral SSH key dir
   ansible.builtin.import_playbook: _cleanup-ssh-keys.yml
 
-# The summary is the last play. Its assert fails each host whose capture failed, and when that is every host,
-# Ansible ends the playbook there: a play after it would not run. Before I-9 the history, the prune and the key
-# cleanup came after it, so a run whose every capture failed (since I-5, one device that answers nothing) left the
-# run's SSH keys on disk. It connects to nothing (a debug and an assert run on the controller), so it can follow
-# the key cleanup.
+# The summary is the last play. Its assert fails each host whose capture was recorded as failed, and when that is
+# every host, Ansible ends the playbook there: a play after it would not run. Before I-9 the history, the prune and
+# the key cleanup came after it, so a run whose every capture was recorded as failed (since I-5, one device that
+# answers nothing) left the run's SSH keys on disk. It connects to nothing: a debug and an assert open no connection,
+# whatever the host's connection (`connection: local` says so, it guards nothing), so it can follow the key cleanup.
+# A capture that fails as a task on every host still ends the run at the capture play, before the cleanup (I-12),
+# and so does a failing local play above (the backup dir's check, the history commit, the prune's retention check),
+# before this summary too.
 - name: Backup run summary
   hosts: all
   gather_facts: false
@@ -354,10 +357,11 @@
           {{ inventory_hostname }} ({{ device_role | default('?') }}):
           {{ kontroll_backup_result | default('not run — unreachable or skipped') }}
 
-    # A logged skip or an unreachable host is tolerated; a capture that actually
-    # FAILED (e.g. a permission error, or a read that answered nothing) must not
+    # A logged skip or an unreachable host is tolerated; a capture recorded as
+    # FAILED (a read that answered nothing, an API answer that is not 200) must not
     # pass silently — fail the run so a scheduled job surfaces it. This runs after
-    # every host's summary line above.
+    # every host's summary line above. A read that errors (a permission error) fails
+    # its host in the capture play instead, and never reaches here (I-12).
     - name: Fail the run if any capture failed
       ansible.builtin.assert:
         that: not (kontroll_backup_failed | default(false) | bool)

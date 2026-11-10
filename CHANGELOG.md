@@ -11,20 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
-### fix(ansible): a backup run whose every capture failed still removes its SSH keys (I-9, 2026-11-09)
+### fix(ansible): a backup run whose every capture is recorded as failed still removes its SSH keys (I-9, 2026-11-09)
 
-`backup-configs.yml`'s summary play fails each host whose capture failed, and when that is every host Ansible ends
-the playbook at that play. The capture history, the retention prune and the per-run SSH-key cleanup came after it, so
-such a run left the run's key-auth hosts' `0600` keys in their per-run directory until the next run or a reboot, a
-residue SECURITY.md accepts for a hard-aborted run only. Since I-5 one device that answers nothing is enough to cause
-it: a one-host scheduled backup.
+`backup-configs.yml`'s summary play fails each host whose capture was recorded as failed (a read that answered
+nothing, an API answer that is not 200), and when that is every host Ansible ends the playbook at that play. The
+capture history, the retention prune and the per-run SSH-key cleanup came after it, so such a run left the run's
+key-auth hosts' `0600` keys in their per-run directory, a residue SECURITY.md accepts for a hard-aborted run only.
+Since I-5 one device that answers nothing is enough to cause it: a one-host scheduled backup.
 
 - **Fixed.** The summary is the playbook's last play, after the history, the prune and the key cleanup. It connects
-  to nothing (a `debug` and an `assert`, on the local connection), so it can follow the cleanup, which stays the last
-  import (MF-4). The run still fails at its summary for each host whose capture failed, with the same lines;
-  `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row say so.
+  to nothing: a `debug` and an `assert` open no connection, whatever the host's connection. So it can follow the
+  cleanup, which stays the last import (MF-4). The run still fails at its summary for each host whose capture was
+  recorded as failed, with the same lines; `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row say so.
+- **Not fixed here.** A capture that fails as a task on every host (a read that exits non-zero, such as a
+  permission error; the API credential gate) still ends the run at the capture play, before the history, the prune,
+  the cleanup and the summary, and leaves its keys, as on main; so does every host failed by some play before the
+  cleanup. A rescue that records such a capture as failed is I-12. A failing local play (the backup dir's check, the
+  history commit, the prune's retention check) ends the run there, before the cleanup and, now, before the summary.
+  SECURITY.md's key row lists these with the hard aborts, and says which later run removes what they leave: one with
+  the same key dir (no run id); a run id's own dir stays until a reboot clears the runtime dir. A scheduled backup is
+  `--limit`ed, so its history and prune plays never run at all (I-48).
 - **Tests.** `unit/test_backup_summary_is_last.py` holds the order: the one play that fails a host for a failed
-  capture is the last, after the snapshot, the prune and the cleanup import, and it holds only controller-side tasks.
+  capture is the last, after the snapshot, the prune and the cleanup import. Every play after the cleanup gathers no
+  facts, runs no role and holds only controller-side actions (`debug`, `assert`, `fail`, `set_fact`, `meta`, in
+  blocks too). The first build read the last play only: a fleet play put between the cleanup and the summary, a
+  summary that gathers facts or runs a role, and a device task in a play split off the summary each reached a device
+  after the cleanup and passed it (reader B's M1, M5-M8).
   `integration/test_backup_failed_run_cleans_up.py` runs the playbook for real with one host that answers nothing and
   a stale key in the run's key directory: the run fails at its summary, the history play commits, and the key
   directory is gone. `unit/test_backup_prune.py`'s order row never checked its second edge (it looked for

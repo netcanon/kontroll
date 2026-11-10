@@ -1,12 +1,14 @@
-"""backup-configs.yml run for real, every capture failing: the run still removes its SSH keys, and still fails (I-9).
+"""backup-configs.yml run for real, every capture recorded as failed: the run still removes its SSH keys, and still
+fails (I-9).
 
-WHY. The summary play's assert fails each host whose capture failed, and when that is every host Ansible ends the
-playbook at that play. The history, the prune and the per-run SSH-key cleanup came after it, so a run whose every
-capture failed left the run's keys in their per-run directory until the next run or a reboot. Since I-5 one device that
-answers nothing is enough: a one-host scheduled backup. tests/unit/test_backup_summary_is_last.py holds the order; this
-row runs it. One host of the generic raw-SSH backend, on a local connection, whose backup command (`true`) answers
-nothing; its good capture is in place and in the history, and a stale key file is in the run's key directory before
-the run.
+WHY. The summary play's assert fails each host whose capture was recorded as failed, and when that is every host
+Ansible ends the playbook at that play. The history, the prune and the per-run SSH-key cleanup came after it, so a
+run whose every capture was recorded as failed left the run's keys in their per-run directory. Since I-5 one device
+that answers nothing is enough: a one-host scheduled backup. (A capture that fails as a task on every host, a read
+that exits non-zero, still ends the run at the capture play, before the cleanup: I-12.)
+tests/unit/test_backup_summary_is_last.py holds the order; this row runs it. One host of the generic raw-SSH backend,
+on a local connection, whose backup command (`true`) answers nothing; its good capture is in place and in the
+history, and a stale key file is in the run's key directory before the run.
 
 It needs ansible-playbook and git: where either is missing the row is skipped (the gate's images and CI's validate job
 have both). Nothing of the developer's Ansible or git reaches the play: its configuration, home and temporary
