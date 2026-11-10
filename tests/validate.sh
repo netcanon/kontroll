@@ -96,6 +96,18 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
     out="$(PYTEST_ADDOPTS= "$0" -m pytest tests/integration/test_plaintext_guard_sops.py -rs --color=no 2>&1)"; rc=$?
     printf "%s\n" "$out"
     [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
+  # the connection refusal (ansible/playbooks/tasks/refuse-local-connection.yml), wire-logging.yml's per-method
+  # allowlist, and the device_role fact guard (tasks/refuse-device-role-fact.yml, after an `update_fact`, a
+  # `library/` module and a cacheable `set_fact`), run by the INSTALLED ansible-core over the connection spellings
+  # the reads measured: what ansible-core
+  # puts in `ansible_connection` is its own, and a bump that changes it for an allowed spelling, or lets a refused row
+  # through, must fail HERE. Behind `have ansible-playbook`, and no test may be skipped (as above).
+  have ansible-playbook; step refuse-local-runtime $? bash -c '
+    t=tests/integration; t="$t/test_refuse_local_connection_runtime.py $t/test_wire_logging_allowlist_runtime.py
+      $t/test_device_role_fact_guard_runtime.py"
+    out="$(PYTEST_ADDOPTS= "$0" -m pytest $t -rs --color=no 2>&1)"; rc=$?
+    printf "%s\n" "$out"
+    [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
   # the change of identity, with REAL uids (rule 5 of kontroll.canon). The rows of tests/integration/test_canon_drop.py
   # chown a canonical to the play's layout and start git as the service, and those of
   # tests/integration/test_content_clone_as_service.py run the deploy's content-clone tasks with ansible-playbook

@@ -1,0 +1,30 @@
+---
+# Refuse a host whose `device_role` is a fact. A play that includes `{{ device_role }}` (ping.yml's reach play,
+# backup-configs.yml's capture play) runs the role the host's inventory names, so the role, and the connection it is
+# written for, come from the instance alone. A module that returns facts sets a host fact, which outranks every
+# inventory var and lasts for the host from one play to the next: `ansible.utils.update_fact` (the first part of each
+# `updates` path), `ansible.utils.cli_parse` (its `set_fact`), `community.sops.load_vars` (each key of the file), a
+# `set_fact` with `cacheable: true`, and any module or action plugin a collection or a `library/` holds. A task of an
+# earlier play could so set the role a `local` host runs, and backup-configs.yml ran a fixed role on one on 2.18 and
+# 2.19 with the scan green.
+#
+# The scan (tests/unit/test_group_dispatch_refuses_local.py) refuses each such setter it can name in a file the tool
+# ships. This check refuses the class by where such a value lands, whatever module set it: `ansible_facts`, which
+# the inventory, a plain `set_fact`, an include_vars, a vars file beside the playbooks and `-e` never reach (the scan
+# holds the set_fact, the include_vars and the vars file; `-e` is the operator's: SECURITY.md C4). A var named
+# `ansible_facts` would hide a fact from it: the scan's tree rule refuses one. The check holds for a `device_role`
+# the inventory gives as a plain name; one the inventory templates from another var reads that var, which a fact
+# can set past it (the instance's own inventory, SECURITY.md C4).
+#
+# The play imports this file as its first task. `assert` is an action that runs on the controller and touches no
+# host; a refused host fails before its role runs, and the play goes on for the others.
+
+- name: Refuse a host whose device_role is a fact (only the inventory names the role a host dispatches by)
+  ansible.builtin.assert:
+    that:
+      - ('device_role' not in ansible_facts)
+    fail_msg: >-
+      {{ inventory_hostname }}: `device_role` is a fact for this host (a module that returns facts set it, in an
+      earlier play of this run), and only the inventory may name the role a host dispatches by. Refused for this host;
+      the other hosts go on.
+    quiet: true

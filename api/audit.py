@@ -21,7 +21,7 @@ _FIELDS = ("ts", "user", "ip", "action", "run_id", "detail")
 
 def mint_run_id() -> str:
     """A correlation id for one privileged request: `<UTC-stamp>-<6hex>`. Co-appears in the audit
-    line and (when a route triggers Ansible) the `-e kontroll_run_id=…` it passes down."""
+    line; no route passes it down to Ansible yet (no `-e kontroll_run_id=…`), so a play stamps its own."""
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + os.urandom(3).hex()
 
 

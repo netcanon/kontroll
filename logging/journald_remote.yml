@@ -54,6 +54,9 @@ wiring_role: logging_journald_remote   # roles/logging_journald_remote -- persis
                                        # the SENDER (remote host). The COLLECTOR receiver is
                                        # roles/logging_journald_receiver (systemd-journal-remote on mgmt :19532 +
                                        # the Vector /var/log/journal-remote bind mount).
+# The connections wire-logging.yml runs the wiring role over; a host on any other is refused
+# (tasks/refuse-local-connection.yml). The role edits the host's own journald config, so only ssh reaches it.
+wiring_connections: [ssh, ansible.builtin.ssh, paramiko_ssh, ansible.builtin.paramiko_ssh]
 secret_domain: null                    # unauthenticated upload on the mgmt VLAN (accepted risk, parity with :5514
                                        # syslog -- SECURITY.md C12); a future TLS/cred variant would name a domain.
 access_chain:

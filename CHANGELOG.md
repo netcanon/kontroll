@@ -11,6 +11,200 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a group-dispatched play runs its role only over a connection that role is written for (2026-10-23)
+
+`wire-logging.yml` runs `-e role` on every host of a device class's group, and `install-node-exporter.yml` runs
+`node_exporter` on `hypervisors:docker_hosts`. Both run that role whatever the host's own `device_role` is. Under a
+connection that executes on the controller, the role would run on the control node, as the runner. The examples are
+an `authorized_keys` line under a home the host names, a journald config edit and an apt install. ansible-core loads
+the local plugin as `local`, `ansible.builtin.local`, `ansible.legacy.local` and
+`[ansible.builtin.|ansible.legacy.]redirected_local`, and `network_cli`, `httpapi` and `netconf` run every module that
+is not a network module on the controller too. The fleet plays include `{{ device_role }}`, so a host runs only the
+role its own `device_role` names. Which roles may sit beside a controller-side connection is a separate rule (the
+homelab tine's `local` rule).
+
+- Both plays open with `ansible/playbooks/tasks/refuse-local-connection.yml`, an `assert` on the controller that
+  touches no host. It is an allowlist: the import passes `refusal_connections`, the connections the play's role is
+  written for.
+  - `install-node-exporter.yml` passes the ssh family (`ssh` and `paramiko_ssh`, bare and `ansible.builtin.`).
+  - `wire-logging.yml` passes the method's new `wiring_connections` (logging/README.md): `network_cli` (bare and
+    `ansible.netcommon.`) for `syslog_push`, whose role runs network modules alone, and the ssh family for
+    `journald_remote` and `file_tail_ssh`. It reads the methods from `logging/*.yml` and `*.yaml`, as the catalog
+    does. A wiring role no method gives a list stops the run before any device is reached. It starts the method list
+    empty, so a `_wire_methods` the inventory or a vars file beside the playbooks sets is not read as methods (one
+    so set widened a role's list).
+  - An import with no list, or a list that names the local plugin, refuses every host, and the refusal says which.
+  - A list set for any host of the play anywhere but the import (the inventory, a vars file beside the playbooks, an
+    earlier play's `set_fact` or `include_vars`, a fact delegated to it, an operator's `-e`) refuses every host of the
+    play: all but the inventory's and the vars file's outrank the import's, which is only task vars, and `hostvars`
+    holds such a list and never the import's. The check, the assert's first, is that no host's `hostvars` hold the
+    key (`in`), which renders nothing: on 2.19 a test of the value rendered it in the host's own context, where a list
+    templated to read a play's magic var is undefined, so such a list passed. It reads the play's hosts by
+    `ansible_play_hosts_all`, a magic var nothing outranks: by `hostvars[inventory_hostname]`, a `set_fact` of the list
+    beside `inventory_hostname: localhost` passed every host. Being first, it also refuses a null or `omit` list with
+    its own message. The refusal says that the list is set outside the import and names the hosts that hold it, and
+    does not name a list, which would be the outside one or the import's own. With a list an earlier play left,
+    install-node-exporter.yml ran node_exporter over network_cli on the controller.
+  - A refused host fails, and the play goes on for the others.
+  - The node_exporter, wiring-role and logging READMEs and docs/logging-architecture.md describe the refusal.
+- The assert is followed by a `set_fact` that freezes `ansible_connection` at the allowlist's own spelling of the
+  value the assert passed. A host var is templated again for every task, so one that rendered `ssh` at the check and
+  `local` inside the role ran the role on the controller (measured on 2.18 and 2.19). A `set_fact` outranks every
+  inventory var and every play, role, block, task and include_vars var; an include's own `vars`, a role entry's
+  parameter, a loop variable, a later `set_fact` (or one that takes `module_defaults`) and an operator's `-e` outrank
+  it. A value that renders, at the freeze, to a name not on the list is stored as '', which no connection plugin
+  loads, so that host fails.
+- For a host that sets no `ansible_connection`, ansible-core fills in the plugin it loaded: `ssh`, unless `-c`,
+  `ANSIBLE_TRANSPORT`, ansible.cfg's `transport` or the play's `connection:` names another (`local` under `-c local`,
+  which is refused).
+- `install-node-exporter.yml` gathers facts after the refusal, with the `gather_facts` action the play keyword runs,
+  so a refused host has nothing run on it. Under a network plugin (now refused first) `setup` had run on the
+  controller and reported its facts; `gather_facts` picks the network OS's facts module instead.
+- The fleet plays (ping.yml's reach play, backup-configs.yml's capture play) open with
+  `ansible/playbooks/tasks/refuse-device-role-fact.yml`, an `assert` that `device_role` is not in `ansible_facts`. A
+  module that returns facts sets a fact, which outranks the inventory: an earlier play's `ansible.utils.update_fact`
+  ran a fixed role from backup-configs.yml on a `local` host (2.18 and 2.19). The scan below names each setter it
+  knows; the guard refuses the class, whatever module set it. In ping.yml it sits before the block, whose rescue
+  would report a refused host as unreachable. The fleet plays set no `ignore_errors`, tag no task and run no
+  `meta: clear_host_errors` (each let a refused host run the role; the scan refuses a `clear_host_errors` anywhere,
+  a role's own too) and set no var named `ansible_facts`, which hides a fact from the guard. The guard holds for a
+  `device_role` the inventory gives as a plain role name; one the instance's inventory templates from another var reads
+  that var.
+- `tests/unit/test_group_dispatch_refuses_local.py` finds every play under `ansible/playbooks/` that runs a role other
+  than the host's own `{{ device_role }}`: by `roles:`, by an include or import key (bare, `ansible.builtin.`,
+  `ansible.legacy.`, or in `action:` form, the path written plainly or as a mapping's `_raw_params` or `file`), by a
+  role's own task file, by a task file it cannot read (a templated or missing path, a mapping that names it neither way,
+  or an include that carries `args:` or is written as an `action:` mapping, whose own `args` or `module:` words
+  ansible-core may take its path or role name from), or with a `device_role` the play sets itself (a var, a vars file, a
+  prompt, a `set_fact` — or one it cannot read — or `include_vars`). It reads a task file a play includes directly (one
+  under `ansible/roles/` it counts as that role's run and does not read), from the playbook's directory as ansible-core
+  does, and counts an include inside an included file as a file it cannot read (ansible-core also tries the working
+  directory, and `<dir>/tasks/` when the playbook directory looks like a role), which a dispatching play may not hold.
+  It flags an `import_playbook` it cannot follow, does not parse (any but `.yml`/`.yaml`) or reaches through a symlinked
+  directory and `..`, counts a path that is not plain (ansible-core unquotes, strips or expands any other) as one it
+  cannot read, and does not see a play that runs inline tasks and no role. It refuses a symlink, a play anywhere below
+  the top of the playbooks (under `files/` and `templates/` too), a `collections` directory at their top, a file other
+  than `.yml`/`.yaml` outside the top-level `files/` and `templates/`, a file inside them that ansible-core would
+  read as a play or a playbook import (JSON first, an `__ansible_unsafe` mapping read as its value as 2.18 reads it,
+  then YAML by libyaml's reader and by PyYAML's, a tag read as the node it tags, a file that is not UTF-8 decoded as
+  2.18 decodes it; run by its path, it is a play the scan does not see), any file there or in a role that holds a
+  mapping key starting `__ansible` in any of those readings (2.19 keeps a wrapper's other keys, where 2.18 drops them: a
+  wrapped `set_fact` of `ansible_connection: local` with a key beside it ran after the refusal on 2.19; a key tagged
+  `!vault`, which ansible-core decrypts at run time, reads as one), any file there
+  or in a role that sets `device_role` (a key of that name, in group_vars too; a `register`, loop or index variable that
+  names it or is templated; an `add_host`, a `group_by` (it moves a host into a group whose vars may name another role),
+  a `load_vars`, a `cli_parse` or an `update_fact` (plainly, in `action:` form or by `module_defaults`); an
+  `include_vars` without a `name` that is a plain string other than it; a templated `set_fact` key, `args:` or `k=v`
+  word; a key `_variable_params` (ansible-core's own: a templated one sets any name); a set_fact's own `device_role==`
+  word (a value that begins with `=`); or an `action:` form of those, a mapping's `module` read by its first word, or of
+  a `set_fact` written as a mapping or with a templated word; an `action:` or `local_action:` whose module, its first
+  word as ansible-core splits it (at a space or a line break, not a tab), is not a name as written (ansible-core renders
+  a template there at run time); a `vars_prompt`; a `device_role=` word, read as ansible-core's `parse_kv` reads it
+  (split into words at spaces and line breaks, each word's escapes decoded alone, the key stripped): only the instance's
+  inventory sets the role a host dispatches by, and one set in an earlier play or a role's own code ran a fixed role on
+  a `local` host), any file that names a var `ansible_facts` (a key, a `register`, a loop or index variable, an
+  `include_vars` `name`, a `vars_prompt`, a `k=v` word, read so too, a key `_variable_params`, a set_fact's own
+  `ansible_facts==` word), any file that runs `meta: clear_host_errors` (the word in a task's `args:` too: a role's own
+  one, or one in a role another host runs, revived a host the guard refused), any file that includes a task file or a
+  role the scan cannot follow into the tree (a path that is not plain, is absolute or has a `..` part, an `action:`
+  form, one carrying `args:`, a role named by its path, as an include, a `roles:` entry or a `meta/` dependency, or by a
+  collection's name, any `meta/` dependency (ansible-core looks each one up as `ansible.legacy.<name>` in every
+  collection root before the roles path), a plain role name not found first, as written, as a directory in the roles
+  path (ansible-core searches `<playbooks>/roles`, the roles path and the playbooks directory, then the working
+  directory, and stops where the name first exists, a file too), a role named `.`, a `collections` keyword, a task file
+  included or imported anywhere but in a file at the top of the playbooks or in a role's own `tasks/main.yml` or
+  `handlers/main.yml` (`.yaml` too) under `ansible/roles/`, one not found, as written, beside that file, or one that
+  itself includes a task file, node_exporter's pinned include with another `when` or a family's file missing, a
+  `{{ role }}` outside wire-logging.yml: one outside the tree set `device_role`), and any plugin directory ansible-core
+  loads beside a playbook (`*_plugins`, `library`, `module_utils`, `doc_fragments`) under `ansible/playbooks/`; such a
+  directory at the top of a role or of the roles path; a symlink under `ansible/roles/`; an ansible.cfg at the repo
+  root; and an `ansible/ansible.cfg` whose `roles_path` is not `roles`, that names any plugin path but its own
+  `filter_plugins`, whose `filter_plugins` defines a filter not named `kontroll_*` or holds a file with no `filters`
+  function, whose `[ssh_connection]` is not the shipped one, that has a section or a `[defaults]` key the shipped file
+  does not (a `[paramiko_connection]`, a `[persistent_connection]`, a `[connection]`, a `jinja2_extensions`), or that
+  gives a key it has a value other than the shipped one (a `collections_path`, a `stdout_callback`, a
+  `vars_plugins_enabled` or an `[inventory]` `enable_plugins` names code ansible-core loads on the controller), or that
+  leaves out a key or section the shipped file has (ansible-core's own default then stands in, and with no `[inventory]`
+  that default enables the `script` and `auto` plugins). The cfg is read as ansible-core reads it, its bytes (but for a
+  `;` comment after a value, which ansible-core takes and the scan refuses, failing closed): a file whose lines end in a
+  bare CR is one comment line there, holds none of the shipped keys, and is refused, a byte that is not UTF-8 is read as
+  ansible-core reads it, and a file ansible-core refuses to read (a duplicate key or section) is refused; a file nested
+  deeper than the scan reads is refused, where it was a traceback, and a playbook or task file the scan cannot parse (a
+  NUL, several documents, a tag the safe loader does not know) fails the scan tests that read it, each naming the file.
+  It pins the shipped filter files by content: a filter file is code ansible-core imports on the controller, so the
+  names it registers do not hold what it runs, and a change to one changes the pin in the same diff. It holds each one
+  to opening with a static import of the refusal that carries only its list, with `gather_facts: false`, no play-level
+  `ignore_errors` and no `setup` task. After the refusal, nothing may name `ansible_connection` (in a task's `vars`, a
+  `set_fact` as a key, an `args:` key, a `k=v` word (the words of an `action:` mapping's `module:` among them), behind
+  any key that is not a plain name — templated under `{{`, `{%` or `{#` — or as the `args` of an `action:` form, a loop
+  or index variable that is an `ansible_` name or not a plain name, `module_defaults` or a role entry), run `meta:
+  clear_host_errors` (which revives a refused host past the freeze), delegate a block, a static import, an include's
+  `apply:` or a role entry, import with `local_action:`, give a task but a `set_fact` an `args:`, or write one as an
+  `action:` or `local_action:` mapping (ansible-core merges the first under the key's own arguments,
+  and a mapping's `module:` words and then its `args` over the mapping's own keys, so an include's path, a role's name,
+  an `apply:`, a `tasks_from` or `meta`'s `clear_host_errors` can sit there), name a module in an `action:` or
+  `local_action:` by a template (ansible-core renders it at run time), or include a task file the scan cannot read, and
+  no task or role entry may be tagged (`--tags` would skip the untagged refusal). It pins the assert, the freeze,
+  install-node-exporter.yml's list and the expression wire-logging.yml passes, refuses an `__ansible` key in any file
+  under `logging/` (wire-logging.yml's `from_yaml` and the catalog's `yaml.safe_load` keep a wrapper's other keys, so
+  the list the test read was not the one the run used) and a method that does not read to a mapping (one it cannot
+  parse, or that is not UTF-8), and holds each method's `wiring_connections` to the ssh family, or to a network plugin
+  only for a role whose every task, through its blocks and the roles it includes, is a network-safe module (named bare
+  or under `ansible.builtin`, `ansible.legacy` or `ansible.netcommon`: another collection's `cli_config` is that
+  collection's code), and that has no task-file include, `meta/` dependency (any of `main.yml`, `main.yaml`,
+  `main.json`, `main`) or handler (the walk reports those, and an include that carries `args:` (the keyword) or is
+  written as an `action:` mapping, rather than read them, and reports a role that `ansible/playbooks/roles/` would
+  shadow); a play whose list is not of the ssh family alone runs no task or handler of its own, beside the role, that is
+  not network-safe, and sets no `collections:` on the play, a block or a task, nor reaches a role whose `meta/` or a
+  task sets one; the shadow is judged from the play's own directory. It reads every playbook and task file as
+  ansible-core 2.18 does: JSON first, where 2.18 takes a mapping with an `__ansible_unsafe` key as that key's value (a
+  `set_fact` of `ansible_connection: local` so wrapped, in a task file a play included, ran on 2.18 with every check
+  green), then YAML; with every `__ansible` key refused, 2.19's reading and `from_yaml`'s agree with it on every file
+  the tool ships. Each rule has a planted row that fails without it; the filter files' pin is an assertion on the
+  shipped tree. `test_no_tracked_file_is_one_the_repo_ignores` refuses a tracked file the repo's own `.gitignore` rules
+  name, and pins the files tracked under `ansible/filter_plugins/` and the cfg's `collections_path` to the filter pin's
+  (it needs a git checkout, and fails where git lists none of the repo's files): an unchecked `__pycache__` pyc beside a
+  filter file, and a plugin under the cfg's `collections_path`, each ran on the controller with the pin green; a forced
+  `git add`, or a plain one under a nested `.gitignore` negation, commits either, and either is refused.
+- `tests/unit/test_onboard_ssh_key.py::test_every_playbook_that_renders_device_keys_removes_them_last` holds every
+  playbook that imports `_fleet-preamble.yml` or `_render-ssh-keys.yml` (judged by the path the import runs) to
+  importing the shipped `ansible/playbooks/_cleanup-ssh-keys.yml` last (by the path it runs, not a namesake), by an
+  entry that carries only its name, and `test_the_key_cleanup_removes_the_run_key_dir_on_the_runner` pins the cleanup to
+  one `file: state=absent` task on the run's key dir, delegated to localhost, with no other keyword (the runtime test
+  runs in `--check`, which cannot tell a cleanup that removes the dir from one that never does).
+- `tests/integration/test_refuse_local_connection_runtime.py` runs the shipped file under the installed ansible-core
+  over the connection spellings its reads measured, a templated `local`, chroot, `smart` and templates that render by
+  context, and checks that the play's next task and a role's task run over the connection the refusal passed, and that
+  a list set outside the import for one host refuses every host of the play.
+  `tests/integration/test_device_role_fact_guard_runtime.py` runs the device_role guard after an `update_fact`, a
+  `library/` module and a cacheable `set_fact` (each of which, without it, makes the host dispatch by the role it
+  set), and passes a host whose role only the inventory names; the unit test holds each play that dispatches by
+  `{{ device_role }}` to importing it first and to setting no `ignore_errors`, tagging no task and running no
+  `clear_host_errors`. `tests/integration/test_wire_logging_allowlist_runtime.py` runs the shipped `wire-logging.yml`
+  for each method and checks that only a host on that method's `wiring_connections` reaches the role, with
+  `ansible_connection` still the value the refusal passed and on no delegate, with a method list seeded beside the
+  playbooks that it does not read, and that the key cleanup runs on the run's key dir (2.18 and 2.19 checked).
+- What a connection check cannot see is in SECURITY.md C4: ssh to the controller's own address, an ssh or paramiko
+  option that runs a controller command, as a var or in the runner's environment (`ansible_scp_executable`,
+  `ansible_sftp_executable` and `ansible_ssh_args` among them), an operator's `-e` (an `ansible_connection`, a
+  `_wire_methods` or `_wire_connections`, or a `device_role`, which makes one role every host's in a fleet play),
+  `--start-at-task`, `--step`, task debugger or `ANSIBLE_ROLES_PATH`, a plugin of any
+  type on the runner's own plugin path or named by a config file it reads other than the
+  repo's, an operator's `--tags` with a static role import whose own tasks are tagged, a
+  connection set or a block delegated inside a role's own code (a dispatched role's, or a role
+  task file a play includes by path), a role from a collection that the inventory names as a host's `device_role` (the
+  tree rule reads only `ansible/playbooks/` and `ansible/roles/`; the generated requirements and `trust.generated.yml`
+  hold an installed collection), a play that writes a task file, a role or the inventory at run time and then
+  runs it, `ansible_facts_modules`, and a run that an earlier play stops (every target
+  refused, failed or, in ping.yml, unreachable, or a failed validation play), which skips the key cleanup. No shipped
+  caller passes `kontroll_run_id`, so every run shares the `kontroll-ssh-keys.manual` key dir (unless
+  `$KONTROLL_SSH_KEY_DIR` names one) and the next run that completes outside `--check` removes what such a run left (the
+  dir removed is the first remaining host's `kontroll_device_key_dir`, since the task runs once: when a host var or a
+  `set_fact` gives hosts different dirs, every other dir stays, with its keys); on the Semaphore runner a host reboot or
+  a container restart keeps it until then (SECURITY.md's accepted-risk row, `_cleanup-ssh-keys.yml`). Two overlapping
+  jobs share the dir: one's cleanup leaves the other unable to open a new connection, which it counts as an ignored
+  unreachable host.
+
 ### fix(ansible): a dry-run before a service's self-signed cert is made no longer fails on owning it, on any node (I-27, 2026-11-08)
 
 In self_signed mode the deploy makes each service's cert with `openssl req`, which `--check` skips, then gives the cert

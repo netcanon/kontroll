@@ -171,9 +171,9 @@ instance's job, not CI's). Coverage focus: the service layer + auth are the high
 
 The API is a **privileged surface**, so it is wired into the Layer 0 foundations
 ([logging-architecture.md](logging-architecture.md) §3):
-- **run_id** — minted at the request boundary, written into every audit line **and** passed to any
-  Ansible the call triggers (`-e kontroll_run_id=…`), so one operation is greppable end-to-end across
-  the API audit log, the durable ansible log, and the Semaphore job output.
+- **run_id** — minted at the request boundary and written into every audit line. No route passes it
+  to Ansible yet (the API runs no play), so a play stamps its own: the API audit log, the durable
+  ansible log and the Semaphore job output are each greppable by their own id.
 - **Audit** — every mutation logs `who/when/what` (never creds), append-only, rotated (the GUI's
   `RotatingFileHandler` pattern). A `GET /audit/log?action=&user=&run_id=&since=` route (privileged)
   makes it queryable — the cross-silo "show me everything for this run" §G2 wanted.

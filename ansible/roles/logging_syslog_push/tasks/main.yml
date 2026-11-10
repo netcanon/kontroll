@@ -4,7 +4,7 @@
 # to the device_role-dispatched CLI backend (the ONE dispatch seam) — no per-vendor branching here. The enact
 # step (logsvc.logging_enact_commands) runs this via ansible/playbooks/wire-logging.yml with --check --diff FIRST.
 #
-# Access chain used:   control VM (mgmt VLAN) -> device mgmt (network_cli/netconf) sets `logging host <collector>`
+# Access chain used:   control VM (mgmt VLAN) -> device mgmt (network_cli) sets `logging host <collector>`
 # May break:           the device's syslog config ONLY (a wrong collector host = logs go nowhere). NO forwarding
 #                      path, NO traffic rule, NO mgmt reachability is touched.
 # Fallback required:   console for edge_firewall/core_switch (OPNsense HDMI / CRS310 MAC-Winbox) per CLAUDE.md;
