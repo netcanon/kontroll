@@ -129,10 +129,10 @@ script's header and in `SECURITY.md` C1.
 
 ## `lib/run-log.sh` — persistent run-logs (Layer 0)
 
-Sourced fail-soft by the operator scripts (`update`/`backup`/`state-snapshot`/`state-restore`/
-`run-smoke-gate`); `run_log_init <name>` tees a run's stdout+stderr to a timestamped, 30-day-pruned
-log under `~/.local/state/kontroll/runs`, the directory Vector ships (`KONTROLL_RUN_LOG_DIR` keeps it elsewhere,
-unshipped; `XDG_STATE_HOME` is not read) — a persistent "what ran, when,
+Sourced fail-soft by the operator scripts that call `run_log_init`; `run_log_init <name>` tees a run's
+stdout+stderr to a timestamped, 30-day-pruned log under `~/.local/state/kontroll/runs`, the directory Vector ships
+when the script runs as the operator who deployed the stack (`KONTROLL_RUN_LOG_DIR` keeps it elsewhere, unshipped,
+and says so; `XDG_STATE_HOME` is not read; run as root or under sudo it is root's, unshipped) — a persistent "what ran, when,
 succeeded?" trail (operator-owned, not the uid-1001 runner). See
 [docs/logging-architecture.md](../docs/logging-architecture.md) §3.
 
