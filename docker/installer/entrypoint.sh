@@ -26,7 +26,7 @@ case "$verb" in
   init)
     # bootstrap (collections + age/ssh keys, fleet-driven) → deploy-stack, which IMPORTS local-canonical (the C10
     # canonical) then renders docker/.env from the SOPS domains and brings up the compose stack. Extra args
-    # (e.g. -e api_privileged=true, -e stack_services='["semaphore","onboard-gui",…]') forward to deploy-stack,
+    # (e.g. -e api_privileged=true, -e '{"stack_services":["semaphore","onboard-gui",…]}') forward to deploy-stack,
     # the sole consumer; bootstrap takes none.
     cd "$ANSIBLE_DIR"
     ansible-playbook playbooks/bootstrap.yml

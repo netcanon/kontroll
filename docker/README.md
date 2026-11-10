@@ -8,7 +8,12 @@ Deploy is codified, not manual: `ansible/playbooks/deploy-stack.yml` installs Do
 renders `docker/.env` from the SOPS `semaphore`/`dashboards`/`proxmox` domains,
 regenerates the Prometheus scrape targets from the modules+inventory
 (`scripts/gen-observability.py`), and brings up the data-driven `stack_services` list.
-Re-run it to add services as later phases enable them.
+Re-run it to add services as later phases enable them. Pass the list as JSON
+(`-e '{"stack_services":["semaphore"]}'`): the play refuses a string, which a key=value `-e`
+passes, and any name compose could not take as one service. When nothing is left to bring up
+(the list is empty, or names only snmp-exporter on a node without its credentials, which the
+play drops, and the node runs no Caddy) the play brings up nothing and says why: `docker compose
+up -d` with no service named would start every service in the stack.
 
 > **Compose-native install (Phase 1):** the install glue itself now runs in an ephemeral container —
 > [`installer/`](installer/README.md) (built from `installer/Dockerfile`, run via `services/installer.yaml` +
