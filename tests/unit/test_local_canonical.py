@@ -136,8 +136,9 @@ def test_the_harden_task_sets_only_a_key_the_config_does_not_hold_already():
 def test_the_ownership_pass_sets_operator_owner_and_is_a_detect_then_apply_pair():
     """The grant on EXISTING objects is the ownership pass of `scripts/kontroll-canonical.py --normalise`, run from
     the worktree with become, as a detect-then-apply pair: the detect task carries `--check`, runs under the play's
-    `--check` too (`check_mode: false`) — when there is a canonical to look at (`_canonical_before`), so the dry-run
-    of a fresh node is not failed by a path that is not there yet —, is never "changed", and fails on any status but 0 (nothing to do) and 3
+    `--check` too (`check_mode: false`) — when there is a canonical to look at (`_canonical_present`), so the dry-run
+    of a fresh node is not failed by a path that is not there yet or an empty directory —, is never
+    "changed", and fails on any status but 0 (nothing to do) and 3
     (something to do); the apply task carries no `--check`, runs only when the detect task exited 3, and is
     "changed" then — so a second run reports 0 changed. Both say `--owner {{ operator_uid }} --group 1001`: the
     owner half is what lets the operator's first-run push succeed before the just-added group membership becomes
@@ -149,8 +150,11 @@ def test_the_ownership_pass_sets_operator_owner_and_is_a_detect_then_apply_pair(
     landing left — the service's files when root landed (rule 5), git's `0444` pack files either way — so that the
     deploy after a landing reports 0 changed instead of re-owning them then (`tests/integration/
     test_local_canonical_as_root.py` runs the play and holds the count). Both pairs are the same two commands
-    with the same conditions; the second follows the landing task, and the detect of the second registers its own
-    name (`_normalise_after`) so its apply is gated on it and not on the first detect's answer."""
+    with the same conditions but one: the detect after the landing asks for a repository (`_canonical_repo`, the
+    landing's judgement's condition), where the first asks for any canonical, entries that are no repository too,
+    whose owners the real run changes and the dry run names first (I-19's read A). The second follows the landing
+    task, and the detect of the second registers its own name (`_normalise_after`) so its apply is gated on it and
+    not on the first detect's answer."""
     detect, apply, detect_after, apply_after = _pass_tasks()
     tasks = _tasks()
     land = next(i for i, t in enumerate(tasks) if "kontroll-land.py" in _cmd(t) and "--check" not in _cmd(t))
@@ -171,9 +175,10 @@ def test_the_ownership_pass_sets_operator_owner_and_is_a_detect_then_apply_pair(
         assert d.get("check_mode") is False and d.get("changed_when") is False
         assert str(d.get("failed_when")).replace(" ", "") == "%s.rcnotin[0,3]" % d["register"]
         assert str(a.get("when")).replace(" ", "") == "(%s.rc|default(0))==3" % d["register"]
-        assert str(d.get("when")).replace(" ", "") == "_canonical_before.stat.existsornotansible_check_mode", (
-            "the detect must be skipped under the dry-run of a node with no canonical yet (its path is not there), "
-            "and run everywhere else")
+        assert str(d.get("when")).replace(" ", "") == ("_canonical_presentornotansible_check_mode" if d is detect
+                                                       else "_canonical_repoornotansible_check_mode"), (
+            "the first detect is skipped only under the dry-run of a node with no canonical yet (no path, an empty "
+            "directory), the one after the landing also where there is no repository; both run on every real run")
         assert a.get("changed_when") is True and "check_mode" not in a
     for task in _tasks():
         words = _cmd(task).split()
@@ -260,16 +265,16 @@ def test_the_mirror_is_a_landing_judged_first_and_never_a_push():
     skipping the judgement, a landing task that runs under check mode), which the hook would then refuse at
     every deploy.
 
-    The `--check` task's CONDITION is pinned to the ownership pass's — `_canonical_before.stat.exists or not
-    ansible_check_mode` — and the refusal's to `(<register>.rc | default(0)) != 0`. WHY: the judgement needs a
-    canonical to judge against (`--repo {{ bare }}`), and under the dry-run of a FRESH node the `file` and `git
-    init` tasks are only simulated, so the command exits 1 ("--repo must name a bare repository") and the refusal
-    stops the mandated `--check --diff` of every first install (measured 2026-10-20 in the gate image: `failed=1`
-    at the refusal task). The exact condition is held, not merely "a when": a `when: not ansible_check_mode` on
-    the same task would make EVERY dry-run skip the judgement with the rest of this row green (the 20-review-land
-    reversion R06 survived before this pin). And `default(0)`: a skipped judgement registers no `rc`, and the
-    refusal must read that as "nothing to refuse", not fail on an undefined attribute. The debug task before the
-    judgement says, under that one dry-run, why nothing was judged."""
+    The `--check` task's CONDITION is pinned to that of the ownership pass's detect after the landing —
+    `_canonical_repo or not ansible_check_mode` — and the refusal's to `(<register>.rc | default(0)) != 0`. WHY: the
+    judgement needs a canonical to judge against (`--repo {{ bare }}`), and under the dry-run of a FRESH node the
+    `file` and `git init` tasks are only simulated, so the command exits 1 ("--repo must name a bare repository")
+    and the refusal stops the mandated `--check --diff` of every first install (measured 2026-10-20 in the gate
+    image: `failed=1` at the refusal task). The exact condition is held, not merely "a when": a `when: not
+    ansible_check_mode` on the same task would make EVERY dry-run skip the judgement with the rest of this row green
+    (the 20-review-land reversion R06 survived before this pin). And `default(0)`: a skipped judgement registers no
+    `rc`, and the refusal must read that as "nothing to refuse", not fail on an undefined attribute. The debug task
+    before the judgement says, under that one dry-run, why nothing was judged."""
     tasks = _tasks()
     landing = [t for t in tasks if "kontroll-land.py" in _cmd_text(t)]
     assert len(landing) == 2, "a --check task and a landing task: %r" % [t.get("name") for t in landing]
@@ -285,15 +290,15 @@ def test_the_mirror_is_a_landing_judged_first_and_never_a_push():
         assert "become" not in task, "the landing runs as the caller (root drops to the service in the seam)"
     assert _cmd_text(check).rstrip().endswith("--check") and "--check" not in _cmd_text(land)
     assert check.get("check_mode") is False and check.get("changed_when") is False and check.get("failed_when") is False
-    assert str(check.get("when")).replace(" ", "") == "_canonical_before.stat.existsornotansible_check_mode", (
+    assert str(check.get("when")).replace(" ", "") == "_canonical_repoornotansible_check_mode", (
         "the judgement runs on every real run and on the dry-run of a node that HAS a canonical; only the dry-run "
         "of a fresh node skips it (there is nothing to judge against yet): %r" % check.get("when"))
-    detect = next(t for t in tasks if "--normalise" in _cmd_text(t) and "--check" in _cmd_text(t))
+    detect = [t for t in tasks if "--normalise" in _cmd_text(t) and "--check" in _cmd_text(t)][-1]
     assert str(check.get("when")).replace(" ", "") == str(detect.get("when")).replace(" ", ""), \
-        "the judgement's condition is the ownership pass's detect condition, in the same words"
+        "the judgement's condition is that of the ownership pass's detect after the landing, in the same words"
     note = tasks[tasks.index(check) - 1]
     assert _mod(note, "ansible.builtin.debug", "debug") and "ansible_check_mode" in str(note.get("when")) \
-        and "not _canonical_before.stat.exists" in str(note.get("when")), \
+        and "not _canonical_repo" in str(note.get("when")), \
         "the task before the judgement says, under the fresh node's dry-run, why nothing is judged"
     assert "{{ bare }}" in str(_mod(note, "ansible.builtin.debug", "debug").get("msg")) and "first seed" in \
         str(_mod(note, "ansible.builtin.debug", "debug").get("msg"))
@@ -318,6 +323,155 @@ def test_the_mirror_is_a_landing_judged_first_and_never_a_push():
     assert "git push local HEAD:refs/heads/main" not in src and "REFUSING to mirror" not in src
     commit = next(i for i, t in enumerate(tasks) if "git add -A" in _cmd_text(t))
     assert commit < tasks.index(check), "the instance-state commit comes before the landing that takes HEAD"
+
+
+def test_an_empty_directory_at_the_canonicals_path_is_no_canonical(tmp_path):
+    """Whether there is a canonical is decided once, after the `stat` of its path: one listing of the path's top
+    level, run only when the path is a directory, by the interpreter Ansible runs on, read-only under `--check` too,
+    never "changed" and never failing the play, that prints one WORD and never a name — `empty`, `repo` (`HEAD`
+    among the entries), `headless` (`objects` or `refs`, and no `HEAD`) or `entries` (anything else) —, and one
+    `set_fact` of two answers on that word. The listing's program is RUN here on each shape laid out in a scratch
+    directory (on POSIX, a name that is not UTF-8 too), and on paths it cannot list, where it prints nothing. Both
+    expressions are EVALUATED with Jinja for each word and for none. `_canonical_present` is false for a path that is
+    not there and for an EMPTY directory, and true for anything else — a directory with an entry, a path that is no
+    directory, and a directory this account could not list (no word). `_canonical_repo` is that, less `entries` and
+    `headless`. The audit, its no-report sentence and the first ownership detect ask `_canonical_present` (three
+    tasks, by name); the detect after the landing, the landing's judgement and the dry run's note ask
+    `_canonical_repo` (three); a new task that asks either raises its number here. None asks the bare `stat` any more.
+
+    WHY: the installer's compose service binds `/srv/kontroll.git`, and Docker makes a bind source that is missing an
+    empty root-owned directory, so after `fresh-init` a fresh node has one. Taken for a canonical, the mandated
+    dry-run of every first install through the installer judged the landing against it and failed ("the canonical
+    could not be read"; measured 2026-11-07, the quickstart run as written on a GitHub-hosted runner), and the audit
+    named three things nobody had done. A path that holds entries and no repository (a filesystem mounted there
+    holds `lost+found`) failed the dry run the same way while the real run landed (I-19's read B, measured on both
+    cores): it is audited, and the dry run says the real run will seed it. And a word, not `find`: `find` returns
+    every name, and one that is not UTF-8 failed its result on both cores, before the audit whose job is to name it,
+    and with it every deploy (I-19's read A, measured). Guards the decision going back to the bare `stat` or to a
+    module that returns names, a listing that misreads a shape, an unreadable canonical counted as none, which would
+    skip its audit in silence where the audit says what it could not read, and a directory with entries, or a
+    repository whose `HEAD` is gone, judged as a repository."""
+    import subprocess
+    import sys
+
+    import jinja2
+    tasks = _tasks()
+    at = next(i for i, t in enumerate(tasks) if t.get("register") == "_canonical_before")
+    listing, present = tasks[at + 1], tasks[at + 2]
+    assert set(listing) == {"name", "ansible.builtin.command", "register", "changed_when", "failed_when",
+                            "check_mode", "when"}, listing
+    assert set(listing["ansible.builtin.command"]) == {"argv"}, listing
+    argv = listing["ansible.builtin.command"]["argv"]
+    assert argv[:3] == ["{{ ansible_playbook_python }}", "-B", "-c"] and argv[4:] == ["{{ bare }}"], argv
+    assert listing["register"] == "_canonical_listing"
+    assert listing["when"] == "_canonical_before.stat.isdir | default(false)"
+    assert listing["check_mode"] is False and listing["changed_when"] is False and listing["failed_when"] is False, \
+        "read-only under --check too, and a listing that fails says no word: it is no failure of the play"
+    shapes = [   # the entries, the word
+        ([], "empty"),
+        (["HEAD", "config", "objects", "refs", "hooks"], "repo"),
+        (["HEAD"], "repo"),
+        (["config", "objects", "refs", "hooks"], "headless"),
+        (["refs"], "headless"),
+        (["lost+found"], "entries"),
+        (["README", ".HEAD"], "entries"),
+    ]
+    if os.name == "posix":
+        shapes += [([b"\xff\xfe"], "entries"), ([b"\xff\xfe", "HEAD"], "repo")]
+    for i, (names, word) in enumerate(shapes):
+        top = tmp_path / ("shape%d" % i)
+        top.mkdir()
+        for name in names:
+            os.mkdir(os.path.join(os.fsencode(str(top)), name if isinstance(name, bytes) else name.encode()))
+        ran = subprocess.run([sys.executable, "-B", "-c", argv[3], str(top)], capture_output=True, timeout=60)
+        assert ran.returncode == 0 and ran.stdout.split() == [word.encode()], (names, ran)
+    a_file = tmp_path / "a-file"
+    a_file.write_text("x", encoding="utf-8")
+    for path in (tmp_path / "no-such", a_file):
+        ran = subprocess.run([sys.executable, "-B", "-c", argv[3], str(path)], capture_output=True, timeout=60)
+        assert ran.returncode != 0 and ran.stdout == b"", (path, ran)
+    facts = present["ansible.builtin.set_fact"]
+    assert set(facts) == {"_canonical_present", "_canonical_repo"}, facts
+    assert set(present) == {"name", "ansible.builtin.set_fact"}, present
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    decide = {}
+    for fact, text in facts.items():
+        text = text.strip()
+        assert text.startswith("{{") and text.endswith("}}"), text
+        decide[fact] = env.compile_expression(text[2:-2])
+    skipped = {"changed": False, "skipped": True, "skip_reason": "Conditional result was False"}
+
+    def listed(word, rc=0):
+        return {"changed": False, "rc": rc, "stdout": word, "stdout_lines": word.splitlines(), "stderr": ""}
+    a_dir = {"exists": True, "isdir": True}
+    cases = [   # stat, listing, present, repo
+        ({"exists": False}, skipped, False, False, "no path"),
+        ({"exists": True, "isdir": False}, skipped, True, True, "a path that is no directory"),
+        (a_dir, listed("empty"), False, False, "an empty directory"),
+        (a_dir, listed("empty\n"), False, False, "an empty directory, the word with its newline"),
+        (a_dir, listed("repo"), True, True, "a repository"),
+        (a_dir, listed("headless"), True, False, "a repository whose HEAD is gone"),
+        (a_dir, listed("entries"), True, False, "a filesystem mounted at the path: entries, no repository"),
+        (a_dir, listed("", rc=1), True, True, "a directory this account could not list"),
+    ]
+    for st, registered, want_present, want_repo, what in cases:
+        scope = {"_canonical_before": {"stat": st}, "_canonical_listing": registered}
+        assert decide["_canonical_present"](**scope) is want_present, what
+        assert decide["_canonical_repo"](**scope) is want_repo, what
+        assert want_present or not want_repo, (what, "a repository is a canonical")
+    for fact, number in (("_canonical_present", 3), ("_canonical_repo", 3)):
+        asking = [t.get("name") for t in tasks if fact in str(t.get("when", ""))]
+        assert len(asking) == number, (fact, asking)
+    for task in tasks:
+        assert "_canonical_before.stat.exists" not in str(task.get("when", "")), task.get("name")
+
+
+def test_the_dry_runs_note_says_what_it_saw_and_what_the_real_run_will_do():
+    """The note before the landing's judgement, shown under `--check` when there is no repository to judge
+    against, is EVALUATED here with Jinja (its one var first, as Ansible resolves it) for each case it is shown
+    for. No path, an empty directory, and a directory of entries and no repository each "hold no canonical yet",
+    with the case named ("it is not there"; "what Docker leaves for a bind source that is missing"; "the audit above
+    named them"), and the real run "lands HEAD as a first seed". A repository whose `HEAD` is gone "holds a
+    repository without HEAD", and the real run "restores HEAD, then judges the landing", with no word of a first
+    seed. Every message names the path and the way to judge HEAD's tree by hand, in one paragraph.
+
+    WHY: the dry run of a repository whose `HEAD` is gone skips the judgement (it cannot read one), and the note
+    said that the path held no canonical and that the real run would land HEAD as a first seed; on a canonical that
+    holds a promoted commit the worktree lacks, the real run refuses the landing instead (I-19's read A, measured on
+    both cores). Guards those words coming back for that case, and a note that names the wrong case."""
+    import jinja2
+    tasks = _tasks()
+    check = next(t for t in tasks if "kontroll-land.py" in _cmd_text(t) and _cmd_text(t).rstrip().endswith("--check"))
+    note = tasks[tasks.index(check) - 1]
+    assert set(note) == {"name", "ansible.builtin.debug", "vars", "when"}, note
+    assert str(note["when"]).replace(" ", "") == "ansible_check_modeandnot_canonical_repo", note["when"]
+    (var, text), = note["vars"].items()
+    msg = note["ansible.builtin.debug"]["msg"]
+    assert "\n" not in msg.strip(), "the message is ONE folded paragraph"
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+
+    def said(stat, registered, present):
+        scope = {"_canonical_before": {"stat": stat}, "_canonical_listing": registered,
+                 "_canonical_present": present, "bare": "/srv/kontroll.git", "worktree": "/checkout"}
+        scope[var] = env.from_string(text).render(**scope)
+        return env.from_string(msg).render(**scope)
+    head = "local-canonical: /srv/kontroll.git "
+    skipped = ", so under --check the landing's judgement is skipped — the real run "
+    hand = (" To judge HEAD's tree now: in /checkout, `git init -q --bare /tmp/empty.git && python3 -B "
+            "scripts/kontroll-land.py --check --repo /tmp/empty.git`.")
+    seed = "creates the canonical and lands HEAD as a first seed, judged then."
+    a_dir = {"exists": True, "isdir": True}
+    for stat, registered, present, saw in (
+            ({"exists": False}, {"skipped": True}, False, "holds no canonical yet (it is not there)"),
+            (a_dir, {"stdout": "empty"}, False,
+             "holds no canonical yet (it is an empty directory — what Docker leaves for a bind source "
+             "that is missing)"),
+            (a_dir, {"stdout": "entries"}, True,
+             "holds no canonical yet (it holds entries but no repository: the audit above named them)")):
+        assert said(stat, registered, present) == head + saw + skipped + seed + hand, saw
+    assert said(a_dir, {"stdout": "headless"}, True) == (
+        head + "holds a repository without HEAD (the audit above named it)" + skipped
+        + "restores HEAD, then judges the landing." + hand)
 
 
 def test_the_play_refuses_an_operator_whose_uid_is_the_services():

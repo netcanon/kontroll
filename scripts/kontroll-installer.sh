@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # kontroll-installer.sh — the compose-native installer LAUNCHER (Phase 1). The single entry point a fresh control
 # node uses after install-prereqs.sh: it derives the invoking operator's identity (MF-1 — the playbooks chown the
-# canonical + render docker/.env to THIS user, not the in-container root), ensures the host bind targets exist, and
-# runs the ephemeral installer service. Host floor = Docker + git only; all ansible/sops/age live in the image.
+# canonical + render docker/.env to THIS user, not the in-container root), makes the operator's key directories
+# (Docker makes the canonical's path and the storage root, empty and root's: local-canonical.yml counts an empty
+# canonical path as none), and runs the ephemeral installer service. Host floor = Docker + git only; all
+# ansible/sops/age live in the image.
 # Design-of-record: docs/reviews/2026-06-29-compose-native-install/99-synthesis.md (Phase A).
 #
 # Usage:

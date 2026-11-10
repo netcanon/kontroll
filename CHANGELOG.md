@@ -11,6 +11,48 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the dry run of a first install through the installer no longer refuses to land (I-19, 2026-11-07)
+
+The quickstart's `check` line, `scripts/kontroll-installer.sh check`, failed on every fresh node: "local-canonical:
+REFUSING to land (exit 1) — kontroll-land: the canonical could not be read". The second line, `fresh-init`, runs the
+installer container, whose compose service binds `/srv/kontroll.git`, and Docker makes a bind source that is missing an
+empty root-owned directory. `local-canonical.yml` asked only whether the path was there, so the dry run took that
+directory for a canonical: it audited it (`config-unread`, `head`, `hook-missing`: nobody's doing) and judged the
+landing against it instead of saying that the real run seeds the canonical. The quickstart, run as written on a
+GitHub-hosted runner, found it; the 2026-10-20 fix for the fresh node's dry run had been measured in the gate image,
+where nothing makes the directory.
+
+- **Fixed.** Whether there is a canonical is decided once, after the `stat`, by one listing of the path's top level,
+  which prints a word and never a name: a module that returns the names (`find`) fails on both cores at a top-level
+  name that is not UTF-8, before the audit whose job is to name it. A path that is not there, or an empty directory,
+  is none; anything else is one to audit, including a directory the account could not list (its audit says what it
+  could not read). A directory that holds entries but no `HEAD` (the root of a filesystem mounted at the path holds
+  `lost+found`) is audited and is no repository: under `--check` the landing is not judged against it, as the real
+  run makes the canonical there and lands. A repository whose `HEAD` is gone is audited (`head: HEAD`) and not judged
+  either, and its dry run says that the real run restores `HEAD` and then judges the landing, which may refuse it.
+  The audit, its no-report sentence and the first ownership detect ask the first answer, so the dry run names the
+  entries the real run re-owns (a mounted filesystem's root-owned `0700 lost+found` becomes the operator's,
+  group-writable); the detect after the landing, the landing's judgement and the dry run's note ask the second, and
+  the note says which case it saw. The real run makes and lands the canonical as before; it no longer prints the
+  three audit lines for a directory nobody filled. `deploy-stack.yml`'s fresh-node preview already probed `HEAD` for
+  the same reason.
+- **Tests.** `unit/test_local_canonical.py`: the decision's tasks; the listing's program run on each shape (empty, a
+  repository, one whose `HEAD` is gone, entries, a name that is not UTF-8) and on a path it cannot list; both
+  expressions evaluated for no path, a file, each word and none; which tasks ask each answer; the note's four
+  messages evaluated. `unit/test_canonical_audit.py` follows the audit's condition.
+  `integration/test_local_canonical_as_root.py` runs the play as root on a node whose canonical path is an empty
+  root-owned directory, and on one that holds only `lost+found`: each dry run passes, says it, and leaves the
+  directory as it was (the first names no audit finding, the second names the entry, and its ownership preview); each
+  first apply lands, and the second reports 0 changed. It runs it on a landed canonical with a top-level name that is
+  not UTF-8 (the dry run audits it and judges the landing, the apply re-owns it, the next reports 0 changed) and on
+  one whose `HEAD` was removed (the dry run says the real run restores it, which it does). The fresh node's row now
+  holds its note's wording too.
+- **Docs.** `docs/troubleshooting.md` §8 and SECURITY.md's audit row: an empty directory is not audited, and one with
+  entries and no `HEAD` is; §8 also says what the dry run names and says of each case. The installer's launcher is no
+  longer said to make every host bind target: it makes the operator's key directories, and Docker makes the
+  canonical's path and the storage root (`docker/services/installer.yaml`, `scripts/kontroll-installer.sh`,
+  `docker/installer/README.md`, `scripts/README.md`, `tests/check-storage-chown.py`).
+
 ### fix(ansible): a group-dispatched play runs its role only over a connection that role is written for (2026-10-23)
 
 `wire-logging.yml` runs `-e role` on every host of a device class's group, and `install-node-exporter.yml` runs

@@ -8,7 +8,8 @@ Each script is idempotent and reproducible (the cold-agent bar).
 `sudo bash scripts/install-prereqs.sh` installs the host floor — now just **Docker + compose + git** (the
 ansible/sops/age toolchain moved into the ephemeral installer image; `--with-host-ansible` restores the legacy host
 toolchain for rollback). `scripts/kontroll-installer.sh <verb>` is then the single entry point: it injects the
-operator identity (MF-1) + ensures the host bind targets exist, then runs the installer container
+operator identity (MF-1) + makes the operator's key directories (Docker makes the canonical's path and the storage
+root, empty and root's), then runs the installer container
 ([docker/services/installer.yaml](../docker/services/installer.yaml)) which executes the unchanged
 bootstrap/local-canonical/deploy-stack playbooks. Verbs: `fresh-init` · `check` (the `--check --diff` dry-run) ·
 *(bare)* `init` · `configure-semaphore` · `shell`. `host-systemd.sh` is the small host-systemd residual
