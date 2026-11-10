@@ -11,6 +11,14 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(logging): Vector skips a container named `kontroll-throwaway-…`, so a deploy's short helper raises no ERROR (I-1, 2026-11-10)
+
+Vector's `docker_logs` source inspects each container that starts, then attaches to its logs. A deploy's `docker run --rm` helper (a seed, a chown, where an edition runs one) exits before Vector is done, and each cost an ERROR line, 10 to 30 a deploy: "404 No such container" if gone by the inspect, "409 … marked for removal" if dead by the attach, or, under `--log-driver none`, Vector's own "not using either the `jsonfile` or `journald` logging driver". Measured on Vector 0.56.0: a container whose name starts with an excluded entry is neither inspected nor attached, and raised none, under either driver.
+
+- **Fixed.** `docker/vector/config.d/sources/internal_containers.yaml` excludes `kontroll-throwaway-` (Vector matches an entry against the start of a name). A deploy names each short-lived helper under it; the shipped playbooks run none, and an edition that adds one names it. The installer's own `compose run init` is not under the prefix: its lines ship.
+- **Tests.** `unit/test_compose_logging.py::test_a_throwaway_container_is_never_read_by_vector`: the prefix is excluded, each one-line `docker run` (or `docker container run`) in a .yml, .yaml, .sh or .j2 file under ansible/, at any depth, names its container under it on the same line (`--name x` or `--name=x`, quoted or not; a container that lives belongs in docker/services/); the line rule is checked on sample lines first, the walk on a tree of one file of each kind (the installed collections a bootstrapped checkout holds not entered), and the scan must read the deploy, a script, a template and the role template; and no service's `container_name` is under it.
+- **Docs.** `docs/logging-architecture.md` Layer 1; `docs/troubleshooting.md`'s label map (a `kontroll-throwaway-…` container is not shipped); `SECURITY.md` accepted risks: a container under the prefix is not shipped.
+
 ### fix(ansible): a Docker host without the compose plugin is backed up, and a failed Docker read is reported (I-62, 2026-11-11)
 
 A Docker host opted in to the backup, without the compose plugin, was never captured: the manifest script's last read

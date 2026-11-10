@@ -1,8 +1,17 @@
 # config.d/sources/internal_containers.yaml  → source id "internal_containers", type docker_logs.
-# Driver-agnostic, rich metadata. Self-excludes vector+loki to avoid a shipping feedback loop.
+# Driver-agnostic, rich metadata. Self-excludes vector+loki to avoid a shipping feedback loop, and a deploy's
+# short-lived helpers (below).
 type: docker_logs
 # The FILTERED read-only Docker API (docker/services/docker-socket-proxy.yaml), NOT the raw root-equivalent socket —
 # so non-root Vector never holds /var/run/docker.sock (C12 promotion fix); POST=0 on the proxy makes it read-only.
 docker_host: http://docker-socket-proxy:2375
-exclude_containers: [vector, loki, docker-socket-proxy]  # never ship our own collector/store/proxy logs (loop guard)
+# An entry matches the START of a container's name (or id). `kontroll-throwaway-` is the prefix of a deploy's
+# short-lived helpers, where an edition runs one (`docker run --rm --name kontroll-throwaway-<what>-…`, a seed
+# or a chown). Vector inspects each container that starts, then attaches to its logs: a helper gone by the
+# inspect raised "404 No such container", one dead by the attach "409 … marked for removal", and one under
+# `--log-driver none` Vector's own "not using either the `jsonfile` or `journald` logging driver". A name under
+# an excluded prefix is neither inspected nor attached, so it raises none (measured on Vector 0.56.0, I-1). The
+# installer's own `compose run init` is not under it: its lines ship. tests/unit/test_compose_logging.py holds
+# each one-line `docker run` in ansible/ to the prefix.
+exclude_containers: [vector, loki, docker-socket-proxy, kontroll-throwaway-]  # loop guard; a deploy's helpers
 auto_partial_merge: true                 # re-join Docker's 16 KiB line splits

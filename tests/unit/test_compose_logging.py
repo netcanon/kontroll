@@ -315,6 +315,116 @@ def test_vector_uses_socket_proxy_not_raw_socket():
     assert src["docker_host"] == "http://docker-socket-proxy:2375", "docker_logs must target the proxy, not the raw socket"
 
 
+_THROWAWAY = "kontroll-throwaway-"
+_DOCKER_RUN = re.compile(r"\bdocker\s+(?:container\s+)?run\b")
+_NAMED = re.compile(r"--name(?:=|\s+)[\"']?" + re.escape(_THROWAWAY))
+# what the scan's walk of ansible/ does not enter: the git store, caches, and the vendor collections a bootstrapped
+# checkout installs there (`collections_path = collections`), which are not the repository's own runs
+_SCAN_SKIPS = (".git", "__pycache__", "node_modules", "ansible_collections", ".ansible")
+_SCANNED = (".yml", ".yaml", ".sh", ".j2")
+
+
+def _unnamed_throwaways(text):
+    """The lines of `text` that run `docker run` (or `docker container run`) without naming the container under the
+    throwaway prefix on the same line (`--name x`, `--name=x`, either quoted). A comment line is not a run, and
+    `docker compose run` is not `docker run`."""
+    bad = []
+    for n, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("#") or not _DOCKER_RUN.search(line):
+            continue
+        if not _NAMED.search(line):
+            bad.append((n, line.strip()))
+    return bad
+
+
+def _scan_ansible(root):
+    """Each .yml, .yaml, .sh or .j2 file under `root`/ansible/, at any depth (a dot-directory such as the role
+    template too), less the `_SCAN_SKIPS` directories: the unnamed runs `_unnamed_throwaways` finds in each, and the
+    files read."""
+    bad, read = [], set()
+    for top, dirs, files in os.walk(os.path.join(root, "ansible")):
+        dirs[:] = sorted(d for d in dirs if d not in _SCAN_SKIPS)
+        for f in sorted(files):
+            if not f.endswith(_SCANNED):
+                continue
+            path = os.path.join(top, f)
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            read.add(rel)
+            with open(path, encoding="utf-8") as fh:
+                bad += [(rel, n, line) for n, line in _unnamed_throwaways(fh.read())]
+    return bad, read
+
+
+def test_a_throwaway_container_is_never_read_by_vector(tmp_path):
+    """A deploy's short-lived helper container (a `docker run --rm` seed or chown, where an edition runs one) is named
+    under one prefix, and the docker_logs source excludes that prefix. Vector inspects each container that starts,
+    then attaches to its logs: a helper gone by the inspect raised "404 No such container", one dead by the attach
+    "409 … marked for removal", and one under `--log-driver none` Vector's own "not using either the `jsonfile` or
+    `journald` logging driver" (a 501), 10 to 30 a deploy. A name under an excluded prefix is neither inspected nor
+    attached, so it raises none (I-1, measured on Vector 0.56.0). Guards three ways back to that burst or past it:
+    the prefix dropped from the source; a one-line `docker run` (or `docker container run`) in a .yml, .yaml, .sh or
+    .j2 file under ansible/, at any depth, with no `--name` under the prefix on its line (a container that lives
+    belongs in docker/services/, as a service whose lines ship); and a service whose `container_name` is under the
+    prefix, whose lines would then never ship (one without is compose's `<project>-<key>-<n>`, the deploy's project
+    `docker`, the installer's `services`, never under it). The line rule is checked on sample lines first (a named
+    run, `--name=`, both quoted, an unnamed one, `docker container run`, a comment, `docker compose run`, another
+    name, the prefix in another option, a trailing comment, a tab, an indented comment), the walk on a tree of one
+    file of each kind (a dot-directory entered, the installed collections a bootstrapped checkout holds under
+    ansible/ not), and the scan must read the deploy, a script, a template and the role template, so it binds
+    although main has no such run; an edition that adds one is held to it. The service check must read vector.yaml."""
+    src = _load("docker/vector/config.d/sources/internal_containers.yaml")
+    assert _THROWAWAY in src["exclude_containers"], \
+        "the docker_logs source must exclude %r, the deploy's short-lived helpers (I-1)" % _THROWAWAY
+
+    sample = "\n".join([
+        "cmd: docker run --rm --name kontroll-throwaway-seed-1 busybox true",      # named: passes
+        "cmd: docker run --rm --name=kontroll-throwaway-chown-1 busybox true",     # named with `=`: passes
+        "cmd: docker run --rm --name \"kontroll-throwaway-seed-{{ i }}\" busybox",  # quoted: passes
+        "cmd: docker run --rm --name='kontroll-throwaway-x' busybox true",         # `=`, quoted: passes
+        "cmd: docker run --rm busybox true",                                        # 5: caught
+        "  docker container run --rm busybox true",                                 # 6: caught
+        "# docker run --rm busybox true",                                           # a comment: skipped
+        "cmd: docker compose run --rm init",                                        # compose run: not docker run
+        "cmd: docker run --rm --name kontroll-seed busybox true",                   # 9: another name: caught
+        "cmd: docker run --rm --name kontroll-seed -v kontroll-throwaway-v:/d busybox",  # 10: in -v: caught
+        "cmd: docker run --rm busybox true  # a note",                              # 11: a trailing comment: caught
+        "cmd: docker\trun --rm busybox true",                                       # 12: a tab: caught
+        "    # docker run --rm busybox true",                                       # an indented comment: skipped
+    ])
+    assert [n for n, _ in _unnamed_throwaways(sample)] == [5, 6, 9, 10, 11, 12], _unnamed_throwaways(sample)
+
+    run = "- ansible.builtin.command: docker run --rm busybox true\n"
+    for rel in ("ansible/a.yml", "ansible/b.yaml", "ansible/files/c.sh", "ansible/roles/r/templates/d.j2",
+                "ansible/roles/.role-template/tasks/e.yml", "ansible/f.txt",
+                "ansible/collections/ansible_collections/v/g.yml"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(run, encoding="utf-8")
+    bad, read = _scan_ansible(str(tmp_path))
+    held = ["ansible/a.yml", "ansible/b.yaml", "ansible/files/c.sh", "ansible/roles/.role-template/tasks/e.yml",
+            "ansible/roles/r/templates/d.j2"]
+    assert sorted(read) == held and sorted(r for r, _, _ in bad) == held, (sorted(read), bad)
+
+    bad, read = _scan_ansible(_ROOT)
+    for rel in ("ansible/playbooks/deploy-stack.yml", "ansible/playbooks/files/canonical-update-hook.sh",
+                "ansible/roles/logging_journald_receiver/templates/kontroll-journal-remote.service.j2",
+                "ansible/roles/.role-template/tasks/backup.yml"):
+        assert rel in read, "the scan must read %s (the deploy, a script, a template, the role template)" % rel
+    assert not bad, ("a `docker run` in ansible/ is a short-lived helper (a container that lives belongs in "
+                     "docker/services/, as a service whose lines ship): name it `--name %s<what>-…` on the same "
+                     "line, so Vector skips it (I-1): %r" % (_THROWAWAY, bad))
+
+    read = set()
+    for path in sorted(glob.glob(os.path.join(_ROOT, "docker", "services", "*.yaml"))):
+        rel = os.path.relpath(path, _ROOT).replace(os.sep, "/")
+        read.add(rel)
+        for name, svc in ((_load(rel) or {}).get("services") or {}).items():
+            given = str((svc or {}).get("container_name") or "")
+            assert not given.startswith(_THROWAWAY), \
+                "%s: service %s's container %r would never ship a line (the prefix is excluded)" % (rel, name, given)
+    assert "docker/services/vector.yaml" in read, "the service check must read the service fragments"
+
+
 def test_socket_proxy_is_read_only_filtered():
     """The docker-socket-proxy fragment sets POST=0 (the whole Docker API is GET/HEAD-only ⇒ cannot create/exec/kill
     a container) and publishes NO host port (kontroll-net only, C3). It alone holds the raw socket (:ro). Guards the

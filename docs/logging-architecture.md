@@ -192,7 +192,12 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   avoided (deprecated). Container logs come through the read-only `docker-socket-proxy`. It passes only the
   container list, an inspect and the logs under `/containers/` (and does not start if it cannot add that limit),
   and routes the `/logs` streams to its no-timeout backend, so a quiet container's stream is not cut every ten
-  minutes.
+  minutes. A deploy's short-lived helper container, where an edition runs one, is named `kontroll-throwaway-…`,
+  a prefix the source excludes (`exclude_containers` matches a name's start). Vector inspects each container
+  that starts, then attaches to its logs: a helper gone by the inspect cost a "404 No such container" ERROR, one
+  dead by the attach a "409 … marked for removal", and one under `--log-driver none` a 501 ("not using either
+  the `jsonfile` or `journald` logging driver"). A name under the prefix is neither inspected nor attached, so
+  it costs none (I-1). The installer's own `compose run init` is not under the prefix, and its lines ship.
   (Built on branch; pending the dogfood deploy.)
 
 ### Layer 2 — Store + query: Loki  🟡 built (`feat/logging-vector`)

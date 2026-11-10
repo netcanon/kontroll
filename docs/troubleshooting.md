@@ -25,7 +25,9 @@ the dashboard panels are kept in sync on purpose.
 
 ¹ A compose one-off is labelled without its run hash: the installer's `services-init-run-<hash>` is
 `services-init` (an `init` or `check` run; its other verbs, `fresh-init` and `shell` among them, keep no log). A
-bare `docker run` with no `--name` gets a random name, and so a stream of its own.
+bare `docker run` with no `--name` gets a random name, and so a stream of its own. A container named
+`kontroll-throwaway-…` (a deploy's short helper, where an edition runs one) is not shipped at all: the source
+excludes the prefix (I-1), and the deploy's own output carries what it prints.
 ² Less what systemd mints per login, run, container scope or instance: `session.scope`, `run.<type>`,
 `docker.scope`, and every template's instance dropped (`getty@.service`, `wg-quick@.service`). The journald
 capability methods fold the same way. The full name stays in the body — pick one with
