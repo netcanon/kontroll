@@ -9,8 +9,9 @@ of the play can say that the dry-run sends nothing and that a real run sends one
 `-e prometheus_url=…`, the operator's override.
 
 It needs ansible-playbook: where it is missing every row is skipped (the gate's images and CI's validate job have it).
-Nothing of the developer's Ansible reaches the play: its configuration, home, temporary directory and inventory are
-the row's own.
+Nothing of the developer's Ansible reaches the play: its configuration, home, temporary directory, vars-plugin path
+and inventory are the row's own (the default vars-plugin path includes the site-wide /usr/share/ansible/plugins/vars,
+which ANSIBLE_HOME does not move: the I-15 read B's N-10).
 """
 import http.server
 import os
@@ -78,6 +79,7 @@ def _play(tmp_path, url, check=False, hosts=None):
     inventory.write_text(yaml.safe_dump({"all": {"hosts": hosts} if hosts else {}}), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
     env.update(ANSIBLE_CONFIG=str(cfg), ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"),
+               ANSIBLE_VARS_PLUGINS=str(home / "plugins" / "vars"),
                ANSIBLE_NOCOLOR="1", ANSIBLE_DEPRECATION_WARNINGS="0", ANSIBLE_LOCALHOST_WARNING="0",
                PYTHONDONTWRITEBYTECODE="1", NO_PROXY="127.0.0.1", no_proxy="127.0.0.1")
     argv = ["ansible-playbook", "-i", str(inventory), PLAYBOOK, "-e", "prometheus_url=%s" % url]
@@ -147,9 +149,11 @@ def test_a_real_run_on_an_inventory_with_no_hosts_is_stamped(tmp_path, prometheu
     """I-15: with an inventory that has no hosts (`all: {}`), the play still runs on the implicit localhost and POSTs
     the reload, so its output must carry the run id. On `hosts: all` the stamp matched nothing (the implicit
     localhost is not in `all`), and the reload was sent with nothing to correlate it by, by the installer and by
-    Semaphore alike."""
+    Semaphore alike. The id is printed once, and before the POST's task starts, not only before its report: a stamp
+    played after the POST would leave a refused reload, which fails the host at the POST, with no id, and a second
+    import prints a second id (the I-15 read B's N-1 and N-4)."""
     rc, out, recap = _play(tmp_path, prometheus.url, hosts={})
     assert rc == 0, out
     assert prometheus.seen == [("POST", "/-/reload")], out
-    assert _stamped(out), out
-    assert out.index("kontroll_run_id=") < out.index("Prometheus config reloaded"), out
+    assert _stamped(out) and out.count('"msg": "kontroll_run_id=') == 1, out
+    assert out.index("kontroll_run_id=") < out.index("TASK [POST the Prometheus lifecycle reload endpoint]"), out

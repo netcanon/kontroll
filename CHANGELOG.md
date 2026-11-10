@@ -23,14 +23,21 @@ stamped while the run's localhost plays still acted: reload-observability's real
   on its first host as before and its recap gains no localhost, a `--limit <host>` run is stamped on that host,
   and a run on an inventory with no hosts is stamped on the implicit localhost. Measured on both cores for an
   empty, a flat, a grouped and a localhost-holding inventory, with and without `--limit`: the stamp moved only
-  where the inventory has no hosts.
+  where the inventory has no hosts. `--list-hosts` on a fleet now lists localhost in the stamp's play, which
+  still stamps the first fleet host.
 - **Tests.** The new `integration/test_run_id_stamp_runs.py` runs `_log-run-id.yml` by ansible-playbook on an
-  empty inventory (stamped once, on localhost, a UTC id), a fleet (once, on its first host, the recap naming it
-  alone), a `--limit` (on that host) and an injected id (the one printed).
-  `integration/test_reload_observability_runs.py` gains a real run on an inventory with no hosts: one POST, the
-  stamp printed before the reload.
+  empty inventory (stamped once, on localhost, with the UTC time of the run under a TZ off UTC), a fleet (once, on
+  its first host, the recap naming it alone), a `--limit` (on that host), an injected id (the one printed, on no
+  hosts and on a fleet) and an empty injected id (a UTC id). `integration/test_reload_observability_runs.py` gains
+  a real run on an inventory with no hosts: one POST, one stamp, printed before the POST's task. The new
+  `unit/test_run_id_stamp_imported.py` holds each importer to importing the stamp first and once: the preamble,
+  deploy-stack, promote and reload-observability directly, the fleet playbooks through the preamble. No test held
+  deploy-stack's or promote's import before.
 - **Docs.** `docs/logging-architecture.md` (Layer 0's run correlation key: which playbooks import it, and its
-  pattern), tests/README.md.
+  pattern), the stamp's header (what `connection: local` does and does not do), `docs/testing-standards.md`,
+  `docs/observability/delivery-runbook.md` (a line pointer the change made stale), tests/README.md.
+- **Not changed.** A fleet whose first host's connection plugin cannot load fails the stamp and ends the run, on
+  main too (I-52).
 
 ### fix(ansible): a backup run whose every capture is recorded as failed still removes its SSH keys (I-9, 2026-11-09)
 

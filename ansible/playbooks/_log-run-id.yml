@@ -1,6 +1,7 @@
 ---
 # Stamp + log this run's correlation id (Layer 0, docs/logging-architecture.md §3).
-# Imported FIRST by the fleet playbooks so every run's id lands in the ansible log AND the
+# Imported FIRST by the fleet and stack playbooks (directly, or through _fleet-preamble.yml;
+# tests/unit/test_run_id_stamp_imported.py) so every run's id lands in the ansible log AND the
 # Semaphore job output (Postgres-backed, queryable via the task API) — the key that correlates
 # one operation across the ansible log, the Semaphore job, and (ahead) the aggregated logs.
 # A caller may inject `-e kontroll_run_id=...`; otherwise a UTC timestamp is used.
@@ -13,8 +14,13 @@
 # acted (I-15: reload-observability's real run POSTed /-/reload with no id). run_once takes the
 # play's first host, which is the first inventory host when there is one, so a fleet's stamp
 # lands where it did and its recap gains no localhost (measured on ansible-core 2.19 and 2.18,
-# tests/integration/test_run_id_stamp_runs.py). connection: local keeps it a no-contact,
-# log-only task.
+# tests/integration/test_run_id_stamp_runs.py). `--list-hosts` lists localhost for this play
+# too; run_once stamps it there only when the inventory has no hosts.
+#
+# The task is a debug, which runs nothing on its host, so the stamp contacts none. connection:
+# local applies only to a host that names no connection of its own (the implicit localhost): a
+# fleet host's ansible_connection outranks it and its plugin still loads, so a first host whose
+# connection plugin cannot load fails the stamp and ends the run (I-52).
 - name: Stamp the run correlation id
   hosts: all:localhost
   gather_facts: false

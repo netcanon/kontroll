@@ -104,8 +104,9 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   (UTC stamp); a caller may inject `-e kontroll_run_id=…`. It plays on `all:localhost` with
   `run_once`: a fleet run stamps its first host, a `--limit <host>` run that host, and a run on
   an inventory with no hosts the implicit localhost (I-15: on `hosts: all` that run printed no
-  id while its localhost plays still acted; `tests/integration/test_run_id_stamp_runs.py`). (Investigated: Semaphore does
-  not expose its task id as a runner env var, so an in-playbook id is the reliable mechanism;
+  id while its localhost plays still acted; `tests/integration/test_run_id_stamp_runs.py`;
+  `tests/unit/test_run_id_stamp_imported.py` holds each importer to it). (Investigated: Semaphore
+  does not expose its task id as a runner env var, so an in-playbook id is the reliable mechanism;
   it co-appears with the Semaphore task id in the job output for cross-reference.)
   *Durability enhancement (since shipped):* a persistent `ANSIBLE_LOG_PATH`
   (`/var/lib/kontroll/ansible-log`, surviving the ephemeral job clone) **and** a host

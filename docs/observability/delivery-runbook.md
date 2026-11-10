@@ -365,7 +365,7 @@ def observe(body: ObserveIn, request: Request,
     return {"applied": True, "run_id": principal.run_id, **applied}
 ```
 
-**run_id correlation (the audit-silo gap, delivery self-review):** route the GUI opt-in **through the API** (which mints `run_id` at the boundary, `auth.py:40`, and is fail-closed on audit) rather than the GUI's 4-field fail-open `_audit`. The enact step (Semaphore play) receives `-e kontroll_run_id=<principal.run_id>` so the GUI click → plan → playbook is greppable end-to-end via the `_log-run-id.yml:19` mechanism. The audit line is **`observe-apply`** with `key/method/creds=<var-names>` — **never** the SNMP community or API key value.
+**run_id correlation (the audit-silo gap, delivery self-review):** route the GUI opt-in **through the API** (which mints `run_id` at the boundary, `auth.py:40`, and is fail-closed on audit) rather than the GUI's 4-field fail-open `_audit`. The enact step (Semaphore play) receives `-e kontroll_run_id=<principal.run_id>` so the GUI click → plan → playbook is greppable end-to-end via the `_log-run-id.yml` mechanism (its `Log kontroll_run_id` task). The audit line is **`observe-apply`** with `key/method/creds=<var-names>` — **never** the SNMP community or API key value.
 
 **Integration test — `tests/integration/test_api_observe.py`** (copy the `priv` fixture + battery from `test_api_auth.py:28-96`):
 
