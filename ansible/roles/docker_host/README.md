@@ -29,3 +29,10 @@ headers alone is no manifest: it is recorded `FAILED`, which fails the run at it
 summary, and nothing is written, so any earlier manifest is kept (I-10). A
 `--check` run never runs the script (`shell` skips it) and previews an empty
 capture.
+
+The compose plugin is optional: a host without it is captured with an empty
+stacks section. Any other read that fails (no docker, no daemon, no access to
+its socket) stops the script there, and the read's exit code is recorded
+`FAILED` (the summary prints it and fails the run; nothing is written, so any
+earlier manifest is kept). An unreachable host is tolerated, as every class's
+is: its summary line says it was not run (I-62).

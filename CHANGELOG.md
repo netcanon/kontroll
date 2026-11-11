@@ -11,6 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a Docker host without the compose plugin is backed up, and a failed Docker read is reported (I-62, 2026-11-11)
+
+A Docker host opted in to the backup, without the compose plugin, was never captured: the manifest script's last read
+was `docker compose ls`, which exits 1 without the plugin, so the read failed the host at its own task. A failed read
+(no docker, a daemon that is down, no access to its socket) failed the host the same way, and the summary printed no
+line for it: the run failed with a censored fatal and nothing that said which host or why. The I-13 read A found both,
+and found that an unreachable Docker host or Proxmox node failed the whole run (rc 2) on its branch, before I-10's
+write gate (`stdout | default('')`), which is what tolerates one now; no row held it for either class.
+
+- **Fixed.** The script runs under `set -e`, so a read that fails stops it there and its exit code is that read's; the
+  compose read runs only where `docker compose version` answers, so a host without the plugin is captured with an
+  empty stacks section. The read carries `failed_when: false`, and a read that exits non-zero is recorded `FAILED: the
+  manifest read exited <rc> …`, naming the exit code alone (the answer is `no_log`), before the write, which runs only
+  for an exit code of 0; the summary prints the line and fails the run, and any earlier manifest is kept. Run to its
+  end, a host whose daemon is down and that has no compose plugin would have exited 0 with the client's half of
+  `docker version`, and that would have been written over the good manifest.
+- **Tests.** `tests/unit/test_backup_empty_capture_refused.py`: a Docker read that exits 1 (with the client's half of
+  `docker version`) or 127 (a header alone) runs the failure record and nothing else, in a real run and a dry run; the
+  read carries `failed_when: false`, and the record sits before the write and reads only the read's `rc`.
+  `tests/integration/test_backup_empty_capture_real_run.py` runs the playbook for real: an unreachable opted-in Docker
+  host and an unreachable Proxmox node beside a good host (a dry run and a real run both pass, each says it was not
+  run, both captures kept), a Docker host without the compose plugin (captured, with its stacks header and nothing
+  under it) and one whose daemon is down (FAILED, naming exit code 1, its manifest kept, the run failed at its
+  summary).
+- **Docs.** `ansible/roles/docker_host/README.md` says what a failed read and a missing compose plugin get.
+
 ### fix(scripts): a landing from a shallow clone is refused before the pack, with the remedy (I-20, 2026-11-09)
 
 An operator who cloned with `git clone --depth 1` got, at the first deploy, `kontroll-land: the commit is not whole
