@@ -28,6 +28,17 @@ nothing changed, but a bundle update that changes the Dockerfile is always refle
 require an installer rebuild — the device collections bake into the Semaphore runner image at deploy time; the
 installer carries only the fleet-independent control-plane base (sops/general/docker).
 
+**Stdin.** `docker compose run` keeps the container's stdin open and reads it. So both launchers run every verb
+but `shell` with stdin at `/dev/null` when stdin is no terminal: a verb run where stdin carries a later command's
+input (`ssh <node> 'scripts/kontroll-installer.sh init; bash -s' < verify.sh`) leaves that input to the later
+command (I-4). No verb but `shell` needs stdin: nothing in the installer prompts. An ansible-playbook flag that
+prompts (`--ask-vault-pass`, `--ask-become-pass`, `--ask-pass`, `--step`), forwarded to `init`, `check` or a playbook,
+reads its answer from a terminal only; from a script, give a password as a file (`--vault-password-file`,
+`--become-password-file`, `--connection-password-file`). `shell` keeps its stdin (`shell < script.sh` runs the
+script), and a terminal is handed over as it is, with whatever is queued on it: a script run under a terminal (`ssh
+-tt`, `script`) still hands its later lines to the installer, so run it with a plain `ssh`, or give the verb
+`</dev/null`. Pinned by [tests/unit/test_installer_stdin.py](../../tests/unit/test_installer_stdin.py).
+
 > **Published path (C1):** the installer image is also published to ghcr (public packages) and pinned by `@sha256:` digest in
 > [`../images.lock.yml`](../images.lock.yml). A fresh node can install from a **launch kit** (`scripts/make-launch-kit.sh`)
 > with no clone and no build: [`scripts/kontroll`](../../scripts/kontroll.sh) (the published sibling of
