@@ -146,7 +146,7 @@ change. kontroll's correlation model (full detail in [logging-architecture.md](l
 Layer 0):
 
 - **`kontroll_run_id`** — the shared correlation key (`_log-run-id.yml`, imported first by the
-  fleet playbooks) that stitches one operation across the ansible log, the Semaphore job output,
+  fleet and stack playbooks, directly or through `_fleet-preamble.yml`) that stitches one operation across the ansible log, the Semaphore job output,
   and script run-logs. Any new actuating path emits it.
 - **GUI audit log** — every onboard action + auth-denial: timestamp, client IP, what
   (collection/key/host/flags). **Never** a credential. New GUI actions extend it, and a test
