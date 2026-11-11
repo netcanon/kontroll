@@ -102,8 +102,10 @@ WRITE_VERBS = frozenset({
     # proposal) — a commit id judged by the promote gate, brought across as a pack on a pipe (`index-pack`), one
     # compare-and-swap (`update-ref`); `_land_in_canonical` is its canonical-side half, `_pack` starts the
     # worktree's `pack-objects`; `land_main` is the door the operator CLI and a non-staging `commit_and_push` call
-    # where they pushed `main`. Each registered in the same commit as the verb (P0b/#134).
-    "land_commit", "_land_in_canonical", "_pack", "land_main",
+    # where they pushed `main`. Each registered in the same commit as the verb (P0b/#134). `_pack_view` judges a
+    # shallow worktree's pack in the view it is made in, and writes that view's shallow list to a temporary file
+    # (I-20); it is reached from `land_commit` only.
+    "land_commit", "_land_in_canonical", "_pack", "_pack_view", "land_main",
 })
 
 

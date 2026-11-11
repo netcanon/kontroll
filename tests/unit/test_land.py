@@ -17,9 +17,11 @@ accepts, and whether a hook ran.
 import ast
 import importlib.util
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -248,6 +250,380 @@ def test_a_pack_short_of_an_object_is_refused_before_any_ref_names_it(box):
     packer = gitio._pack(box.wt, c, x)                       # excludes X's objects, which the canonical lacks
     rc, said = gitio._land_in_canonical(box.bare, canon.MAIN, c, box.seed, box.seed, packer)
     assert rc == 1 and "not whole" in said and _main(box.bare) == box.seed, said
+
+
+def _history(tmp_path):
+    """A whole repository (`src`): the clean tree, then three commits on it. Returns `(src, [c0, c1, c2, c3])`."""
+    src = str(tmp_path / "src")
+    subprocess.run(["git", "init", "-q", "-b", "main", src], check=True, capture_output=True)
+    _git(src, "config", "core.autocrlf", "false")
+    return src, [_commit(src, CLEAN, "seed")] + [_commit(src, {"%d.txt" % n: "%d\n" % n}, "c%d" % n) for n in (1, 2, 3)]
+
+
+def _shallow_clone(src, wt, bare, depth):
+    """`git clone --depth <depth>` of `src` — through a `file://` URL, since a clone of a local path ignores
+    `--depth` — with core.autocrlf off and the `local` remote naming `bare`, as `local-canonical.yml` leaves one."""
+    subprocess.run(["git", "clone", "-q", "--depth", str(depth), pathlib.Path(src).as_uri(), wt], check=True,
+                   capture_output=True)
+    _git(wt, "config", "core.autocrlf", "false")
+    _git(wt, "remote", "add", "local", bare)
+    assert _git(wt, "rev-parse", "--is-shallow-repository") == "true"
+
+
+def test_a_shallow_clone_short_of_what_the_canonical_lacks_is_refused_first_and_lands_once_unshallowed(tmp_path,
+                                                                                                      capsys):
+    """A `git clone --depth 1` worktree holds HEAD and not its parents. Into an EMPTY canonical (the first deploy
+    after a quickstart) the landing, and its `--check` (the deploy's dry-run), is refused (rc 1) before anything is
+    packed: the sentence says `is a shallow clone` and gives the remedy, `git -C <worktree> fetch --unshallow`, and
+    the command exits 1 with it on stderr. The sentence names the shallow clone (`made by git clone --depth`),
+    what git said, and that the canonical is untouched. Into a canonical whose `main` is a commit below where the
+    clone stops, and not in it, the same sentence, not the not-a-fast-forward one: its remedy, a rebase, cannot
+    mend a cut history. After `fetch --unshallow` the same commit lands, and the canonical holds it whole. Guards
+    I-20: before this, the first landing from a shallow clone packed HEAD without its parents and failed only after
+    the canonical had received the pack, with `the commit is not whole in the canonical`, which names neither the
+    cause nor the remedy."""
+    bare = str(tmp_path / "canonical.git")
+    wt = str(tmp_path / "worktree")
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True, capture_output=True)
+    src, (c0, _c1, _c2, c3) = _history(tmp_path)
+    _shallow_clone(src, wt, bare, 1)
+    remedy = "git -C %s fetch --unshallow" % wt
+    for check in (True, False):
+        rc, said = gitio.land_commit(wt, bare, check=check)
+        assert rc == 1 and _main(bare) is None, said
+        assert "is a shallow clone (made by `git clone --depth" in said and remedy in said, said
+        assert "having no main yet (git: " in said and "the canonical is untouched" in said, said
+    assert os.listdir(os.path.join(bare, "objects", "pack")) == [], "a pack was received"
+    assert subprocess.run(["git", "-C", bare, "cat-file", "-e", c3], capture_output=True).returncode != 0
+    assert _land_cli().main(["--worktree", wt, "--check"]) == 1
+    out, err = capsys.readouterr()
+    assert "kontroll_run_id=" in out and err.startswith("kontroll-land: the worktree") and remedy in err, err
+    _git(src, "push", "-q", bare, c0 + ":refs/heads/main")       # main below the cut: the worktree has only c3
+    rc, said = gitio.land_commit(wt, bare)
+    assert rc == 1 and _main(bare) == c0, said
+    assert "is a shallow clone" in said and "main (%s) is under HEAD cannot be told: it is not in the clone" % c0 \
+        in said, said
+    assert remedy in said and "has commit(s) your worktree" not in said, said
+    _git(wt, "fetch", "-q", "--unshallow")
+    assert _git(wt, "rev-parse", "--is-shallow-repository") == "false"
+    rc, said = gitio.land_commit(wt, bare)
+    assert (rc, _main(bare)) == (0, c3), said
+    _git(bare, "rev-list", "--objects", "--quiet", c3)             # whole in the canonical: rc 0, or _git raises
+
+
+@pytest.mark.parametrize("depth", [1, 2])
+def test_a_shallow_clone_whose_cut_the_canonical_holds_lands(tmp_path, depth):
+    """A `--depth 1` clone of the canonical's own `main` (cut AT `main`), and a `--depth 2` one (cut one commit
+    below it), each with a commit made on top: everything the pack must carry is in the worktree, since the
+    canonical holds `main` and all under it, so the landing goes through as from a whole clone, and the canonical
+    holds the new commit whole. Guards the shallow check against refusing every shallow clone: it refuses a
+    landing that would arrive short, and a clone that only adds commits on top of `main` arrives whole."""
+    bare = str(tmp_path / "canonical.git")
+    wt = str(tmp_path / "worktree")
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True, capture_output=True)
+    src, made = _history(tmp_path)
+    _git(src, "push", "-q", bare, made[-1] + ":refs/heads/main")
+    _shallow_clone(src, wt, bare, depth)
+    _git(wt, "config", "user.name", "t")
+    _git(wt, "config", "user.email", "t@example.test")
+    new = _commit(wt, {"4.txt": "4\n"}, "c4")
+    rc, said = gitio.land_commit(wt, bare)
+    assert (rc, said) == (0, "landed refs/heads/main %s (was %s)" % (new, made[-1])), said
+    _git(bare, "rev-list", "--objects", "--quiet", new)
+
+
+def _bare(tmp_path):
+    """An empty bare canonical (no hook, no ref) at `<tmp>/canonical.git`."""
+    bare = str(tmp_path / "canonical.git")
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True, capture_output=True)
+    return bare
+
+
+def _received(bare):
+    """The packs the canonical holds: none, where a landing was refused before its pack."""
+    return [n for n in os.listdir(os.path.join(bare, "objects", "pack")) if n.endswith(".pack")]
+
+
+def _no_gate(calls=None):
+    """A gate that passes every tree, recording the commits it was asked about in `calls`."""
+    def gate(commit_id, gitdir, main_id):
+        if calls is not None:
+            calls.append(commit_id)
+        return None
+    return gate
+
+
+def _merge_history(tmp_path, with_q):
+    """A whole repository (`src`): c0, c1 on main; a side branch on c1 (q then s, or s alone); c2 on main; `m` =
+    main merging side (`--no-ff`). A `--depth 2` clone of it holds m, c2 and s, and stops at c2 and s, whose
+    parents (c1; q, or c1) it never fetched. Returns `(src, ids)`, the ids by name."""
+    src = str(tmp_path / "src")
+    subprocess.run(["git", "init", "-q", "-b", "main", src], check=True, capture_output=True)
+    _git(src, "config", "core.autocrlf", "false")
+    ids = {"c0": _commit(src, CLEAN, "c0"), "c1": _commit(src, {"1.txt": "1\n"}, "c1")}
+    _git(src, "checkout", "-q", "-b", "side")
+    if with_q:
+        ids["q"] = _commit(src, {"q.txt": "q\n"}, "q")
+    ids["s"] = _commit(src, {"s.txt": "s\n"}, "s")
+    _git(src, "checkout", "-q", "main")
+    ids["c2"] = _commit(src, {"2.txt": "2\n"}, "c2")
+    _git(src, "merge", "-q", "--no-ff", "--no-edit", "side")
+    ids["m"] = _git(src, "rev-parse", "HEAD")
+    return src, ids
+
+
+@pytest.mark.parametrize("side", ["under-main", "under-a-proposal", "nowhere"])
+def test_a_shallow_merge_lands_where_the_canonical_holds_what_its_cut_sides_rest_on(tmp_path, side, monkeypatch):
+    """A `--depth 2` clone of a merge `m` (first parent c2, the canonical's `main`; second parent s) stops at c2
+    and at s. "under-main": s rests on c1, which the canonical's `main` holds, and the landing goes through, the
+    canonical holding m whole; so it does where s rests on q, held by the canonical only under a proposal ref
+    ("under-a-proposal"). "nowhere": the canonical holds no q, the clone does not either, and the landing is
+    refused before anything is packed, with the shallow sentence and git's own line. After each landing, refused or not, by
+    `--check` or not, the temporary list of the stops kept is gone. Guards the I-20 fold's S1: the first shallow
+    check read the canonical's `main` cut in the clone too and refused every such merge, though it arrives whole
+    (the old code landed it); the fold reaching too far, a merge whose side the canonical lacks let through to a
+    pack it then refuses; and a landing that leaves a file behind in the temporary directory each time it runs."""
+    cuts = tmp_path / "tmp"
+    cuts.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(cuts))
+    bare = _bare(tmp_path)
+    src, ids = _merge_history(tmp_path, with_q=side != "under-main")
+    _git(src, "push", "-q", bare, ids["c2"] + ":refs/heads/main")
+    if side == "under-a-proposal":
+        _git(src, "push", "-q", bare, ids["q"] + ":refs/heads/proposed/" + RID)
+    wt = str(tmp_path / "worktree")
+    _shallow_clone(src, wt, bare, 2)
+    holds = {n: subprocess.run(["git", "-C", wt, "cat-file", "-e", ids[n]], capture_output=True).returncode == 0
+             for n in ids}
+    assert holds == {n: n in ("s", "c2", "m") for n in ids}, holds
+    held = side != "nowhere"
+    for check in (True, False):
+        rc, said = gitio.land_commit(wt, bare, check=check, gate=_no_gate())
+        if held:
+            assert rc == 0, said
+        else:
+            assert rc == 1 and "is a shallow clone" in said and "does not either (git: " in said, said
+            assert "(git: rc " not in said, "the sentence lost git's own line: " + said
+        assert os.listdir(str(cuts)) == [], "the list of the stops kept was left behind"
+    if held:
+        assert _main(bare) == ids["m"]
+        _git(bare, "rev-list", "--objects", "--quiet", ids["m"])
+    else:
+        assert _main(bare) == ids["c2"] and _received(bare) == [], said
+
+
+def test_a_shallow_clone_on_main_whose_tip_is_a_stop_lands(tmp_path):
+    """A `--depth 1` clone (c3 only, a stop) after `git fetch local` has brought the canonical's `main`, c2, which
+    is c3's own parent: in the clone's own view c2 is not under c3 (the stop hides it), but c3 records it, so the
+    ancestry is asked again with the stops lifted, and the landing goes through, whole. Guards the fold's S5/S4: the
+    first shallow check said "cannot be told: the history between them was never fetched" here, with nothing
+    missing; and the re-ask must not let through a `main` the clone cannot show under HEAD (the next row)."""
+    bare = _bare(tmp_path)
+    src, made = _history(tmp_path)
+    wt = str(tmp_path / "worktree")
+    _shallow_clone(src, wt, bare, 1)
+    _git(src, "push", "-q", bare, made[2] + ":refs/heads/main")
+    _git(wt, "fetch", "-q", "local")
+    rc, said = gitio.land_commit(wt, bare, gate=_no_gate())
+    assert (rc, _main(bare)) == (0, made[3]), said
+    _git(bare, "rev-list", "--objects", "--quiet", made[3])
+
+
+def test_a_main_below_the_cut_is_refused_with_the_shallow_sentence_by_the_dry_run_and_before_the_gate(tmp_path):
+    """A `--depth 1` clone (c3), the canonical's `main` c1: not in the clone, then fetched into it (`git fetch
+    local`, the rebase advice's first half), where the clone still cannot show it under HEAD. Each time, `--check`
+    and the landing both refuse with the shallow sentence (`cannot be told`; "it is not in the clone", then "the
+    clone stops before the history that would tell"), never the not-a-fast-forward one, and the gate is never
+    asked. And into an empty canonical, the same: refused, the gate never asked. Guards the shallow refusals'
+    place: in the dry-run (`--check` returning before them gave the rebase advice again, the I-20 bug) and before
+    the gate (which would judge, and run its generator over, a tree that will be refused)."""
+    bare = _bare(tmp_path)
+    src, made = _history(tmp_path)
+    wt = str(tmp_path / "worktree")
+    _shallow_clone(src, wt, bare, 1)
+    calls = []
+    for check in (True, False):
+        rc, said = gitio.land_commit(wt, bare, check=check, gate=_no_gate(calls))
+        assert rc == 1 and "is a shallow clone" in said, said
+    _git(src, "push", "-q", bare, made[1] + ":refs/heads/main")
+    for fetched, clause in ((False, "it is not in the clone"), (True, "the clone stops before the history")):
+        if fetched:
+            _git(wt, "fetch", "-q", "local")
+            assert _git(wt, "cat-file", "-t", made[1]) == "commit"
+        for check in (True, False):
+            rc, said = gitio.land_commit(wt, bare, check=check, gate=_no_gate(calls))
+            assert rc == 1 and "under HEAD cannot be told: " + clause in said, said
+            assert "has commit(s) your worktree" not in said, said
+    assert calls == [] and _main(bare) == made[1] and _received(bare) == []
+
+
+def test_a_linked_worktree_of_a_shallow_clone_is_judged_as_shallow(tmp_path):
+    """`git worktree add` of a `--depth 1` clone: its `.git` is a file, and its shallow list is the main
+    checkout's (git says it is shallow). Into an empty canonical it is refused before anything is packed, as the
+    clone itself is. Guards how the shallow question is asked (git's own answer, `--is-shallow-repository`, and
+    its own path to the list, `--git-path shallow`), not a look for `<worktree>/.git/shallow`, which is not there."""
+    bare = _bare(tmp_path)
+    src, _made = _history(tmp_path)
+    wt = str(tmp_path / "worktree")
+    _shallow_clone(src, wt, bare, 1)
+    linked = str(tmp_path / "linked")
+    _git(wt, "worktree", "add", "-q", "--detach", linked)
+    assert os.path.isfile(os.path.join(linked, ".git"))
+    rc, said = gitio.land_commit(linked, bare, gate=_no_gate())
+    assert rc == 1 and "is a shallow clone" in said and _received(bare) == [], said
+
+
+def test_a_whole_clone_short_of_an_object_is_not_called_shallow(box):
+    """A WHOLE worktree that lacks a blob under HEAD (removed from its store) is not told it is a shallow clone:
+    the pack's own view is judged for a shallow clone only, and a damaged whole clone still gets the canonical's
+    read-back, "not whole … after the pack was received", whose row in docs/troubleshooting.md §10 names it.
+    Guards the shallow sentence's reach: its remedy, `fetch --unshallow`, means nothing to a whole clone."""
+    new = _commit(box.wt, {"z.txt": "z\n"}, "z")
+    blob = _git(box.wt, "rev-parse", new + ":z.txt")
+    loose = os.path.join(box.wt, ".git", "objects", blob[:2], blob[2:])
+    os.chmod(loose, 0o644)
+    os.remove(loose)
+    rc, said = gitio.land_commit(box.wt, box.bare, gate=_no_gate())
+    assert rc == 1 and "shallow" not in said and _main(box.bare) == box.seed, said
+
+
+@pytest.mark.parametrize("how", ["replace-ref", "grafts"])
+def test_a_shallow_clone_whose_stop_is_rewritten_is_judged_by_the_parents_it_records(tmp_path, how):
+    """A `--depth 1` clone (c3, its parent c2 never fetched) into an empty canonical, with c3 made parentless in
+    the clone's own view: by `git replace --graft`, or by an `info/grafts` line. The canonical reads c3's parents
+    as c3 records them, through neither rewrite, so a pack that leaves c2's history out arrives short. The landing
+    is refused before anything is packed, with the shallow sentence, by `--check` too. Guards the fold's S2: the
+    first shallow check followed the rewrite, said "would land", and the apply failed after the pack, the I-20
+    symptom."""
+    bare = _bare(tmp_path)
+    src, made = _history(tmp_path)
+    wt = str(tmp_path / "worktree")
+    _shallow_clone(src, wt, bare, 1)
+    if how == "replace-ref":
+        _git(wt, "replace", "--graft", made[3])
+    else:
+        with open(os.path.join(wt, ".git", "info", "grafts"), "w", encoding="ascii", newline="\n") as fh:
+            fh.write(made[3] + "\n")
+    for check in (True, False):
+        rc, said = gitio.land_commit(wt, bare, check=check, gate=_no_gate())
+        assert rc == 1 and "is a shallow clone" in said, said
+    assert _main(bare) is None and _received(bare) == []
+
+
+def test_a_depth_fetch_into_a_whole_clone_lands_whole(tmp_path):
+    """A whole clone that holds a branch's f0, then `git fetch --depth=1` of that branch after f1 was made on f0:
+    git lists f1 as a stop although f0 is in the clone, and HEAD merges f1 (`--allow-unrelated-histories`, as the
+    cut view needs). The canonical's `main` (m3) holds no f*. f1's stop is lifted (the canonical lacks f0), the
+    walk goes on into f0, which the clone holds, and the pack, made in the same view, carries f0: the landing
+    goes through and the canonical holds HEAD whole. Guards the pack's view: a check that reads past the stop while
+    `pack-objects` keeps it says "would land" and the apply fails after the pack (the fold's S2)."""
+    bare = _bare(tmp_path)
+    src = str(tmp_path / "src")
+    subprocess.run(["git", "init", "-q", "-b", "main", src], check=True, capture_output=True)
+    _git(src, "config", "core.autocrlf", "false")
+    m = [_commit(src, CLEAN, "m0"), _commit(src, {"m1.txt": "1\n"}, "m1")]
+    _git(src, "checkout", "-q", "-b", "feature")
+    f0 = _commit(src, {"f0.txt": "f0\n"}, "f0")
+    _git(src, "checkout", "-q", "main")
+    m += [_commit(src, {"m2.txt": "2\n"}, "m2"), _commit(src, {"m3.txt": "3\n"}, "m3")]
+    _git(src, "push", "-q", bare, m[3] + ":refs/heads/main")
+    wt = str(tmp_path / "worktree")
+    subprocess.run(["git", "clone", "-q", "--no-local", pathlib.Path(src).as_uri(), wt], check=True,
+                   capture_output=True)
+    _git(wt, "config", "core.autocrlf", "false")
+    _git(wt, "fetch", "-q", "origin", "feature:refs/remotes/origin/feature")
+    _git(src, "checkout", "-q", "feature")
+    f1 = _commit(src, {"f1.txt": "f1\n"}, "f1")
+    _git(src, "checkout", "-q", "main")
+    _git(wt, "fetch", "-q", "--depth=1", "origin", "feature")
+    assert _git(wt, "rev-parse", "--is-shallow-repository") == "true"
+    assert _git(wt, "cat-file", "-t", f0) == "commit"
+    _git(wt, "merge", "-q", "--no-edit", "--allow-unrelated-histories", "origin/feature")
+    head = _git(wt, "rev-parse", "HEAD")
+    assert f1 in _git(wt, "rev-parse", "HEAD^2")
+    for check in (True, False):
+        rc, said = gitio.land_commit(wt, bare, check=check, gate=_no_gate())
+        assert rc == 0, said
+    assert _main(bare) == head
+    _git(bare, "rev-list", "--objects", "--quiet", head)
+
+
+def test_a_shallow_partial_clone_short_of_a_blob_is_refused_and_fetches_nothing(tmp_path):
+    """A `--filter=blob:none --depth 4` clone from a local promisor (`file://`, filters served), its stop at c0,
+    the canonical's `main`; above `main` c1 adds tmp.txt and c2 drops it, so no checkout ever fetched that blob.
+    The landing is refused, `main` unmoved, and the blob is still missing in the worktree: the judgement fetched
+    nothing. Guards the no-transport rule of the judgement (GIT_NO_LAZY_FETCH, `protocol.allow=never`): a check
+    allowed to fetch lazily would reach the promisor for the blob, pass, and pack. (The first build called the
+    mutant that drops both rules equivalent; this row tells them apart.)"""
+    bare = _bare(tmp_path)
+    src = str(tmp_path / "src")
+    subprocess.run(["git", "init", "-q", "-b", "main", src], check=True, capture_output=True)
+    for key, value in (("core.autocrlf", "false"), ("uploadpack.allowFilter", "true"),
+                       ("uploadpack.allowAnySHA1InWant", "true")):
+        _git(src, "config", key, value)
+    _commit(src, {"x.txt": "x\n"}, "x")
+    c0 = _commit(src, CLEAN, "c0")
+    c1 = _commit(src, {"tmp.txt": "tmp\n"}, "c1 adds tmp.txt")
+    os.remove(os.path.join(src, "tmp.txt"))
+    _commit(src, {}, "c2 drops tmp.txt")
+    _commit(src, {"3.txt": "3\n"}, "c3")
+    blob = _git(src, "rev-parse", c1 + ":tmp.txt")
+    _git(src, "push", "-q", bare, c0 + ":refs/heads/main")
+    wt = str(tmp_path / "worktree")
+    subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--depth", "4", pathlib.Path(src).as_uri(), wt],
+                   check=True, capture_output=True)
+
+    def missing():
+        return subprocess.run(["git", "-C", wt, "cat-file", "-e", blob], capture_output=True,
+                              env=dict(os.environ, GIT_NO_LAZY_FETCH="1")).returncode != 0
+
+    assert _git(wt, "rev-parse", "--is-shallow-repository") == "true" and missing()
+    rc, said = gitio.land_commit(wt, bare, gate=_no_gate())
+    assert rc == 1 and "is a shallow clone" in said, said
+    assert _main(bare) == c0 and missing() and _received(bare) == [], said
+
+
+def test_a_judgement_that_cannot_run_refuses_before_the_pack(tmp_path, monkeypatch):
+    """When git cannot finish the pack view's walk (a timeout, stood in for by a wrapper around `gitio._wt` that
+    raises for `rev-list` only), the shallow clone is refused before anything is packed, the sentence saying that
+    it could not be judged and naming no cause it did not find, and the temporary list of the stops kept is gone.
+    Guards the judgement failing open: a check that passed when it could not run would hand the canonical a pack
+    it then refuses."""
+    cuts = tmp_path / "tmp"
+    cuts.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(cuts))
+    bare = _bare(tmp_path)
+    src, _made = _history(tmp_path)
+    wt = str(tmp_path / "worktree")
+    _shallow_clone(src, wt, bare, 1)
+    real = gitio._wt
+
+    def times_out(worktree, argv, *a, **k):
+        if "rev-list" in argv:
+            raise subprocess.TimeoutExpired(argv, 1)
+        return real(worktree, argv, *a, **k)
+
+    monkeypatch.setattr(gitio, "_wt", times_out)
+    rc, said = gitio.land_commit(wt, bare, gate=_no_gate())
+    assert rc == 1 and "could not finish judging what the pack would carry (TimeoutExpired)" in said, said
+    assert _received(bare) == [] and os.listdir(str(cuts)) == []
+
+
+def test_a_proposal_lands_from_a_shallow_clone_whose_cut_the_canonical_holds(tmp_path):
+    """`--propose` (`target` a `refs/heads/proposed/<run id>`) from a `--depth 1` clone of the canonical's `main`
+    with a commit on top: the proposal is made, `main` unmoved, and the canonical holds the commit whole. Guards
+    the shallow judgement on the proposal door, whose old value is the zero id while the pack is still made
+    against `main`."""
+    bare = _bare(tmp_path)
+    src, made = _history(tmp_path)
+    _git(src, "push", "-q", bare, made[-1] + ":refs/heads/main")
+    wt = str(tmp_path / "worktree")
+    _shallow_clone(src, wt, bare, 1)
+    new = _commit(wt, {"4.txt": "4\n"}, "c4")
+    rc, said = gitio.land_commit(wt, bare, target=canon.proposal_ref(RID), gate=_no_gate())
+    assert rc == 0 and _main(bare) == made[-1], said
+    assert canon.read_ref(bare, canon.proposal_ref(RID))[0] == new
+    _git(bare, "rev-list", "--objects", "--quiet", new)
 
 
 def test_a_proposal_is_created_once_and_a_proposal_of_mains_commit_is_nothing_to_propose(box):

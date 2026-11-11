@@ -11,6 +11,45 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): a landing from a shallow clone is refused before the pack, with the remedy (I-20, 2026-11-09)
+
+An operator who cloned with `git clone --depth 1` got, at the first deploy, `kontroll-land: the commit is not whole
+in the canonical after the pack was received`. The cause was right: the canonical holds every commit whole, and the
+pack carried HEAD without the parents the clone never fetched. But nothing said "shallow", or the remedy, and it was
+said only after the canonical had received the pack. A canonical whose `main` was below where the clone stops got the
+not-a-fast-forward advice instead, a rebase, which cannot mend a cut history. The T34 smoke found it.
+
+- **Fixed.** `gitio.land_commit`, the one door every landing goes through (`kontroll-land.py`, `update.sh`,
+  `update-from-bundle.sh`, the deploy's mirror, the operator CLI), asks whether the worktree is shallow. If it is,
+  then before the gate and before anything is packed, with `--check` too, it judges the pack in the view the pack is
+  made in. A commit where the clone stops stays a stop only where the canonical holds the parents that commit
+  records, and all under them; every other stop is lifted. In that view the worktree is walked as the canonical
+  checks a pack it receives (`rev-list --objects` from HEAD, less `main`), with replace refs and `info/grafts` set
+  aside, no commit-graph and no fetch from a promisor remote, and the pack is then made in the same view. Where the
+  walk cannot finish, the landing is refused (exit 1) with a sentence that names the shallow clone, what was found
+  (what git said, or that it could not judge), and the remedy, `git -C <worktree> fetch --unshallow`. Where the
+  canonical's `main` is not seen under HEAD, the ancestry is asked again with the stops lifted; a `main` the clone
+  does not hold, or still cannot show under HEAD, is refused with the same sentence and not the rebase advice (the
+  first also says a promote may have moved `main`, and gives the rebase for that case). A shallow clone whose cut-off
+  history the canonical holds lands: commits on top of `main`, a merge whose cut side rests on what the canonical
+  holds (under `main` or a proposal), a HEAD whose own stop is `main`'s child, a proposal.
+- **Not fixed here.** The deploy's dry-run says the sentence once a canonical exists; on a fresh node it skips the
+  landing's judgement and says so (`local-canonical.yml`), and the real run then refuses before anything is packed.
+  A whole clone made with `--filter` still fetches lazily while it is packed (I-44). `GIT_NO_LAZY_FETCH` is read by
+  git 2.45 and later; before that `protocol.allow=never` keeps the judgement from fetching.
+- **Tests.** `unit/test_land.py`: a `--depth 1` clone into an empty canonical is refused, by the library, by
+  `--check` and by the command, with nothing received; into a canonical whose `main` is below the cut, the shallow
+  sentence and not the rebase advice, before the gate is asked, whether or not `main` was fetched into the clone;
+  after `fetch --unshallow` it lands whole. Land: a `--depth 1` and a `--depth 2` clone of the canonical's own
+  `main` with a commit on top; a shallow merge whose cut side the canonical holds under `main` or under a proposal
+  (refused where it holds it nowhere); a `--depth 1` clone whose stop's parent is `main`; a proposal; a whole clone
+  after a `fetch --depth`. Refused before the pack: a stop rewritten by a replace ref or by `info/grafts`; a shallow
+  partial clone short of a blob, which fetches nothing; a linked worktree of a shallow clone; a walk that cannot
+  finish. A whole clone short of an object is not called shallow.
+- **Docs.** `docs/troubleshooting.md` §10 gains the sentence's row (the not-whole row now names a damaged clone);
+  the quickstart in `docs/install-from-scratch.md` says a `--depth` clone shorter than the history cannot seed the
+  canonical, and how to mend one; `kontroll-land.py`'s exit codes; `tests/README.md`.
+
 ### fix(installer): a verb run from a script no longer eats the input of the command after it, when its stdin is no terminal (I-4, 2026-11-09)
 
 `docker compose run` keeps the container's stdin open and reads it. Redeploying a dev box with `ssh <node>

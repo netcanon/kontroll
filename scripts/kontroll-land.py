@@ -31,9 +31,11 @@ Usage:  python3 scripts/kontroll-land.py [--worktree <dir>] [--repo <canonical>]
 Exit 0: landed, or `main` is this commit already ("up to date"), or — with --check — it would land. Exit 1:
 nothing to land as asked — not a repository, no commit at HEAD, no `local` remote, the canonical unreadable or its
 `main` not a branch, not a fast-forward (the canonical has commits the worktree does not: bring the worktree
-forward and run again), the ref moved meanwhile, git failed. Exit 2: REFUSED — the gate refused the tree, or
-could not run; nothing was packed and nothing moved. After any exit but 0 the worktree keeps its commit, the
-canonical its refs, the running stack is as it was.
+forward and run again), a shallow clone (`git clone --depth`) whose pack would not be whole in the canonical, or
+that cannot show the canonical's `main` under HEAD (`git fetch --unshallow`, and run again), the ref moved
+meanwhile, git failed. Exit 2: REFUSED — the gate
+refused the tree, or could not run; nothing was packed and nothing moved. After any exit but 0 the worktree
+keeps its commit, the canonical its refs, the running stack is as it was.
 
 AS WHOM. Run it as yourself from your checkout (the deploy's host-direct mode): the worktree's git runs as you,
 and so does the canonical's — in the seam, which runs none of the canonical's hooks and config-named programs.
