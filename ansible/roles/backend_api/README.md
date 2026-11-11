@@ -47,9 +47,10 @@ Both names are now tried, an unresolvable or **empty** token is refused up front
 both candidates, and the liveness result is actually evaluated (it previously used
 `failed_when: false` and was never read again, so the check could not fail at all).
 A refused check says which: a 401 or 403 names the variables the recipe's auth reads
-(a `basic` recipe's `username_var` and `password_var`, as does any recipe that names
-them, since the GET sends them whatever the type; a token recipe's `token_var`, else
-the per-host name; a `none` recipe is told it sends no credential), never their values;
+(a `basic` recipe's `username_var` and `password_var`, each with its per-host name, as
+does any recipe that names them, since the GET sends the pair whatever the type; a
+token recipe's `token_var`, else the per-host name; a `none` recipe is told it sends no
+credential), never their values;
 no answer (uri's status -1: refused, timed out, a TLS failure, plain HTTP on the port)
 says the device did not answer the API port, or its TLS failed; any other status says
 the API answered, but not with success. (A basic or `none` recipe's 401 used to fail on
@@ -62,6 +63,34 @@ status a backup takes. (It used to say "check the API token's permissions" for e
 one of them. I-17.) Pinned by
 [`tests/unit/test_backend_api_backup_failure_message.py`](../../../tests/unit/test_backend_api_backup_failure_message.py).
 
+### Which variables hold a basic-auth pair
+**The same two names, each:** the username is the recipe's `auth.username_var`, else
+`<inventory_hostname with - replaced by _>_api_username`; the password is the recipe's
+`auth.password_var`, else `<…>_api_password`. A recipe var that is defined but empty
+falls through to the per-host name, as a token's does. The pair is resolved for a
+`basic` recipe and for any recipe that names either var (the GET sends what it names,
+whatever the type), and refused before the request, by name and never by value, when
+either half resolves to nothing; so a recipe that names either var is refused unless both
+halves resolve, whatever its type. The per-host name is read only when the recipe's yields
+nothing, so a per-host value that cannot be read does not fail a host whose recipe var
+holds the pair. `default=''` covers a name that is not in scope; a name that is defined
+and whose own value fails when it is read (an inline `community.sops` lookup whose domain
+is missing, cannot be decrypted on this box, or lacks the key) fails the `no_log` resolve,
+censored, and its rescue then refuses the host by name, never by value. The token's
+resolve has the same rescue.
+
+That too is a correction (I-16). The GET used to look the two names up in its own
+arguments, so a name that was not in scope failed the request under its `no_log`, and
+the fatal arrived *censored*, as the token's once did (2.19 also printed an `[ERROR]`
+naming the recipe's var; 2.18 said nothing more); the 401 hint was never reached.
+And the onboard wrote the pair as `ansible_user` and `ansible_password`, which this role
+never read, so an onboarded basic host could not authenticate at all. The api backend's
+`username` and `password` entries now say `maps_to: "{cred_key}_api_username"` and
+`"{cred_key}_api_password"`, the per-host names above. A host onboarded with a basic pair
+before I-16 keeps the old names in its drop-in: re-onboard it, or rename the two vars
+there. Pinned by the teeth test above, and run end to end by
+[`tests/integration/test_backend_api_basic_auth_runs.py`](../../../tests/integration/test_backend_api_basic_auth_runs.py).
+
 ```yaml
 name: fortios
 port: 443
@@ -73,10 +102,10 @@ backup: {method: GET, path: /api/.../config/backup, extract: body,
 ```
 
 Auth types: `bearer` (`Authorization: Bearer <token>`), `apikey_header`
-(`<header_name>: <token>`), `basic` (`username_var`/`password_var`), `none` (no
-credential). Backup
+(`<header_name>: <token>`), `basic` (`username_var`/`password_var`, else the per-host
+pair above), `none` (no credential). Backup
 endpoints must be **read-only** (GET / export). Output is `no_log` — the request
-carries the token, the response the secret-bearing config.
+carries the token or the pair, the response the secret-bearing config.
 
 **In a dry-run (`--check`)** the credential is still resolved and refused when it is
 missing, but no request is made: `uri` has no check mode, so the GET and the pull are

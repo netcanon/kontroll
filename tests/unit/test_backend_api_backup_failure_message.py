@@ -62,10 +62,16 @@ def _render(auth, status, host="fw-1"):
     return env.from_string(msg).render(**ctx)
 
 
-TOKEN_HINT = ("The API rejected the credential: check that `fortios_api_token` (or, if it is empty, `fw_1_api_token`)"
-              " holds a current token with read permission.")
-BASIC_HINT = ("The API rejected the credential: check that `probe_user` and `probe_pass` hold a current username and"
-              " password with read permission.")
+TOKEN_HINT = ("The API rejected the credential: check that `fortios_api_token` (or, if that is unset or empty,"
+              " `fw_1_api_token`) holds a current token with read permission.")
+BASIC_HINT = ("The API rejected the credential: check that `probe_user` (or, if that is unset or empty,"
+              " `fw_1_api_username`) and `probe_pass` (or, if that is unset or empty, `fw_1_api_password`) hold a"
+              " current username and password with read permission.")
+# A var the recipe does not name: its per-host name alone is named.
+NO_PASS_HINT = BASIC_HINT.replace("`probe_pass` (or, if that is unset or empty, `fw_1_api_password`)",
+                                  "`fw_1_api_password`")
+TYPE_ONLY_HINT = NO_PASS_HINT.replace("`probe_user` (or, if that is unset or empty, `fw_1_api_username`)",
+                                      "`fw_1_api_username`")
 NONE_HINT = "The API refused the request, and the recipe sends no credential: name one in its auth."
 DOWN = ("The device did not answer the API port, or its TLS failed — wrong address, port, certificate, or the service"
         " is down.")
@@ -88,9 +94,9 @@ DIGEST = {"type": "digest", "username_var": "probe_user", "password_var": "probe
     (BASIC, 403, "403", BASIC_HINT),
     (NONE, 401, "401", NONE_HINT),
     (NONE, 403, "403", NONE_HINT),
-    (BASIC_NO_PASS, 401, "401", BASIC_HINT.replace("`probe_pass`", "`?`")),
+    (BASIC_NO_PASS, 401, "401", NO_PASS_HINT),
     # The type alone picks the basic hint: a hand-written recipe that names neither var (derive_auth names both).
-    (BASIC_TYPE_ONLY, 401, "401", BASIC_HINT.replace("`probe_user`", "`?`").replace("`probe_pass`", "`?`")),
+    (BASIC_TYPE_ONLY, 401, "401", TYPE_ONLY_HINT),
     (DIGEST, 401, "401", BASIC_HINT),    # the pull sends the vars a recipe names, whatever its type
     (BEARER, 500, "500", ANSWERED),      # before I-17: the token blamed for the device's own error
     (BASIC, 404, "404", ANSWERED),       # a wrong backup path
@@ -105,8 +111,9 @@ DIGEST = {"type": "digest", "username_var": "probe_user", "password_var": "probe
 def test_the_backup_failure_names_the_cause_for_each_auth_type_and_answer(auth, status, http, remedy):
     """The failure record, rendered as the task renders it, for each auth type the role builds a request for and each
     kind of failed pull: a 401 or a 403 names the variables that auth reads (a basic recipe's username and password
-    vars, by its type alone too, and any recipe's that names them; a var the recipe does not name is `?`; a token
-    recipe's `token_var`, else the onboarded per-host name), never their values; a status below 0 or none says the
+    vars, by its type alone too, and any recipe's that names them, each else its onboarded per-host name, which
+    alone is named for a var the recipe does not name (I-16); a token recipe's `token_var`, else the onboarded
+    per-host name), never their values; a status below 0 or none says the
     device did not answer or its TLS failed; any other status, a 201 too, says the API answered, but not with 200.
     Guards I-17: every one of these said "check the API token's permissions", which sends the operator of a basic
     recipe, a wrong path or a down device to a token that is not the cause."""

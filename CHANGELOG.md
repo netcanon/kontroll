@@ -11,6 +11,50 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): an API host's basic-auth pair is read where the onboard writes it, or refused by name (I-16, 2026-11-09)
+
+roles/backend_api sent a basic recipe's username and password by looking the recipe's `username_var` and
+`password_var` up in the GET's own arguments. A name not in scope failed the request under its `no_log` before
+`failed_when: false` applied, so the check and the backup failed CENSORED, on both cores (2.19 also printed an
+`[ERROR]` naming the recipe's var; 2.18 nothing more), and the 401 hint written for a rejected pair was never reached.
+The token's two-name rule was made for exactly this fault; the pair was left out. And the onboard wrote an api host's
+pair as `ansible_user` and `ansible_password`, which the role never read, so an onboarded basic host could not
+authenticate at all.
+
+- **Fixed.** The check and the backup resolve the pair as they do a token: the username is the recipe's
+  `username_var`, else `<host with - as _>_api_username`, and the password the recipe's `password_var`, else
+  `<…>_api_password`; a recipe var defined but empty falls through. It is resolved for a `basic` recipe and for any
+  recipe that names either var (the GET sends what it names whatever the type), in a `no_log` task whose lookups
+  cannot raise for a name not in scope, and an unresolvable half is refused before the request by an assertion that
+  names the recipe's var and the per-host one, never a value. The GET sends what was resolved and looks nothing up.
+  Each per-host name is read only when the recipe's yields nothing, so a per-host value that cannot be read does not
+  fail a host whose recipe var holds the credential (on 2.18 it did; the token's resolve had the same eager fallback
+  since S27). A defined name whose own value fails when it is read (an inline SOPS lookup whose domain is missing,
+  will not decrypt on the box, or lacks the key) still fails the resolve, censored, and a rescue now refuses the host
+  by name, never by value; the token's resolve has the same rescue. The 401/403 hint names each half's two names. The
+  api backend's `username` and `password` entries now map to `{cred_key}_api_username` and `{cred_key}_api_password`,
+  the per-host names, so the onboard writes the pair where the role reads it (the SOPS keys are as they were).
+- **Upgrade.** A host onboarded with a basic pair before this keeps `ansible_user` and `ansible_password` in its
+  inventory drop-in, which the role does not read: re-onboard it with its pair, or rename the two vars in the drop-in
+  to `<host with - as _>_api_username` and `_api_password`. A recipe's own `username_var`/`password_var` in scope and
+  non-empty works as it did; an empty one now falls through to the per-host name, and is refused by name if that is
+  empty too (it was sent empty).
+- **Tests.** `unit/test_backend_api_check_teeth.py` evaluates the pair's resolution (each name, both, empty values,
+  neither) and holds that its lookups cannot raise for a name not in scope, that a per-host value is not read when the
+  recipe's var holds one (pair and token), that each resolve's rescue is one `fail`, printed, naming only names, that
+  it and the refusal run for exactly the recipes whose request sends the pair, that the refusal precedes the request
+  and reads no value, that the GET looks nothing up, and that the check and the backup agree;
+  `unit/test_backend_api_backup_failure_message.py` takes the hint's new words; `unit/test_backend_defaults.py`
+  expects the onboard's per-host pair (a deliberate change from the former rules) and a TIER-B pair on the api backend
+  landing there. The new `integration/test_backend_api_basic_auth_runs.py` runs the role's check and backup by
+  ansible-playbook against a loopback HTTPS stand-in that records each request: every resolvable host authenticates,
+  the host with no pair is refused by name with no request, a wrong password gets the hint, a dry-run sends nothing,
+  captures are written only for a good pair, a per-host value that cannot be read beside a good recipe pair
+  authenticates, a pair whose lookup fails is refused by the rescue's message with no request, and no credential,
+  config or "censored" is printed but that rescued host's own censored fatal (at -v too, for the credentials).
+- **Docs.** roles/backend_api/README.md (the pair's two names), SECURITY.md (the shipped templates),
+  docs/capability-matrix.md, tests/README.md.
+
 ### fix(ansible): a Proxmox or Docker backup that answered only its headers keeps the last capture (I-10, 2026-11-09)
 
 The Proxmox and Docker-host captures run a script that prints a `### ` header before each read, so their answer was
