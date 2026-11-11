@@ -11,6 +11,50 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): install-prereqs asks compose before installing a compose package, and fails when none can be (I-21, 2026-11-09)
+
+With Docker already installed (a GitHub-hosted runner; a host with the distribution's `docker.io`),
+install-prereqs.sh ran `pkg_install docker-compose-plugin` under `|| true`. That package is in Docker's own
+repository, so apt printed "E: Package 'docker-compose-plugin' has no installation candidate". Where compose was
+there, that read as a failure; where it was not (the distribution's Docker alone), the `|| true` hid the failed
+install, the script said "Done", and compose stayed missing until the installer failed later. The T34 smoke's fourth
+run found it.
+
+- **Fixed.** `scripts/lib/pkg.sh` gains `compose_ensure`. It asks `docker compose version` first and installs nothing
+  when compose answers: as root, and, given the operator, as the operator (`runuser`), since the launcher runs
+  compose as the operator and a plugin in their own `~/.docker/cli-plugins` answers for them only. Otherwise, on apt,
+  it installs the first compose v2 package the sources offer: Docker's `docker-compose-plugin`, Ubuntu's
+  `docker-compose-v2`, or Debian's `docker-compose` where its candidate is 2 or later (Debian 13 on; the older one is
+  the v1 tool). It reads apt's policy under `LC_ALL=C`, so a host whose apt speaks another language is not skipped;
+  a package with no candidate is not asked for, so apt prints no error; the install carries `--no-remove`, so apt
+  never removes an engine to make room; and compose is asked again after each install. When compose still does not
+  answer, it says so, naming the packages and Docker's repository. On dnf, zypper and pacman it installs nothing,
+  and says it installs compose only on apt. install-prereqs.sh calls it after whichever Docker path ran (already
+  there, Docker's apt repository, or get.docker.com), with the operator who ran sudo unless `--with-host-ansible`
+  (whose host deploy runs compose as root). It still installs the rest of the floor, and then exits 1 before
+  "Done", pointing at the error and giving the command as it was run. Its summary says whose compose answered.
+- **Tests.** The new `unit/test_compose_ensure.py` sources pkg.sh under `sh` with stand-in `docker`, `runuser`,
+  `apt-cache`, `apt-get`, `dnf`, `zypper` and `pacman` that record their calls:
+  - a host whose compose answers asks apt nothing, and one where only the operator's does asks as the operator;
+  - with no operator, or root, only root's compose counts;
+  - the distribution's Docker gets `docker-compose-v2`, and the plugin is never asked of apt-get;
+  - Docker's repository gets the plugin first;
+  - a `Candidate: (none)` is skipped;
+  - apt speaking German still gets `docker-compose-v2`;
+  - Debian's `docker-compose` is installed at 2.x and skipped at 1.29, with or without an epoch;
+  - the v1 tool on the PATH is not taken for compose;
+  - a package that would remove the engine is not installed;
+  - no package refuses by name;
+  - an install that leaves compose silent is not taken for compose;
+  - dnf, zypper and pacman install nothing and say so.
+
+  install-prereqs.sh is run whole, from a copy whose only change is where apt's lock-timeout file goes, with
+  stand-ins for its root-only commands. Without compose it starts the daemon, provisions the canonical group,
+  prints the summary and exits 1, NOT done, never Done. With docker-compose-v2 on offer it installs it and is Done.
+  With the operator's own compose it installs nothing and is Done, but with `--with-host-ansible` root's must answer.
+  The rows that read its text hold the call after every Docker path and the gate after the rest of the floor.
+- **Docs.** `docs/install-from-scratch.md` (the compose row), `tests/README.md`.
+
 ### fix(ansible): docker_host's container manifest is no longer printed by a dry-run's diff (I-13, 2026-11-09)
 
 Every class's capture write and its read carry `no_log: true`, because a capture is the device's configuration and
