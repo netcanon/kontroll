@@ -96,7 +96,10 @@ every installer verb reads, made now or there before; it knows the container by 
 ([docs/troubleshooting.md](../../docs/troubleshooting.md) §11). The host residual lives in
 [scripts/host-systemd.sh](../../scripts/host-systemd.sh). Operator identity (MF-1) comes from
 `KONTROLL_OPERATOR_{USER,UID,GID,HOME}`; on a host-direct run those are absent and the playbooks fall back to the
-gathered facts (the same value), so nothing changes off-container.
+gathered facts (the same value), so nothing changes off-container. Bootstrap's collection install runs in the
+container too, into the image's own collections path, which ends with the container: a re-install there reports no
+change, so a second `init` reports 0 changed. A digest the L2b wrapper records there for the first time
+(`instance/trust/observed-digests.yml`, in the repo bind) stays, and is reported (I-3).
 
 ## See also
 

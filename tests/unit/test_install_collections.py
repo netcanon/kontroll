@@ -273,6 +273,24 @@ def test_main_l2b_records_then_installs_offline(l2b_env):
     assert wrap.load_digests(str(l2b_env))["community.docker==4.0.0"] == hashlib.sha256(b"REALBYTES").hexdigest()
 
 
+def test_main_l2b_prints_recorded_on_a_first_record_only(l2b_env, capsys):
+    """A digest recorded for the first time prints `  L2b recorded  <name==version>`; the same bytes again, the
+    collection gone as it is when the installer container ends, print `  L2b ok …` and no `recorded`. bootstrap's
+    install task reads `L2b recorded` as the change a container run keeps (I-3: the install ends with the
+    container, the record in instance/trust/ stays). Guards the word moving under that signal, which would
+    report a first trust record as no change again."""
+    tarballs = {"community-docker-4.0.0.tar.gz": b"REALBYTES"}
+    with pytest.raises(SystemExit) as ei:
+        wrap.main(run=_FakeGalaxy(installed={}, tarballs=tarballs))
+    first = capsys.readouterr().out.splitlines()
+    assert ei.value.code == 0 and "  L2b recorded  community.docker==4.0.0" in first, first
+    with pytest.raises(SystemExit) as ei:
+        wrap.main(run=_FakeGalaxy(installed={}, tarballs=tarballs))
+    second = capsys.readouterr().out.splitlines()
+    assert ei.value.code == 0 and "  L2b ok        community.docker==4.0.0" in second, second
+    assert not [line for line in second if "L2b recorded" in line], second
+
+
 def test_main_l2b_fail_closed_on_digest_mismatch(l2b_env):
     """A recorded pin whose served tarball now hashes DIFFERENTLY ⇒ main() exits non-zero and NEVER calls install —
     L2b fail-closed on a possible whole-artifact swap of a recorded version (the central security claim, MF-1).
