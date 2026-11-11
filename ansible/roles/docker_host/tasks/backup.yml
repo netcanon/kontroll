@@ -15,6 +15,8 @@
 # Fallback required:   no
 # Blast radius:        none — pure read
 # Idempotence:         capture file overwritten each run; no host state changes
+# no_log:              the manifest is no config, but `docker ps -a` prints each container's command line
+#                      (truncated), and a credential passed as an argument can show there (I-13)
 
 - name: Record skip when this class is not backup-capable
   ansible.builtin.set_fact:
@@ -37,6 +39,7 @@
         echo "### compose stacks";   docker compose ls --all 2>/dev/null
       register: dkr
       changed_when: false
+      no_log: true                       # a container's command line can carry a credential
 
     # The script prints a `### ` header before each read, so a host that answers none of them exits with the
     # headers alone. Today its last command's failure fails the host first (the script ends on a docker read, which
@@ -68,6 +71,7 @@
       when: >-
         ((dkr.stdout | default('')).splitlines() | reject('match', '### ') | join('') | trim | length > 0)
         or (ansible_check_mode and dkr is skipped and dkr.skip_reason is not defined)
+      no_log: true                       # the diff of a dry-run would print the manifest
 
     # Recorded where the write ran (in a dry-run, its preview), and only there, so "captured" never outruns the write.
     - name: Record successful capture
