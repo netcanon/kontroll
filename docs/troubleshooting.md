@@ -333,6 +333,9 @@ unarmed, as uid 1001 when it is armed (`api_privileged`); a clone held by the wr
 
 ## 10. A landing was refused, or did not happen
 
+This section also holds the refusal of an operator with the network service's uid (the row quoting `has uid 1001`):
+install-prereqs.sh and the launchers say it before any landing, and the deploy's first task before its own.
+
 Every way the operator's or the deploy's commit reaches the canonical's `main` is a LANDING
 (`scripts/kontroll-land.py`; `gitio.land_commit` — SECURITY.md C10): `scripts/update.sh`,
 `scripts/update-from-bundle.sh`, an onboard or a capture-exception from the CLI (`scripts/galaxy.py … --commit`),
@@ -354,7 +357,7 @@ exit but 0 the worktree keeps its commit and the canonical is untouched.
 | `kontroll-land: refs/heads/proposed/<id> exists already: a proposal is created once` | `--propose`, exit 1 | that run id is taken | mint another id |
 | `remote: C10: refused refs/heads/main — refs/heads/main is never pushed, by anyone …` | a `git push` by hand into the canonical | the canonical's hook refuses a push of `main` from everyone: nothing legitimate pushes it | `python3 scripts/kontroll-land.py` from the checkout (`--check` first to see what would land) |
 | `fatal: Not possible to fast-forward, aborting.` | `git merge --ff-only local/main` ([break-glass.md](break-glass.md), "Before you start") | the checkout and the canonical have each moved on: each holds commits the other does not (a checkout that is only ahead is not refused: the merge prints `Already up to date.`, and `git log --oneline local/main..HEAD` lists what it holds) | `git rebase local/main` (the `kontroll-land: the canonical (…) has commit(s)` row above), land (`python3 scripts/kontroll-land.py --check`, then without `--check`), then run the merge again. Never `--no-ff` |
-| `local-canonical: the operator (…) has uid 1001 …` | the deploy, first task | the operator's uid is the network service's; the canonical's grant and hook cannot tell the two apart | deploy as an account with another uid |
+| `install-prereqs.sh: the operator (…) has uid 1001, the uid the network service runs as …`, `kontroll: the operator (…) has uid 1001, the uid the network service runs as …`, or `local-canonical: the operator (…) has uid 1001, which is the uid the network service runs as …` | install-prereqs.sh, before its root check (as root, the operator is the account that ran sudo); a launcher, for every verb before it makes anything (`shell` is told and goes on); the deploy's first task, behind them | the operator's uid is the network service's; the canonical's grant and hook cannot tell the two apart | install and deploy as an account with another uid. After install-prereqs.sh's sentence, or a launcher's on any verb but `shell`, nothing was installed or made under this one. After `shell` or the deploy's sentence, what this account made is its own: the home's directories and, from an earlier fresh-init or bootstrap, `instance/` and the keys under `~/.config/sops/age` and `~/.ssh`; start again as the new account, or move them to it |
 
 ## 11. kontroll-init refused the break-glass choice
 

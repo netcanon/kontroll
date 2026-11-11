@@ -907,7 +907,10 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   nothing else: not `refs/heads/main`, not a tag (a tag called `main` is what a short name finds first), not
   `refs/replace/*`, and not a second push to a proposal that exists (a proposal a human has read cannot be
   re-pointed by a push; a re-propose mints a new id). As **any other uid** — the operator, root in the installer
-  container — a proposal (created or moved), and nothing else. **`refs/heads/main` is refused from everyone**
+  container — a proposal (created or moved), and nothing else. The hook tells the two apart by that one number, so
+  **an operator with uid 1001 is refused**: by `scripts/install-prereqs.sh` and both launchers before anything is
+  made, and by the deploy's first task (I-18; `tests/unit/test_operator_uid_1001_refused.py`,
+  `tests/unit/test_local_canonical.py`). **`refs/heads/main` is refused from everyone**
   (2026-10-19): nothing legitimate pushes it any more, so a hook that still let it through from some uid would
   let a hand-run `git push` skip the gate every other way in passes. A delete is refused from everyone, and so
   is every push when the pusher's uid cannot be read. A push can therefore leave one kind of ref there (a ref

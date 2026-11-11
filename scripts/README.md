@@ -12,7 +12,9 @@ operator identity (MF-1) + makes the operator's key directories (Docker makes th
 root, empty and root's), then runs the installer container
 ([docker/services/installer.yaml](../docker/services/installer.yaml)) which executes the unchanged
 bootstrap/local-canonical/deploy-stack playbooks. Verbs: `fresh-init` · `check` (the `--check --diff` dry-run) ·
-*(bare)* `init` · `configure-semaphore` · `shell`. `host-systemd.sh` is the small host-systemd residual
+*(bare)* `init` · `configure-semaphore` · `shell`. install-prereqs.sh and both launchers refuse an operator whose
+uid is 1001, the network service's, before they install or make anything; `shell` is told and goes on
+([docs/troubleshooting.md](../docs/troubleshooting.md) §10). `host-systemd.sh` is the small host-systemd residual
 (qemu-guest-agent) the ephemeral container can't own. Full reference + security model:
 [docker/installer/README.md](../docker/installer/README.md).
 

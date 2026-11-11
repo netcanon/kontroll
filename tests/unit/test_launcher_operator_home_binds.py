@@ -32,7 +32,8 @@ _OPERATOR_HOME = re.compile(r"^(?:\$\{KONTROLL_OPERATOR_HOME(?::?[-?][^}]*)?\}|"
                             r"(/[^:]+)(?::|$)")
 _OTHER_HOME = re.compile(r"^(?:~|\$\{?HOME(?![A-Za-z0-9_]))")
 
-pytestmark = [pytest.mark.unit]
+# The launchers refuse uid 1001, a GitHub-hosted runner's own (I-18): a stand-in `id` keeps it from deciding these.
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("not_the_service_uid")]
 
 _POSIX = pytest.mark.skipif(os.name == "nt" or not all(shutil.which(t) for t in ("sh", "bash", "git")),
                             reason="runs the POSIX launchers with a stand-in docker on PATH (CI has sh, bash and git)")

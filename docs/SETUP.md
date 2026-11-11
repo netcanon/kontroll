@@ -28,7 +28,9 @@ installer container, so the host distro is otherwise irrelevant.
 > The steps below are the legacy host-ansible path, still valid after `install-prereqs.sh --with-host-ansible`.
 
 On the compose-native path this is the quickstart's `sudo bash scripts/install-prereqs.sh` — Docker, compose and
-git, the whole host floor — and you follow the quickstart from there. The commands in §4, §5 and §7 below belong
+git, the whole host floor — and you follow the quickstart from there, as the account that will operate the node:
+not one with uid 1001, the network service's, which install-prereqs.sh and the installer refuse (troubleshooting.md
+§10). The commands in §4, §5 and §7 below belong
 to the legacy host-ansible path, which needs Ansible, sops and age on the host as well:
 
 ```bash
