@@ -169,21 +169,44 @@
     owner: "0"
     group: "0"
     mode: "0644"
+  register: _clone_gitconfig
   when: not (_fresh_preview | bool)
+
+- name: Unarmed — the canonical's owner, for a preview the file above is not written for yet — {{ _clone_service }}
+  # In check mode the git module below reaches the canonical too (it reads main with `ls-remote`), and the
+  # copy above, which names the canonical safe, writes nothing. For root, git also trusts a repository that
+  # the uid in SUDO_UID owns (git-config(1), safe.directory), and it reads that variable on the serving side of
+  # a local clone, which `-c safe.directory` does not reach. So such a preview gives root's git the canonical's
+  # owner there: it trusts the canonical as the apply's file makes it, and the clone is root's anyway. The
+  # module then compares, and fails where the apply fails (a clone with a local change, a canonical that is no
+  # repository); skipping it in such a preview hid both (I-33). An apply never sets it: it writes the file first.
+  ansible.builtin.stat:
+    path: "{{ _clone_canonical }}"
+    follow: true
+    get_checksum: false
+  register: _clone_canon_owner
+  when:
+    - ansible_check_mode
+    - not (_fresh_preview | bool)
+    - not (api_privileged | bool)
+    - _clone_gitconfig is changed
 
 - name: Unarmed — clone/update the local canonical into the content tree, as root — {{ _clone_service }}
   # Root-owned and world-readable: uid 1001 reads it and cannot write it (the read-only lock). In check mode a
-  # clone the step above would remove is NOT looked at: the git module runs git in it even to preview, and it is
+  # clone the removal above would remove is NOT looked at: the git module runs git in it even to preview, and it is
   # not root's. Skipped on a fresh-node preview: the module reaches the remote even in check mode, so with no
-  # canonical yet it fails outright rather than say what it would do (see _fresh_preview).
+  # canonical yet it fails outright rather than say what it would do (see _fresh_preview). A preview the
+  # configuration file is not written for yet runs it with SUDO_UID = the canonical's owner (the step before this
+  # one), so it compares, and fails, as the apply will (I-33).
   ansible.builtin.git:
     repo: "file://{{ _clone_canonical }}"
     dest: "{{ _clone_dir }}"
     version: main
     update: true
-  environment:
-    GIT_CONFIG_NOSYSTEM: "1"
-    GIT_CONFIG_GLOBAL: "{{ kontroll_storage_root }}/content-clone.gitconfig"
+  environment: >-
+    {{ {'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': kontroll_storage_root ~ '/content-clone.gitconfig'}
+       | combine({'SUDO_UID': _clone_canon_owner.stat.uid | string}
+                 if (_clone_canon_owner.stat is defined and _clone_canon_owner.stat.exists) else {}) }}
   when:
     - not (_fresh_preview | bool)
     - not (api_privileged | bool)

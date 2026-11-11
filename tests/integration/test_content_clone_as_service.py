@@ -66,6 +66,21 @@ _SAY_WHO = ('#!/bin/sh\n'
             '"$(sed "s/^.*) //" /proc/$$/stat | cut -d" " -f5)" "$HOME" '
             '"$(env | grep -c -e ^ANSIBLE_ -e ^SUDO_)" >> "@LOG@"\n')
 _CLEAN = "uid=1001 gid=1001 groups=1001 nnp=1 cap=0000000000000000 tty=0 home=/nonexistent leaked=0"
+UNARMED_GIT = "clone/update the local canonical into the content tree, as root"
+ARMED_GIT = "clone/update the local canonical into the content tree, AS THE SERVICE UID"
+_STATUS = re.compile(r"^(ok|changed|skipping|fatal): \[localhost\]", re.M)
+
+
+def _task_status(out, words):
+    """The status ansible-playbook printed for the first task whose name holds `words` — `ok`, `changed`,
+    `skipping` or `fatal` — or None when no such task is in the output. A row reads one task's own status where
+    the recap, which sums every task, cannot tell whether that task ran or what it found."""
+    head = re.search(r"^TASK \[[^\n]*" + re.escape(words), out, re.M)
+    if not head:
+        return None
+    nxt = out.find("\nTASK [", head.end())
+    found = _STATUS.search(out, head.end(), nxt if nxt >= 0 else len(out))
+    return found.group(1) if found else None
 
 
 class World:
@@ -153,8 +168,10 @@ class World:
             return [line.strip() for line in fh if line.strip()]
 
     def play(self, armed, check=False, expect_ok=True):
-        """Run the task file with ansible-playbook as root, holding a controlling terminal. Returns the recap's
-        counters; a failed task fails the row with the run's output. With `expect_ok=False` a failed run is
+        """Run the task file with ansible-playbook as root, holding a controlling terminal, with no SUDO_UID — as
+        the installer's `check` and deploy run (git trusts, for root, a repository SUDO_UID's uid owns, so the
+        runner's own would hide a missing configuration file). Returns the recap's counters; a failed task fails
+        the row with the run's output. With `expect_ok=False` a failed run is
         returned (`rc`, `out`), not asserted."""
         home = os.path.join(self.base, "ansible-home")
         os.makedirs(home, exist_ok=True)
@@ -169,6 +186,7 @@ class World:
                    ANSIBLE_NOCOLOR="1", ANSIBLE_RETRY_FILES_ENABLED="0", ANSIBLE_PYTHON_INTERPRETER="auto_silent",
                    ANSIBLE_DEPRECATION_WARNINGS="0", ANSIBLE_CONFIG=cfg,
                    SUDO_USER="operator", SUDO_COMMAND="ansible-playbook")   # as an operator's `sudo` deploy has
+        env.pop("SUDO_UID", None)                          # the installer's environment has none (above)
         env.update(getattr(self, "extra_env", {}))         # a row may add to the deploy's environment
         master, slave = pty.openpty()
 
@@ -432,13 +450,94 @@ def test_an_armed_clone_gets_its_local_remote_back_and_is_updated_from_the_canon
 
 def test_an_armed_preview_of_a_node_with_no_clone_writes_nothing(w):
     """`--check --diff` first, on an armed node with no clone and no configuration file yet: it says the clone
-    would be made and writes nothing — no clone, no configuration file, nothing in the clone's parent. Then the
-    deploy makes it, wholly the service's."""
-    assert w.play(armed=True, check=True)["changed"] > 0
+    would be made — the armed git task itself runs its script in the preview and reports `changed` (a preview that
+    skipped it without the file would leave the script's checks — not a clone, HEAD off main, a discarded change —
+    unpreviewed, with no other row to see it) — and writes nothing: no clone, no configuration file, nothing in the
+    clone's parent. Then the deploy makes it, wholly the service's."""
+    pre = w.play(armed=True, check=True)
+    assert pre["changed"] > 0 and _task_status(pre["out"], ARMED_GIT) == "changed", pre["out"]
     assert not os.path.lexists(w.clone) and os.listdir(w.parent) == []
     assert not os.path.exists(os.path.join(w.storage, "content-clone.gitconfig"))
     w.play(armed=True)
     assert w.owners() == {SERVICE}
+
+
+def test_an_unarmed_preview_before_the_configuration_file_is_written_compares_and_writes_nothing(w):
+    """Unarmed, `--check --diff` as the installer's `check` verb runs it — as root with no SUDO_UID — on a node with no
+    clone and no configuration file yet: the preview's git module reaches the canonical (in check mode it reads main
+    with `ls-remote`) and says the clone would be made, and the preview writes nothing (no clone, no file). The deploy
+    then makes the clone, root's, at main; and the next preview, main moved, says the clone would change and changes
+    nothing. Before I-33 the preview's git reached the canonical (the operator's) with no file naming it safe and failed
+    the dry run at `detected dubious ownership`, where the apply, which writes the file first, went through; a preview
+    now gives root's git the canonical's owner as SUDO_UID, which git trusts for root."""
+    conf = os.path.join(w.storage, "content-clone.gitconfig")
+    first = w.play(armed=False, check=True)
+    assert _task_status(first["out"], UNARMED_GIT) == "changed", first["out"]
+    assert not os.path.lexists(w.clone) and not os.path.exists(conf)
+    w.play(armed=False)
+    assert w.owners() == {0} and w.head() == "first" and os.path.exists(conf)
+    w.commit("second")
+    again = w.play(armed=False, check=True)
+    assert _task_status(again["out"], UNARMED_GIT) == "changed", again["out"]
+    assert w.head() == "first"
+
+
+def test_an_unarmed_preview_of_a_clone_made_before_the_configuration_file_compares_and_the_deploy_updates_it(w):
+    """Unarmed, a root clone a build made before the configuration file existed (here the file is removed after the
+    first deploy): the preview compares the clone with the canonical's main — its git task is `ok` while main has not
+    moved and `changed` once it has — and changes nothing: the clone stays at the old main, and no file is written.
+    The deploy then writes the file and brings the clone to main, and the next deploy changes nothing. Guards the I-33
+    failure on the upgrade path: the git module in check mode reads the canonical's main through the clone's remote
+    (`ls-remote`), which root's git refused as another uid's without the file; a preview that skipped the module
+    instead would say nothing of what main holds."""
+    conf = os.path.join(w.storage, "content-clone.gitconfig")
+    w.play(armed=False)
+    os.remove(conf)
+    same = w.play(armed=False, check=True)
+    assert _task_status(same["out"], UNARMED_GIT) == "ok", same["out"]
+    w.commit("second")
+    moved = w.play(armed=False, check=True)
+    assert _task_status(moved["out"], UNARMED_GIT) == "changed", moved["out"]
+    assert w.head() == "first" and not os.path.exists(conf)
+    w.play(armed=False)
+    assert w.head() == "second" and os.path.exists(conf)
+    assert w.play(armed=False)["changed"] == 0
+
+
+def test_an_unarmed_preview_refuses_a_kept_clone_with_a_local_change_as_the_deploy_does(w):
+    """Unarmed, a root clone a build made before the configuration file existed, with a change to a tracked file made
+    in it: the preview, before the file is written, fails as the deploy does — the git module will not update a clone
+    with local modifications (`force: no`) — and the change stays. Guards the preview against being rosier than its
+    apply: I-33's first fix skipped the module in any preview the file was not written for, and this preview passed
+    and said the deploy would update the clone."""
+    conf = os.path.join(w.storage, "content-clone.gitconfig")
+    w.play(armed=False)
+    os.remove(conf)
+    with open(os.path.join(w.clone, "f"), "a", encoding="utf-8") as fh:
+        fh.write("edited" + chr(10))
+    pre = w.play(armed=False, check=True, expect_ok=False)
+    assert pre["rc"] != 0 and "Local modifications exist" in pre["out"], pre["out"]
+    run = w.play(armed=False, expect_ok=False)
+    assert run["rc"] != 0 and "Local modifications exist" in run["out"], run["out"]
+    assert "edited" in w.head()
+
+
+def test_an_unarmed_preview_of_a_canonical_that_is_not_a_repository_fails_as_the_deploy_does(w):
+    """Unarmed, no clone and no configuration file, and the canonical a directory of the operator's that holds a HEAD
+    and no repository: the preview fails as the deploy does — git says it `does not appear to be a git repository` —
+    and no clone is made. Guards the preview's git running where there is no clone yet: I-33's first fix skipped it
+    there until the file was written, and this preview passed and said the deploy would make the clone."""
+    shutil.rmtree(w.canonical)
+    os.makedirs(w.canonical)
+    with open(os.path.join(w.canonical, "HEAD"), "w", encoding="utf-8") as fh:
+        fh.write("ref: refs/heads/main" + chr(10))
+    for path in (w.canonical, os.path.join(w.canonical, "HEAD")):
+        os.chown(path, OPERATOR, SERVICE)
+    pre = w.play(armed=False, check=True, expect_ok=False)
+    assert pre["rc"] != 0 and "does not appear to be a git repository" in pre["out"], pre["out"]
+    assert not os.path.lexists(w.clone)
+    run = w.play(armed=False, expect_ok=False)
+    assert run["rc"] != 0 and "does not appear to be a git repository" in run["out"], run["out"]
 
 
 def test_an_armed_deploy_fails_when_the_service_cannot_read_the_canonical(w):

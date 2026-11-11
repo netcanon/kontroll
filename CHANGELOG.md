@@ -11,6 +11,34 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): an unarmed dry-run before the content clone's git configuration is written compares as the apply will (I-33, 2026-11-09)
+
+The deploy's git for a content clone reads one configuration file, `<storage root>/content-clone.gitconfig`, which names
+the canonical safe (git refuses to serve a repository another uid owns, and the canonical is the operator's). The deploy
+writes it just before its git runs, and a dry-run writes nothing. The unarmed path's git module reaches the canonical
+in check mode too, so on a node no deploy had written the file for yet, and on a clone a build made before the file
+existed, the dry-run failed at `detected dubious ownership` where the apply, which writes the file first, went through.
+A `sudo` run hid it (git trusts, for root, a repository that `SUDO_UID`'s uid owns); the installer's `check` verb runs
+as root with no `SUDO_UID`.
+
+- **Fixed.** `ansible/playbooks/tasks/content-clone.yml`: a preview the file is not written for yet runs root's git
+  with `SUDO_UID` set to the canonical's owner (a `stat` of the canonical, in check mode only). git reads that variable
+  on the serving side of a local clone, where `-c safe.directory` does not reach. The preview then compares the clone
+  with the canonical's main, and fails where the apply fails: a kept clone with a local change, a canonical that is no
+  repository. It trusts what the apply's file makes the apply trust: the module's git touches only the clone, which is
+  root's, and the canonical. An apply never sets it; it writes the file first.
+- **Not changed.** The armed preview, whose git is uid 1001's (git reads `SUDO_UID` only as root), compares nothing
+  until the file is readable: a clone not made yet shows `would make …`, one that is there shows `ok`, with its `main
+  not compared` in the task's output (`-v`). An armed preview with a readable file that is not as written fails where
+  the apply passes (I-45, queued).
+- **Tests.** `integration/test_content_clone_as_service.py` (as root): unarmed previews before the file is written, of a
+  node with no clone and of a clone a build made before the file, compare (the git task `ok` while main has not moved,
+  `changed` once it has) and write nothing, and the deploy makes or updates the clone; a kept clone with a local
+  change, and a canonical that is no repository, fail the preview as they fail the deploy; the armed preview with no
+  clone runs the armed git task. Every row now runs with no `SUDO_UID`, as the installer does.
+- **Docs.** docs/troubleshooting.md §9 (what a preview before the file compares, armed and unarmed);
+  docker/installer/README.md (its content-clone exception, gone); tests/README.md.
+
 ### fix(scripts): a run-log is written where Vector reads it, whatever XDG_STATE_HOME says (I-29, 2026-11-09)
 
 Vector ships the operator scripts' run-logs from one directory, `<operator home>/.local/state/kontroll/runs`, which
@@ -337,9 +365,9 @@ made the cert and owned it. The I-19 read found it.
   the generator (in a dry-run too), and the task is skipped only in a dry-run that found no cert. An apply always runs
   it. A note, `NOT PREVIEWED — <dir>/tls/<svc>.crt is not there yet`, says so where it is skipped, and the fresh-node
   banner no longer says a later `check` previews the whole play.
-- **Not fixed here (I-33).** An unarmed installer-path dry-run that first enables the API or onboard-gui on a node
-  with a canonical still fails earlier, at the content clone ("detected dubious ownership"): the clone's gitconfig
-  that names the canonical safe is written by a task `--check` skips. The apply goes through. It predates this fix.
+- **Fixed by I-33** (the entry above). An unarmed installer-path dry-run that first enabled the API or onboard-gui on
+  a node with a canonical then failed earlier, at the content clone ("detected dubious ownership"): the clone's
+  gitconfig that names the canonical safe is written by a task `--check` skips. It predated this fix.
 - **Tests.** The new `integration/test_tls_owner_dry_run.py` runs both services' four TLS tasks from the playbook: a
   dry-run with no certs yet, on a node with a canonical and on a fresh one, passes, skips the owner tasks, prints both
   notes and makes nothing; a dry-run with the certs there previews owning them and changes nothing; an apply (as root)
@@ -350,7 +378,7 @@ made the cert and owned it. The I-19 read found it.
   gate's whole `when` (its probe, not `_fresh_preview`, and the resolver's answer), each probe to the generator's
   path, `check_mode: false`, its place before the generator and its note, and the banner's words.
 - **Docs.** `docker/installer/README.md` (a cert a service enabled later has not had made yet; the content-clone
-  preview gap).
+  preview gap, since closed by I-33).
 
 ### fix(ansible): the onboard-gui age-key gate takes only a key file, judged as Docker mounts it (I-22, 2026-11-08)
 
