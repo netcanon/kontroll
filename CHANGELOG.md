@@ -17,8 +17,10 @@ NetConfig project.
 directory: it was never listed, and was taken for a repository. A link to an empty directory (the canonical kept on
 another disk, made empty) was audited and judged as one, and its mandated dry run refused ("local-canonical:
 REFUSING to land (exit 1) — kontroll-land: the canonical could not be read") while its real run, whose `file` and
-`git init` follow the link, landed; a link to nothing failed the same way. Docker makes a directory at the path, not
-a link, so a node gets one only by an operator's hand.
+`git init` follow the link, landed. A link to nothing was audited too (NO REPORT: not a directory), and its dry run
+then stopped at the ownership pass's look, which cannot open a path that is no directory, while its real run made the
+directory the link names and landed. Docker makes a directory at the path, not a link, so a node gets one only by an
+operator's hand.
 
 - **Fix.** The play's look at the path follows a link (`follow: true`): the canonical is the directory the link
   names, as the real run, the audit and the landing take it. A link to an empty directory is no canonical yet, as an
@@ -26,9 +28,10 @@ a link, so a node gets one only by an operator's hand.
   which it does, in the directory the link names. A link to a canonical is audited and judged as before.
 - **Tests.** `tests/integration/test_local_canonical_as_root.py` runs the play as root for a link to an empty
   directory (the dry run passes; the first apply lands HEAD in the directory the link names and leaves the link; the
-  second reports 0 changed), a link to a landed canonical (audited and judged; the apply reports 0 changed) and a link
-  to nothing (the dry run passes and writes nothing; the apply makes the directory and lands). The stat's unit pin
-  (`tests/unit/test_canonical_audit.py`) takes the key.
+  second reports 0 changed), a link to a landed canonical (the audit and the judgement each run; the apply reports 0
+  changed) and a link to nothing (the dry run passes, audits nothing and writes nothing; the apply makes the
+  directory and lands). Its rows for a directory of entries and for a repository without `HEAD` run at the path and
+  through a link. The stat's unit pin (`tests/unit/test_canonical_audit.py`) takes the key.
 - **Docs.** `docs/troubleshooting.md` §8 and SECURITY.md's audit row: a link at the path is followed; §8 says what a
   link to a disk that is not mounted gets.
 

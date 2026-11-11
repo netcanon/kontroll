@@ -209,6 +209,15 @@ def test_a_first_install_whose_canonical_path_is_an_empty_directory_passes_its_d
     assert second["changed"] == 0 and second["failed"] == 0, second["out"]
 
 
+def _ran(out, task):
+    """Whether the task whose name begins with `task` ran in this play's output: its first status line after its
+    TASK banner is ok or changed, not skipping (the default callback, as `_play` runs it)."""
+    at = out.find("TASK [" + task)
+    assert at >= 0, ("no such task in the run", task)
+    status = re.search(r"^(ok|changed|skipping|fatal|failed):", out[at:], re.M)
+    return bool(status) and status.group(1) in ("ok", "changed")
+
+
 def _elsewhere(node):
     """A directory beside the node's canonical path, as a second disk's mount point would be — root's, `0755` —
     and the path in it that a link at the canonical's path names (nothing is made there)."""
@@ -250,13 +259,14 @@ def test_a_canonical_path_that_is_a_link_to_an_empty_directory_passes_its_dry_ru
 
 def test_a_canonical_path_that_is_a_link_to_a_landed_canonical_is_audited_judged_and_deploys_0_changed(node):
     """A landed canonical moved to a directory elsewhere, and a symbolic link to it left at its path. Its `--check
-    --diff` does not fail: the audit reads it (its message of NO REPORT is not shown), the landing is judged, nothing is refused and nothing
-    is said to be missing. The apply after it reports 0 changed, the link is left a link, and `main` stays the
-    checkout's commit.
+    --diff` does not fail: the audit runs and reads it (its NO REPORT sentence is not shown), the judgement of the
+    landing runs, nothing is refused and nothing is said to be missing. The apply after it reports 0 changed, the
+    link is left a link, and `main` stays the checkout's commit.
 
     Guards the fix going too far: before the play's look at the path followed a link, a link to a canonical was
     audited and judged already (the audit and the landing open the path, through the link), and following it must
-    leave that so (I-40)."""
+    leave that so (I-40); the audit and the judgement are each held to having run, which the row's absent sentences
+    alone did not show (the I-40 read B's N2)."""
     first = _play(node)
     assert first["failed"] == 0 and canon.read_ref(node.bare, canon.MAIN)[0] == _head(node.wt), first["out"]
     target = _elsewhere(node)
@@ -267,6 +277,7 @@ def test_a_canonical_path_that_is_a_link_to_a_landed_canonical_is_audited_judged
     for said in ("holds no canonical yet", "holds a repository without HEAD", "REFUSING to land",
                  "local-canonical: the audit gave NO REPORT"):
         assert said not in dry["out"], (said, dry["out"])
+    assert _ran(dry["out"], "Audit the canonical") and _ran(dry["out"], "Judge the working tree's commit"), dry["out"]
     real = _play(node)
     assert real["changed"] == 0 and real["failed"] == 0, real["out"]
     assert os.path.islink(node.bare) and os.readlink(node.bare) == target, "the link is left a link"
@@ -281,15 +292,19 @@ def test_a_canonical_path_that_is_a_link_to_nothing_passes_its_dry_run_and_the_r
     reports 0 changed.
 
     Guards the dry run saying what the real run does here too. Looked at without following it, the link was a path
-    that is no directory: it was audited (`unread: the top directory`) and judged as a repository, and the dry run
-    refused while the real run made the directory and landed (I-40). The real run's seeding through such a link is
-    as it was; whether the play should refuse a link to nothing is not decided."""
+    that is no directory: the audit ran and gave NO REPORT (the path is not a directory), and the dry run then
+    stopped at the ownership pass's look, which cannot open a path that is no directory, while the real run made the
+    directory and landed (I-40; measured by both of its reads on main, on both cores). The real run's seeding through
+    such a link is as it was; whether the play should refuse a link to nothing is not decided (I-49)."""
     target = _elsewhere(node)
     os.symlink(target, node.bare)
     dry = _play(node, check=True)
     assert dry["failed"] == 0, "the mandated dry-run must not fail:\n" + dry["out"]
     assert "holds no canonical yet (it is not there)" in dry["out"] and "first seed" in dry["out"], dry["out"]
-    assert "REFUSING to land" not in dry["out"] and "unread" not in dry["out"], dry["out"]
+    assert "REFUSING to land" not in dry["out"], dry["out"]
+    assert "local-canonical: the audit gave NO REPORT" not in dry["out"], dry["out"]
+    assert not _ran(dry["out"], "Audit the canonical"), \
+        ("a path that is not there is not audited", dry["out"])
     assert os.path.islink(node.bare) and not os.path.exists(target), "a dry-run made the canonical"
     first = _play(node)
     assert first["changed"] > 0 and first["failed"] == 0, first["out"]
@@ -299,9 +314,11 @@ def test_a_canonical_path_that_is_a_link_to_nothing_passes_its_dry_run_and_the_r
     assert second["changed"] == 0 and second["failed"] == 0, second["out"]
 
 
-def test_a_canonical_path_that_holds_entries_and_no_repository_is_audited_and_its_dry_run_passes(node):
+@pytest.mark.parametrize("through", [False, True], ids=["at-the-path", "through-a-link"])
+def test_a_canonical_path_that_holds_entries_and_no_repository_is_audited_and_its_dry_run_passes(node, through):
     """The node's canonical path is a directory that holds an entry and no repository: the root of a filesystem
-    mounted at the path, which holds `lost+found/` (root's, `0700`) and nothing else. Its `--check --diff` does not
+    mounted at the path, which holds `lost+found/` (root's, `0700`) and nothing else; and the same directory
+    elsewhere, a symbolic link to it at the path, the link left a link by every run. Its `--check --diff` does not
     fail: the audit runs and names the entry, the ownership pass names it too (the real run makes it the operator's,
     group-writable), the dry run says the real run will seed the canonical, nothing is judged and nothing is
     written. The first apply makes the canonical there and lands HEAD as a first seed, and the second reports 0
@@ -310,10 +327,14 @@ def test_a_canonical_path_that_holds_entries_and_no_repository_is_audited_and_it
     Guards the dry run of such a node. Counted as a canonical, it was also judged as a repository, which it is not,
     so the dry run stopped at the refusal ("the canonical could not be read") while the real run landed: I-19's own
     symptom on a path that is not empty (I-19's read B, measured on both cores). And its preview of the ownership
-    pass, which the first fold skipped with the judgement (I-19's read A)."""
-    os.mkdir(node.bare)
-    os.chmod(node.bare, 0o755)
-    lost = os.path.join(node.bare, "lost+found")
+    pass, which the first fold skipped with the judgement (I-19's read A). Through a link the play judged it too,
+    before it followed one, and refused the same way (the I-40 read B's N4)."""
+    root = _elsewhere(node) if through else node.bare
+    os.mkdir(root)
+    os.chmod(root, 0o755)
+    if through:
+        os.symlink(root, node.bare)
+    lost = os.path.join(root, "lost+found")
     os.mkdir(lost)
     os.chmod(lost, 0o700)
     dry = _play(node, check=True)
@@ -322,10 +343,11 @@ def test_a_canonical_path_that_holds_entries_and_no_repository_is_audited_and_it
     assert re.search(r"\b(owner|mode): lost\+found\b", dry["out"]), ("the ownership pass names it", dry["out"])
     assert "holds no canonical yet (it holds entries but no repository" in dry["out"], dry["out"]
     assert "first seed" in dry["out"] and "REFUSING to land" not in dry["out"], dry["out"]
-    assert os.listdir(node.bare) == ["lost+found"] and os.lstat(node.bare).st_uid == 0, "a dry-run wrote there"
+    assert os.listdir(root) == ["lost+found"] and os.lstat(root).st_uid == 0, "a dry-run wrote there"
     first = _play(node)
     assert first["changed"] > 0 and first["failed"] == 0, first["out"]
-    assert canon.read_ref(node.bare, canon.MAIN) == (_head(node.wt), "commit", ""), first["out"]
+    assert canon.read_ref(root, canon.MAIN) == (_head(node.wt), "commit", ""), first["out"]
+    assert os.path.islink(node.bare) == through, "the link is left a link"
     second = _play(node)
     assert second["changed"] == 0 and second["failed"] == 0, second["out"]
 
@@ -357,8 +379,10 @@ def test_a_canonical_with_a_top_level_name_that_is_not_utf8_is_audited_judged_an
     assert os.path.exists(odd) and canon.read_ref(node.bare, canon.MAIN)[0] == _head(node.wt)
 
 
-def test_a_canonical_whose_head_is_gone_is_said_so_by_its_dry_run_and_the_real_run_restores_it(node):
-    """A landed canonical whose `HEAD` was removed. Its `--check --diff` does not fail: the audit names the missing
+@pytest.mark.parametrize("through", [False, True], ids=["at-the-path", "through-a-link"])
+def test_a_canonical_whose_head_is_gone_is_said_so_by_its_dry_run_and_the_real_run_restores_it(node, through):
+    """A landed canonical whose `HEAD` was removed, at the path, or moved elsewhere with a symbolic link to it left at
+    the path (the link left a link by every run). Its `--check --diff` does not fail: the audit names the missing
     `HEAD` (`head: HEAD`), and the note says the path holds a repository without HEAD and that the real run restores
     HEAD and then judges the landing, not that it holds no canonical or that HEAD lands as a first seed; nothing is
     written. The apply restores `HEAD` (`ref: refs/heads/main`), `main` stays the checkout's commit, and the next
@@ -366,9 +390,14 @@ def test_a_canonical_whose_head_is_gone_is_said_so_by_its_dry_run_and_the_real_r
 
     Guards the words of that dry run: they said "holds no canonical yet … lands HEAD as a first seed" of a repository
     that may hold a promoted commit the worktree lacks, and its real run then refuses the landing (I-19's read A,
-    measured on both cores)."""
+    measured on both cores). Through a link, before the play followed one, the dry run refused ("the canonical could
+    not be read") while the real run restored HEAD and landed (the I-40 read B's N4)."""
     first = _play(node)
     assert first["failed"] == 0, first["out"]
+    if through:
+        target = _elsewhere(node)
+        os.rename(node.bare, target)
+        os.symlink(target, node.bare)
     os.unlink(os.path.join(node.bare, "HEAD"))
     dry = _play(node, check=True)
     assert dry["failed"] == 0, "the dry run of a repository without HEAD must not fail:\n" + dry["out"]
@@ -382,6 +411,7 @@ def test_a_canonical_whose_head_is_gone_is_said_so_by_its_dry_run_and_the_real_r
     with open(os.path.join(node.bare, "HEAD"), encoding="utf-8") as fh:
         assert fh.read() == "ref: refs/heads/main\n"
     assert canon.read_ref(node.bare, canon.MAIN)[0] == _head(node.wt)
+    assert os.path.islink(node.bare) == through, "the link is left a link"
     after = _play(node)
     assert after["changed"] == 0 and after["failed"] == 0, after["out"]
 
