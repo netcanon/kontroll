@@ -2,25 +2,28 @@
 
 WHY. A backup's read can succeed with nothing in it: a raw-SSH command that exits 0 and prints nothing, a CLI `show`
 that returns no lines, a RouterOS export with no output, an API that answers 200 with an empty body, an empty
-/conf/config.xml. Each of those backups wrote that answer as the capture, over the device's last good one, and
-recorded it captured; the history play then committed the loss as a change (T27's runtime read, N9: a raw-SSH
-`cmd=true` against a seeded good capture left a 0-byte file and rc 0). Each now records such an answer as a failed
-capture, which fails the run at its summary, and does not run its write, so any earlier capture is kept. A read a
-dry-run skips (`raw` and the RouterOS command have no check mode, nor has the API's `uri`) gave no answer: the dry-run
-previews an empty capture as before and refuses nothing. The reads that run in a dry-run (`cli_command`'s `show`,
-`slurp`) are held to their answer there too. An unreachable host's read (the play tolerates one) gave no answer
-either: it is not refused, and the summary says the host was not run.
+/conf/config.xml, a Proxmox node or Docker host that answers none of its script's reads (the script still prints the
+`### ` header it puts before each). Each of those backups wrote that answer as the capture, over the device's last
+good one, and recorded it captured; the history play then committed the loss as a change (T27's runtime read, N9: a
+raw-SSH `cmd=true` against a seeded good capture left a 0-byte file and rc 0). Each now records such an answer as a
+failed capture, which fails the run at its summary, and does not run its write, so any earlier capture is kept. A
+read a dry-run skips (`raw`, `shell`, the RouterOS command and the API's `uri` do not run under `--check`) gave no
+answer: the dry-run previews an empty capture as before and refuses nothing. The reads that run in a dry-run
+(`cli_command`'s `show`, `slurp`) are held to their answer there too. An unreachable host's read (the play tolerates
+one) gave no answer either: it is not refused, and the summary says the host was not run.
 
 The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must
-be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, `skipped` the
-test Ansible registers and `b64decode` its filter. The results are the shapes ansible-core 2.18.19 and 2.19.4
-register (measured for this change): raw's check-mode skip holds `skipped`, `changed` and `failed` alone, the RouterOS
-command's adds a `msg`, a `when` skip adds `skip_reason` and `false_condition`, and an unreachable host's read (the
-play's `ignore_unreachable`) registers `unreachable` with no output.
+be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, `skipped`,
+`unreachable` and `match` the tests Ansible has, and `b64decode` its filter. The results are the shapes ansible-core
+2.18.19 and 2.19.4 register (measured for I-5, and `shell`'s for I-10): raw's check-mode skip holds `skipped`,
+`changed` and `failed` alone, the RouterOS command's adds a `msg`, `shell`'s an empty output, an `rc` of 0 and a
+`msg`, a `when` skip adds `skip_reason` and `false_condition`, and an unreachable host's read (the play's
+`ignore_unreachable`) registers `unreachable` with no output.
 """
 import base64
 import glob
 import os
+import re
 
 import jinja2
 import jinja2.meta
@@ -39,6 +42,40 @@ def _b64(text):
     return base64.b64encode(text.encode()).decode()
 
 
+def _script(role):
+    """The role's capture script: the text of the one `shell` task of its backup.yml."""
+    with open(os.path.join(ROOT, "ansible", "roles", role, "tasks", "backup.yml"), encoding="utf-8") as fh:
+        tasks = yaml.safe_load(fh)
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "ansible.builtin.shell" in node:
+                found.append(node["ansible.builtin.shell"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+    walk(tasks)
+    assert len(found) == 1 and isinstance(found[0], str), (role, found)
+    return found[0]
+
+
+def _headers(role):
+    """The `### ` section headers the role's capture script echoes before each read, in order: its whole answer when
+    no read answers (I-10). `test_every_line_of_the_capture_script_that_starts_with_an_echo_is_a_header` holds that
+    none is echoed in another form."""
+    found = re.findall(r'^\s*echo "(### [^"]*)"', _script(role), re.M)
+    assert len(found) >= 2, (role, found)
+    return found
+
+
+def _shell(*lines):
+    """A `shell` read's result, its output as the module registers it (the last newline stripped)."""
+    return {"changed": False, "rc": 0, "stdout": "\n".join(lines), "stderr": ""}
+
+
 # role: (the read's register, the write's register, a result with a config in it, an empty one, a blank one)
 ROLES = {
     "backend_raw_ssh": ("_cfg", "_cfg_write", {"rc": 0, "stdout": "config system\n", "stderr": ""},
@@ -54,6 +91,15 @@ ROLES = {
                  {"changed": False, "encoding": "base64", "content": ""},
                  {"changed": False, "encoding": "base64", "content": _b64(" \n")}),
 }
+# The two whose script prints a header before each read: a good answer has a line besides them (a guest's .conf
+# separator alone counts), the empty one is the headers alone, the blank one adds blank lines between them.
+_PVE, _DKR = _headers("proxmox"), _headers("docker_host")
+ROLES.update({
+    "proxmox": ("pve_cfg", "_pve_write", _shell(_PVE[0], _PVE[1], "auto lo", *_PVE[2:]), _shell(*_PVE),
+                _shell(*(h + "\n \t" for h in _PVE))),
+    "docker_host": ("dkr", "_dkr_write", _shell(*_DKR[:2], "CONTAINER ID   IMAGE   NAMES", *_DKR[2:]), _shell(*_DKR),
+                    _shell(*(h + "\n \t" for h in _DKR))),
+})
 # The check-mode skip of each read a dry-run does not make. `cli_command` runs a `show` command in check mode (and
 # fails any other), and `slurp` reads in check mode: those two have none.
 SKIPS = {
@@ -63,6 +109,8 @@ SKIPS = {
     "backend_api": {"changed": False, "skipped": True,
                     "msg": "This action (ansible.builtin.uri) does not support check mode."},
 }
+SKIPS.update({role: {"changed": False, "skipped": True, "rc": 0, "stdout": "", "stderr": "",
+                     "msg": "Command would have run if not in check mode"} for role in ("proxmox", "docker_host")})
 WHEN_SKIPPED = {"changed": False, "skipped": True, "skip_reason": "Conditional result was False",
                 "false_condition": False}
 WRITTEN = {"changed": True, "dest": "/backups/capture.cfg"}
@@ -71,10 +119,12 @@ UNREACHABLE = {"changed": False, "unreachable": True, "msg": "Failed to connect 
 # Each role's one read: the module whose answer the refusal and the write judge.
 READ_MODULE = {"backend_raw_ssh": "ansible.builtin.raw", "backend_netcommon_cli": "ansible.netcommon.cli_command",
                "routeros": "community.routeros.command", "backend_api": "ansible.builtin.uri",
-               "opnsense": "ansible.builtin.slurp"}
+               "opnsense": "ansible.builtin.slurp", "proxmox": "ansible.builtin.shell",
+               "docker_host": "ansible.builtin.shell"}
 # What each refusal's message may name: never the read's register, which holds the device's config.
 MESSAGE_NAMES = {"backend_raw_ssh": {"backend_backup_command"}, "backend_netcommon_cli": {"backend_backup_command"},
-                 "routeros": set(), "backend_api": {"backend_api_recipe", "_api_recipe"}, "opnsense": set()}
+                 "routeros": set(), "backend_api": {"backend_api_recipe", "_api_recipe"}, "opnsense": set(),
+                 "proxmox": set(), "docker_host": set()}
 
 
 def _grid():
@@ -120,6 +170,7 @@ def _env():
     env.tests["skipped"] = lambda r: bool(_result(r, "skipped").get("skipped", False))
     env.tests["unreachable"] = lambda r: bool(_result(r, "unreachable").get("unreachable", False))
     env.filters["b64decode"] = lambda s: base64.b64decode(s).decode()
+    env.tests["match"] = lambda value, pattern="": re.match(pattern, value) is not None   # Ansible's own
     return env
 
 
@@ -211,10 +262,25 @@ def test_each_capture_is_recorded_where_its_write_ran_and_only_there(role):
         assert _runs(role, RECORD, {write: WHEN_SKIPPED, "ansible_check_mode": check_mode}) is False
 
 
+@pytest.mark.parametrize("role", ["proxmox", "docker_host"])
+def test_every_line_of_the_capture_script_that_starts_with_an_echo_is_a_header(role):
+    """Every line of the Proxmox and Docker capture scripts that starts with `echo` or `printf` is an
+    `echo "### …"` header, the one form the rows above build their answers from and the role's refusal rejects
+    (`reject('match', '### ')`); and there is one header per such line.
+
+    WHY: the rows' empty answer is built from the headers this file can read. A header renamed out of that form
+    (`echo "## images"`) or a section added in another (`echo "== volumes"`) left the rows, so the empty answer was
+    built without it and still refused, while the role, which rejects only `### ` lines, kept that line and wrote
+    the headers as the capture again: the I-10 fault, back (mutants that survived on both cores, the I-10 reads). A
+    guest's separator echoed inside a loop (`echo "--- $f"`) does not start its line, and it is config: kept."""
+    script = _script(role)
+    leading = [line.strip() for line in script.splitlines() if re.match(r"\s*(echo|printf)\b", line)]
+    assert leading and all(re.match(r'echo "### [^"]*"', line) for line in leading), (role, leading)
+    assert len(leading) == len(_headers(role)), (role, leading)
+
+
 # Every other task that writes a capture under config_backup_dir, and why an empty one is the truth there.
 EXEMPT = {
-    ("docker_host", "Write capture"): "header",
-    ("proxmox", "Write capture"): "header",
     ("logging_file_tail_ssh", "Write the authorized_keys capture"): "file",
     ("logging_journald_remote", "Write the journald.conf capture"): "file",
     ("openwrt_discovery_key", "Write the authorized_keys capture"): "file",
@@ -268,24 +334,17 @@ def _source(write, tasks):
 
 def test_every_capture_write_refuses_an_empty_answer_or_is_exempt_for_a_reason_it_holds():
     """Every role task whose arguments name `config_backup_dir` (by any module or argument, in any task file of the
-    role, or through a fact built from it) is one of the five writes above, which refuse an empty answer, or is
-    exempt, and its reason is checked, not just stated: a header read (Docker's and Proxmox's `shell` prints a `### `
-    section header before each read, and the write is that output whole, so its capture is never empty), or a file
-    read (the logging and OpenWrt key roles `slurp` one file before they change it, as its rollback copy, and an
-    empty file captured is the file as it was). Guards a new backup writing an empty answer over a good capture
-    unseen, by a module, an argument, a file or a fact the net did not look at (I-5's tests-and-docs read, S1: a
-    `cli_backup`, a `lineinfile`, a shell redirect, a nested task file and a fact-built `dest` all passed), and an
-    exemption whose reason no longer holds (a Proxmox read that loses its headers, or a Docker write that filters
-    them out, can answer nothing)."""
+    role, or through a fact built from it) is one of the writes above, which refuse an empty answer, or is exempt,
+    and its reason is checked, not just stated: a file read (the logging and OpenWrt key roles `slurp` one file
+    before they change it, as its rollback copy, and an empty file captured is the file as it was). Guards a new
+    backup writing an empty answer over a good capture unseen, by a module, an argument, a file or a fact the net did
+    not look at (I-5's tests-and-docs read, S1: a `cli_backup`, a `lineinfile`, a shell redirect, a nested task file
+    and a fact-built `dest` all passed), and an exemption whose reason no longer holds; and a backup spared because
+    its script's headers make the capture non-empty (I-10: a Proxmox node that answered none of its reads was written
+    captured, its headers alone)."""
     writes = _capture_writes()
     refusing = {(role, WRITE) for role in ROLES}
     assert set(writes) == refusing | set(EXEMPT), sorted(set(writes) ^ (refusing | set(EXEMPT)))
     for key, reason in EXEMPT.items():
         source = _source(*writes[key])
-        if reason == "header":
-            script = source["ansible.builtin.shell"]
-            assert script.lstrip().startswith('echo "### '), (key, script)
-            content = writes[key][0]["ansible.builtin.copy"]["content"]
-            assert content == "{{ %s.stdout }}\n" % source["register"], (key, content)
-        else:
-            assert "ansible.builtin.slurp" in source, (key, source.get("name"))
+        assert reason == "file" and "ansible.builtin.slurp" in source, (key, reason, source.get("name"))

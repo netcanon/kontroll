@@ -15,7 +15,9 @@
 # play prints a per-host summary (captured / skipped / FAILED / not-run) from the
 # `kontroll_backup_result` fact each role sets. The raw-SSH, CLI, RouterOS, OPNsense
 # and API backups record a read that answers nothing as a failed capture and never
-# write it, so the last good capture is kept.
+# write it, so the last good capture is kept. The Proxmox and Docker-host backups,
+# whose scripts print a `### ` header before each read, do the same with an answer
+# of the headers alone.
 #
 # Access chain used:   control node (mgmt VLAN) -> mgmt IPs over SSH/API
 # May break:           none (read-only captures)
