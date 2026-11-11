@@ -117,7 +117,7 @@ def _lab(tmp_path, hosts, captures):
     _git(str(backups), "add", "-A")
     _git(str(backups), "-c", "user.email=kontroll-backup@localhost", "-c", "user.name=kontroll backup",
          "commit", "-q", "-m", "backup before the run")
-    # The fleet plays' key directory is the row's own: the last play deletes it, and its default is a fixed path
+    # The fleet plays' key directory is the row's own: the key-cleanup play deletes it, and its default is a fixed path
     # under /tmp. No bytecode is written next to the tree's filter plugins.
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
     env.update(ANSIBLE_CONFIG=str(cfg), ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"),
