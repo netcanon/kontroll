@@ -300,12 +300,13 @@ def _strings(value):
 
 
 def _capture_writes():
-    """{(role, task name): (the task, the role's tasks)} for every task of a role's task files, at any depth below
-    tasks/, whose arguments name `config_backup_dir` or a fact a set_fact in the same file builds from it: any
-    module, any argument (a `dest`, a `path`, a `dir_path`, a shell redirect). The set_facts themselves are left
-    out, and so is the `file: state=directory` that makes the directory."""
+    """{(role, task name): (the task, the role's tasks)} for every task of a role's task files (.yml or .yaml), at any
+    depth below tasks/, whose arguments name `config_backup_dir` or a fact a set_fact in the same file builds from
+    it: any module, any argument (a `dest`, a `path`, a `dir_path`, a shell redirect). The set_facts themselves are
+    left out, and so is the `file: state=directory` that makes the directory. Two writes of one name in a role fail
+    here: keyed by name, the second would hide the first from every row (the I-13 reads' S1)."""
     out = {}
-    pattern = os.path.join(ROOT, "ansible", "roles", "*", "tasks", "**", "*.yml")
+    pattern = os.path.join(ROOT, "ansible", "roles", "*", "tasks", "**", "*.y*ml")
     for path in sorted(glob.glob(pattern, recursive=True)):
         role = os.path.relpath(path, os.path.join(ROOT, "ansible", "roles")).split(os.sep)[0]
         with open(path, encoding="utf-8") as fh:
@@ -319,6 +320,7 @@ def _capture_writes():
                 continue
             args = {k: v for k, v in t.items() if k not in ("name", "when", "register", "delegate_to", "no_log")}
             if any("config_backup_dir" in s or any(f in s for f in facts) for s in _strings(args)):
+                assert (role, t.get("name")) not in out, ("two capture writes share a name", role, t.get("name"))
                 out[(role, t.get("name"))] = (t, tasks)
     return out
 

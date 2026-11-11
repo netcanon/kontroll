@@ -140,16 +140,20 @@ recipient was added, every domain file re-wrapped to it, and its private half ke
 proven (above). This is the analog of NetConfig's
 OS-keyring Fernet key, with a different mechanism (documented choice, PLAN.md §7).
 
-### C2 — Secrets never logged  ⬚ planned
+### C2 — Secrets never logged  ◑ partial
 
 **Implements:** `no_log: true` on every Ansible task handling a credential or
 decrypted value; `ansible.cfg` `log_path`.
-**Proves:** a grep gate in `tests/validate` flags secret-handling modules
-(`*_command`, `uri`, `*_token` vars) lacking `no_log`. Mirrors NetConfig's
-`test_logging_config.py` "credentials are never logged" guarantee. Every backup
-capture's write, and the read it writes, is `no_log`, since `--check --diff`
-prints a write whole: `tests/unit/test_capture_no_log.py` (I-13; its exemptions
-name the file and why it holds no credential).
+**Proves (built):** every capture under `config_backup_dir` is written, and read,
+`no_log`, since `--check --diff` prints a write whole:
+`tests/unit/test_capture_no_log.py` (I-13; its exemptions name the file and why
+it holds no credential). Not a capture of this kind, and not held there:
+logging_journald_receiver's rollback copy of a systemd unit, written under the
+playbook's directory.
+**Planned, not built:** a grep gate in `tests/validate` that flags
+secret-handling modules (`*_command`, `uri`, `*_token` vars) lacking `no_log`,
+mirroring NetConfig's `test_logging_config.py` "credentials are never logged"
+guarantee. `tests/validate` runs no such step today.
 
 Scheduled jobs never run at `-vvvv` (can echo secrets despite `no_log`).
 

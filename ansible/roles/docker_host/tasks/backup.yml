@@ -16,7 +16,7 @@
 # Blast radius:        none — pure read
 # Idempotence:         capture file overwritten each run; no host state changes
 # no_log:              the manifest is no config, but `docker ps -a` prints each container's command line
-#                      (truncated), and a credential passed as an argument shows there (I-13)
+#                      (truncated), and a credential passed as an argument can show there (I-13)
 
 - name: Record skip when this class is not backup-capable
   ansible.builtin.set_fact:

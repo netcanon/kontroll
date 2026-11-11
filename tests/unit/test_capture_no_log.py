@@ -2,13 +2,21 @@
 is a fact about the file read (I-13).
 
 WHY: a capture is the device's own configuration, and most carry its secrets: password hashes, PSKs, keys, a
-cloud-init password. Its write is a `copy` of the read's answer, so `--check --diff` prints the whole capture as the
-diff, into the ansible log and the Semaphore job's output, and a `-v` run prints the read's answer. Every class's
-write and read carried `no_log` but one: docker_host's container manifest, whose `docker ps -a` prints each
-container's command line (truncated), where a credential passed as an argument shows. A rule kept by each role's
-author, with no check, let that one through (CLAUDE.md: never log a secret; SECURITY.md C2). The writes are found as
-tests/unit/test_backup_empty_capture_refused.py finds them: any task of a role's task files, at any depth, whose
-arguments name `config_backup_dir` or a fact built from it; a new class's write is held without being listed here.
+cloud-init password. Its write is a `copy` of the read's answer, so `--check --diff` prints a capture whole as the
+diff (the new one where the read runs in a dry-run, the last one where it does not), into the ansible log and the
+Semaphore job's output, and a `-v` run prints the read's answer. Every class's write and read carried `no_log` but
+one: docker_host's container manifest, whose `docker ps -a` prints each container's command line (truncated), where a
+credential passed as an argument can show. A rule kept by each role's author, with no check, let that one through
+(CLAUDE.md: never log a secret; SECURITY.md C2).
+
+What the guard holds, as it finds them (tests/unit/test_backup_empty_capture_refused.py finds the writes the same
+way): every task of a role's task files (.yml or .yaml), at any depth, whose arguments name `config_backup_dir` or a
+fact a set_fact in the same file builds from it, is a write; a task in the same file whose register the write's own
+arguments name is its read. Each is checked on its own, so two tasks of one name are two tasks (the I-13 reads' S1: a
+second write named like the first escaped the check). `no_log` counts as the literal `true` on the task itself, or,
+for an include, in its `apply:`: a `no_log` on an include_tasks does not reach the tasks it includes (measured, both
+cores). Not held here, and so not claimed: a path built in role defaults, a block's vars or a fact of a fact, and a
+read whose answer reaches the write through a set_fact or a template.
 """
 import glob
 import os
@@ -20,6 +28,7 @@ import yaml
 pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+INCLUDES = ("include_tasks", "ansible.builtin.include_tasks", "include_role", "ansible.builtin.include_role")
 
 # (role, task name) -> (the file the task reads, or whose read it writes; why that file's text may be shown).
 EXEMPT = {
@@ -61,18 +70,32 @@ def _reads_file(task):
     return os.path.basename(str(src)) if src else None
 
 
+def _hidden(task):
+    """Whether the task's output is hidden: `no_log` the literal true on the task, or, for an include, in its
+    `apply:` (an include's own `no_log` does not reach the tasks it includes)."""
+    include = next((task[k] for k in INCLUDES if k in task), None)
+    if include is not None:
+        return isinstance(include, dict) and (include.get("apply") or {}).get("no_log") is True
+    return task.get("no_log") is True
+
+
 def _captures():
-    """{(role, write's name): (the write, [each task whose register the write's arguments read])} for every role
-    task that names `config_backup_dir` or a fact a set_fact in the same file builds from it, but the set_facts and
-    the `file: state=directory` that makes the directory."""
-    out = {}
-    for path in sorted(glob.glob(os.path.join(ROOT, "ansible", "roles", "*", "tasks", "**", "*.yml"), recursive=True)):
+    """[(role, the write, [each task whose register the write's arguments read])] for every role task that names
+    `config_backup_dir` or a fact a set_fact in the same file builds from it, but the set_facts and the
+    `file: state=directory` that makes the directory. A list, so a second task of a name is never folded into the
+    first; every task that registers a name the write reads counts as its read."""
+    out = []
+    pattern = os.path.join(ROOT, "ansible", "roles", "*", "tasks", "**", "*.y*ml")
+    for path in sorted(glob.glob(pattern, recursive=True)):
         role = os.path.relpath(path, os.path.join(ROOT, "ansible", "roles")).split(os.sep)[0]
         with open(path, encoding="utf-8") as fh:
             tasks = [t for t in _walk(yaml.safe_load(fh)) if isinstance(t, dict)]
         facts = {k for t in tasks for k, v in (t.get("ansible.builtin.set_fact") or {}).items()
                  if "config_backup_dir" in str(v)}
-        registers = {t["register"]: t for t in tasks if t.get("register")}
+        registers = {}
+        for t in tasks:
+            if t.get("register"):
+                registers.setdefault(t["register"], []).append(t)
         for t in tasks:
             if "block" in t or "ansible.builtin.set_fact" in t:
                 continue
@@ -81,41 +104,59 @@ def _captures():
             args = {k: v for k, v in t.items() if k not in ("name", "when", "register", "delegate_to", "no_log")}
             text = list(_strings(args))
             if any("config_backup_dir" in s or any(f in s for f in facts) for s in text):
-                reads = [registers[r] for r in registers
-                         if r != t.get("register") and any(re.search(r"\b%s\b" % re.escape(r), s) for s in text)]
-                out[(role, t.get("name"))] = (t, reads)
+                reads = [r for name, rs in registers.items() for r in rs
+                         if r is not t and any(re.search(r"\b%s\b" % re.escape(name), s) for s in text)]
+                out.append((role, t, reads))
     return out
 
 
+def _exempt(role, task, reads=None):
+    """Whether EXEMPT covers this task: its (role, name) is listed and the file it reads is the one listed (for a
+    write, the file every read it writes reads). Judged per task, so a task that borrows a listed name to read another
+    file is not covered."""
+    entry = EXEMPT.get((role, task.get("name")))
+    if entry is None:
+        return False
+    if reads is not None:
+        return bool(reads) and all(_reads_file(r) == entry[0] for r in reads)
+    return _reads_file(task) == entry[0]
+
+
 def test_every_capture_write_and_its_read_carry_no_log_or_are_exempt():
-    """Each capture's write, and each task whose register the write reads (the read whose answer it writes), has
-    `no_log: true`, or is named in EXEMPT. Guards a capture printed whole by `--check --diff` or a `-v` run, as
-    docker_host's container manifest was (I-13: its read and write had no `no_log`), and a new class's backup
-    added without it."""
+    """Each capture's write, and each task whose register the write reads (the read whose answer it writes), hides its
+    output (`no_log: true` on the task, or in an include's `apply:`), or is covered by EXEMPT for the file it reads.
+    Every task is checked, a second of the same name too. Guards a capture printed whole by `--check --diff` or a `-v`
+    run, as docker_host's container manifest was (I-13: its read and write had no `no_log`); a new class's backup
+    added without it; a second capture written under a name an earlier write already has, or a read registering a
+    name a later read reuses (the I-13 reads' S1, both of which escaped a check keyed by name); and a `no_log` on an
+    include_tasks, which does not hide the write it includes."""
     found = _captures()
     assert found, "no capture write found: the discovery is broken"
     bare = []
-    for (role, name), (write, reads) in sorted(found.items()):
-        for task in [write] + reads:
-            if task.get("no_log") is not True and (role, task.get("name")) not in EXEMPT:
-                bare.append((role, task.get("name")))
-    assert not bare, bare
+    for role, write, reads in found:
+        if not _hidden(write) and not _exempt(role, write, reads):
+            bare.append((role, write.get("name")))
+        for read in reads:
+            if not _hidden(read) and not _exempt(role, read):
+                bare.append((role, read.get("name")))
+    assert not bare, sorted(set(bare))
 
 
 def test_each_exemption_names_a_task_that_exists_and_the_file_it_reads():
-    """Each EXEMPT entry is a capture write or its read that exists and lacks `no_log`, and the file it names is the
-    file the task reads (a `slurp`'s `src`), or, for a write, the file every read it writes reads. Guards an
-    exemption outliving its task (a renamed task the exemption no longer reaches, or one now `no_log` anyway), and a
-    reason that stopped being true: a role that comes to read another file under the same task name keeps no
-    exemption. The file is read from the task's `src`, never its name, which names the file whatever it reads."""
+    """Each EXEMPT entry is a capture write or its read that exists, and every task under that (role, name) lacks
+    `no_log` and reads the file named (a `slurp`'s `src`, or, for a write, the file every read it writes reads).
+    Guards an exemption outliving its task (a renamed task the exemption no longer reaches, or one now `no_log`
+    anyway), and a reason that stopped being true: a role that comes to read another file under the same task name, a
+    second task taking a listed name among them, keeps no exemption. The file is read from the task's `src`, never its
+    name, which names the file whatever it reads."""
     found = _captures()
-    reads_of = {(role, w.get("name")): rs for (role, _), (w, rs) in found.items()}
-    tasks = {(role, t.get("name")): t for (role, _), (write, reads) in found.items() for t in [write] + reads}
+    tasks = {}
+    for role, write, reads in found:
+        tasks.setdefault((role, write.get("name")), []).append((write, reads))
+        for read in reads:
+            tasks.setdefault((role, read.get("name")), []).append((read, None))
     for key, (named, _why) in EXEMPT.items():
         assert key in tasks, key
-        task = tasks[key]
-        assert task.get("no_log") is not True, (key, "no longer needs the exemption")
-        if key in reads_of:
-            assert reads_of[key] and all(_reads_file(r) == named for r in reads_of[key]), (key, named)
-        else:
-            assert _reads_file(task) == named, (key, named, _reads_file(task))
+        for task, reads in tasks[key]:
+            assert not _hidden(task), (key, "no longer needs the exemption")
+            assert _exempt(key[0], task, reads), (key, named, _reads_file(task), [_reads_file(r) for r in reads or []])

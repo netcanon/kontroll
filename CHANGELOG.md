@@ -14,16 +14,23 @@ NetConfig project.
 ### fix(ansible): docker_host's container manifest is no longer printed by a dry-run's diff (I-13, 2026-11-09)
 
 Every class's capture write and its read carry `no_log: true`, because a capture is the device's configuration and
-`--check --diff` prints the whole write as its diff. docker_host's opt-in container manifest had neither. Its
-`docker ps -a` prints each container's command line (truncated), and a credential passed there as an argument showed
-in the dry-run's diff, in the ansible log and the Semaphore job's output. A `-v` run showed it in the read.
+`--check --diff` prints a write whole as its diff (the new capture where the read runs in a dry-run, the last one
+where it does not, as here). docker_host's opt-in container manifest had neither. Its `docker ps -a` prints each
+container's command line (truncated), and a credential passed there as an argument could show in the dry-run's diff,
+in the ansible log and the Semaphore job's output. A `-v` run showed it in the read, and a failing read printed it at
+any verbosity.
 
 - `ansible/roles/docker_host/tasks/backup.yml`: the manifest's read and write are `no_log`, and the header says why.
-- Tests: `tests/unit/test_capture_no_log.py` holds every capture write, and the read it writes, to `no_log`. It finds
-  the writes as the I-5 test does (any role task that names `config_backup_dir` or a fact built from it), so a new
-  class's backup is held without being listed. Its exemptions are journald.conf, which names no credential, and the
-  authorized_keys reads (public keys); each must name a task that exists and reads that file.
-- Docs: SECURITY.md C2 and the docker_host README.
+- Tests: `tests/unit/test_capture_no_log.py` holds every capture write, and every read in its task file whose register
+  the write names, to `no_log` (the literal `true` on the task, or in an include's `apply:`, since an include's own
+  `no_log` does not reach what it includes). It finds the writes as the I-5 test does (any role task, in a .yml or
+  .yaml task file, that names `config_backup_dir` or a fact a set_fact in the same file builds from it), so a new
+  class's backup is held without being listed, and it checks every task, a second of one name too. Its exemptions are
+  journald.conf, which names no credential, and the authorized_keys reads (public keys); each is judged by the file
+  the task reads, not its name. The I-5 test refuses two capture writes of one name in a role. Not held, and not
+  claimed: a path built in role defaults, a block's vars or a fact of a fact, or a read that reaches the write
+  through a set_fact or a template.
+- Docs: SECURITY.md C2 (now partial: its grep gate is not built), the docker_host README, tests/README.md.
 
 ### fix(ansible): an API host's basic-auth pair is read where the onboard writes it, or refused by name (I-16, 2026-11-09)
 
