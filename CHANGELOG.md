@@ -14,28 +14,39 @@ NetConfig project.
 ### fix(ansible): a Docker host without the compose plugin is backed up, and a failed Docker read is reported (I-62, 2026-11-11)
 
 A Docker host opted in to the backup, without the compose plugin, was never captured: the manifest script's last read
-was `docker compose ls`, which exits 1 without the plugin, so the read failed the host at its own task. A failed read
-(no docker, a daemon that is down, no access to its socket) failed the host the same way, and the summary printed no
-line for it: the run failed with a censored fatal and nothing that said which host or why. The I-13 read A found both,
-and found that an unreachable Docker host or Proxmox node failed the whole run (rc 2) on its branch, before I-10's
-write gate (`stdout | default('')`), which is what tolerates one now; no row held it for either class.
+was `docker compose ls`, which exits 1 without the plugin, so the read failed the host at its own task. A read that
+failed for any other reason (no docker, a daemon that is down, no access to its socket) failed the host the same way:
+the run failed with a censored fatal that named the host but not why, and the summary had no line for it. And where
+the compose plugin answered, a daemon that refused one read (`ps`, `images`) let the script run on to an exit of 0, so
+the manifest without that section was written over the good one and recorded captured. The I-13 read A found the first
+two, and found that an unreachable Docker host or Proxmox node failed the whole run (rc 2) before I-10's write gate
+(`stdout | default('')`), which is what tolerates one now; no row held it for either class.
 
 - **Fixed.** The script runs under `set -e`, so a read that fails stops it there and its exit code is that read's; the
   compose read runs only where `docker compose version` answers, so a host without the plugin is captured with an
-  empty stacks section. The read carries `failed_when: false`, and a read that exits non-zero is recorded `FAILED: the
-  manifest read exited <rc> …`, naming the exit code alone (the answer is `no_log`), before the write, which runs only
-  for an exit code of 0; the summary prints the line and fails the run, and any earlier manifest is kept. Run to its
-  end, a host whose daemon is down and that has no compose plugin would have exited 0 with the client's half of
-  `docker version`, and that would have been written over the good manifest.
+  empty stacks section. The read carries `failed_when: false`, and a read that exits non-zero is recorded `FAILED: a
+  manifest read exited <rc> …` (docker or the module's python missing, its daemon down or refusing a read, or no
+  access to its socket), naming the exit code alone (the answer is `no_log`), before the write, which runs only for an
+  exit code of 0; the summary prints the line and fails the run, and any earlier manifest is kept. So a daemon that
+  refuses one read is now FAILED, and the good manifest is kept, where it was overwritten by a partial one. Without
+  `set -e`, a host whose daemon is down and that has no compose plugin would exit 0 with the client's half of `docker
+  version`, and that would be written over the good manifest.
+- **Not changed.** A host whose compose plugin stops answering is captured without its stacks, over a manifest that
+  listed them (the history keeps the earlier one), as a Proxmox node without its cluster filesystem is (I-50). A dry
+  run still never runs the script (`shell` skips it) and previews an empty capture, as every class whose read a dry
+  run skips does.
 - **Tests.** `tests/unit/test_backup_empty_capture_refused.py`: a Docker read that exits 1 (with the client's half of
-  `docker version`) or 127 (a header alone) runs the failure record and nothing else, in a real run and a dry run; the
-  read carries `failed_when: false`, and the record sits before the write and reads only the read's `rc`.
+  `docker version`) or 127 (a header alone), or a failed result with no exit code, runs the failure record and nothing
+  else, in a real run and a dry run; the read carries `failed_when: false`, and the record sits before the write, sets
+  only the result and the flag, and reads only the read's `rc`.
   `tests/integration/test_backup_empty_capture_real_run.py` runs the playbook for real: an unreachable opted-in Docker
   host and an unreachable Proxmox node beside a good host (a dry run and a real run both pass, each says it was not
-  run, both captures kept), a Docker host without the compose plugin (captured, with its stacks header and nothing
-  under it) and one whose daemon is down (FAILED, naming exit code 1, its manifest kept, the run failed at its
-  summary).
-- **Docs.** `ansible/roles/docker_host/README.md` says what a failed read and a missing compose plugin get.
+  run, both captures kept), a Docker host with the compose plugin (captured with its stacks), one without it
+  (captured, with its stacks header and nothing under it) and one whose daemon is down (FAILED, naming exit code 1,
+  its manifest kept, the run failed at its summary).
+- **Docs.** `ansible/roles/docker_host/README.md` (a failed read, a missing plugin, the unreachable host),
+  backup-configs.yml's summary comment and SECURITY.md's key row (a Docker read that exits non-zero is one of the
+  captures recorded as failed), tests/README.md.
 
 ### fix(scripts): a landing from a shallow clone is refused before the pack, with the remedy (I-20, 2026-11-09)
 

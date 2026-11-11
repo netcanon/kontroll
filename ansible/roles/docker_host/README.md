@@ -31,8 +31,11 @@ summary, and nothing is written, so any earlier manifest is kept (I-10). A
 capture.
 
 The compose plugin is optional: a host without it is captured with an empty
-stacks section. Any other read that fails (no docker, no daemon, no access to
-its socket) stops the script there, and the read's exit code is recorded
-`FAILED` (the summary prints it and fails the run; nothing is written, so any
-earlier manifest is kept). An unreachable host is tolerated, as every class's
-is: its summary line says it was not run (I-62).
+stacks section (so a host whose plugin stops answering is captured without its
+stacks, over a manifest that listed them; the history keeps the earlier one).
+Any other read that fails (no docker, no python for the module, a daemon that is
+down or refuses a read, no access to its socket) stops the script there, and the
+read's exit code is recorded `FAILED` (the summary prints it and fails the run;
+nothing is written, so any earlier manifest is kept). An unreachable host is
+tolerated, as an unreachable raw-SSH, OPNsense or Proxmox host is: its summary
+line says it was not run (I-62).

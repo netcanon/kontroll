@@ -19,10 +19,10 @@ machine: where `pveversion`, /etc/network/interfaces and /etc/pve are all missin
 its headers alone; where any of them is there, the Proxmox rows are skipped (the answer would have a line of the
 machine's own), and a skip fails no gate, so they are proved in the gate's image only.
 
-Three rows are I-62's. An opted-in Docker host and a Proxmox node that cannot be reached (the row's `down` plugin)
+I-62's rows: an opted-in Docker host and a Proxmox node that cannot be reached (the row's `down` plugin)
 are tolerated, as the raw-SSH one is: CLAUDE.md's hard rule, never let one unreachable host fail a fleet-wide run.
-A Docker host without the compose plugin, and one whose daemon is down, each have a `docker` of the row's own that
-answers as a real one does.
+A Docker host with the compose plugin, one without it, and one whose daemon is down each have a `docker` of the
+row's own that answers with the exit codes a real one gives (docker/cli; the image's own CLI with no daemon).
 
 It needs ansible-playbook and git: where either is missing every row is skipped (the gate's images and CI's validate
 job have both). Nothing of the developer's Ansible or git reaches the play: its configuration, home and temporary
@@ -335,6 +335,16 @@ case "$1" in
   *) echo "docker: '$1' is not a docker command." >&2; exit 1 ;;
 esac
 """
+WITH_COMPOSE = r"""#!/bin/sh
+case "$1 $2" in
+  version*) printf 'Client:\n Version:           27.3.1\n' ;;
+  ps*) printf 'CONTAINER ID   IMAGE        NAMES\n0123456789ab   nginx:1.27   web\n' ;;
+  images*) printf 'REPOSITORY   TAG    IMAGE ID\nnginx        1.27   0123456789ab\n' ;;
+  'compose version') echo 'Docker Compose version v2.29.7' ;;
+  'compose ls') printf 'NAME      STATUS       CONFIG FILES\nproxy     running(1)   /srv/proxy/compose.yaml\n' ;;
+  *) echo "docker: '$1' is not a docker command." >&2; exit 1 ;;
+esac
+"""
 NO_DAEMON = r"""#!/bin/sh
 [ "$1" = version ] && printf 'Client:\n Version:           27.3.1\n'
 [ "$1" = compose ] && { echo "docker: 'compose' is not a docker command." >&2; exit 1; }
@@ -400,8 +410,8 @@ def test_a_docker_host_whose_daemon_is_down_fails_at_its_summary_by_its_exit_cod
     whose line says FAILED and names the read's exit code; its good manifest is kept byte for byte; the good raw-SSH
     host beside it is captured, and the history's new commit holds nothing of the Docker host's. Guards I-62 (F-5):
     the host failed at the read, so the summary printed no line for it; and the script stops at the read that fails
-    (`set -e`): run to its end, this host's script exits 0 (an absent compose plugin is no failure), and the
-    client's half of `docker version` was written over the good manifest as a capture."""
+    (`set -e`): without it this host's script would run to its end and exit 0 (an absent compose plugin is no
+    failure), and the client's half of `docker version` would be written over the good manifest as a capture."""
     lab = _docker_lab(tmp_path, "dk-nodaemon", NO_DAEMON)
     name = "Docker_dk-nodaemon_manifest.txt"
     rc, out, recap = _play(lab)
@@ -409,9 +419,28 @@ def test_a_docker_host_whose_daemon_is_down_fails_at_its_summary_by_its_exit_cod
     assert recap == {"dk-nodaemon": 1, "ap-good": 0, "localhost": 0}, (recap, out)
     assert _stamped(out), out
     assert _summary(out, "dk-nodaemon", "docker_host") == (
-        "FAILED: the manifest read exited 1 (no docker, no daemon, or no access to it), so no capture was written "
-        "and any earlier one is kept."), out
+        "FAILED: a manifest read exited 1 (docker or the module's python missing, its daemon down or refusing a "
+        "read, or no access to its socket), so no capture was written and any earlier one is kept."), out
     assert _summary(out, "ap-good") == "captured -> %s" % _capture("ap-good")
     with open(os.path.join(lab.backups, name), encoding="utf-8") as fh:
         assert fh.read() == GOOD
     _committed_beside(lab, name)
+
+
+def test_a_docker_host_with_the_compose_plugin_is_captured_with_its_stacks(tmp_path):
+    """A real run against an opted-in Docker host whose `docker` has the compose plugin (`docker compose version`
+    answers) passes and captures its manifest with the stack `docker compose ls --all` lists under its header, and
+    the history's new commit holds it. Guards the compose read's guard: a guard that never lets the read run (one
+    testing for the v1 `docker-compose` tool a v2 host does not have, or `if false`) dropped every host's stacks
+    section from its manifest and passed every other row, since their stand-ins have no plugin, answer nothing, or
+    stop before the guard (the I-62 read B's N-2, its B4 and B7)."""
+    lab = _docker_lab(tmp_path, "dk-compose", WITH_COMPOSE)
+    name = "Docker_dk-compose_manifest.txt"
+    rc, out, recap = _play(lab)
+    assert rc == 0 and set(recap.values()) == {0}, (rc, recap, out)
+    assert _summary(out, "dk-compose", "docker_host") == "captured -> %s (manifest)" % name
+    with open(os.path.join(lab.backups, name), encoding="utf-8") as fh:
+        manifest = fh.read()
+    assert manifest.endswith("### compose stacks\nNAME      STATUS       CONFIG FILES\n"
+                             "proxy     running(1)   /srv/proxy/compose.yaml\n"), manifest
+    assert name in _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()

@@ -50,12 +50,16 @@
       failed_when: false                 # recorded below; the summary fails the run on it
       no_log: true                       # a container's command line can carry a credential
 
-    # The message names the exit code alone: the answer is no_log, and the summary prints this line.
+    # The message names the exit code alone: the answer is no_log, and the summary prints this line. 127 is also
+    # what a read that could not start at all registers (no python for the module); 1 is also a daemon that is up
+    # and refused one read (`ps`, `images`, `compose ls`). A result with no exit code is taken as failed here, and
+    # neither the empty refusal nor the write below runs for it (the reads' F-2).
     - name: Record capture failure (reported in summary, not a hard abort)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
-          FAILED: the manifest read exited {{ dkr.rc | default('without an exit code') }} (no docker, no daemon, or
-          no access to it), so no capture was written and any earlier one is kept.
+          FAILED: a manifest read exited {{ dkr.rc | default('without an exit code') }} (docker or the module's
+          python missing, its daemon down or refusing a read, or no access to its socket), so no capture was written
+          and any earlier one is kept.
         kontroll_backup_failed: true
       when:
         - dkr is not unreachable
@@ -78,7 +82,7 @@
         kontroll_backup_failed: true
       when:
         - dkr is not unreachable
-        - (dkr.rc | default(0)) == 0
+        - dkr is skipped or (dkr.rc | default(1)) == 0
         - not (ansible_check_mode and dkr is skipped and dkr.skip_reason is not defined)
         - (dkr.stdout | default('')).splitlines() | reject('match', '### ') | join('') | trim | length == 0
 
@@ -90,7 +94,7 @@
       delegate_to: localhost
       register: _dkr_write
       when: >-
-        ((dkr.rc | default(0)) == 0
+        ((dkr.rc | default(1)) == 0
          and (dkr.stdout | default('')).splitlines() | reject('match', '### ') | join('') | trim | length > 0)
         or (ansible_check_mode and dkr is skipped and dkr.skip_reason is not defined)
       no_log: true                       # the diff of a dry-run would print the manifest

@@ -11,8 +11,8 @@ read a dry-run skips (`raw`, `shell`, the RouterOS command and the API's `uri` d
 answer: the dry-run previews an empty capture as before and refuses nothing. The reads that run in a dry-run
 (`cli_command`'s `show`, `slurp`) are held to their answer there too. An unreachable host's read (the play tolerates
 one) gave no answer either: it is not refused, and the summary says the host was not run. A Docker read that
-exits non-zero (no docker, no daemon, no access to it) records its exit code as a failed capture instead, and
-nothing is written (I-62).
+exits non-zero (docker or the module's python missing, its daemon down or refusing a read, no access to its socket)
+records its exit code as a failed capture instead, and nothing is written (I-62).
 
 The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must
 be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, `skipped`,
@@ -153,6 +153,10 @@ def _grid():
             if role == "docker_host":
                 for rc, lines in ((1, (_DKR[0], "Client:", " Version:           27.3.1")), (127, (_DKR[0],))):
                     yield role, check_mode, dict(_shell(*lines), rc=rc, failed=False, failed_when_result=False), FAILED
+                # A failed result with no exit code at all: the record alone, not the empty refusal too (the I-62
+                # read A's F-2: both ran, and the refusal's words won).
+                yield role, check_mode, {"changed": False, "failed": False, "failed_when_result": False,
+                                         "msg": "MODULE FAILURE"}, FAILED
 
 
 def _walk(tasks):
@@ -364,16 +368,19 @@ def test_every_capture_write_refuses_an_empty_answer_or_is_exempt_for_a_reason_i
 
 def test_a_docker_read_that_fails_is_recorded_by_its_exit_code_alone_before_the_write():
     """Docker's read carries `failed_when: false` and no `ignore_errors`, and its failure record sits before the
-    write, records a result that starts "FAILED:" with `kontroll_backup_failed: true`, and reads nothing of the read
-    but its `rc`. Guards I-62: the read failed the host at its own task (a host without the compose plugin, whose
-    `docker compose ls` was the script's last command, or a daemon that is down), so the summary printed no line for
-    it and a capture that could be taken was not; a record that read the answer would print a container's command
-    line, where a credential can show (the read is `no_log`, the summary's line is not)."""
+    write, records a result that starts "FAILED:" with `kontroll_backup_failed: true`, and sets nothing but the result
+    and the flag, and reads nothing of the read but its `rc`. Guards I-62: the read failed the host at its own task (a
+    host without the compose plugin, whose `docker compose ls` was the script's last command, or a daemon that is
+    down), so the summary printed no line for it and a capture that could be taken was not; a record that read the
+    answer would print a container's command line, where a credential can show (the read is `no_log`, the summary's
+    line is not), and so would a fact of the record's own that kept the answer, which `-v` prints (the I-62 read B's
+    N-3)."""
     read = _task("docker_host", "Gather container + stack manifest (read-only, brace-free output)")
     assert read.get("register") == "dkr" and read.get("failed_when") is False and "ignore_errors" not in read, read
     names = [t.get("name") for t in _walk(_load("docker_host"))]
     assert names.index(FAILED) < names.index(WRITE), names
     facts = _task("docker_host", FAILED)["ansible.builtin.set_fact"]
+    assert set(facts) == {"kontroll_backup_result", "kontroll_backup_failed"}, facts
     assert facts["kontroll_backup_failed"] is True and facts["kontroll_backup_result"].startswith("FAILED:"), facts
     tree = jinja2.Environment().parse(facts["kontroll_backup_result"])
     assert jinja2.meta.find_undeclared_variables(tree) == {"dkr"}
