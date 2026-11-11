@@ -15,24 +15,35 @@ NetConfig project.
 
 `docker/services/vector.yaml` bound `/var/log/journal` from the host. On a control node whose journald is volatile
 that path is absent: the first `up` made Docker create it (root:root 0755), and journald's default `Storage=auto` reads
-that directory as "persist" from its next start, so a deploy changed a host setting. Vector meanwhile read the empty
+that directory as "persist" from the next boot, so a deploy changed a host setting. Vector meanwhile read the empty
 directory, and its `/run/log/journal` bind was read by no source.
 
 - **Fixed.** Vector's one journal mount is `${KONTROLL_JOURNAL_DIR:-/run/log/journal}`, at the directory its journald
   source reads. deploy-stack chooses the value and renders it into `docker/.env`: `kontroll_journal_dir` when the
   inventory sets it, else the host's own answer, a `stat` of `/var/log/journal` on the host path and, in the installer
   container (which cannot see the host's `/var/log`), `KONTROLL_HOST_JOURNAL_DIR`, which both launchers now read on
-  the host and `installer.yaml` passes in. With neither it binds `/run/log/journal`, which makes nothing new, and says
-  NOT KNOWN; any value but the two directories journald writes is refused. The log says which ("Vector reads the host
-  journal at …"). `KONTROLL_JOURNAL_DIR` joins the reserved platform-core names (`scripts/gen-secret-env.py`), so a
-  module's `secret_env_map` cannot shadow it. A node on which the old bind already made `/var/log/journal` keeps its
-  persistent journal; removing it is the operator's call.
+  the host and `installer.yaml` passes in. With neither it binds `/run/log/journal`, which makes no directory journald
+  reads, and says NOT KNOWN. Any value but the two directories journald writes is refused, and so is
+  `kontroll_journal_dir: /var/log/journal` where the host's own answer is that it has none. The log says which
+  ("Vector reads the host journal at …"). `KONTROLL_JOURNAL_DIR` joins the reserved platform-core names
+  (`scripts/gen-secret-env.py`), so a module's `secret_env_map` cannot shadow it.
+- **The journald role.** `logging_journald_remote`'s handlers now run `journalctl --flush` after they restart
+  journald: since systemd 252 a restart alone leaves `/var/log/journal` to the next boot, so a deploy run straight
+  after the role bound the volatile journal.
+- **Not changed.** A node on which the old bind already made `/var/log/journal` keeps a persistent journal, which
+  Vector now reads. The way back (relinquish, move the directory aside, re-deploy, restart journald) is in
+  `docs/troubleshooting.md` note 3; removing the directory alone is undone at Vector's next start.
 - **Tests.** `integration/test_journal_dir_choice.py` runs the four tasks from the playbook with ansible-playbook, the
   probe pointed at a stand-in path: a directory, a symlink to one, a file and nothing, on the host path and in the
-  container, with and without a launcher's value and an override, in a dry-run and an apply; and the refusals.
-  `unit/test_installer_journal_dir.py` runs both launchers with a stand-in docker: each hands it this host's answer,
-  not the shell's. `unit/test_compose_logging.py` holds the mount to the variable, its default and the source's
-  directory, the `.env` line to the choice, and the read-only check to the mount, now that its source is a variable.
+  container, with and without a launcher's value and an override, in a dry-run and an apply; the refusals, an
+  override naming a journal the host lacks among them; and holds the four tasks together, before the `.env` render,
+  with no other task setting the choice. `unit/test_installer_journal_dir.py` runs both launchers with a stand-in
+  docker and their probe pointed at a stand-in of each shape: each hands docker the host's answer, not the shell's
+  (beside the docker, an `id` answering 1000 where the suite runs as uid 1001, which the launchers refuse, I-18);
+  `unit/test_fresh_node_check_script.py` does the same for every play of `tests/fresh-node-check.sh`.
+  `unit/test_compose_logging.py` holds the mount to the variable, its default and the source's directory, the
+  `.env` line to the choice, every service of every fragment to no literal journal source, and the read-only check
+  to the mount. `unit/test_journald_role_flush.py` holds the role to flushing the journal after the restart.
 - **Docs.** `docs/logging-architecture.md` (Layer 1), `docs/troubleshooting.md` (§1, note 3), SECURITY.md C12, the
   `logging_journald_remote` role (re-run deploy-stack after it first makes the journal persistent).
 

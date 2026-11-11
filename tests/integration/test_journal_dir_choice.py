@@ -2,17 +2,21 @@
 
 WHY: vector.yaml bound /var/log/journal from the host. On a host whose journald is volatile that path is absent, so
 the first `up` made Docker create it (root:root 0755), and journald's default `Storage=auto` reads that directory as
-"persist" from its next start: a deploy changed a host setting. deploy-stack now chooses the directory Vector binds
+"persist" from the next boot: a deploy changed a host setting. deploy-stack now chooses the directory Vector binds
 (KONTROLL_JOURNAL_DIR): kontroll_journal_dir when the inventory sets it, else the host's own answer, a `stat` of
 /var/log/journal on the host path and the launcher's KONTROLL_HOST_JOURNAL_DIR in the installer container, which cannot
-see the host's /var/log; with neither, /run/log/journal, which makes nothing new, and a NOT KNOWN note. Any value but
-the two directories journald writes is refused.
+see the host's /var/log; with neither, /run/log/journal, which makes no directory journald reads, and a NOT KNOWN note.
+Any value but the two directories journald writes is refused, and so is kontroll_journal_dir: /var/log/journal where
+the host's own answer is that it has none (binding it would make it).
 
 These rows take the four tasks from the playbook as they are (the probe, the choice, the refusal, the note), in the
-playbook's order, with the play's own `in_container`, and run them with ansible-playbook. The probe's path is the one
-change: a path under tmp_path that each row makes a directory, a symlink to one, a file or nothing, so no row reads or
-touches this host's /var/log. Each row runs as a dry-run (the mandated `--check --diff`), and the first two also as an
-apply. Needs POSIX and ansible-playbook; without them every row is skipped.
+playbook's order, with the play's own `in_container`, and run them with ansible-playbook; `_picked()` also holds the
+four to one run of tasks before the task that renders docker/.env, with no other task setting the choice, since the
+rows run them lifted out of the play. The probe's path is the one change: a path under tmp_path that each row makes a
+directory, a symlink to one, a file or nothing, so no row reads or touches this host's /var/log. Each row runs as a
+dry-run (the mandated `--check --diff`), and three also as an apply (the two host shapes and the container with no
+launcher), as do the refusals of a journal the host lacks. Needs POSIX and ansible-playbook; without them every row is
+skipped.
 """
 import json
 import os
@@ -27,6 +31,7 @@ DEPLOY = os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml")
 PERSISTENT, VOLATILE = "/var/log/journal", "/run/log/journal"
 TASKS = ("Look for the host's persistent journal", "Choose the host journal directory Vector reads",
          "Refuse a journal directory journald does not write", "Say which host journal Vector reads")
+RENDER = "Render docker/.env (secrets — never logged)"
 
 pytestmark = [
     pytest.mark.integration,
@@ -47,7 +52,11 @@ def _tasks(node):
 
 
 def _picked():
-    """The play's `in_container` expression and its four journal tasks, in the play's order."""
+    """The play's `in_container` expression and its four journal tasks, in the play's order. The four must also stand
+    one after another, before the task that renders docker/.env, and be the only tasks that set `_journal_dir`: the
+    rows run them lifted out of the play, so a task moved between them, a choice moved after the render (which then
+    renders an empty value) or a later fact that rebinds /var/log/journal would pass every row (the I-25 read B's
+    N3)."""
     with open(DEPLOY, encoding="utf-8") as fh:
         plays = yaml.safe_load(fh.read())
     hits = [(play, task) for play in plays for task in _tasks(play.get("tasks", []))
@@ -55,6 +64,16 @@ def _picked():
     assert [next(f for f in TASKS if f in t["name"]) for _, t in hits] == list(TASKS), \
         "a journal task moved or was renamed: %r" % [t.get("name") for _, t in hits]
     assert len({id(p) for p, _ in hits}) == 1, "the journal tasks are in one play"
+    flat = [t for play in plays for t in _tasks(play.get("tasks", []))]
+    at = [i for i, t in enumerate(flat) if any(frag in str(t.get("name", "")) for frag in TASKS)]
+    assert at == list(range(at[0], at[0] + len(TASKS))), \
+        "a task sits between the journal tasks: %r" % [flat[i].get("name") for i in range(at[0], at[-1] + 1)]
+    render = [i for i, t in enumerate(flat) if t.get("name") == RENDER]
+    assert len(render) == 1 and render[0] > at[-1], "the journal tasks must come before %r" % RENDER
+    setters = [t.get("name") for t in flat
+               if "_journal_dir" in (t.get("ansible.builtin.set_fact") or t.get("set_fact") or {})
+               or "_journal_dir" in (t.get("vars") or {})]
+    assert setters == [hits[1][1]["name"]], "only the choice sets _journal_dir: %r" % setters
     return hits[0][0]["vars"]["in_container"], [dict(t) for _, t in hits]
 
 
@@ -120,6 +139,10 @@ ROWS = [
     ("container-no-launcher", "dir", True, None, None, VOLATILE, "NOT KNOWN", False, (True, False)),
     ("given-over-the-stat", "dir", False, None, VOLATILE, VOLATILE, "kontroll_journal_dir", True, (True,)),
     ("given-over-the-launcher", None, True, PERSISTENT, VOLATILE, VOLATILE, "kontroll_journal_dir", False, (True,)),
+    ("given-persistent-the-host-has", "dir", False, None, PERSISTENT, PERSISTENT, "kontroll_journal_dir", True,
+     (True,)),
+    ("given-persistent-nothing-known", None, True, None, PERSISTENT, PERSISTENT, "kontroll_journal_dir", False,
+     (True,)),
 ]
 
 
@@ -127,11 +150,13 @@ ROWS = [
 def test_vector_reads_the_journal_the_host_has(tmp_path, row):
     """Each row's directory and its source, and that the probe runs on the host path only; the note says NOT KNOWN,
     and binds the volatile journal, exactly when the installer container ran without a launcher and no
-    kontroll_journal_dir; otherwise it names the directory and its source. Guards I-25 (a /var/log/journal bound where
-    the host lacks it, which Docker then made and journald then persisted into) and the ways the choice can go wrong:
-    a stat in the container (which reads the container's own /var/log), a launcher's value read on the host path, an
-    override that loses, a symlink read as no journal, a plain file read as one, a guess of /var/log/journal when
-    nothing is known."""
+    kontroll_journal_dir; otherwise it names the directory and its source. kontroll_journal_dir: /var/log/journal is
+    taken where the host has it, and where nothing is known (the installer container with no launcher). Guards I-25 (a
+    /var/log/journal bound where the host lacks it, which Docker then made and journald then persisted into) and the
+    ways the choice can go wrong: a stat in the container (which reads the container's own /var/log), a launcher's
+    value read on the host path, an override that loses, a symlink read as no journal, a plain file read as one, a
+    guess of /var/log/journal when nothing is known, and the refusal of a journal the host lacks reaching a host that
+    has one."""
     name, host, container, launcher, given, want, how, probed, modes = row
     for check in modes:
         sub = tmp_path / ("check" if check else "apply")
@@ -150,19 +175,53 @@ def test_vector_reads_the_journal_the_host_has(tmp_path, row):
 
 
 @pytest.mark.parametrize("given,launcher", [("/srv/journal", None), (None, "/var/log/journal/../../../srv"),
-                                            ("/var/log/journal/", None), (None, "/run/log/journal\nX=1")],
-                         ids=["given-elsewhere", "launcher-climbs-out", "given-trailing-slash", "launcher-newline"])
+                                            ("/var/log/journal/", None), (None, "/run/log/journal\nX=1"),
+                                            ("/var/log", None)],
+                         ids=["given-elsewhere", "launcher-climbs-out", "given-trailing-slash", "launcher-newline",
+                              "given-the-parent"])
 def test_a_journal_directory_journald_does_not_write_is_refused(tmp_path, given, launcher):
     """kontroll_journal_dir, or in the installer container the launcher's value, naming anything but /var/log/journal
-    or /run/log/journal stops the play at the refusal, in a dry-run, before the note and before .env is rendered, and
-    says which source gave what. Guards a bind source the playbook never chose reaching docker/.env and Vector's
-    compose file: a directory journald does not write (Vector reads nothing), or a value that carries a second .env
-    line."""
+    or /run/log/journal stops the play at the refusal, in a dry-run, before the note (and, by `_picked()`, before .env
+    is rendered), and says which source gave what. Guards a bind source the playbook never chose reaching docker/.env
+    and Vector's compose file: a directory journald does not write (Vector reads nothing), or a value that carries a
+    second .env line."""
     rc, out, got = _run(tmp_path, None, container=launcher is not None, launcher=launcher, given=given)
     assert rc != 0 and got is None, out[-3000:]
     source = "kontroll_journal_dir" if given is not None else "the launcher"
     assert "The host journal directory from %s is" % source in out, out[-3000:]
     assert "Vector reads the host journal at" not in out and "NOT KNOWN —" not in out
+
+
+@pytest.mark.parametrize("host,container,launcher,how", [
+    (None, False, None, "a stat of /var/log/journal"),
+    ("file", False, None, "a stat of /var/log/journal"),
+    ("dir", True, VOLATILE, "the launcher"),
+], ids=["host-has-none", "host-has-a-file", "launcher-says-volatile"])
+def test_kontroll_journal_dir_naming_a_journal_the_host_lacks_is_refused(tmp_path, host, container, launcher, how):
+    """kontroll_journal_dir: /var/log/journal where the host's own answer is the volatile journal (on the host path a
+    stat that finds no directory there, in the installer container the launcher's /run/log/journal) stops the play at
+    the refusal, in a dry-run and an apply, before the note, and says the host has none and from what; the probe makes
+    nothing. Guards I-25 through the override (both I-25 reads, A S4 / B S2): the refusal checked the value's spelling
+    and not the host, so the override reached docker/.env, Docker made the directory and journald persisted from the
+    next boot, while four documents said /var/log/journal is bound only where the host has it."""
+    for check in (True, False):
+        sub = tmp_path / ("check" if check else "apply")
+        sub.mkdir()
+        rc, out, got = _run(sub, host, check=check, container=container, launcher=launcher, given=PERSISTENT)
+        assert rc != 0 and got is None, out[-3000:]
+        assert "kontroll_journal_dir is /var/log/journal, and the host has none (from %s)" % how in out, out[-3000:]
+        assert "Vector reads the host journal at" not in out and "NOT KNOWN —" not in out
+        if host is None:
+            assert not (sub / "var-log-journal").exists(), "the probe made the path it looks for"
+
+
+def test_the_refusal_names_exactly_the_two_directories_journald_writes():
+    """The refusal's first condition is the membership test of exactly /var/log/journal and /run/log/journal, as the
+    playbook's task holds it. Guards a list widened unseen (the I-25 read B's N5: a third entry such as /var/log passed
+    every refusal row that did not try it), which would let compose bind a directory journald does not write."""
+    _, tasks = _picked()
+    that = tasks[2]["ansible.builtin.assert"]["that"]
+    assert that[0] == "_journal_dir in ['/var/log/journal', '/run/log/journal']", that
 
 
 def test_a_stack_without_vector_chooses_nothing(tmp_path):

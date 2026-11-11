@@ -1,10 +1,19 @@
 ---
-# Restart the journald daemon after a persistence change, and the uploader after a URL change. Both are
-# idempotent (only fire on a notifying task's change) and --check-safe (skipped in check_mode).
+# Restart the journald daemon and flush its journal to disk after a persistence change, and the uploader after a URL
+# change. All three are idempotent (only fire on a notifying task's change) and --check-safe (skipped in check_mode).
 - name: Restart systemd-journald
   ansible.builtin.systemd:
     name: systemd-journald
     state: restarted
+  become: true
+
+- name: Flush the journal to /var/log/journal
+  # A restarted journald opens /var/log/journal only on a flush request, and since systemd 252
+  # systemd-journal-flush.service no longer restarts with it (Wants=, not Requires=): without this the directory
+  # appears at the next boot, and a deploy run before it binds the volatile journal (I-25). Defined after the
+  # restart, so Ansible runs it after the restart.
+  ansible.builtin.command: journalctl --flush
+  changed_when: true
   become: true
 
 - name: Restart systemd-journal-upload

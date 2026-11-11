@@ -77,8 +77,9 @@ services:
       # Host journald: the directory deploy-stack chose (KONTROLL_JOURNAL_DIR, I-25), /var/log/journal where the host
       # keeps a persistent journal, /run/log/journal (volatile) where it does not, mounted where the journald source
       # reads (config.d/sources/internal_journald.yaml's journal_directory). Never a literal /var/log/journal source:
-      # on a host without it Docker would create it, and journald's default Storage=auto then persists from its next
-      # start (a host setting changed by a bind). The default is the volatile one, which makes nothing new.
+      # on a host without it Docker would create it, and journald's default Storage=auto then persists from the next
+      # boot (a host setting changed by a bind). The default is the volatile one, which makes no directory journald
+      # reads.
       - ${KONTROLL_JOURNAL_DIR:-/run/log/journal}:/var/log/journal:ro
       # Remote hosts' journals: received by the host systemd-journal-remote (roles/logging_journald_receiver) and
       # read by the journald_remote method's `exec` journalctl source. A SEPARATE top-level dir (NOT under

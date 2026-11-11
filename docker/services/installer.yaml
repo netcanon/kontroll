@@ -64,7 +64,7 @@ services:
       KONTROLL_REPO_ROOT: ${KONTROLL_REPO_ROOT:?run via scripts/kontroll-installer.sh}
       # I-25: the host's journal directory, as the launcher read it on the host (this container cannot see the host's
       # /var/log). deploy-stack binds Vector's journald read to it; empty without a launcher, and deploy-stack then
-      # says NOT KNOWN and binds the volatile journal, which makes nothing new on the host.
+      # says NOT KNOWN and binds the volatile journal, which makes no directory journald reads.
       KONTROLL_HOST_JOURNAL_DIR: ${KONTROLL_HOST_JOURNAL_DIR:-}
       # MF-8: ONE in-container age-key path (this container is root ⇒ ~ == /root). community.sops + sops read it;
       # SOPS_AGE_KEY_FILE (the file form), NEVER the literal SOPS_AGE_KEY env (synthesis §5.4).
