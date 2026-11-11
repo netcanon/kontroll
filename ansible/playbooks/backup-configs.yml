@@ -17,7 +17,9 @@
 # and API backups record a read that answers nothing as a failed capture and never
 # write it, so the last good capture is kept. The Proxmox and Docker-host backups,
 # whose scripts print a `### ` header before each read, do the same with an answer
-# of the headers alone.
+# of the headers alone. A capture that fails as a task is recorded as failed by the
+# capture play's rescue, so its host still reaches the history, the prune and the
+# key cleanup, and the summary names it (I-12).
 #
 # Access chain used:   control node (mgmt VLAN) -> mgmt IPs over SSH/API
 # May break:           none (read-only captures)
@@ -59,10 +61,26 @@
     - name: Refuse a host whose device_role is a fact (only the inventory names the role it dispatches by)
       ansible.builtin.import_tasks: tasks/refuse-device-role-fact.yml
 
+    # A capture that fails as a task (a read that exits non-zero or errors, a module or permission error, the API
+    # credential gate's assert, a write that fails) is recorded as a failed capture: the rescue names the task it
+    # stopped at, never its result (the reads and writes are no_log), so the host goes on to the history, the prune
+    # and the key cleanup, and the summary names it FAILED and fails the run. Before, it failed the host here: no
+    # summary line, and when every host failed so, the run ended at this play and left the run's keys (I-12). An
+    # unreachable host is not failed (ignore_unreachable), so the rescue does not run for it, and the refusal above
+    # stays outside the block: a refused host fails here, as before.
     - name: Run the class-specific backup entrypoint
-      ansible.builtin.include_role:
-        name: "{{ device_role }}"
-        tasks_from: backup
+      block:
+        - name: Run the class-specific backup entrypoint
+          ansible.builtin.include_role:
+            name: "{{ device_role }}"
+            tasks_from: backup
+      rescue:
+        - name: Record a capture that failed as a task
+          ansible.builtin.set_fact:
+            kontroll_backup_result: >-
+              FAILED: the capture stopped at the task "{{ ansible_failed_task.name | default('(unnamed)') }}", whose
+              error is printed at that task.
+            kontroll_backup_failed: true
 
 # Keep a per-run, diffable HISTORY of every device's config instead of overwriting
 # (docs/logging-architecture.md Layer 0, G3 — answers "what changed on this device?").
@@ -343,9 +361,9 @@
 # the key cleanup came after it, so a run whose every capture was recorded as failed (since I-5, one device that
 # answers nothing) left the run's SSH keys on disk. It connects to nothing: a debug and an assert open no connection,
 # whatever the host's connection (`connection: local` says so, it guards nothing), so it can follow the key cleanup.
-# A capture that fails as a task on every host still ends the run at the capture play, before the cleanup (I-12),
-# and so does a failing local play above (the backup dir's check, the history commit, the prune's retention check),
-# before this summary too.
+# A capture that fails as a task is recorded as failed by the capture play's rescue, and its host reaches here
+# (I-12). A failing local play above (the backup dir's check, the history commit, the prune's retention check)
+# still ends the run there, before the cleanup and this summary (I-48).
 - name: Backup run summary
   hosts: all
   gather_facts: false
@@ -358,11 +376,10 @@
           {{ kontroll_backup_result | default('not run — unreachable or skipped') }}
 
     # A logged skip or an unreachable host is tolerated; a capture recorded as
-    # FAILED (a read that answered nothing, an API answer that is not 200, a Docker
-    # read that exited non-zero: I-62) must not pass silently — fail the run so a
-    # scheduled job surfaces it. This runs after every host's summary line above. A
-    # read of another class that errors (a permission error) fails its host in the
-    # capture play instead, and never reaches here (I-12).
+    # FAILED — a read that answered nothing, an API answer that is not 200, a Docker
+    # read that exited non-zero (I-62), or a capture that failed as a task, named by
+    # the capture play's rescue (I-12) — must not pass silently: fail the run so a
+    # scheduled job surfaces it. This runs after every host's summary line above.
     - name: Fail the run if any capture failed
       ansible.builtin.assert:
         that: not (kontroll_backup_failed | default(false) | bool)

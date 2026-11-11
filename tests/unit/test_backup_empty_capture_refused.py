@@ -259,10 +259,11 @@ def test_each_capture_is_recorded_where_its_write_ran_and_only_there(role):
     """The write registers its result, and "Record successful capture" reads that and nothing else: it runs for a
     write that ran (in a dry-run, its preview), one that found the capture unchanged included, and not for one its
     `when` skipped; and the write neither ignores its errors nor sets its own failure, so a write that failed fails
-    the host there. Guards "captured" following a copy of the write's condition, or none: with the refusal's `when`
-    wrong, the summary would say captured for a capture never written (I-6's runtime read, N1, on the API backend);
-    "captured" said only of a changed capture, so a nightly run of an unchanged config says the host was not run
-    (I-5's tests-and-docs read, N1); and a failed write recorded as captured."""
+    its task there (the capture play's rescue then records the host FAILED, naming the task: I-12). Guards "captured"
+    following a copy of the write's condition, or none: with the refusal's `when` wrong, the summary would say
+    captured for a capture never written (I-6's runtime read, N1, on the API backend); "captured" said only of a
+    changed capture, so a nightly run of an unchanged config says the host was not run (I-5's tests-and-docs read,
+    N1); and a failed write recorded as captured."""
     write = ROLES[role][1]
     assert _task(role, WRITE).get("register") == write
     assert not {"ignore_errors", "failed_when"} & set(_task(role, WRITE)), _task(role, WRITE)
