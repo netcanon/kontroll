@@ -11,6 +11,34 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): a run-log is written where Vector reads it, whatever XDG_STATE_HOME says (I-29, 2026-11-09)
+
+Vector ships the operator scripts' run-logs from one directory, `<operator home>/.local/state/kontroll/runs`, which
+docker/services/vector.yaml binds read-only and which the launchers and the deploy make. scripts/lib/run-log.sh wrote
+under `${XDG_STATE_HOME:-~/.local/state}`: an operator whose shell sets XDG_STATE_HOME kept every run-log where Vector
+never looks, with no error anywhere, and the internal_scripts stream just stayed empty. Found building I-23.
+
+- **Fixed.** run-log.sh's default is `~/.local/state/kontroll/runs`, the directory Vector ships when the script runs
+  as the operator who deployed the stack; XDG_STATE_HOME is no longer read. `KONTROLL_RUN_LOG_DIR` still keeps the
+  run-logs elsewhere, and such a run now says in its first lines, on the console and in the log, that Vector does not
+  read that directory (spelled absolute), and which one it ships; the shipped directory spelled another way (`//`,
+  `..`, a symlink) says nothing. An override the helper cannot make now says so, as one it cannot write to did. With
+  HOME unset the helper no longer stops its `set -u` caller: an override still keeps the log, and without one there
+  is no run-log.
+- **Not changed.** Run as root, or under sudo, `$HOME` is root's: the log is kept under it, Vector does not read it,
+  and the run does not say so (I-46).
+- **If you had XDG_STATE_HOME set.** Run-logs already under `$XDG_STATE_HOME/kontroll/runs` stay there and are no
+  longer pruned: move them into `~/.local/state/kontroll/runs` (`mv` keeps their age; Vector ships those under 30 days
+  old and the next run's prune takes the rest) or delete them.
+- **Tests.** The new `unit/test_run_log_dir.py` sources the helper under bash, as its callers run it, with a scratch
+  home. With XDG_STATE_HOME unset, set outside HOME, set under HOME, and set where an earlier helper left run-logs,
+  the log is written where Vector's bind (read from vector.yaml as compose reads it) points and nothing is added under
+  XDG_STATE_HOME; the helper's code names no XDG_STATE_HOME. Under KONTROLL_RUN_LOG_DIR the log is kept there and the
+  run says so, and set to the shipped directory itself, however spelled, it says nothing. HOME unset, an override that
+  cannot be made, and the prune (old logs taken from the directory written, and from no other) each have a row.
+- **Docs.** `docs/logging-architecture.md` §3, `scripts/README.md` and `docs/troubleshooting.md` name the one
+  directory; the helper's header.
+
 ### ci: a stalled release download is given up on, and the download scan reads what runs (I-34, 2026-11-09)
 
 The I-28 helper bounded the tries and not the wait: a mirror that took the connection and sent nothing, or stopped
