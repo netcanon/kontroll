@@ -42,6 +42,9 @@ Since I-5 one device that answers nothing is enough to cause it: a one-host sche
   directory is gone. `unit/test_backup_prune.py`'s order row never checked its second edge (it looked for
   `import_playbook`, the playbook writes `ansible.builtin.import_playbook`, and a guard skipped the edge when nothing
   was found); it now finds either spelling and requires the import.
+  `unit/test_onboard_ssh_key.py`'s cleanup-last row (#125) read the cleanup as each playbook's last entry; it now
+  reads it as the last import, checks the import's own entry for a `when:`, a `tags:` or a `vars:`, and lets plays,
+  never an import, follow it in `backup-configs.yml` alone (the rows above hold that they connect to nothing).
 
 ### fix(ansible): a link at the canonical's path is read as the directory it names (I-40, 2026-11-09)
 
