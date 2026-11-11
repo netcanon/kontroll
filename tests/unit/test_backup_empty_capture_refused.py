@@ -10,7 +10,9 @@ failed capture, which fails the run at its summary, and does not run its write, 
 read a dry-run skips (`raw`, `shell`, the RouterOS command and the API's `uri` do not run under `--check`) gave no
 answer: the dry-run previews an empty capture as before and refuses nothing. The reads that run in a dry-run
 (`cli_command`'s `show`, `slurp`) are held to their answer there too. An unreachable host's read (the play tolerates
-one) gave no answer either: it is not refused, and the summary says the host was not run.
+one) gave no answer either: it is not refused, and the summary says the host was not run. A Docker read that
+exits non-zero (docker or the module's python missing, its daemon down or refusing a read, no access to its socket)
+records its exit code as a failed capture instead, and nothing is written (I-62).
 
 The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must
 be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, `skipped`,
@@ -35,7 +37,8 @@ pytestmark = pytest.mark.unit
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NOTHING = "Record an empty capture as failed (any earlier capture is kept)"
 WRITE, RECORD = "Write capture", "Record successful capture"
-FAILED = "Record capture failure (reported in summary, not a hard abort)"  # the API's non-200, its own test's
+FAILED = "Record capture failure (reported in summary, not a hard abort)"  # the API's non-200; Docker's failed read
+RECORDS_FAILURE = ("backend_api", "docker_host")
 
 
 def _b64(text):
@@ -145,6 +148,15 @@ def _grid():
             # API's pull runs on the control node, which is never unreachable.
             if role != "backend_api":
                 yield role, check_mode, UNREACHABLE, None
+            # A Docker read that failed (the script stops at the read that fails, `set -e`) is recorded by its exit
+            # code, whatever it printed before: the client's half of `docker version` without a daemon, or a header.
+            if role == "docker_host":
+                for rc, lines in ((1, (_DKR[0], "Client:", " Version:           27.3.1")), (127, (_DKR[0],))):
+                    yield role, check_mode, dict(_shell(*lines), rc=rc, failed=False, failed_when_result=False), FAILED
+                # A failed result with no exit code at all: the record alone, not the empty refusal too (the I-62
+                # read A's F-2: both ran, and the refusal's words won).
+                yield role, check_mode, {"changed": False, "failed": False, "failed_when_result": False,
+                                         "msg": "MODULE FAILURE"}, FAILED
 
 
 def _walk(tasks):
@@ -201,9 +213,11 @@ def test_an_answer_with_nothing_in_it_is_refused_and_never_written(role, check_m
     capture and recorded captured), the refusal reaching a dry-run's skipped read (the mandated `--check` would fail
     every raw-SSH and RouterOS host, as before T27), and a dry-run that read the device passing what a real run
     refuses. Neither runs for an unreachable host's read: it gave no answer, and the summary says the host was not
-    run (I-5's runtime read, S-1: the refusal reported it as a read that answered nothing)."""
+    run (I-5's runtime read, S-1: the refusal reported it as a read that answered nothing). For Docker, a read that
+    exits non-zero runs the failure record alone, by its exit code, whatever it printed first: a daemon that is down
+    leaves the client's half of `docker version`, which a write would have put over the last good manifest (I-62)."""
     read = ROLES[role][0]
-    tasks = [NOTHING, WRITE] + ([FAILED] if role == "backend_api" else [])
+    tasks = [NOTHING, WRITE] + ([FAILED] if role in RECORDS_FAILURE else [])
     ctx = {read: result, "ansible_check_mode": check_mode}
     assert [t for t in tasks if _runs(role, t, ctx)] == ([runs] if runs else [])
 
@@ -350,3 +364,27 @@ def test_every_capture_write_refuses_an_empty_answer_or_is_exempt_for_a_reason_i
     for key, reason in EXEMPT.items():
         source = _source(*writes[key])
         assert reason == "file" and "ansible.builtin.slurp" in source, (key, reason, source.get("name"))
+
+
+def test_a_docker_read_that_fails_is_recorded_by_its_exit_code_alone_before_the_write():
+    """Docker's read carries `failed_when: false` and no `ignore_errors`, and its failure record sits before the
+    write, records a result that starts "FAILED:" with `kontroll_backup_failed: true`, and sets nothing but the result
+    and the flag, and reads nothing of the read but its `rc`. Guards I-62: the read failed the host at its own task (a
+    host without the compose plugin, whose `docker compose ls` was the script's last command, or a daemon that is
+    down), so the summary printed no line for it and a capture that could be taken was not; a record that read the
+    answer would print a container's command line, where a credential can show (the read is `no_log`, the summary's
+    line is not), and so would a fact of the record's own that kept the answer, which `-v` prints (the I-62 read B's
+    N-3)."""
+    read = _task("docker_host", "Gather container + stack manifest (read-only, brace-free output)")
+    assert read.get("register") == "dkr" and read.get("failed_when") is False and "ignore_errors" not in read, read
+    names = [t.get("name") for t in _walk(_load("docker_host"))]
+    assert names.index(FAILED) < names.index(WRITE), names
+    facts = _task("docker_host", FAILED)["ansible.builtin.set_fact"]
+    assert set(facts) == {"kontroll_backup_result", "kontroll_backup_failed"}, facts
+    assert facts["kontroll_backup_failed"] is True and facts["kontroll_backup_result"].startswith("FAILED:"), facts
+    tree = jinja2.Environment().parse(facts["kontroll_backup_result"])
+    assert jinja2.meta.find_undeclared_variables(tree) == {"dkr"}
+    uses = [n for n in tree.find_all(jinja2.nodes.Name) if n.name == "dkr"]
+    reads = [n for n in tree.find_all(jinja2.nodes.Getattr) if isinstance(n.node, jinja2.nodes.Name)
+             and n.node.name == "dkr"]
+    assert len(uses) == len(reads) and {n.attr for n in reads} == {"rc"}, [n.attr for n in reads]

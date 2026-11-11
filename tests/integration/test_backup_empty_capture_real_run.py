@@ -19,6 +19,11 @@ machine: where `pveversion`, /etc/network/interfaces and /etc/pve are all missin
 its headers alone; where any of them is there, the Proxmox rows are skipped (the answer would have a line of the
 machine's own), and a skip fails no gate, so they are proved in the gate's image only.
 
+I-62's rows: an opted-in Docker host and a Proxmox node that cannot be reached (the row's `down` plugin)
+are tolerated, as the raw-SSH one is: CLAUDE.md's hard rule, never let one unreachable host fail a fleet-wide run.
+A Docker host with the compose plugin, one without it, and one whose daemon is down each have a `docker` of the
+row's own that answers with the exit codes a real one gives (docker/cli; the image's own CLI with no daemon).
+
 It needs ansible-playbook and git: where either is missing every row is skipped (the gate's images and CI's validate
 job have both). Nothing of the developer's Ansible or git reaches the play: its configuration, home and temporary
 directory, the inventory and the captures are the row's own.
@@ -153,19 +158,24 @@ def pve_lab(tmp_path, isolated_git):
                            "ap-good": _raw_ssh("ap-good")}, [PVE_CAPTURE, _capture("ap-good")])
 
 
-@pytest.fixture
-def dkr_lab(tmp_path, isolated_git):
-    """One Docker host opted in to the backup, on this machine, whose `docker` is the row's own (first on `PATH`: it
-    prints nothing and exits 0, whatever it is asked), and the good raw-SSH host beside it, each with its good
-    capture."""
+def _docker_lab(tmp_path, host, docker):
+    """One Docker host, `host`, opted in to the backup, on this machine, whose `docker` is the shell script `docker`
+    (first on `PATH`), and the good raw-SSH host beside it, each with its good capture."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    (bindir / "docker").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (bindir / "docker").write_text(docker, encoding="utf-8")
     (bindir / "docker").chmod(0o755)
-    lab = _lab(tmp_path, {DKR: {"ansible_host": "192.0.2.51", "device_role": "docker_host", "backup_capable": True},
-                          "ap-good": _raw_ssh("ap-good")}, [DKR_CAPTURE, _capture("ap-good")])
+    lab = _lab(tmp_path, {host: {"ansible_host": "192.0.2.51", "device_role": "docker_host", "backup_capable": True},
+                          "ap-good": _raw_ssh("ap-good")}, ["Docker_%s_manifest.txt" % host, _capture("ap-good")])
     lab.env = dict(lab.env, PATH=str(bindir) + os.pathsep + lab.env.get("PATH", os.defpath))
     return lab
+
+
+@pytest.fixture
+def dkr_lab(tmp_path, isolated_git):
+    """One Docker host opted in to the backup whose `docker` prints nothing and exits 0, whatever it is asked, and
+    the good raw-SSH host beside it, each with its good capture."""
+    return _docker_lab(tmp_path, DKR, "#!/bin/sh\nexit 0\n")
 
 
 def _play(lab, check=False):
@@ -312,3 +322,125 @@ def test_a_docker_host_whose_docker_answers_nothing_dry_runs_clean_then_keeps_it
     with open(os.path.join(dkr_lab.backups, DKR_CAPTURE), encoding="utf-8") as fh:
         assert fh.read() == GOOD
     _committed_beside(dkr_lab, DKR_CAPTURE)
+
+# I-62's rows. A docker without the compose plugin answers every read but `docker compose`, which it refuses as a
+# real one does; a docker whose daemon is down prints the client's half of `docker version` and fails every read.
+NO_COMPOSE = r"""#!/bin/sh
+case "$1" in
+  version) printf 'Client:\n Version:           27.3.1\n\n'
+           printf 'Server: Docker Engine - Community\n Engine:\n  Version:          27.3.1\n' ;;
+  ps) printf 'CONTAINER ID   IMAGE        COMMAND            NAMES\n'
+      printf '0123456789ab   nginx:1.27   "/entrypoint.sh"   web\n' ;;
+  images) printf 'REPOSITORY   TAG    IMAGE ID       SIZE\nnginx        1.27   0123456789ab   192MB\n' ;;
+  *) echo "docker: '$1' is not a docker command." >&2; exit 1 ;;
+esac
+"""
+WITH_COMPOSE = r"""#!/bin/sh
+case "$1 $2" in
+  version*) printf 'Client:\n Version:           27.3.1\n' ;;
+  ps*) printf 'CONTAINER ID   IMAGE        NAMES\n0123456789ab   nginx:1.27   web\n' ;;
+  images*) printf 'REPOSITORY   TAG    IMAGE ID\nnginx        1.27   0123456789ab\n' ;;
+  'compose version') echo 'Docker Compose version v2.29.7' ;;
+  'compose ls') printf 'NAME      STATUS       CONFIG FILES\nproxy     running(1)   /srv/proxy/compose.yaml\n' ;;
+  *) echo "docker: '$1' is not a docker command." >&2; exit 1 ;;
+esac
+"""
+NO_DAEMON = r"""#!/bin/sh
+[ "$1" = version ] && printf 'Client:\n Version:           27.3.1\n'
+[ "$1" = compose ] && { echo "docker: 'compose' is not a docker command." >&2; exit 1; }
+echo 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?' >&2
+exit 1
+"""
+
+
+@pytest.fixture
+def down_lab(tmp_path, isolated_git):
+    """An opted-in Docker host and a Proxmox node, both unreachable (the row's `down` plugin), and the good raw-SSH
+    host beside them, each with its good capture."""
+    down = {"ansible_connection": "down"}
+    return _lab(tmp_path, {"dk-down": dict(down, ansible_host="192.0.2.52", device_role="docker_host",
+                                           backup_capable=True),
+                           "pve-down": dict(down, ansible_host="192.0.2.42", device_role="proxmox"),
+                           "ap-good": _raw_ssh("ap-good")},
+                ["Docker_dk-down_manifest.txt", "Proxmox_pve-down_node-and-guests.txt", _capture("ap-good")])
+
+
+def test_an_unreachable_docker_host_and_proxmox_node_are_tolerated_and_keep_their_captures(down_lab):
+    """A dry run and then a real run against an opted-in Docker host and a Proxmox node that cannot be reached,
+    beside the good raw-SSH host, both pass: neither host is failed, each one's summary line says it was not run,
+    and its good capture is kept byte for byte; the real run captures the good host, and the history's new commit
+    holds that capture and nothing of theirs. Guards CLAUDE.md's hard rule for these two classes (I-62, P-1): their
+    writes once templated the unreachable read's output, which it has none of, and failed the run (rc 2), while the
+    raw-SSH host beside them was tolerated; I-5's rows held the raw-SSH host only."""
+    for check in (True, False):
+        rc, out, recap = _play(down_lab, check=check)
+        assert rc == 0 and set(recap.values()) == {0}, (check, rc, recap, out)
+        assert _stamped(out), out
+        assert _summary(out, "dk-down", "docker_host") == "not run — unreachable or skipped"
+        assert _summary(out, "pve-down", "proxmox") == "not run — unreachable or skipped"
+        for name in ("Docker_dk-down_manifest.txt", "Proxmox_pve-down_node-and-guests.txt"):
+            with open(os.path.join(down_lab.backups, name), encoding="utf-8") as fh:
+                assert fh.read() == GOOD, (check, name)
+    assert _summary(out, "ap-good") == "captured -> %s" % _capture("ap-good")
+    for name in ("Docker_dk-down_manifest.txt", "Proxmox_pve-down_node-and-guests.txt"):
+        _committed_beside(down_lab, name)
+
+
+def test_a_docker_host_without_the_compose_plugin_is_captured_with_an_empty_stacks_section(tmp_path):
+    """A real run against an opted-in Docker host whose `docker` has no compose plugin passes and captures its
+    manifest: its version, containers and images, and the stacks header with nothing under it; the history's new
+    commit holds it. Guards I-62 (F-5): the script's last read was `docker compose ls`, which exits 1 without the
+    plugin, so the host failed at the read, no manifest was taken, and the summary printed no line for it."""
+    lab = _docker_lab(tmp_path, "dk-nocompose", NO_COMPOSE)
+    name = "Docker_dk-nocompose_manifest.txt"
+    rc, out, recap = _play(lab)
+    assert rc == 0 and set(recap.values()) == {0}, (rc, recap, out)
+    assert _summary(out, "dk-nocompose", "docker_host") == "captured -> %s (manifest)" % name
+    with open(os.path.join(lab.backups, name), encoding="utf-8") as fh:
+        manifest = fh.read()
+    assert manifest.startswith("### docker version\nClient:\n") and "nginx:1.27" in manifest, manifest
+    assert manifest.endswith("### images\nREPOSITORY   TAG    IMAGE ID       SIZE\nnginx        1.27   0123456789ab"
+                             "   192MB\n### compose stacks\n"), manifest
+    assert name in _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
+
+
+def test_a_docker_host_whose_daemon_is_down_fails_at_its_summary_by_its_exit_code_and_keeps_its_manifest(tmp_path):
+    """A real run against an opted-in Docker host whose daemon is down (its `docker version` prints the client's
+    half and exits 1, every other read fails, and it has no compose plugin) fails at its summary for that host,
+    whose line says FAILED and names the read's exit code; its good manifest is kept byte for byte; the good raw-SSH
+    host beside it is captured, and the history's new commit holds nothing of the Docker host's. Guards I-62 (F-5):
+    the host failed at the read, so the summary printed no line for it; and the script stops at the read that fails
+    (`set -e`): without it this host's script would run to its end and exit 0 (an absent compose plugin is no
+    failure), and the client's half of `docker version` would be written over the good manifest as a capture."""
+    lab = _docker_lab(tmp_path, "dk-nodaemon", NO_DAEMON)
+    name = "Docker_dk-nodaemon_manifest.txt"
+    rc, out, recap = _play(lab)
+    assert rc != 0, out
+    assert recap == {"dk-nodaemon": 1, "ap-good": 0, "localhost": 0}, (recap, out)
+    assert _stamped(out), out
+    assert _summary(out, "dk-nodaemon", "docker_host") == (
+        "FAILED: a manifest read exited 1 (docker or the module's python missing, its daemon down or refusing a "
+        "read, or no access to its socket), so no capture was written and any earlier one is kept."), out
+    assert _summary(out, "ap-good") == "captured -> %s" % _capture("ap-good")
+    with open(os.path.join(lab.backups, name), encoding="utf-8") as fh:
+        assert fh.read() == GOOD
+    _committed_beside(lab, name)
+
+
+def test_a_docker_host_with_the_compose_plugin_is_captured_with_its_stacks(tmp_path):
+    """A real run against an opted-in Docker host whose `docker` has the compose plugin (`docker compose version`
+    answers) passes and captures its manifest with the stack `docker compose ls --all` lists under its header, and
+    the history's new commit holds it. Guards the compose read's guard: a guard that never lets the read run (one
+    testing for the v1 `docker-compose` tool a v2 host does not have, or `if false`) dropped every host's stacks
+    section from its manifest and passed every other row, since their stand-ins have no plugin, answer nothing, or
+    stop before the guard (the I-62 read B's N-2, its B4 and B7)."""
+    lab = _docker_lab(tmp_path, "dk-compose", WITH_COMPOSE)
+    name = "Docker_dk-compose_manifest.txt"
+    rc, out, recap = _play(lab)
+    assert rc == 0 and set(recap.values()) == {0}, (rc, recap, out)
+    assert _summary(out, "dk-compose", "docker_host") == "captured -> %s (manifest)" % name
+    with open(os.path.join(lab.backups, name), encoding="utf-8") as fh:
+        manifest = fh.read()
+    assert manifest.endswith("### compose stacks\nNAME      STATUS       CONFIG FILES\n"
+                             "proxy     running(1)   /srv/proxy/compose.yaml\n"), manifest
+    assert name in _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()

@@ -358,10 +358,11 @@
           {{ kontroll_backup_result | default('not run — unreachable or skipped') }}
 
     # A logged skip or an unreachable host is tolerated; a capture recorded as
-    # FAILED (a read that answered nothing, an API answer that is not 200) must not
-    # pass silently — fail the run so a scheduled job surfaces it. This runs after
-    # every host's summary line above. A read that errors (a permission error) fails
-    # its host in the capture play instead, and never reaches here (I-12).
+    # FAILED (a read that answered nothing, an API answer that is not 200, a Docker
+    # read that exited non-zero: I-62) must not pass silently — fail the run so a
+    # scheduled job surfaces it. This runs after every host's summary line above. A
+    # read of another class that errors (a permission error) fails its host in the
+    # capture play instead, and never reaches here (I-12).
     - name: Fail the run if any capture failed
       ansible.builtin.assert:
         that: not (kontroll_backup_failed | default(false) | bool)
