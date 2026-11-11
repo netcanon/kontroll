@@ -2,26 +2,27 @@
 # Post-run: remove the per-run ephemeral SSH key dir _render-ssh-keys.yml created. Imported LAST by every fleet play
 # (after the fleet connections are done); only a play that connects to nothing may follow it, as backup-configs.yml's
 # summary does, so that a run whose every capture was recorded as failed (a read that answered nothing, an API answer
-# that is not 200, a capture that failed as a task: I-12) still gets here (I-9). The device keys are EPHEMERAL (unlike
-# file_tail_ssh's persistent bind-mounted read key). A hard-aborted run skips this, and so does a run that an earlier
-# play stops: one whose every target is refused (by tasks/refuse-local-connection.yml), fails (in backup-configs.yml,
-# a `device_role` fact refused on every host, or a failing local play: I-48), or (in ping.yml, whose reach play does
-# not ignore unreachable hosts) cannot be logged in to, or whose validation play fails (wire-logging.yml's):
-# ansible-core runs no later play once every host of a play's batch has failed or been unreachable, and a later play
-# whose every host has failed by then runs nothing. Every key-auth host's key rendered for that run then stays in that
-# run's dir. No shipped caller passes `kontroll_run_id` (the Semaphore templates and schedules and the enact commands
-# pass none), so every run uses `kontroll-ssh-keys.manual`, which the next run that completes outside `--check`
-# removes (a `--check` run removes nothing). On the Semaphore runner that is `/tmp/kontroll-ssh-keys.manual` in the
-# container's writable layer: a host reboot or a container restart keeps it, and the next Semaphore fleet job that
-# completes outside `--check`, or recreating the container, removes it. Two jobs that overlap share it, so one's
-# cleanup removes the other's keys mid-run: that job's connections already open go on (ControlPersist keeps one 60 s),
-# and a new one cannot log in and counts as an ignored unreachable host, so the job can end green with that host not
-# run; nothing runs elsewhere. On a CLI host it is under `$XDG_RUNTIME_DIR` when that is set (logout or a reboot
-# clears it), else `/tmp`. A caller that passes `-e kontroll_run_id` gets a dir no later run reuses.
-# `$KONTROLL_SSH_KEY_DIR`, when set, is the dir itself: every run uses it, whatever the run id, and this play removes
-# it. The dir removed is the first remaining host's `kontroll_device_key_dir` (the task runs once): when a host var or
-# a `set_fact` gives hosts different dirs, every other dir stays, with its keys. The residue is 0600, run-uid-owned
-# keys outside the repo (accepted, SECURITY.md). Idempotent.
+# that is not 200, a capture that failed as a task: I-12) still gets here (I-9). The device keys are EPHEMERAL
+# (unlike file_tail_ssh's persistent bind-mounted read key). A hard-aborted run skips this, and so does a run that an
+# earlier play stops: one whose every target is refused (by tasks/refuse-local-connection.yml), fails (in
+# backup-configs.yml, a `device_role` fact refused on every host, a class whose backup entrypoint cannot be loaded on
+# every host: I-66, or a failing local play: I-48), or (in ping.yml, whose reach play does not ignore unreachable
+# hosts) cannot be logged in to, or whose validation play fails (wire-logging.yml's): ansible-core runs no later play
+# once every host of a play's batch has failed or been unreachable, and a later play whose every host has failed by
+# then runs nothing. Every key-auth host's key rendered for that run then stays in that run's dir. No shipped caller
+# passes `kontroll_run_id` (the Semaphore templates and schedules and the enact commands pass none), so every run
+# uses `kontroll-ssh-keys.manual`, which the next run that completes outside `--check` removes (a `--check` run
+# removes nothing). On the Semaphore runner that is `/tmp/kontroll-ssh-keys.manual` in the container's writable
+# layer: a host reboot or a container restart keeps it, and the next Semaphore fleet job that completes outside
+# `--check`, or recreating the container, removes it. Two jobs that overlap share it, so one's cleanup removes the
+# other's keys mid-run: that job's connections already open go on (ControlPersist keeps one 60 s), and a new one
+# cannot log in and counts as an ignored unreachable host, so the job can end green with that host not run; nothing
+# runs elsewhere. On a CLI host it is under `$XDG_RUNTIME_DIR` when that is set (logout or a reboot clears it), else
+# `/tmp`. A caller that passes `-e kontroll_run_id` gets a dir no later run reuses. `$KONTROLL_SSH_KEY_DIR`, when
+# set, is the dir itself: every run uses it, whatever the run id, and this play removes it. The dir removed is the
+# first remaining host's `kontroll_device_key_dir` (the task runs once): when a host var or a `set_fact` gives hosts
+# different dirs, every other dir stays, with its keys. The residue is 0600, run-uid-owned keys outside the repo
+# (accepted, SECURITY.md). Idempotent.
 #
 # Access chain used:   control node / Semaphore runner -> rm the local ephemeral key dir
 # May break:           nothing — removes a LOCAL ephemeral dir after the fleet connections completed

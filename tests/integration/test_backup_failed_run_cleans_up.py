@@ -9,8 +9,9 @@ non-zero) failed its host at the capture play instead: no summary line, and when
 there, before the cleanup (I-12); the capture play's rescue now records it as a failed capture.
 tests/unit/test_backup_summary_is_last.py holds the order and tests/unit/test_backup_capture_rescue.py the rescue;
 these rows run them. Hosts of the generic raw-SSH backend, on a local connection: one whose backup command (`true`)
-answers nothing, one whose command exits 3, and one that prints a config; each has its good capture in place and in
-the history, and a stale key file in the run's key directory before the run.
+answers nothing, one whose command exits 3, one that prints a config, and one whose `device_role` names no installed
+role; each has its good capture in place and in the history, and a stale key file in the run's key directory before
+the run.
 
 It needs ansible-playbook and git: where either is missing the row is skipped (the gate's images and CI's validate job
 have both). Nothing of the developer's Ansible or git reaches the play: its configuration, home and temporary
@@ -38,7 +39,9 @@ HOSTS = {  # host: (address, its backup command)
     "ap-empty": ("192.0.2.51", "true"),               # answers nothing: recorded as failed by the role (I-5, I-9)
     "ap-erring": ("192.0.2.52", "echo partial; exit 3"),  # fails as a task: recorded by the capture play (I-12)
     "ap-good": ("192.0.2.53", "printf 'config system\\n'"),
+    "ap-missing": ("192.0.2.54", "true"),             # its class cannot be loaded: failed in the rescue (I-12)
 }
+ROLE = {"ap-missing": "zz_no_such_class"}           # every other host: backend_raw_ssh
 HOST = "ap-empty"
 GOOD = "config wifi-iface 'default_radio0'\n"
 PLAYS = ("Snapshot the captures into local history (git)", "Prune capture history older than the retention window (git)",
@@ -74,6 +77,18 @@ def erring_good_lab(tmp_path, isolated_git):
     return _lab(tmp_path, ["ap-erring", "ap-good"])
 
 
+@pytest.fixture
+def missing_lab(tmp_path, isolated_git):
+    """ap-missing alone (see _lab)."""
+    return _lab(tmp_path, ["ap-missing"])
+
+
+@pytest.fixture
+def missing_good_lab(tmp_path, isolated_git):
+    """ap-missing and ap-good (see _lab)."""
+    return _lab(tmp_path, ["ap-missing", "ap-good"])
+
+
 def _lab(tmp_path, hosts):
     """The inventory of `hosts`, an Ansible home and configuration of the row's own, a captures directory holding each
     host's good capture, committed as the history play commits, and the run's key directory holding a stale key for
@@ -88,7 +103,7 @@ def _lab(tmp_path, hosts):
     inventory = tmp_path / "hosts.yml"
     inventory.write_text(yaml.safe_dump({"all": {
         "vars": {"ansible_connection": "local", "ansible_python_interpreter": "{{ ansible_playbook_python }}"},
-        "hosts": {host: {"ansible_host": HOSTS[host][0], "device_role": "backend_raw_ssh",
+        "hosts": {host: {"ansible_host": HOSTS[host][0], "device_role": ROLE.get(host, "backend_raw_ssh"),
                          "backend_backup_command": HOSTS[host][1]} for host in hosts}}}), encoding="utf-8")
     backups = tmp_path / "backups"
     backups.mkdir(mode=0o700)
@@ -111,9 +126,11 @@ def _lab(tmp_path, hosts):
                             "keys": str(keys), "env": env})()
 
 
-def _play(lab):
-    """Run backup-configs.yml against the lab's hosts; return its exit code, its output and each host's recap."""
-    argv = ["ansible-playbook", "-i", lab.inventory, PLAYBOOK, "-e", json.dumps({"config_backup_dir": lab.backups})]
+def _play(lab, *extra):
+    """Run backup-configs.yml against the lab's hosts (with `extra` arguments); return its exit code, its output and
+    each host's recap."""
+    argv = ["ansible-playbook", "-i", lab.inventory, PLAYBOOK, "-e", json.dumps({"config_backup_dir": lab.backups}),
+            *extra]
     p = subprocess.run(argv, cwd=lab.base, env=lab.env, capture_output=True, text=True, timeout=600)
     out = p.stdout + p.stderr
     recap = {m.group(1): int(m.group(2)) for m in
@@ -143,7 +160,10 @@ def test_a_run_whose_every_capture_failed_still_removes_its_keys_and_fails(lab):
 
 
 STOPPED = (r'"msg": "%s \(backend_raw_ssh\): FAILED: the capture stopped at the task '
-           r'\\"Pull config via raw command\\", whose error is printed at that task\."')
+           r'\\"Pull config via raw command\\" \(a no_log task prints only that it failed\)\."')
+STAMP = r'"msg": "kontroll_run_id=[0-9]{8}T[0-9]{6}Z"'
+MISSING = ('"msg": "ap-missing: the backup entrypoint of the class zz_no_such_class could not be loaded (its role, or '
+           'a file it includes, is missing), so the run fails here (I-12)."')
 
 
 def test_a_run_whose_every_capture_fails_as_a_task_still_removes_its_keys_and_names_it(erring_lab):
@@ -170,13 +190,14 @@ def test_a_run_whose_every_capture_fails_as_a_task_still_removes_its_keys_and_na
 def test_a_capture_that_fails_as_a_task_beside_a_good_one_is_named_and_the_good_one_committed(erring_good_lab):
     """A real run against ap-erring (its command exits 3) and ap-good (it prints a config): ap-good is captured, and
     the history's new commit holds its capture and nothing of ap-erring's; ap-erring's summary line says FAILED,
-    naming the task, its good capture is kept byte for byte, and the run fails at its summary for it alone; the key
-    directory is gone. Guards I-12 where one host of several fails as a task: it had no summary line, so the run's
-    output named no host for the failure the recap counted (the I-9 read B's M3)."""
+    naming the task, with the run id stamped, its good capture is kept byte for byte, and the run fails at its summary
+    for it alone; the key directory is gone. Guards I-12 where one host of several fails as a task: it had no summary
+    line, so the run's output named no host for the failure the recap counted (the I-9 read B's M3)."""
     lab = erring_good_lab
     rc, out, recap = _play(lab)
     assert rc != 0, out
     assert recap == {"ap-erring": 1, "ap-good": 0, "localhost": 0}, (recap, out)
+    assert re.search(STAMP, out), out
     assert re.search(STOPPED % "ap-erring", out), out
     good = r'"msg": "ap-good \(backend_raw_ssh\): captured -> %s"' % re.escape(_capture("ap-good"))
     assert re.search(good, out), out
@@ -187,4 +208,63 @@ def test_a_capture_that_fails_as_a_task_beside_a_good_one_is_named_and_the_good_
     assert _git(lab.backups, "rev-list", "--count", "HEAD").strip() == "2"
     changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
     assert _capture("ap-good") in changed and _capture("ap-erring") not in changed, changed
+    assert not os.path.exists(lab.keys), os.listdir(lab.keys)
+
+
+def test_a_callers_any_errors_fatal_leaves_the_good_host_captured_beside_one_that_fails_as_a_task(erring_good_lab):
+    """The run of the row above under `ANSIBLE_ANY_ERRORS_FATAL=True` ends the same: ap-good is captured and committed
+    and its summary line printed, ap-erring is named FAILED by the task, the run fails for it, and the key directory is
+    gone. Guards the capture play's `any_errors_fatal: false` (the I-12 reads' O1): a caller's setting failed every
+    other host once ap-erring's read failed, rescue or not, so ap-good, whose read had answered, was moved into the
+    rescue and dropped from every later play: its capture was never written, it had no summary line, and its recap
+    read failed=0."""
+    lab = erring_good_lab
+    lab.env["ANSIBLE_ANY_ERRORS_FATAL"] = "True"
+    rc, out, recap = _play(lab)
+    assert rc != 0, out
+    assert recap == {"ap-erring": 1, "ap-good": 0, "localhost": 0}, (recap, out)
+    assert re.search(STOPPED % "ap-erring", out), out
+    good = r'"msg": "ap-good \(backend_raw_ssh\): captured -> %s"' % re.escape(_capture("ap-good"))
+    assert re.search(good, out), out
+    with open(os.path.join(lab.backups, _capture("ap-good")), encoding="utf-8") as fh:
+        assert fh.read() == "config system\n"
+    changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
+    assert _capture("ap-good") in changed and _capture("ap-erring") not in changed, changed
+    assert not os.path.exists(lab.keys), os.listdir(lab.keys)
+
+
+def test_a_class_whose_backup_entrypoint_cannot_be_loaded_fails_the_run(missing_lab):
+    """A dry run and a real run whose only host's `device_role` names no installed role each fail with rc 2, the
+    rescue's second task naming the host and its class, and neither runs the summary play. Guards the I-12 reads' S1:
+    an include that cannot be loaded is no task failure; Ansible moved the host into the rescue with no failed task and
+    out of every later play, so with the record alone the run's iterator no longer counted it failed, and Ansible ended
+    the run at the capture play with rc 0, a capture that failed reported as passed to a scheduler that reads the exit
+    code (main, with no rescue, gave rc 2). The host's recap counts two failures, the load and the rescue's `fail`.
+    The run's keys stay, as on main: the cleanup is a later play (I-66)."""
+    for extra in (("--check", "--diff"), ()):
+        rc, out, recap = _play(missing_lab, *extra)
+        assert rc == 2, (extra, rc, out)
+        assert recap == {"ap-missing": 2, "localhost": 0}, (extra, recap, out)
+        assert MISSING in out, (extra, out)
+        assert "PLAY [Backup run summary]" not in out, (extra, out)
+
+
+def test_a_class_that_cannot_be_loaded_beside_a_good_host_leaves_the_good_one_captured(missing_good_lab):
+    """A real run against ap-missing (its `device_role` names no installed role) and ap-good fails with rc 2: ap-good
+    is captured and committed (ap-missing's file is not in the run's commit) and its summary line printed, the key
+    directory is gone, and ap-missing gets the rescue's failure (its recap counts the load and that `fail`) and no
+    summary line. Guards the load failure's `fail` against stopping the other hosts: it fails its own host only, and
+    the good host's capture, the history, the prune and the key cleanup still run."""
+    lab = missing_good_lab
+    rc, out, recap = _play(lab)
+    assert rc == 2, (rc, out)
+    assert recap == {"ap-missing": 2, "ap-good": 0, "localhost": 0}, (recap, out)
+    assert MISSING in out, out
+    good = r'"msg": "ap-good \(backend_raw_ssh\): captured -> %s"' % re.escape(_capture("ap-good"))
+    assert re.search(good, out), out
+    assert not re.search(r'"msg": "ap-missing \(', out), out
+    with open(os.path.join(lab.backups, _capture("ap-good")), encoding="utf-8") as fh:
+        assert fh.read() == "config system\n"
+    changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
+    assert _capture("ap-good") in changed and _capture("ap-missing") not in changed, changed
     assert not os.path.exists(lab.keys), os.listdir(lab.keys)

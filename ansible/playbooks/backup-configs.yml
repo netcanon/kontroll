@@ -19,7 +19,9 @@
 # whose scripts print a `### ` header before each read, do the same with an answer
 # of the headers alone. A capture that fails as a task is recorded as failed by the
 # capture play's rescue, so its host still reaches the history, the prune and the
-# key cleanup, and the summary names it (I-12).
+# key cleanup, and the summary names it (I-12). A class whose backup entrypoint
+# cannot be loaded (its role, or a file it includes, is missing) is failed in that
+# rescue and fails the run, with no summary line (I-66).
 #
 # Access chain used:   control node (mgmt VLAN) -> mgmt IPs over SSH/API
 # May break:           none (read-only captures)
@@ -57,6 +59,11 @@
   hosts: all
   gather_facts: false
   ignore_unreachable: true
+  # A caller's any_errors_fatal (ANSIBLE_ANY_ERRORS_FATAL, an ansible.cfg) failed every other host once one host's
+  # capture failed, rescue or not: a host whose read had answered was moved into the rescue and dropped from every
+  # later play, its capture never written and no summary line for it (the I-12 reads' O1). The play's own keyword
+  # wins over that setting.
+  any_errors_fatal: false
   tasks:
     - name: Refuse a host whose device_role is a fact (only the inventory names the role it dispatches by)
       ansible.builtin.import_tasks: tasks/refuse-device-role-fact.yml
@@ -65,9 +72,16 @@
     # credential gate's assert, a write that fails) is recorded as a failed capture: the rescue names the task it
     # stopped at, never its result (the reads and writes are no_log), so the host goes on to the history, the prune
     # and the key cleanup, and the summary names it FAILED and fails the run. Before, it failed the host here: no
-    # summary line, and when every host failed so, the run ended at this play and left the run's keys (I-12). An
+    # summary line, and when every host failed so, the run ended at this play and left the run's keys (I-12). A
+    # capture dir that is not writable fails the history commit next, which still ends the run (I-48). An
     # unreachable host is not failed (ignore_unreachable), so the rescue does not run for it, and the refusal above
     # stays outside the block: a refused host fails here, as before.
+    #
+    # An include that cannot be loaded (a `device_role` no installed role answers, or a file or role the class's
+    # backup includes that is missing) is no task failure: Ansible moves the host into the rescue with no failed task
+    # and drops it from every later play, so it gets no summary line, and where it was every host Ansible ended the
+    # run with rc 0. The rescue's second task fails it, so the run fails; where it is every host, the run's keys stay,
+    # as before the rescue (I-66).
     - name: Run the class-specific backup entrypoint
       block:
         - name: Run the class-specific backup entrypoint
@@ -78,9 +92,15 @@
         - name: Record a capture that failed as a task
           ansible.builtin.set_fact:
             kontroll_backup_result: >-
-              FAILED: the capture stopped at the task "{{ ansible_failed_task.name | default('(unnamed)') }}", whose
-              error is printed at that task.
+              FAILED: the capture stopped at the task "{{ ansible_failed_task.name | default('(unnamed)', true) }}"
+              (a no_log task prints only that it failed).
             kontroll_backup_failed: true
+        - name: Fail a host whose class's backup entrypoint could not be loaded
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: the backup entrypoint of the class {{ device_role | default('?') }} could not
+              be loaded (its role, or a file it includes, is missing), so the run fails here (I-12).
+          when: ansible_failed_task is not defined
 
 # Keep a per-run, diffable HISTORY of every device's config instead of overwriting
 # (docs/logging-architecture.md Layer 0, G3 — answers "what changed on this device?").
@@ -362,8 +382,9 @@
 # answers nothing) left the run's SSH keys on disk. It connects to nothing: a debug and an assert open no connection,
 # whatever the host's connection (`connection: local` says so, it guards nothing), so it can follow the key cleanup.
 # A capture that fails as a task is recorded as failed by the capture play's rescue, and its host reaches here
-# (I-12). A failing local play above (the backup dir's check, the history commit, the prune's retention check)
-# still ends the run there, before the cleanup and this summary (I-48).
+# (I-12); a host whose class's backup entrypoint could not be loaded is failed in that rescue, and does not (I-66).
+# A failing local play above (the backup dir's check, the history commit, the prune's retention check) still ends
+# the run there, before the cleanup and this summary (I-48).
 - name: Backup run summary
   hosts: all
   gather_facts: false

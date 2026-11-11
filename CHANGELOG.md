@@ -21,18 +21,31 @@ SSH-key cleanup, and the run's key-auth hosts' keys stayed on disk until the nex
 scheduled backup of a device whose read errors).
 
 - **Fixed.** The capture play dispatches inside a block whose rescue records the host as a failed capture: `FAILED:
-  the capture stopped at the task "<name>", whose error is printed at that task.` The rescue reads the failed task's
-  name and nothing of its result (the reads and writes are `no_log`, the summary's line is not). The host goes on to
-  the history, the prune and the key cleanup, and the summary names it and fails the run, as it does for an answer
-  that is empty. An unreachable host is not failed (`ignore_unreachable`), so the rescue does not run for it; the
-  `device_role` refusal stays outside the block, so a refused host fails there as before. A failing local play (the
-  backup dir's check, the history commit, the prune's retention check) still ends the run before the cleanup: I-48.
-- **Tests.** `tests/unit/test_backup_capture_rescue.py` holds the block, its one include and its one rescue.
+  the capture stopped at the task "<name>" (a no_log task prints only that it failed).` The rescue reads the failed
+  task's name and nothing of its result (the reads and writes are `no_log`, the summary's line is not). The host goes
+  on to the history, the prune and the key cleanup, and the summary names it and fails the run, as it does for an
+  answer that is empty. An unreachable host is not failed (`ignore_unreachable`), so the rescue does not run for it;
+  the `device_role` refusal stays outside the block, so a refused host fails there as before. An include that cannot
+  be loaded (a `device_role` no installed role answers, a file or role the class's backup includes that is missing) is
+  no task failure: Ansible moves its host into the rescue with no failed task and out of every later play, so the
+  rescue's second task fails it and the run fails (with the record alone, a run of that host alone ended with rc 0).
+  The capture play sets `any_errors_fatal: false`: a caller's `ANSIBLE_ANY_ERRORS_FATAL` failed every other host once
+  one host's capture failed, so a host whose read had answered was dropped, its capture never written and no summary
+  line for it.
+- **Not changed.** A failing local play (the backup dir's check, the history commit, the prune's retention check; a
+  capture dir that is not writable fails the history commit) still ends the run before the cleanup: I-48. A class
+  whose backup entrypoint cannot be loaded gets no summary line, and where it is every host of the run, the run's keys
+  stay, as before: I-66.
+- **Tests.** `tests/unit/test_backup_capture_rescue.py` holds the capture play's keywords, the block, its one include
+  and its rescue: the record, which reads nothing of the failed task but its name, and the load failure's `fail`.
   `tests/integration/test_backup_failed_run_cleans_up.py` runs the playbook for real with one host whose command exits
-  non-zero (named FAILED by the task, the key directory gone, its good capture kept) and with that host beside a good
-  one (the good one captured and committed alone).
+  non-zero (named FAILED by the task, the key directory gone, its good capture kept), with that host beside a good one
+  (the good one captured and committed alone), the same under `ANSIBLE_ANY_ERRORS_FATAL=True`, and with one host whose
+  `device_role` names no installed role, alone (a dry run and a real run each fail) and beside a good one (the good
+  one captured and committed, the key directory gone).
 - **Docs.** backup-configs.yml's comments, `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row no longer list a
-  capture that fails as a task among the runs that leave keys; the rows' docstrings say so.
+  capture that fails as a task among the runs that leave keys, and list a class whose backup entrypoint cannot be
+  loaded; the rows' docstrings say so.
 
 ### fix(ansible): inside the installer the deploy uses the storage root it binds, and refuses another (I-26, 2026-11-09)
 
