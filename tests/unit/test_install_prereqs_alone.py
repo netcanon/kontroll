@@ -63,8 +63,8 @@ def test_with_only_one_lib_beside_it_it_names_the_other(tmp_path):
 @needs_bash
 def test_without_the_storage_root_lib_it_names_it_before_installing_anything(tmp_path):
     """With lib/pkg.sh and lib/canonical-group.sh beside it but not lib/storage-root.sh, the script exits 1 naming
-    storage-root.sh. Why: it sources that one last, after the packages and the group (I-24), so only the check at
-    the top stops a copy without it from installing everything and then dying on the bare error."""
+    storage-root.sh. Why: it sources that one right after its root check (I-24), so without the check at the top a
+    copy without it would die there on a bare "No such file", with no word of where to run it from."""
     alone = tmp_path / "install-prereqs.sh"
     shutil.copyfile(PREREQS, alone)
     (tmp_path / "lib").mkdir()

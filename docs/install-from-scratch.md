@@ -59,8 +59,10 @@
 ## 0. System dependencies — **[A]** `scripts/install-prereqs.sh` (idempotent; `./bootstrap.sh` shims it)
 
 `sudo bash scripts/install-prereqs.sh` installs the host floor in one idempotent pass — Docker, compose and git,
-the C10 canonical group (gid 1001) and a missing storage root (root's 0711; one that is there is left);
-`--with-host-ansible` adds the rest of the table (the legacy host toolchain). It is
+the C10 canonical group (gid 1001) and a missing storage root (root's 0711, first, before any package; one that is
+there is left; `--storage-root <root>` names a relocated one, and `./bootstrap.sh --storage-root <root>` passes it on,
+docs/SETUP.md "Pre-provisioning storage"); `--with-host-ansible` adds the rest of the table (the legacy host
+toolchain). It is
 **nixflavor-agnostic**: it auto-detects your package manager (apt/dnf/zypper/pacman) and installs the host
 floor accordingly — on apt it uses Docker's deb822 repo (matching the image + deploy-stack), elsewhere it uses
 Docker's official cross-distro installer (`get.docker.com`). Everything beyond the floor runs in the installer

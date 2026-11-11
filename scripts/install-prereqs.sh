@@ -12,15 +12,26 @@
 # age + python) so the OLD `cd ansible && ansible-playbook …` flow still works on the host. Keeps a clean exit if
 # the container path is ever unavailable. Idempotent: every step is a no-op on a node that already has the package.
 #
-# Usage:  sudo bash scripts/install-prereqs.sh [--with-host-ansible]
+# --storage-root <root>: the storage root to make, if it is not /var/lib/kontroll (also read from KONTROLL_STORAGE_ROOT,
+# where sudo lets that through; the argument wins). See "The storage root" below.
+#
+# Usage:  sudo bash scripts/install-prereqs.sh [--with-host-ansible] [--storage-root <root>]
 set -euo pipefail
 
+USAGE="usage: install-prereqs.sh [--with-host-ansible] [--storage-root <root>]"
+ARGS="$*"
 WITH_HOST_ANSIBLE=0
-for arg in "$@"; do
-  case "$arg" in
+STORAGE_ROOT="${KONTROLL_STORAGE_ROOT:-}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --with-host-ansible) WITH_HOST_ANSIBLE=1 ;;
-    *) echo "unknown arg: $arg (usage: install-prereqs.sh [--with-host-ansible])" >&2; exit 2 ;;
+    --storage-root)
+      [ "$#" -ge 2 ] || { echo "--storage-root needs a path ($USAGE)" >&2; exit 2; }
+      STORAGE_ROOT="$2"; shift ;;
+    --storage-root=*) STORAGE_ROOT="${1#--storage-root=}" ;;
+    *) echo "unknown arg: $1 ($USAGE)" >&2; exit 2 ;;
   esac
+  shift
 done
 
 # It sources helpers from lib/ beside itself, so it runs from a kontroll checkout or the unpacked launch kit. Piped
@@ -58,9 +69,29 @@ if [ "$_operator_uid" = 1001 ]; then
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "install-prereqs.sh needs root (it installs system packages). Re-run: sudo bash $0 $*" >&2
+  echo "install-prereqs.sh needs root (it installs system packages). Re-run: sudo bash $0 $ARGS" >&2
   exit 1
 fi
+
+# The storage root (I-24): deploy-stack makes a missing one root's 0711, but on the installer path the installer's own
+# bind of it has Docker make it root:root 0755 first, and the play leaves a root that exists as it is. So the host
+# floor makes it here, first (it needs no package, so a package step that fails below cannot leave it unmade), and
+# leaves one that is there. A relocated root is named here with --storage-root (bootstrap.sh passes it on); the
+# installer's bind takes it from KONTROLL_STORAGE_ROOT where the launcher runs, and the deploy from
+# `kontroll_storage_root`: all three must name the same path (docs/SETUP.md "Pre-provisioning storage"). A failure is
+# said, and the install carries on. See scripts/lib/storage-root.sh, SECURITY.md C10.
+echo "==> The storage root, root's 0711 unless it is there already…"
+# shellcheck source=scripts/lib/storage-root.sh
+. "$SCRIPT_DIR/lib/storage-root.sh"
+STORAGE_RC=0
+storage_root_ensure "$STORAGE_ROOT" || STORAGE_RC=$?
+case "$STORAGE_RC" in
+  0) ;;
+  2) echo "    (give --storage-root an absolute path other than /, then re-run)" >&2 ;;
+  3) echo "    (choose a root under directories that are root's and only root can write, or sticky ones like" \
+          "/tmp, or make it by hand: docs/SETUP.md \"Pre-provisioning storage\")" >&2 ;;
+  *) echo "    (could not make it — docs/SETUP.md \"Pre-provisioning storage\" says how to make it by hand)" >&2 ;;
+esac
 
 # Package-manager + init-system dispatch (nixflavor-agnostic) — apt/dnf/zypper/pacman. The compose-native floor is
 # the SAME everywhere ("Docker + git"); only HOW it's installed differs by distro. See scripts/lib/pkg.sh.
@@ -155,17 +186,6 @@ echo "==> The C10 canonical group (gid 1001) + the operator's membership…"
 canonical_group_ensure "${SUDO_USER:-root}" || \
   echo "    (could not provision the gid-1001 group automatically — see SECURITY.md C10 / docs/install-from-scratch.md)" >&2
 
-# The storage root (I-24): deploy-stack makes a missing one root's 0711, but on the installer path the installer's own
-# bind of it has Docker make it root:root 0755 first, and the play leaves a root that exists as it is. So the host
-# floor makes it here, before the first installer `up`, and leaves one that is there. A relocated root is named the
-# way the deploy reads it: `sudo KONTROLL_STORAGE_ROOT=<root> bash scripts/install-prereqs.sh` (sudo drops the
-# operator's own environment). See scripts/lib/storage-root.sh, SECURITY.md C10.
-echo "==> The storage root, root's 0711 unless it is there already…"
-# shellcheck source=scripts/lib/storage-root.sh
-. "$SCRIPT_DIR/lib/storage-root.sh"
-storage_root_ensure "${KONTROLL_STORAGE_ROOT:-}" || \
-  echo "    (could not make it — docs/SETUP.md \"Pre-provisioning storage\" says how to make it by hand)" >&2
-
 # ── OPTIONAL: the legacy host toolchain (rollback) ───────────────────────────────────────────────────────────
 if [ "$WITH_HOST_ANSIBLE" -eq 1 ]; then
   echo "==> --with-host-ansible: installing the legacy host toolchain (ansible-core + sops + age + python)…"
@@ -202,15 +222,20 @@ if [ "$WITH_HOST_ANSIBLE" -eq 1 ]; then
     "sops    : $(sops --version 2>/dev/null | head -1 || echo MISSING)" \
     "age     : $(age --version 2>/dev/null || echo MISSING)"
 fi
+if [ "$STORAGE_RC" -ne 0 ]; then
+  echo
+  echo "==> The storage root was NOT made (above). Make it before the installer's first \`up\`, or Docker makes it" \
+       "root:root 0755 and the deploy leaves it so."
+fi
 if [ "$COMPOSE_OK" -eq 0 ]; then
   echo >&2
   echo "==> NOT done: 'docker compose' does not answer, and the stack and the installer run in compose. Install the" >&2
-  echo "    compose v2 package the ERROR above names, then re-run: sudo bash $0 $*" >&2
+  echo "    compose v2 package the ERROR above names, then re-run: sudo bash $0 $ARGS" >&2
   exit 1
 fi
 cat <<'NEXT'
 
-==> Done (idempotent — safe to re-run). The C10 group (gid 1001) and a missing storage root were made above.
+==> Done (idempotent — safe to re-run). What it made, and what it left as it was, is listed above.
   Next, from your kontroll/ directory — after logging out and back in, if this run added you to the docker group:
     scripts/kontroll-installer.sh fresh-init --mgmt-ip <ip> --domain <domain> --trust-mode separated --break-glass-recipient <age1…>
   (from a launch kit: ./kontroll in place of scripts/kontroll-installer.sh; <age1…> is the public half of a key you

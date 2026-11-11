@@ -114,13 +114,15 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
   # (root's git, and the service uid's), those of tests/integration/test_canonical_normalise_as_root.py chown a
   # canonical to another uid through the play's ownership pass, and those of
   # tests/integration/test_local_canonical_as_root.py run local-canonical.yml itself (a dry-run, three applies,
-  # a dry-run: the second apply after a landing is 0 changed), and those of
+  # a dry-run: the second apply after a landing is 0 changed), those of
   # tests/integration/test_g9_age_key_gate_real_stat.py run deploy-stack's age-key gate on keys of uid or gid 1001
-  # (the group leg and the owner read bit, against a real stat), so they need root — and every one of them
-  # was SKIPPED in the suite above unless this gate itself runs as root. So: as root, directly; else through
+  # (the group leg and the owner read bit, against a real stat), and those of tests/unit/test_storage_root_floor.py
+  # make storage roots root's and run install-prereqs.sh as root with stand-ins, so they need root — and every one
+  # of them was SKIPPED in the suite above unless this gate itself runs as root. So: as root, directly; else through
   # `sudo -n` (never a prompt) where that works; else the step is skipped, which --strict counts as a failure — a
   # gate that cannot be root has not shown that root's git is the service's. No row may be skipped (as for the sops
-  # step), and nothing is written into the tree as root: no bytecode, no pytest cache.
+  # step; the one row that shows what a run without root does is deselected here, and runs in the suite above), and
+  # nothing is written into the tree as root: no bytecode, no pytest cache.
   as_root=""; how="as root"
   if [ "$(id -u)" -eq 0 ]; then as_root="env"
   elif have sudo && sudo -n true 2>/dev/null; then as_root="sudo -n env"; how="through sudo -n"; fi
@@ -129,8 +131,8 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
     echo "SKIP  canon-drop-as-root (this gate is not root and has no sudo that needs no password)"; skip=$((skip+1))
     [ "$STRICT" = "--strict" ] && fail=$((fail+1))
   else
-    echo "      canon-drop-as-root runs $how: it chowns repos, stand-in keys and TLS certs under /tmp," \
-         "starts git as uid 1001"
+    echo "      canon-drop-as-root runs $how: it chowns repos, stand-in keys, TLS certs and storage roots under" \
+         "/tmp, starts git as uid 1001"
     step canon-drop-as-root 0 bash -c '
       # shellcheck disable=SC2086  # $1 is "env" or "sudo -n env": it must word-split
       out="$($1 PYTEST_ADDOPTS= PATH="$PATH" HOME="$HOME" LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}" \
@@ -138,6 +140,8 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
              "$0" -B -m pytest tests/integration/test_canon_drop.py tests/integration/test_content_clone_as_service.py \
                tests/integration/test_canonical_normalise_as_root.py tests/integration/test_local_canonical_as_root.py \
                tests/integration/test_g9_age_key_gate_real_stat.py tests/integration/test_tls_owner_dry_run.py \
+               tests/unit/test_storage_root_floor.py \
+               --deselect tests/unit/test_storage_root_floor.py::test_install_prereqs_without_root_makes_nothing \
                -p no:cacheprovider -rs --color=no 2>&1)"; rc=$?
       printf "%s\n" "$out"
       [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY" "$as_root"

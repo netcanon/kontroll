@@ -13,24 +13,43 @@ NetConfig project.
 
 ### fix(scripts): the host floor makes the storage root 0711 before the installer can (I-24, 2026-11-08)
 
-deploy-stack makes a missing `KONTROLL_STORAGE_ROOT` root's 0711 (passable, listed and written by nobody else), but on
-the installer path the installer container binds the root, so Docker had already made it root:root 0755 when the play
-looked, and the play leaves a root that exists as it is. Every installer-path node had a 0755 root, any local account
-could list its stores, and docs/SETUP.md and docker/.env.example said a missing root is made 0711. The I-19 read found
-it in the compose smoke's log (the play's make-the-root task: skipping).
+deploy-stack makes a missing storage root (`kontroll_storage_root`) root's 0711 (passable, listed and written by
+nobody else), but on the installer path the installer container binds the root, so Docker had already made it
+root:root 0755 when the play looked, and the play leaves a root that exists as it is. Every installer-path node had a
+0755 root, any local account could list its stores, and docs/SETUP.md and docker/.env.example said a missing root is
+made 0711. The I-19 read found it in the compose smoke's log (the play's make-the-root task: skipping).
 
-- **Fixed.** `scripts/install-prereqs.sh`, which runs as root on the host before the first installer `up`, makes a
-  missing storage root (`KONTROLL_STORAGE_ROOT`, default `/var/lib/kontroll`) and each missing parent root's 0711
-  through the new `scripts/lib/storage-root.sh`, and leaves one that is there as it is. It refuses `/` and a relative
-  path as the deploy's assert does. A relocated root is named to it as `sudo KONTROLL_STORAGE_ROOT=<root> bash
-  scripts/install-prereqs.sh`. A root Docker already made is closed by `sudo chmod 0711 <root>` (docs/SETUP.md).
-- **Tests.** The new `unit/test_storage_root_floor.py` runs the helper: a missing root and its parents are made
-  exactly 0711 and root's, an inherited group and setgid bit given back (as root); a directory, a file and a link
-  that are there are left; `/` and relative paths are refused; a parent that is a file fails with the reason;
-  install-prereqs.sh calls it with the deploy's variable before it says done; the default root is the installer's
-  and the deploy's. `unit/test_install_prereqs_alone.py` gains the row for a copy without the new library.
-- **Docs.** docs/SETUP.md (pre-provisioning storage; the host floor), docker/.env.example, SECURITY.md C10,
-  docs/install-from-scratch.md (the quickstart; §0), scripts/README.md, docker/installer/README.md, tests/README.md.
+- **Fixed.** `scripts/install-prereqs.sh`, run as root on the host before the first installer `up`, makes a missing
+  storage root and each missing parent root's 0711 through the new `scripts/lib/storage-root.sh`, first, right after
+  its root check (it needs no package, so a package step that fails cannot leave it unmade). One that is there is left
+  as it is, and what it is is said; a root:root one others can list (Docker's 0755, which the deploy passes) gets the
+  `sudo chmod 0711 <root>` that closes it. It refuses `/` and a relative path, as the deploy's assert does, and makes
+  no root under a directory that is not root's, or that others may write and is not sticky, each judged where its
+  links lead, where what it made could be swapped for a link before its `chown` and `chmod`, which follow one. A
+  relocated root is named with the new `--storage-root <root>` (`./bootstrap.sh` passes it on; `KONTROLL_STORAGE_ROOT`
+  is still read where sudo lets it through), and must be the same path as `KONTROLL_STORAGE_ROOT` where the launcher
+  runs (the installer's bind) and the deploy's `kontroll_storage_root`; nothing checks that they agree yet (I-26). A
+  root it did not make is said at the end, with the remedy for the reason, and the install carries on. The launch
+  kit's printed install, docker/README.md and scripts/README.md now begin with it.
+- **Tests.** `unit/test_storage_root_floor.py` runs the helper: a missing root and its parents are made exactly 0711
+  and root's, an inherited group and setgid bit given back; a 0700 and a 0755 directory, a file and a link that are
+  there are left and described; a root:root one others can list gets the chmod line, one at 0711 or one the deploy
+  refuses does not; `/` and relative paths are refused; a root under a directory others can write (that one or one
+  further up) is refused, and under a sticky one made; one under another account's directory (the parent, one further
+  up, where a link on the way leads, or one holding such a link) is refused; a parent that is a file fails with the
+  reason. It runs install-prereqs.sh itself, as root, with stand-ins for its package manager, Docker and the group
+  tools on a PATH that holds nothing else: the root is made before the first package step and the run reaches "Done";
+  `KONTROLL_STORAGE_ROOT` alone names it, and the argument wins over it; a failing package step leaves it made; a root
+  refused or not made is said with its remedy, and as NOT made at the end, and the run still reaches "Done"; without
+  root nothing is made; `--storage-root` with no path is refused. tests/validate.sh's as-root step runs the file.
+  `unit/test_install_prereqs_alone.py` gains the row for a copy without the new library. The whole runs in
+  `unit/test_compose_ensure.py` and `unit/test_operator_uid_1001_refused.py` give the script a stand-in for it. The
+  argument loop now shifts the arguments away, so the compose gate's re-run line reads `$ARGS`, as the root check's
+  does, and the compose file's text row pins that.
+- **Docs.** docs/SETUP.md (pre-provisioning storage: where the root is made, the three names of a relocated one; the
+  host floor), docker/.env.example, SECURITY.md C10, docs/install-from-scratch.md (the quickstart; §0),
+  scripts/README.md, docker/installer/README.md, docker/README.md (the kit's install, and the air-gapped one's order)
+  and scripts/make-launch-kit.sh (the kit's install), README.md, tests/README.md.
 
 ### fix(scripts): an operator with uid 1001 is told so before anything is installed or made (I-18, 2026-11-09)
 

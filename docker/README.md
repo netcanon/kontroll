@@ -177,8 +177,9 @@ C1 publishes the **installer** image too, so a fresh node installs from publishe
 - **Build a launch kit:** after a publish + `gen-image-digests.py --refresh <tag>` + commit,
   [`scripts/make-launch-kit.sh`](../scripts/make-launch-kit.sh) assembles `kontroll-launch-<ver>.tar.gz` — the
   instance-stripped tree + `images.env` (the digest pins) + the `kontroll` launcher (no `instance/`, no secrets).
-- **Install from the kit** (host floor = Docker + git): `tar xzf … && cd kontroll-launch-<ver> && ./kontroll
-  fresh-init …` → edit `instance/` → `./kontroll check` → `./kontroll init`. The launcher pulls every image by digest.
+- **Install from the kit**: `tar xzf … && cd kontroll-launch-<ver> && sudo bash scripts/install-prereqs.sh` (the
+  host floor: Docker + git, the C10 group, the storage root) → `./kontroll fresh-init …` → edit `instance/` →
+  `./kontroll check` → `./kontroll init`. The launcher pulls every image by digest.
 
 The Index "Supply chain" section carries an **images sub-panel** (`GET /api/image-provenance`) that reports each
 kontroll image's honest class — `digest-pinned` (amber: Docker verifies the `@sha256:` on pull, not a signature),
@@ -186,8 +187,10 @@ kontroll image's honest class — `digest-pinned` (amber: Docker verifies the `@
 
 **Air-gapped install:** [`scripts/make-bundle-airgap.sh`](../scripts/make-bundle-airgap.sh) pulls every kontroll image
 by digest, `docker save`s them into one tar, and bundles the launch kit → `dist/kontroll-airgap-<ver>-<arch>.tar.gz`.
-On the disconnected node: `docker load -i kontroll-images-…tar` then `./kontroll fresh-init …` — zero registry
-reachability (the digest-pin survives save/load; the `kontroll` launcher skips the pull when the image is already
+On the disconnected node: `docker load -i kontroll-images-…tar`, the storage root made first (`sudo bash
+scripts/install-prereqs.sh` makes it before any package step, which needs a reachable mirror; or by hand,
+docs/SETUP.md "Pre-provisioning storage"), then `./kontroll fresh-init …` — zero registry reachability (the digest-pin
+survives save/load; the `kontroll` launcher skips the pull when the image is already
 loaded). Remaining deferred: **full launch-kit file-set minimization is Phase-B-coupled** — the stack services run
 code from the `/repo` bind / the cloned canonical (`api.main`, `gui/app.py`, the playbooks), so the kit must ship the
 full tree until those run *baked* code (Phase B).
