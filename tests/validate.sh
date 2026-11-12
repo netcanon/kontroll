@@ -114,6 +114,15 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
     out="$(PYTEST_ADDOPTS= "$0" -m pytest $t -rs --color=no 2>&1)"; rc=$?
     printf "%s\n" "$out"
     [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
+  # the per-run SSH key render and cleanup (ansible/playbooks/_render-ssh-keys.yml, _cleanup-ssh-keys.yml) in every
+  # run mode, a real run, a dry run and a `--tags` run, around a key the INSTALLED sops encrypted and community.sops
+  # decrypts: a dry run that renders no key reaches no key-auth host, and passes (I-87, I-93). Behind `have sops`
+  # and `have ansible-playbook`, and no test may be skipped (as above): a missing community.sops is a skip, so it
+  # fails here.
+  have sops && have ansible-playbook; step key-render-runtime $? bash -c '
+    out="$(PYTEST_ADDOPTS= "$0" -m pytest tests/integration/test_ssh_key_render_runs.py -rs --color=no 2>&1)"; rc=$?
+    printf "%s\n" "$out"
+    [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
   # the change of identity, with REAL uids (rule 5 of kontroll.canon). The rows of tests/integration/test_canon_drop.py
   # chown a canonical to the play's layout and start git as the service, and those of
   # tests/integration/test_content_clone_as_service.py run the deploy's content-clone tasks with ansible-playbook

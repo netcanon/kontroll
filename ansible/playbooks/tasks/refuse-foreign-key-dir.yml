@@ -1,0 +1,50 @@
+---
+# Refuse a key dir that holds anything but SSH keys. `kontroll_device_key_dir` is the dir _render-ssh-keys.yml writes
+# each key-auth host's `<host>.key` into (0600, the dir chmodded 0700) and _cleanup-ssh-keys.yml removes whole after the
+# run, so a path that holds anything else would lose it: a `$KONTROLL_SSH_KEY_DIR` naming a home directory, `~/.ssh`,
+# `/tmp` or a typo for a real dir was chmodded by the render and removed, with all it held, by the cleanup (a real run
+# since the key seam; a dry run too since I-87's first commit: I-95). A path that is not a directory (a file, or a link,
+# even one to a directory), or a directory that holds anything but regular files named `*.key` (a subdirectory, a link,
+# a file of another name, a hidden one), is refused by name and kept as it is. An earlier run's keys (an aborted run's,
+# or those of a run this one overlaps) are `*.key` files, so they pass.
+#
+# The render imports this file before its first write, for each key-auth host (a refused host fails, the others go on);
+# the cleanup imports it before its delete, once (refused, every host fails and the run ends there, nothing removed).
+# `stat` and `find` only read, and run in a dry run as they are. Every task is delegated to localhost, for the reason
+# the render's header gives (a host's `ansible_connection` outranks a play's `connection: local`).
+
+- name: Read what the key dir path is (a link is not followed)
+  ansible.builtin.stat:
+    path: "{{ kontroll_device_key_dir }}"
+    follow: false
+    get_checksum: false
+  register: _kontroll_key_dir
+  delegate_to: localhost
+
+- name: List everything the key dir holds (hidden entries too)
+  ansible.builtin.find:
+    paths: "{{ kontroll_device_key_dir }}"
+    file_type: any
+    hidden: true
+  register: _kontroll_key_dir_held
+  delegate_to: localhost
+  when: _kontroll_key_dir.stat.isdir | default(false)
+
+- name: Refuse a key dir that holds anything but SSH keys (the cleanup removes it whole)
+  ansible.builtin.assert:
+    that:
+      - not _kontroll_key_dir.stat.exists or (_kontroll_key_dir.stat.isdir and _kontroll_key_foreign | length == 0)
+    fail_msg: >-
+      kontroll_device_key_dir ({{ kontroll_device_key_dir }}) {{ _kontroll_key_dir_said }}. The key plays write only
+      `<host>.key` files there and remove it whole after the run, so a path that holds anything else is refused and
+      kept as it is: point KONTROLL_SSH_KEY_DIR at a directory of its own, or unset it.
+    quiet: true
+  vars:
+    # Each entry that is not a regular file, and each whose name does not end `.key` (one entry may be both).
+    _kontroll_key_foreign: >-
+      {{ (_kontroll_key_dir_held.files | default([]) | rejectattr('isreg') | map(attribute='path') | list)
+         + (_kontroll_key_dir_held.files | default([]) | map(attribute='path') | reject('search', '[.]key$') | list) }}
+    _kontroll_key_dir_said: >-
+      {{ ('holds more than SSH keys: ' ~ (_kontroll_key_foreign | map('basename') | unique | sort | join(', ')))
+         if _kontroll_key_dir.stat.isdir | default(false) else 'is not a directory' }}
+  delegate_to: localhost
