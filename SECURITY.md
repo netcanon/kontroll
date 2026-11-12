@@ -158,8 +158,8 @@ it holds no credential). The runner image's censor step, the script's rules and 
 branch of its check: `tests/unit/test_no_log_censor.py`; the script on a copy of the
 core the run's subprocesses import, a failing no_log task's value printed before and
 nowhere after, and its refusals: `tests/integration/test_no_log_censor_runs.py` (I-75;
-it runs in CI's validate job, and is skipped in the pytest legs, which have no
-ansible-core). Not a capture of this kind, and not held there:
+it runs in CI's validate job, and in each pytest leg on the core that leg pins, the
+control image's among them: I-94). Not a capture of this kind, and not held there:
 logging_journald_receiver's rollback copy of a systemd unit, written under the
 playbook's directory.
 **Planned, not built:** a grep gate in `tests/validate` that flags

@@ -152,7 +152,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.11', '3.12', '3.13', '3.14']
+        # Each leg runs the rows that run Ansible on a core the project ships, never on the one the runner image
+        # happens to carry (I-80, I-81, I-94): the installer's (docker/installer/requirements.txt), on the Python of
+        # the installer's Debian base; the control image's (the core its base's ansible venv ships, named in
+        # docker/semaphore-runner/Dockerfile: every Semaphore job runs it), on that venv's Python; the validate job's
+        # (above). The last leg runs the control image's core on the newest Python it supports. The job's name
+        # keeps one leg per Python: the main ruleset requires each name. tests/unit/test_ci_ansible_cores.py holds
+        # each pin to its source.
+        include:
+          - python: '3.11'
+            ansible-core: '2.18.19'
+          - python: '3.12'
+            ansible-core: '2.20.10'
+          - python: '3.13'
+            ansible-core: '2.19.4'
+          - python: '3.14'
+            ansible-core: '2.20.10'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -164,8 +179,24 @@ jobs:
           cache: pip
           cache-dependency-path: tests/requirements-dev.txt
 
-      - name: Install the code-half test deps (no ansible, no lab — the shell-outs are mocked)
+      - name: Install the code-half test deps (no lab — the shell-outs are mocked)
         run: pip install --quiet -r tests/requirements-dev.txt
+
+      - name: Install the leg's ansible-core and every module's collections (the rows that run Ansible use them)
+        # The core from the matrix, so a row's verdict cannot move under an unchanged tree when the runner image's own
+        # Ansible moves; every module's collections, as the validate job installs them for its fresh-node check, where
+        # the rows look for them (~/.ansible/collections). The generator runs in an export of HEAD: it also writes
+        # the trust sidecar into its own tree, and a row that runs `gen-requirements.py --check` on the checkout would
+        # read that one. The last line prints the core the rows run on; a row fails a leg whose core is not the pin.
+        env:
+          ANSIBLE_CORE: ${{ matrix.ansible-core }}
+        run: |
+          set -euo pipefail
+          pip install --quiet "ansible-core==$ANSIBLE_CORE"
+          mkdir "$RUNNER_TEMP/gen" && git archive HEAD | tar -x -C "$RUNNER_TEMP/gen"
+          python3 "$RUNNER_TEMP/gen/scripts/gen-requirements.py" "$RUNNER_TEMP/all-modules.yml" --all-modules
+          ansible-galaxy collection install -r "$RUNNER_TEMP/all-modules.yml"
+          ansible-playbook --version
 
       # scripts/lib/plaintext-guard.sh runs on a control node's HOST, under whatever `awk` that host has. Its tests
       # run once under each implementation they find installed — so install the ones a node may have. The plain
@@ -176,9 +207,11 @@ jobs:
         run: bash .github/scripts/apt-install.sh gawk mawk busybox original-awk
 
       - name: pytest (offline; e2e/slow excluded — the hermetic default)
-        # a row marked requires_checkout that would be skipped (no git checkout) stops the job instead (I-51)
+        # a row marked requires_checkout that would be skipped (no git checkout) stops the job instead (I-51); the
+        # leg's pin, which tests/integration/test_ci_leg_core.py holds the run's core to
         env:
           KONTROLL_REQUIRE_CHECKOUT: "1"
+          KONTROLL_ANSIBLE_CORE: ${{ matrix.ansible-core }}
         run: pytest -m "not e2e and not slow" --cov=scripts --cov=gui --cov=api --cov-report=term-missing
 
   snmp-modules:

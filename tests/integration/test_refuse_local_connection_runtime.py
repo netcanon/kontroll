@@ -15,8 +15,9 @@ the installed ansible-core, so a refusal that passes a host it should stop fails
 Nothing contacts a host: the play gathers no facts, and its only tasks are the refusal (an `assert` and a
 `set_fact`) and `debug`s, in the play and in a stub role, all actions on the controller. Every address is TEST-NET-1.
 It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image, on the pinned cores. ansible-core
-2.21 removed the paramiko_ssh connection plugin (2.20 deprecated it), so on a core from 2.21 on, as a CI runner may
-ship, the two hosts on it fail at the plugin load, before the refusal's condition, and the rows expect that
+2.21 removed the paramiko_ssh connection plugin (2.20 deprecated it), so on a core from 2.21 on (a developer's; CI's
+pytest legs run the shipped cores: I-94), the two hosts on it fail at the plugin load, before the refusal's condition,
+and the rows expect that
 (`_NO_PARAMIKO`).
 """
 import os
@@ -81,9 +82,9 @@ def _core():
 
 
 # ansible-core 2.21 removed the paramiko_ssh connection plugin (2.20 deprecated it, `removed_in: "2.21"`): there a host
-# on it fails at the plugin load, before the refusal's condition, as `drift` and `dbl` do. The pinned cores (2.18,
-# 2.19) have it; the CI's pytest jobs run the core their runner ships. A version line that does not parse keeps the two
-# hosts, so a misread fails the rows rather than drops them.
+# on it fails at the plugin load, before the refusal's condition, as `drift` and `dbl` do. The shipped cores have it,
+# and CI's pytest legs run them (I-94); a developer's core may be newer. A version line that does not parse keeps the
+# two hosts, so a misread fails the rows rather than drops them.
 _NO_PARAMIKO = {"pk", "bpk"} if (_core() or (0, 0)) >= (2, 21) else set()
 _FAILS_AT_LOAD = {"drift", "dbl"} | _NO_PARAMIKO   # past the assert's condition or never at it: the load fails the host
 
@@ -143,8 +144,8 @@ def test_only_a_host_on_an_allowlisted_connection_gets_past_the_refusal(tmp_path
     On a core from 2.21 on, the two paramiko_ssh hosts fail at the load of a plugin that core no longer has, by that
     message and no other. Guards a refusal that lets the role run on the control node for a host whose connection
     executes there (its read, B1; fold 1's read B, S5: the FQCN network_cli and netconf rows); and the two hosts dropped
-    on a newer core for any reason but the plugin's removal (the public CI's pytest jobs, on the runner's core, failed
-    every row on them)."""
+    on a newer core for any reason but the plugin's removal (the public CI's pytest jobs, then on the runner image's
+    core, failed every row on them)."""
     passed, out = _passed(tmp_path, SSH)
     assert passed == {"unset", "ssh", "bssh", "pk", "bpk", "toc1", "toc2"} - _NO_PARAMIKO, out
     for host in _NO_PARAMIKO:   # a core without the plugin fails the host at its load, never past the refusal

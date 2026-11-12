@@ -157,7 +157,10 @@ it runs on a deploy path.
    both `SOPS_SHA256_*` from the release's `checksums.txt` together.
 4. **Prove it.** Build every image from the change (the control image after `python3
    scripts/gen-requirements.py --all-modules`, as the publish workflow does) — `pip check`, the import line, the
-   checksums and the apk constraints run in the build. In the built control image, `ansible --version`, `sops
+   checksums and the apk constraints run in the build. A new base whose ansible venv ships another ansible-core, or
+   another Python, changes the Dockerfile's core line (`# The base's ansible venv ships ansible-core …`) and CI's
+   pytest legs (`.github/workflows/ci.yml`'s `tests` matrix) together, as does a new installer pin or Debian base:
+   `tests/unit/test_ci_ansible_cores.py` fails until both move (I-94). In the built control image, `ansible --version`, `sops
    --version`, `age --version`, `snmpbulkwalk -V` and `ssh -V`; copy `/opt/kontroll` out and run
    `scripts/gen-code-manifest.py --verify` on it. The control image's build prints what its no-log censor step did
    (I-75, `semaphore-runner/no_log_censor.py`); a new base whose ansible-core moved the censor is refused there: read
