@@ -42,7 +42,10 @@ scheduled backup of a device whose read errors).
   non-zero (named FAILED by the task, the key directory gone, its good capture kept), with that host beside a good one
   (the good one captured and committed alone), the same under `ANSIBLE_ANY_ERRORS_FATAL=True`, and with one host whose
   `device_role` names no installed role, alone (a dry run and a real run each fail) and beside a good one (the good
-  one captured and committed, the key directory gone).
+  one captured and committed, the key directory gone). `tests/fresh-node-check.sh` (CI's fresh-node check) holds each
+  mock host whose capture reads its device at the summary's last task, its line naming the read, and the API host
+  without its token the same, its line naming the credential gate: those hosts now reach the summary, where they used
+  to stop at the read.
 - **Docs.** backup-configs.yml's comments, `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row no longer list a
   capture that fails as a task among the runs that leave keys, and list a class whose backup entrypoint cannot be
   loaded; the rows' docstrings say so.
