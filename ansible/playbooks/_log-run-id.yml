@@ -1,10 +1,11 @@
 ---
 # Stamp + log this run's correlation id (Layer 0, docs/logging-architecture.md §3).
-# Imported FIRST by the fleet and stack playbooks (directly, or through _fleet-preamble.yml;
-# tests/unit/test_run_id_stamp_imported.py) so every run's id lands in the ansible log AND the
-# Semaphore job output (Postgres-backed, queryable via the task API) — the key that correlates
-# one operation across the ansible log, the Semaphore job, and (ahead) the aggregated logs.
-# A caller may inject `-e kontroll_run_id=...`; otherwise a UTC timestamp is used.
+# Imported FIRST by every playbook a run can start with (directly, or through _fleet-preamble.yml;
+# tests/unit/test_run_id_stamp_imported.py) so every run's id lands in the run's output (the ansible log
+# where ansible/ansible.cfg is read, AND the Semaphore job output, Postgres-backed, queryable via the
+# task API) — the key that correlates one operation across the ansible log, the Semaphore job, and
+# (ahead) the aggregated logs. A caller may inject `-e kontroll_run_id=...`; otherwise a UTC timestamp
+# is used.
 #
 # hosts: all:localhost + run_once. It starts from `all` (NOT hosts: localhost) so the stamp still
 # fires under `--limit <host>` — the onboard verify path runs `ping.yml --limit <host>`, which a
@@ -17,10 +18,25 @@
 # tests/integration/test_run_id_stamp_runs.py). `--list-hosts` lists localhost for this play
 # too; run_once stamps it there only when the inventory has no hosts.
 #
-# The task is a debug, which runs nothing on its host, so the stamp contacts none. connection:
-# local applies only to a host that names no connection of its own (the implicit localhost): a
-# fleet host's ansible_connection outranks it and its plugin still loads, so a first host whose
-# connection plugin cannot load fails the stamp and ends the run (I-52).
+# Both tasks run on the controller (delegate_to: localhost), so the stamp loads no fleet host's
+# connection plugin and contacts nothing; it takes localhost's connection and become settings
+# (`local` and none, unless the inventory names localhost with others). connection: local alone
+# applies only to a host that names no connection of its own: a first host whose
+# ansible_connection names a plugin that is not installed (network_cli before bootstrap.yml has
+# installed ansible.netcommon) failed the stamp and ended the run, bootstrap's own included
+# (I-52, I-41). The line reads `[<host> -> localhost]`.
+# Both carry `tags: [always]`, so a `--tags` run is stamped too (`--skip-tags always` drops it).
+#
+# Printed ONCE per run. local-canonical.yml runs alone (the recovery paths) and under
+# deploy-stack.yml, after deploy-stack's own stamp: the second import sees _kontroll_run_stamped and
+# says nothing, so a run has one line and one id (an unset id is `now()`, which a second stamp
+# could mint a second later) (I-41). Once holds for the shipped playbooks, which run the linear
+# strategy and add no host; it does not hold under the free strategy (run_once is not honoured
+# there: each host prints), for a host added by add_host before a later import (it carries no
+# fact), or for a run given `-e _kontroll_run_stamped=...`: a key=value form is a non-empty
+# string, so none prints, and a JSON `false` makes every import print. A run started with
+# `--start-at-task` past the stamp prints none unless a later import runs, and one with
+# `--skip-tags always` prints none.
 - name: Stamp the run correlation id
   hosts: all:localhost
   gather_facts: false
@@ -30,3 +46,13 @@
       ansible.builtin.debug:
         msg: "kontroll_run_id={{ kontroll_run_id | default(now(utc=true, fmt='%Y%m%dT%H%M%SZ'), true) }}"
       run_once: true
+      delegate_to: localhost
+      when: not (_kontroll_run_stamped | default(false))
+      tags: [always]
+
+    - name: Note that this run's id is printed (a later import of this stamp says nothing)
+      ansible.builtin.set_fact:
+        _kontroll_run_stamped: true
+      run_once: true
+      delegate_to: localhost
+      tags: [always]

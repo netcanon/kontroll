@@ -14,6 +14,12 @@
 # Blast radius:        this VM only
 # Idempotence:         re-runnable; a clean second run reports 0 changed.
 
+# The run's correlation id first, as every playbook a run can start with does (I-41; _log-run-id.yml). The stamp
+# runs on the controller, so a first host whose connection plugin is in a collection this run has yet to install
+# (network_cli before ansible.netcommon) does not end the run before it installs it (I-52).
+- name: Stamp the run correlation id
+  ansible.builtin.import_playbook: _log-run-id.yml
+
 - name: Bootstrap the kontroll control node
   hosts: localhost
   connection: local

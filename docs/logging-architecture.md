@@ -96,17 +96,22 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   5 files × ~10 MB (46 MB total) vs a single unbounded 26 MB file before the restart.
 - ✅ **GUI audit-log rotation** — `gui/app.py` `_audit()` now routes through a
   `RotatingFileHandler` (5 MB × 5), format preserved, creds still excluded (test-covered) (G1).
-- ✅ **Run correlation key** — a shared `_log-run-id.yml`, imported first by the fleet and
-  stack playbooks (directly by deploy-stack, promote and reload-observability; through
-  `_fleet-preamble.yml` by the plays that open fleet SSH), logs a `kontroll_run_id` at the start
-  of every run — into the ansible log AND the Semaphore job output (Postgres-backed, queryable
-  via the task API), so one operation is greppable by id (G2/G4). Synthetic by default
-  (UTC stamp); a caller may inject `-e kontroll_run_id=…`. It plays on `all:localhost` with
-  `run_once`: a fleet run stamps its first host, a `--limit <host>` run that host, and a run on
-  an inventory with no hosts the implicit localhost (I-15: on `hosts: all` that run printed no
-  id while its localhost plays still acted; `tests/integration/test_run_id_stamp_runs.py`;
-  `tests/unit/test_run_id_stamp_imported.py` holds each importer to it). (Investigated: Semaphore
-  does not expose its task id as a runner env var, so an in-playbook id is the reliable mechanism;
+- ✅ **Run correlation key** — a shared `_log-run-id.yml`, imported first by every playbook a
+  run can start with (directly, or through `_fleet-preamble.yml` by the plays that open fleet SSH;
+  `tests/unit/test_run_id_stamp_imported.py` reads every top-level one), logs a `kontroll_run_id` once
+  at the start of a run of the shipped playbooks (`_log-run-id.yml`'s header says where once stops
+  holding) — into the ansible log (where `ansible/ansible.cfg` is read) AND the Semaphore
+  job output (Postgres-backed, queryable via the task API), so one operation is greppable by id
+  (G2/G4). Synthetic by default (UTC stamp); a caller may inject `-e kontroll_run_id=…`. It plays on
+  `all:localhost` with `run_once`: a fleet run stamps its first host, a `--limit <host>` run that
+  host, and a run on an inventory with no hosts the implicit localhost (I-15: on `hosts: all` that
+  run printed no id while its localhost plays still acted; `tests/integration/test_run_id_stamp_runs.py`).
+  It runs on the controller (`delegate_to: localhost`), so a first host whose connection plugin is
+  not installed is stamped and its run goes on (I-52), and with `tags: [always]` a `--tags` run is
+  stamped too. ONE line per run: a later import of the stamp in the same run (local-canonical.yml
+  under deploy-stack.yml) prints nothing, so a run of the shipped playbooks never carries two
+  `now()` ids (I-41). (Investigated: Semaphore does not expose its task id as a runner env var, so
+  an in-playbook id is the reliable mechanism;
   it co-appears with the Semaphore task id in the job output for cross-reference.)
   *Durability enhancement (since shipped):* a persistent `ANSIBLE_LOG_PATH`
   (`/var/lib/kontroll/ansible-log`, surviving the ephemeral job clone) **and** a host

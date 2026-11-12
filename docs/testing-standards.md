@@ -145,8 +145,8 @@ A test proves a change *works*; a log proves *why it broke* in production. Both 
 change. kontroll's correlation model (full detail in [logging-architecture.md](logging-architecture.md)
 Layer 0):
 
-- **`kontroll_run_id`** — the shared correlation key (`_log-run-id.yml`, imported first by the
-  fleet and stack playbooks, directly or through `_fleet-preamble.yml`) that stitches one operation across the ansible log, the Semaphore job output,
+- **`kontroll_run_id`** — the shared correlation key (`_log-run-id.yml`, imported first by every
+  playbook a run can start with, directly or through `_fleet-preamble.yml`, and printed once per run of the shipped playbooks) that stitches one operation across the ansible log, the Semaphore job output,
   and script run-logs. Any new actuating path emits it.
 - **GUI audit log** — every onboard action + auth-denial: timestamp, client IP, what
   (collection/key/host/flags). **Never** a credential. New GUI actions extend it, and a test
