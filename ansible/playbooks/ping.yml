@@ -18,14 +18,18 @@
 # ok, so a hand-written `ansible_port: ~` used to pass the probe with nothing listening.
 #
 # A host whose class has no `check` entrypoint installed (no `device_role`, one no installed role answers, a role with
-# no tasks/check.yml) is refused before the probe, as a task its own block's rescue records: the summary names it
-# REFUSED, and the run's last play, after the key cleanup, fails it (I-83). The include of such a class could not be
-# loaded, which is no task failure: Ansible dropped the host from every later play or ended the whole run, so the
-# run's SSH keys stayed where no later play ran (no `device_role` was reported UNREACHABLE on 2.19 instead); and a
-# class that loads as a role running nothing (an empty `device_role`, a role with no tasks/) was reported OK. An
-# unreachable host still leaves the run passing. An installed check that cannot be loaded (a file or role it includes
-# is missing, a class in collection form whose collection is not installed) is not refused: the probe's rescue fails
-# its host, which leaves every later play, so where that is every host the run's keys stay (it ended with rc 0).
+# no tasks/check.yml or one with no task in it) is refused before the probe, as a task its own block's rescue records:
+# the summary names it REFUSED, and the run's last play, after the key cleanup, fails it (I-83). The include of such a
+# class could not be loaded, which is no task failure: Ansible dropped the host from every later play or ended the
+# whole run, so the run's SSH keys stayed where no later play ran (no `device_role` was reported UNREACHABLE on 2.19
+# instead); and a class that loads as a role running nothing (an empty `device_role`, a role with no tasks/, an empty
+# or comment-only check) was reported OK. An unreachable host still leaves the run passing. An installed check that
+# cannot be loaded (a file or role it includes is missing, a role dependency or a class's collection that is not
+# installed) is not refused: the probe's rescue fails its host, which leaves every later play, so where that is every
+# host the run's keys stay (before I-83 such a run ended with rc 0; it now fails). A check that does not parse, an
+# installed collection whose role has no check, and a role whose defaults, vars or meta do not parse are not refused
+# either: ansible-core ends the whole run at the include (rc 4), every host's keys left (the entrypoint check's
+# header lists what it does not see).
 
 - name: Fleet preamble — stamp the run id + materialize per-host SSH keys
   ansible.builtin.import_playbook: _fleet-preamble.yml
@@ -33,6 +37,11 @@
 - name: Reach the fleet (per-class liveness)
   hosts: all
   gather_facts: false
+  # A caller's any_errors_fatal (ANSIBLE_ANY_ERRORS_FATAL, an ansible.cfg) failed every other host once one host's
+  # probe or refusal failed, rescue or not: a reachable host was dropped from every later play with no summary line,
+  # and where a down host stood beside it the run ended here, before the key cleanup (the I-83 reads' S3, as I-12's O1
+  # for the capture). The play's own keyword wins over that setting; the probe only reads.
+  any_errors_fatal: false
   tasks:
     # Outside the block: its rescue would report a refused host as UNREACHABLE.
     - name: Refuse a host whose device_role is a fact (only the inventory names the role it dispatches by)

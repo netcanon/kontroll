@@ -6,10 +6,12 @@ block. Where that entrypoint was not installed, the include could not be loaded,
 dropped the host from every later play (no such role: alone, the run ended there with rc 0), ended the whole run (a
 role with no tasks/check.yml, rc 4; no `device_role` on 2.18, rc 1) or reported it UNREACHABLE (no `device_role` on
 2.19), so the run's keys were left in their per-run directory where no later play ran; and a class ansible-core loads
-as a role that runs nothing (an empty `device_role`, a role with no tasks/ directory) was reported OK. The reach play
-now refuses such a host first, in a block of its own whose rescue records the refusal (the probe's rescue would
-report it UNREACHABLE); the summary names it REFUSED, and the run's last play, after the key cleanup, fails it.
-tests/unit/test_ping_entrypoint_refusal.py holds that shape; these rows run it.
+as a role that runs nothing (an empty `device_role`, a role with no tasks/ directory, a check with no task in it) was
+reported OK. The reach play now refuses such a host first, in a block of its own whose rescue records the refusal
+(the probe's rescue would report it UNREACHABLE); the summary names it REFUSED, and the run's last play, after the key
+cleanup, fails it. The reach play also overrides a caller's any_errors_fatal, which otherwise failed the other hosts
+once one host's probe or refusal failed. tests/unit/test_ping_entrypoint_refusal.py holds that shape; these rows run
+it.
 
 Hosts on a local connection, at 127.0.0.1: one of the generic raw-SSH backend probed at a port the row listens on
 (reachable: its check runs `true`), one of that backend at a port nothing listens on (unreachable), and one of each
@@ -45,12 +47,14 @@ ROLE = {  # host: its device_role (None: it names none)
     "p-notasks": "zz_no_tasks",         # its role has no tasks/ directory: ansible-core loads it, and it runs nothing
     "p-norole": None,                   # it names no device_role
     "p-empty": "",                      # an empty device_role: ansible-core loads it as a role that runs nothing
+    "p-emptycheck": "zz_empty_check",   # its role's tasks/check.yml holds comments only: it loads and runs nothing
     "p-broken": "zz_broken_check",      # its role's check includes a missing file: not refused, cannot load
 }
-REFUSED_HOSTS = ["p-missing", "p-noentry", "p-notasks", "p-norole", "p-empty"]
+REFUSED_HOSTS = ["p-missing", "p-noentry", "p-notasks", "p-norole", "p-empty", "p-emptycheck"]
 EXTRA_ROLES = {  # the lab's second roles_path entry
     "zz_no_check/tasks/main.yml": "- ansible.builtin.debug:\n    msg: not a check\n",
     "zz_no_tasks/defaults/main.yml": "zz_no_tasks_default: 1\n",
+    "zz_empty_check/tasks/check.yml": "---\n# tasks file for zz_empty_check\n",
     "zz_broken_check/tasks/check.yml": "- ansible.builtin.include_tasks: no_such_file.yml\n",
 }
 PLAYS = ("Reach the fleet (per-class liveness)", "Reachability summary", "Remove the per-run ephemeral SSH key dir",
@@ -128,14 +132,16 @@ def _task(out, name):
 @pytest.mark.parametrize("host", REFUSED_HOSTS)
 def test_a_class_whose_check_entrypoint_is_not_installed_is_refused_and_its_keys_removed(tmp_path, ports, host):
     """A dry run, then a real run, of one host whose class has no `check` entrypoint installed (its `device_role`
-    names no installed role; names a role with no tasks/check.yml, or with no tasks/ directory; is missing; is empty)
+    names no installed role; names a role with no tasks/check.yml, with no tasks/ directory, or whose check holds
+    comments only; is missing; is empty)
     each fail with rc 2: the refusal names the host, the host skips the probe, the summary names it REFUSED, and the
     last play fails it after the key-cleanup play (its recap: one rescued, one failed); the real run removes the run's
     key directory, stale key and all. Guards I-83: such an include could not be loaded, which is no task failure, so
     Ansible dropped the host from every later play or ended the whole run before the key cleanup, leaving the run's
-    keys on disk with no summary line; or (no tasks/, an empty name) it loaded a role that runs nothing and the
-    summary said OK, a host whose class checks nothing reported reachable. (Measured on the parent: a missing role
-    alone ended with rc 0 and no summary line; no `device_role` was UNREACHABLE on 2.19 and ended the run on 2.18.)"""
+    keys on disk with no summary line; or (no tasks/, an empty name, an empty check) it loaded a role that runs nothing
+    and the summary said OK, a host whose class checks nothing reported reachable (the I-83 reads' B S1). (Measured
+    on the parent: a missing role alone ended with rc 0 and no summary line; no `device_role` was UNREACHABLE on 2.19
+    and ended the run on 2.18.)"""
     lab = _lab(tmp_path, ports, [host])
     for extra in (("--check", "--diff"), ()):
         rc, out, recap = _play(lab, *extra)
@@ -212,4 +218,24 @@ def test_a_class_whose_check_cannot_be_loaded_beside_a_good_host_leaves_the_good
     assert "ok: [p-good]" in _task(out, "backend_raw_ssh : Liveness via raw command"), out
     assert SUMMARY % ("p-good", "OK") in out, out
     assert not re.search(r'"msg": "p-broken: (OK|UNREACHABLE|REFUSED)', out), out
+    assert not os.path.exists(lab.keys), os.listdir(lab.keys)
+
+
+@pytest.mark.parametrize("other", ["p-down", "p-noentry"])
+def test_a_callers_any_errors_fatal_leaves_every_host_reported(tmp_path, ports, other):
+    """A real run of p-good beside p-down (nothing listens at its port) or p-noentry (its role has no tasks/check.yml),
+    under a caller's `ANSIBLE_ANY_ERRORS_FATAL=True`: p-good's check runs and it is OK, the other host is UNREACHABLE
+    or REFUSED, the key directory is gone, and the run passes (p-down) or fails for p-noentry alone (rc 2). Guards the
+    reach play's `any_errors_fatal: false` (the I-83 reads' B S3, A N4): without it the setting failed every other host
+    once one host's probe or refusal failed, rescue or not, so beside p-down, p-good was moved into the probe's rescue,
+    whose `fail` then ended the run before the key cleanup with the keys left (the parent, which had no such `fail`,
+    removed them), and beside p-noentry, p-good was dropped from every later play with no summary line."""
+    lab = _lab(tmp_path, ports, ["p-good", other])
+    lab.env["ANSIBLE_ANY_ERRORS_FATAL"] = "True"
+    rc, out, recap = _play(lab)
+    assert rc == (0 if other == "p-down" else 2), (rc, out)
+    assert recap["p-good"] == (0, 0), (recap, out)
+    assert "ok: [p-good]" in _task(out, "backend_raw_ssh : Liveness via raw command"), out
+    for host, said in (("p-good", "OK"), (other, "UNREACHABLE" if other == "p-down" else REFUSED)):
+        assert SUMMARY % (host, said) in out, (host, out)
     assert not os.path.exists(lab.keys), os.listdir(lab.keys)

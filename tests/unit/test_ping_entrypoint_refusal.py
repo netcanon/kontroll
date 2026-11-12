@@ -88,3 +88,13 @@ def test_the_probes_rescue_fails_a_host_whose_check_could_not_be_loaded():
     assert rescue[1]["when"] == "ansible_failed_task is not defined", rescue
     message = rescue[1]["ansible.builtin.fail"]["msg"]
     assert "{{ inventory_hostname }}" in message and "{{ device_role" in message, message
+
+
+def test_the_reach_play_overrides_a_callers_any_errors_fatal():
+    """The reach play sets `any_errors_fatal: false`, as backup-configs.yml's capture play does (I-12). Guards the
+    I-83 reads' B S3 (A N4): under a caller's any_errors_fatal (ANSIBLE_ANY_ERRORS_FATAL, an ansible.cfg) one host's
+    failed probe or refusal failed every other host, rescue or not: beside a down host, a reachable one was moved into
+    the probe's rescue, whose `fail` ended the run before the key cleanup and left every key; beside a refused host, a
+    reachable one was dropped with no summary line. The play only reads, so it does not honour the setting;
+    tests/integration/test_ping_refused_class_runs.py runs it under ANSIBLE_ANY_ERRORS_FATAL."""
+    assert _reach(_plays()).get("any_errors_fatal") is False

@@ -148,9 +148,10 @@ def test_every_playbook_that_renders_device_keys_removes_them_last():
     pinned it outside backup-configs.yml). The import entry carries only its name: a `when:`, a `tags: [never]` or a
     `vars:` that renames the key dir on it left the dir in place with every other test green (fold 5's read A, N2; I-9
     reads the cleanup's own entry, not the last), and it names the shipped file itself, not one of its name elsewhere
-    (fold 6's read A, N2, and read B, N5: a no-op namesake under `files/` passed every test).""" def imported(entry):
-    return next((str(v) for k, v in entry.items() if k == "import_playbook" or k.endswith(".import_playbook")), None) if
-    isinstance(entry, dict) else None
+    (fold 6's read A, N2, and read B, N5: a no-op namesake under `files/` passed every test)."""
+    def imported(entry):
+        return next((str(v) for k, v in entry.items() if k == "import_playbook" or k.endswith(".import_playbook")),
+                    None) if isinstance(entry, dict) else None
 
     found = {}
     playbooks = os.path.join(ROOT, "ansible", "playbooks")

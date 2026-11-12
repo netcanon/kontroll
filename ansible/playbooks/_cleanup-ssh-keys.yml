@@ -3,33 +3,36 @@
 # (after the fleet connections are done); only a play that connects to nothing may follow it, as backup-configs.yml's,
 # install-node-exporter.yml's and wire-logging.yml's summaries and ping.yml's last play do, so that a run whose every
 # capture was recorded as failed (a read that answered nothing, an API answer that is not 200, a capture that failed as
-# a task: I-12, a class whose backup entrypoint is not installed, which the capture block refuses as such a task: I-66),
-# whose every install or wiring failed, or whose wiring request was refused (I-64), or whose every ping host's class has
-# no `check` entrypoint installed (I-83) still gets here (I-9). The device keys are EPHEMERAL (unlike file_tail_ssh's
-# persistent bind-mounted read key). A hard-aborted run skips this, and so does a run that an earlier play stops: one
-# whose every target is refused (by tasks/refuse-local-connection.yml, or in backup-configs.yml a `device_role` fact
-# refused), whose every host's role cannot be loaded (in backup-configs.yml, a class whose installed backup entrypoint
-# includes a file or role that is missing, or whose collection is not installed: I-66; in ping.yml, a class whose
-# installed `check` entrypoint cannot be loaded), whose failing local play ends it (in backup-configs.yml: I-48), whose
-# caller's any_errors_fatal stops more than one host at a failure (a capture's play overrides it; an install or a wiring
-# honours it, and reaches this play where the failing host is its only one), whose handler fails on every host
-# (install-node-exporter.yml and wire-logging.yml run a role's handlers at the play's end, outside their rescued block:
-# I-86), or (in ping.yml, whose reach play does not ignore unreachable hosts) that cannot be logged in to: ansible-core
-# runs no later play once every host of a play's batch has failed or been unreachable, and a later play whose every host
-# has failed by then runs nothing. Every key-auth host's key rendered for that run then stays in that run's dir. No
-# shipped caller passes `kontroll_run_id` (the Semaphore templates and schedules and the enact commands pass none), so
-# every run uses `kontroll-ssh-keys.manual`, which the next run that completes outside `--check` removes (a `--check`
-# run removes nothing). On the Semaphore runner that is `/tmp/kontroll-ssh-keys.manual` in the container's writable
-# layer: a host reboot or a container restart keeps it, and the next Semaphore fleet job that completes outside
-# `--check`, or recreating the container, removes it. Two jobs that overlap share it, so one's cleanup removes the
-# other's keys mid-run: that job's connections already open go on (ControlPersist keeps one 60 s), and a new one cannot
-# log in and counts as an ignored unreachable host, so the job can end green with that host not run; nothing runs
-# elsewhere. On a CLI host it is under `$XDG_RUNTIME_DIR` when that is set (logout or a reboot clears it), else `/tmp`.
-# A caller that passes `-e kontroll_run_id` gets a dir no later run reuses. `$KONTROLL_SSH_KEY_DIR`, when set, is the
-# dir itself: every run uses it, whatever the run id, and this play removes it. The dir removed is the first remaining
-# host's `kontroll_device_key_dir` (the task runs once): when a host var or a `set_fact` gives hosts different dirs,
-# every other dir stays, with its keys. The residue is 0600, run-uid-owned keys outside the repo (accepted,
-# SECURITY.md). Idempotent.
+# a task: I-12, a class whose backup entrypoint is not installed or holds no task, which the capture block refuses as
+# such a task: I-66), whose every install or wiring failed, or whose wiring request was refused (I-64), or whose every
+# ping host's class has no `check` entrypoint installed (I-83) still gets here (I-9). The device keys are EPHEMERAL
+# (unlike file_tail_ssh's persistent bind-mounted read key). A hard-aborted run skips this (in backup-configs.yml and
+# ping.yml, a host whose class's entrypoint does not parse, an installed collection whose role has no such entrypoint,
+# or a role whose defaults, vars or meta do not parse: ansible-core ends the whole run at the include, rc 4: I-66), and
+# so does a run that an earlier play stops: one whose every target is refused (by tasks/refuse-local-connection.yml, or
+# in backup-configs.yml a `device_role` fact refused), whose every host's role cannot be loaded (in backup-configs.yml,
+# a class whose installed backup entrypoint includes a file or role that is missing, or depends on a role or names a
+# collection that is not installed: I-66; in ping.yml, a class whose installed `check` entrypoint cannot be loaded),
+# whose failing local play ends it (in backup-configs.yml: I-48), whose caller's any_errors_fatal stops more than one
+# host at a failure (a capture's play and ping's reach play override it; an install or a wiring honours it, and reaches
+# this play where the failing host is its only one), whose handler fails on every host (install-node-exporter.yml and
+# wire-logging.yml run a role's handlers at the play's end, outside their rescued block: I-86), or (in ping.yml, whose
+# reach play does not ignore unreachable hosts) that cannot be logged in to: ansible-core runs no later play once every
+# host of a play's batch has failed or been unreachable, and a later play whose every host has failed by then runs
+# nothing. Every key-auth host's key rendered for that run then stays in that run's dir. No shipped caller passes
+# `kontroll_run_id` (the Semaphore templates and schedules and the enact commands pass none), so every run uses
+# `kontroll-ssh-keys.manual`, which the next run that completes outside `--check` removes (a `--check` run removes
+# nothing). On the Semaphore runner that is `/tmp/kontroll-ssh-keys.manual` in the container's writable layer: a host
+# reboot or a container restart keeps it, and the next Semaphore fleet job that completes outside `--check`, or
+# recreating the container, removes it. Two jobs that overlap share it, so one's cleanup removes the other's keys
+# mid-run: that job's connections already open go on (ControlPersist keeps one 60 s), and a new one cannot log in and
+# counts as an ignored unreachable host, so the job can end green with that host not run; nothing runs elsewhere. On a
+# CLI host it is under `$XDG_RUNTIME_DIR` when that is set (logout or a reboot clears it), else `/tmp`. A caller that
+# passes `-e kontroll_run_id` gets a dir no later run reuses. `$KONTROLL_SSH_KEY_DIR`, when set, is the dir itself:
+# every run uses it, whatever the run id, and this play removes it. The dir removed is the first remaining host's
+# `kontroll_device_key_dir` (the task runs once): when a host var or a `set_fact` gives hosts different dirs, every
+# other dir stays, with its keys. The residue is 0600, run-uid-owned keys outside the repo (accepted, SECURITY.md).
+# Idempotent.
 #
 # Access chain used:   control node / Semaphore runner -> rm the local ephemeral key dir
 # May break:           nothing — removes a LOCAL ephemeral dir after the fleet connections completed
