@@ -20,22 +20,37 @@ and by both reads of I-64 with the real logging_journald_remote role's `Restart 
 every host failed every host, ansible-core ran no later play, and the run's SSH keys stayed in its key dir (with one
 host of two failing, the run reached the cleanup).
 
-- **Fixed.** The block ends with a `meta: flush_handlers`, so the role's handlers run inside it, and a failed handler
-  is rescued and recorded as a failed task is: by the handler's name from ansible-core 2.19, which gives the rescue the
-  handler as `ansible_failed_task`. Before 2.19, which gives it none, a marker set after the role's tasks lets the
-  rescue record the host as "stopped while the role's handlers ran". Where a caller sets any_errors_fatal (through the
-  config: these plays take no keyword from an importing playbook), a marked host with no failed task may be one that
-  another host's failure stopped, which is dropped from every later play, so the rescue fails it by name, as it does
-  a host stopped before its handlers.
-- **Not changed.** Under a caller's any_errors_fatal over more than one host the run still ends at that play with the
-  keys kept (the I-64 entry); before 2.19 so does a one-host run whose handler fails, which 2.19+ records and takes to
-  the cleanup.
+- **Fixed.** The block ends with a `meta: flush_handlers`, so the handlers the role's tasks notify, and those they
+  notify in turn that are defined after them, run inside it, and a failed handler is rescued and recorded as a failed
+  task is: by the handler's name from ansible-core 2.19.2, which gives the rescue the handler as `ansible_failed_task`.
+  Before 2.19.2, which gives it none (unless force_handlers is on), a marker set after the role's tasks lets the rescue
+  record the host as "stopped while the role's handlers ran" (its recap still counts the handler's failure); the block
+  clears the marker first, so one kept from an earlier play of the run, or an inventory var of that name, does not
+  record a host whose role never ran. Where a caller sets any_errors_fatal (through the config: an importing playbook's
+  keyword does not reach these plays), a marked host with no failed task may be one that another host's failure stopped,
+  which is dropped from every later play, so the rescue fails it by name, as it does a host stopped before its handlers.
+- **Changed.** Two handler shapes escape the flush, measured on the three cores by both reads: a handler notified by
+  one defined after it runs at the play's end, outside the block (failing on every host, it still ends the run before
+  the cleanup with the keys kept), and a `run_once` handler that fails drops every other host from every later play,
+  named by no line. tests/unit/test_fleet_play_rescue.py refuses either in every role under ansible/roles, the only
+  roles these plays dispatch; no shipped role has one.
+- **Not changed.** Under a caller's any_errors_fatal, where one host's failure stops another (or, before 2.19.2,
+  every host's handler fails), the run still ends at that play with the keys kept (the I-64 entry); before 2.19.2 so
+  does a one-host run whose handler fails, which 2.19.2 and later record and take to the cleanup, and a run whose
+  handler fails on every host in a `meta: flush_handlers` of the role's own (no shipped role has one).
+  backup-configs.yml and ping.yml run a class's entrypoint with no flush, so a handler one notified would run at the
+  play's end; no shipped class's backup or `check` entrypoint notifies one. The three are named with the runs that end
+  before the cleanup.
 - **Tests.** tests/integration/test_fleet_play_failure_cleans_up.py: a handler that fails on every host (install and
-  wiring: rc 2, the key dir gone, each host named), on one host of two, and under any_errors_fatal over two hosts (the
-  stopped host named, the keys kept) and over one (each core's outcome); the stub's handler fails on the hosts a row
-  lists. tests/unit/test_fleet_play_rescue.py pins the marker, the flush, the rescue's second record and both `when`s.
-- **Docs.** Both playbooks' headers, _cleanup-ssh-keys.yml's header and SECURITY.md (the runs that end before the
-  cleanup), tests/README.md.
+  wiring: rc 2, the key dir gone, each host named), a handler that one notifies, defined after it, failing on every
+  host (the same), a handler failing on one host of two, a role that cannot be loaded on a host carrying the marker in
+  (failed by name, as without it), and under any_errors_fatal over two hosts (the stopped host named, the keys kept;
+  set in the environment, and for the install in ansible.cfg) and over one (each core's outcome). The rows read the
+  core, patch included, in their bodies. tests/unit/test_fleet_play_rescue.py pins the marker's clearing and setting
+  and the flush (each task's keys whole), the rescue's second record (its whole text, per playbook) and both `when`s,
+  and every role's handlers (each notifies only handlers defined after it; none is `run_once`).
+- **Docs.** Both playbooks' headers and rescue comments, _cleanup-ssh-keys.yml's header, SECURITY.md C4 and the
+  materialized-key accepted-risk row (the runs that end before the cleanup), tests/README.md.
 
 ### fix(ci): each pytest leg runs an ansible-core the project ships, with every module's collections (I-94, I-80, I-81, 2026-11-12)
 
@@ -348,9 +363,9 @@ stayed in its key dir until the next run that completed.
   any_errors_fatal every host's work stops at the first failure, as before: the failing host is recorded, every other
   host is failed as stopped by another host's failure, and with more than one host, or where an ignored unreachable
   result trips it (I-97), the run ends at that play, with the keys left; with one host whose work fails it reaches the
-  cleanup, and the summary names it. Every host refused, every host's role
-  failing to load (I-66) and a handler that fails on every host (I-86) still end the run before the cleanup, and the
-  keys stay.
+  cleanup, and the summary names it. Every host refused and every host's role
+  failing to load (I-66) still end the run before the cleanup, and the keys stay (a handler that fails on every host
+  did too, until the I-86 entry).
 - **Tests.** `unit/test_fleet_play_rescue.py`: the dispatching play's refusal, then one rescued block holding the
   work, the play's `ignore_unreachable` true; the rescue's record (the failed task's name alone), its `fail` and
   `end_host`, and no `failed_when`, `ignore_errors`, `tags` or `loop` on a rescue or summary task; the summaries

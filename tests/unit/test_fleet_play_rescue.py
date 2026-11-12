@@ -9,10 +9,10 @@ a block whose rescue records the host's failure by the failed task's name, fails
 task of its own (its role could not be loaded, or another host's failure stopped it; no later play sees it), and ends
 the play for the host, as its failure did (a handler it notified does not run); wire-logging.yml's validation play
 records a refusal, which the device play reads first, so a refused request targets no host. Plays after the cleanup
-fail what was recorded; their one task is a `fail`, which connects to nothing. The role's handlers run inside the
-block, so a handler that fails is recorded as a failed task is, where at the play's end, outside it, one that failed
-on every host ended the run before the cleanup (I-86).
-tests/integration/test_fleet_play_failure_cleans_up.py runs both playbooks for real.
+fail what was recorded; their one task is a `fail`, which connects to nothing. The handlers the role's tasks notify
+run inside the block, so a handler that fails is recorded as a failed task is, where at the play's end, outside it,
+one that failed on every host ended the run before the cleanup (I-86); every role's handlers are held to the shape
+that keeps them there. tests/integration/test_fleet_play_failure_cleans_up.py runs both playbooks for real.
 """
 import os
 import re
@@ -22,17 +22,27 @@ import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PLAYBOOKS = os.path.join(ROOT, "ansible", "playbooks")
-# The block's last two tasks: the marker that the role's tasks are done, and the role's handlers run inside the block.
+ROLES = os.path.join(ROOT, "ansible", "roles")
+# The block's first task clears the marker; its last two set it (the role's tasks are done) and run the role's
+# handlers inside the block.
+CLEAR_MARKER = [("ansible.builtin.set_fact", {"_kontroll_handlers_due": False})]
 HANDLERS_IN_BLOCK = [("ansible.builtin.set_fact", {"_kontroll_handlers_due": True}),
                      ("ansible.builtin.meta", "flush_handlers")]
-# playbook: (the dispatching play's name, the record its rescue sets, the work its block holds, as (module, arg))
+# playbook: (the dispatching play's name, the record its rescue sets, the work its block holds, as (module, arg), the
+# record's text for a host stopped while the role's handlers ran)
 DISPATCH = {
     "install-node-exporter.yml": ("Install node_exporter on the metrics-eligible hosts", "kontroll_install_failed",
-                                  [("ansible.builtin.gather_facts", None),
-                                   ("ansible.builtin.include_role", {"name": "node_exporter"})] + HANDLERS_IN_BLOCK),
+                                  CLEAR_MARKER + [("ansible.builtin.gather_facts", None),
+                                                  ("ansible.builtin.include_role", {"name": "node_exporter"})]
+                                  + HANDLERS_IN_BLOCK,
+                                  "the install stopped while the role's handlers ran (the failure is printed above)"),
     "wire-logging.yml": ("Wire the logging method onto the target device class", "kontroll_wire_failed",
-                         [("ansible.builtin.include_role", {"name": "{{ role }}"})] + HANDLERS_IN_BLOCK),
+                         CLEAR_MARKER + [("ansible.builtin.include_role", {"name": "{{ role }}"})]
+                         + HANDLERS_IN_BLOCK,
+                         "the wiring stopped while the role's handlers ran (the failure is printed above)"),
 }
+# The marker as the rescue reads it: false where it is not defined.
+DUE = "(_kontroll_handlers_due | default(false) | bool)"
 NAMED = "ansible_failed_task.name | default('(unnamed)', true)"
 # How the rescue reads a caller's any_errors_fatal (the config is the only way a caller sets it for these plays).
 AEF = "(lookup('ansible.builtin.config', 'ANY_ERRORS_FATAL') | bool)"
@@ -101,10 +111,14 @@ def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_bl
     block, the refusal moved into it (the rescue would record a refused host, and the scan's first-task rule would no
     longer hold), an `always` that runs work on a failed host, `ignore_unreachable` turned off (a down host would fail
     the run, and with every host down end it before the cleanup), and the flush dropped (the role's handlers run at the
-    play's end, outside the block, so one that fails on every host ends the run before the cleanup again: I-86) or the
-    marker dropped or moved before the include (before 2.19 the rescue reads it to tell a failed handler from a role
-    that could not be loaded)."""
-    title, _record, work = DISPATCH[name]
+    play's end, outside the block, so one that fails on every host ends the run before the cleanup again: I-86), the
+    marker dropped or moved before the include (before 2.19.2 the rescue reads it to tell a failed handler from a role
+    that could not be loaded), or its clearing dropped (a marker kept from an earlier play of the run, or an inventory
+    var of that name, then makes the rescue record a host whose role never loaded instead of failing it, and no later
+    play names it: both reads of I-86 measured it). Each of the three tasks holds its name and module alone: a `when`
+    or `tags` on one keeps the module and argument and stops it running (the second read's mutants `when: false` and
+    `tags: [never]` on the marker passed every row on 2.19.4, and kill only on 2.18.19)."""
+    title, _record, work, _text = DISPATCH[name]
     play = _play(name, title)
     assert set(play) == {"name", "hosts", "gather_facts", "ignore_unreachable", "tasks"}, play
     assert play["ignore_unreachable"] is True and play["gather_facts"] is False, play
@@ -114,6 +128,8 @@ def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_bl
     block = tasks[1]
     assert set(block) == {"name", "block", "rescue"}, block
     assert [(_module(t), t[_module(t)]) for t in block["block"]] == work, block["block"]
+    for task in [block["block"][0]] + block["block"][-2:]:
+        assert set(task) == {"name", _module(task)}, task
 
 
 def test_the_install_runs_its_role_only_on_a_host_whose_gathering_answered():
@@ -122,8 +138,8 @@ def test_the_install_runs_its_role_only_on_a_host_whose_gathering_answered():
     role then read the facts the gathering did not bring and failed the host, so one down host failed the run.
     tests/integration/test_fleet_play_failure_cleans_up.py runs it with the stub and with the real role."""
     block = _play("install-node-exporter.yml", DISPATCH["install-node-exporter.yml"][0])["tasks"][1]["block"]
-    assert block[0].get("register") == "_kontroll_gather", block[0]
-    assert block[1].get("when") == "_kontroll_gather is not unreachable", block[1]
+    assert block[1].get("register") == "_kontroll_gather", block[1]
+    assert block[2].get("when") == "_kontroll_gather is not unreachable", block[2]
 
 
 @pytest.mark.parametrize("name", sorted(DISPATCH))
@@ -131,23 +147,25 @@ def test_the_rescue_records_the_task_fails_a_host_with_no_failed_task_and_ends_t
     """The rescue is four tasks, in order, each holding its name, its module and (the first three) its `when`, and
     nothing else: a `set_fact` of the playbook's record alone, `when: ansible_failed_task is defined`, whose value's
     one expression is `ansible_failed_task.name | default('(unnamed)', true)`, reading nothing of
-    `ansible_failed_result`; a `set_fact` of the record alone, a fixed text naming the role's handlers, when there is
-    no failed task and the handlers' marker is defined; an `ansible.builtin.fail` when there is no failed task and
-    either the marker is not defined or any_errors_fatal is on (read from the config), whose message names the causes
+    `ansible_failed_result`; a `set_fact` of the record alone, the playbook's fixed text naming the role's handlers
+    (whole), when there is no failed task and the handlers' marker is true; an `ansible.builtin.fail` when there is no
+    failed task and either the marker is not true or any_errors_fatal is on (read from the config), whose message names
+    the causes
     its condition cannot tell apart (the role could not be loaded, or another host's failure stopped it); and
     `meta: end_host`. Guards: a record that reads the failed task's result (a role's task may handle what its log must
     not show; the result is printed at that task already); an unnamed task's "" kept by a `default` without its
     `true`; a host with no failed task of its own left to the record alone (it is dropped from every later play, so
     the run would end with rc 0: the I-12 reads' S1), which a fail without the marker's clause would do for a host
-    whose handler failed before 2.19, and without the config's for a host another host's failure stopped under
+    whose handler failed before 2.19.2, and without the config's for a host another host's failure stopped under
     any_errors_fatal (I-86's measured design); a handler record without the marker's clause, whose text would name
     handlers for a role that could not be loaded (the fail then fails that host, so no run shows it: this row is its
-    only guard); the fail running for a task failure or a failed handler without any_errors_fatal too (the host would
-    end the run before the cleanup again); a
-    `failed_when`, `ignore_errors`, `tags` or `loop` that keeps a task from running or failing; a message that blames
+    only guard); a record text that names the other playbook or loses its pointer to the failure (the second read's
+    mutants passed every row on 2.19.4: only 2.18.19's rows read it); the fail running for a task failure or a failed
+    handler without any_errors_fatal too (the host would end the run before the cleanup again); a `failed_when`,
+    `ignore_errors`, `tags` or `loop` that keeps a task from running or failing; a message that blames
     the role for another host's failure (the I-64 reads' S1); and the play going on for the host past the rescue,
     which would run a handler a task notified before it failed, which its failure did not."""
-    _title, record, _work = DISPATCH[name]
+    _title, record, _work, text = DISPATCH[name]
     rescue = _play(name, DISPATCH[name][0])["tasks"][1]["rescue"]
     assert [_module(t) for t in rescue] == ["ansible.builtin.set_fact", "ansible.builtin.set_fact",
                                             "ansible.builtin.fail", "ansible.builtin.meta"], rescue
@@ -159,13 +177,11 @@ def test_the_rescue_records_the_task_fails_a_host_with_no_failed_task_and_ends_t
     assert set(ends) == {"name", "ansible.builtin.meta"}, ends
     assert _exprs(sets["ansible.builtin.set_fact"][record]) == [NAMED], sets
     assert _exprs(handler_sets["ansible.builtin.set_fact"][record]) == [], handler_sets
-    assert "stopped while the role's handlers ran" in handler_sets["ansible.builtin.set_fact"][record], handler_sets
+    assert handler_sets["ansible.builtin.set_fact"][record] == text, handler_sets
     assert "ansible_failed_result" not in yaml.safe_dump(rescue), rescue
     assert sets["when"] == "ansible_failed_task is defined", sets
-    assert handler_sets["when"] == "ansible_failed_task is not defined and _kontroll_handlers_due is defined", \
-        handler_sets
-    assert fails["when"] == ("ansible_failed_task is not defined and (_kontroll_handlers_due is not defined or "
-                             + AEF + ")"), fails
+    assert handler_sets["when"] == "ansible_failed_task is not defined and " + DUE, handler_sets
+    assert fails["when"] == "ansible_failed_task is not defined and (not " + DUE + " or " + AEF + ")", fails
     msg = " ".join(str(fails["ansible.builtin.fail"]["msg"]).split())
     assert "could not be loaded" in msg and "another host's failure stopped it" in msg, msg
     assert ends["ansible.builtin.meta"] == "end_host", ends
@@ -182,7 +198,7 @@ def test_a_play_after_the_cleanup_fails_each_recorded_host_and_connects_to_nothi
     before the cleanup again), dropped or kept from failing (a failed install or wiring would end the run green), run
     over another pattern (a recorded host it does not reach is never failed), or joined by a play that reaches a device
     after its key is gone (MF-4)."""
-    title, record, _work = DISPATCH[name]
+    title, record, _work, _text = DISPATCH[name]
     plays = _plays(name)
     after = plays[_cleanup_at(plays) + 1:]
     assert after, "no play follows the key cleanup"
@@ -256,3 +272,53 @@ def test_a_wiring_request_no_validation_play_read_fails_the_run_after_the_cleanu
     assert "--limit <host>:localhost" in " ".join(task["ansible.builtin.fail"]["msg"].split()), task
     with open(os.path.join(PLAYBOOKS, "wire-logging.yml"), encoding="utf-8") as fh:
         assert "add --limit <host>:localhost" in fh.read()
+
+
+def _notified(handler):
+    value = handler.get("notify") or []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _answers(handler):
+    """The names a `notify` reaches this handler by: its name and each `listen` topic."""
+    listen = handler.get("listen") or []
+    return {handler.get("name")} | set([listen] if isinstance(listen, str) else listen)
+
+
+def _role_handlers():
+    """{role: its handlers/main.yml's entries} for every role under ansible/roles that has one."""
+    found = {}
+    for role in sorted(os.listdir(ROLES)):
+        for leaf in ("main.yml", "main.yaml"):
+            path = os.path.join(ROLES, role, "handlers", leaf)
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as fh:
+                    found[role] = yaml.safe_load(fh) or []
+    return found
+
+
+def test_every_roles_handlers_run_in_one_flush_and_none_runs_once():
+    """Every role under ansible/roles (the only roles the two plays dispatch: wire-logging.yml refuses a role with no
+    tasks/main.yml there) has handlers whose entries are each a named task (no include, import or block, which this
+    row could not follow), none `run_once`, and each `notify` naming only handlers defined after it, by name or
+    `listen` topic, in the same file. Guards the two shapes that escape the block's flush (I-86, both reads, measured
+    on ansible-core 2.18.19, 2.19.4 and 2.20.10): a handler notified by one defined after it runs at the play's end,
+    outside the block, so one that fails on every host ends the run before the key cleanup again with the keys kept;
+    and a `run_once` handler that fails brings only the host it ran on to the rescue, while ansible-core drops every
+    other host from every later play, failed by no task and named by no line. A forward chain runs inside the flush
+    (tests/integration/test_fleet_play_failure_cleans_up.py runs one failing on every host). No shipped role has
+    either shape; a wiring role is a drop-in (logging/*.yml names it), so the next one could."""
+    handlers = _role_handlers()
+    assert handlers, "no role's handlers found: the row would hold nothing"
+    for role, entries in handlers.items():
+        assert isinstance(entries, list), (role, entries)
+        for i, handler in enumerate(entries):
+            where = "%s handler %d (%s)" % (role, i, handler.get("name"))
+            assert handler.get("name"), where
+            assert not set(handler) & {"block", "include_tasks", "import_tasks", "ansible.builtin.include_tasks",
+                                       "ansible.builtin.import_tasks"}, where
+            assert "run_once" not in handler, where
+            for target in _notified(handler):
+                answering = [j for j, other in enumerate(entries) if target in _answers(other)]
+                assert answering, "%s notifies %r, which no handler of the role answers" % (where, target)
+                assert min(answering) > i, "%s notifies %r, defined at or before it" % (where, target)

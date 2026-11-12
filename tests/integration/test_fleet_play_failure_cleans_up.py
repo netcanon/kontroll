@@ -13,7 +13,13 @@ since I-89 runs nothing more on it, the real node_exporter role included (it fai
 its facts missing); and what a caller's any_errors_fatal does: every host's work stops at the first failure, and with
 more than one host the run ends there with the keys kept (a residual the docs name), with one it reaches the cleanup;
 and that a wiring run under a `--limit` that leaves localhost out, which skips the validation play and so wired nothing
-and passed, now fails naming the limit to use (I-88), while `--limit <host>:localhost` wires that host alone.
+and passed, now fails naming the limit to use (I-88), while `--limit <host>:localhost` wires that host alone. And
+(I-86) that a handler the role's tasks notify, or one such a handler notifies, runs inside the rescued block: one that
+fails on every host is recorded, the run reaches the cleanup and names each host (by the handler's name from
+ansible-core 2.19.2, by the rescue's fixed text before it); one that fails on one host of two leaves the other done; a
+host that carries the handlers' marker into the play is still failed by name when its role cannot be loaded; and under
+a caller's any_errors_fatal, from the environment or from ansible.cfg, the host a failed handler stopped is failed by
+name.
 tests/unit/test_fleet_play_rescue.py pins the shapes. The stubs run `debug`, `fail` and `include_tasks`, which open no
 connection. install-node-exporter.yml's fact gathering meets a stand-in `ssh` first on PATH (FAKE_SSH), whether or not
 the machine has an ssh client (the validate image has none): for a host whose address the row lists as up it runs the
@@ -58,6 +64,15 @@ STUB = [
 # The stub's handler prints its line, then fails on the hosts in `handler_fail`.
 HANDLERS = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN {{ inventory_hostname }}"},
              "failed_when": "inventory_hostname in (handler_fail | default([]))"}]
+# A forward chain: the stub's handler reports a change and notifies one defined after it, which fails on the hosts in
+# `handler_fail` (the only shape tests/unit/test_fleet_play_rescue.py lets a role's handlers take).
+CHAIN = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN {{ inventory_hostname }}"},
+          "changed_when": True, "notify": "Stub handler next"},
+         {"name": "Stub handler next", "ansible.builtin.debug": {"msg": "NEXT RAN {{ inventory_hostname }}"},
+          "failed_when": "inventory_hostname in (handler_fail | default([]))"}]
+# The first ansible-core whose rescue sees a failed handler as `ansible_failed_task` (its 2.19.2 changelog,
+# ansible/ansible#85682); before it the rescue sees none.
+NAMED_HANDLER = (2, 19, 2)
 # The stand-in `ssh`: for a host in $FAKESSH_UP (a comma list of addresses) it runs the remote command here, under
 # /bin/sh, as an ssh login would on the device; for any other it answers as a refused connection does (exit 255).
 FAKE_SSH = """#!%s
@@ -80,13 +95,14 @@ ADDRESS = {"a": "192.0.2.36", "b": "192.0.2.37"}
 INSTALL = "Install + start node_exporter (the via:host host metrics agent)"
 
 
-def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=None, args=(), up=(), real=False):
+def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=None, args=(), up=(), real=False,
+         handlers=None, cfg=""):
     """Run the shipped `playbook` from a copy of ansible/playbooks (with logging/, a probe module whose group is `g`
-    and an instance.yml), the role `role` a stub (STUB, HANDLERS) or, when `real`, the shipped role of that name, over
-    `hosts` in group `g`, with `extra` as one JSON `-e` and `args` after it, each text in `append` added to the copy's
-    file it names, a key dir under `tmp_path` holding one stale key, and FAKE_SSH first on PATH, answering for the
-    addresses in `up`. Return the exit code, the output, each host's failed count from the recap, and whether the key
-    dir is gone."""
+    and an instance.yml), the role `role` a stub (STUB, and `handlers` or HANDLERS) or, when `real`, the shipped role
+    of that name, over `hosts` in group `g`, with `extra` as one JSON `-e` and `args` after it, each text in `append`
+    added to the copy's file it names, `cfg` added to ansible.cfg's [defaults], a key dir under `tmp_path` holding one
+    stale key, and FAKE_SSH first on PATH, answering for the addresses in `up`. Return the exit code, the output, each
+    host's failed count from the recap, and whether the key dir is gone."""
     tree = tmp_path / "t"
     shutil.copytree(os.path.join(ROOT, "ansible", "playbooks"), str(tree / "ansible" / "playbooks"))
     shutil.copytree(os.path.join(ROOT, "logging"), str(tree / "logging"))
@@ -103,13 +119,13 @@ def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=Non
         (stub / "tasks" / "main.yml").write_text(yaml.safe_dump(STUB, sort_keys=False))
         (stub / "tasks" / "ok.yml").write_text(yaml.safe_dump([{"name": "Stub loaded", "ansible.builtin.debug": {
             "msg": "LOADED {{ inventory_hostname }}"}}]))
-        (stub / "handlers" / "main.yml").write_text(yaml.safe_dump(HANDLERS))
+        (stub / "handlers" / "main.yml").write_text(yaml.safe_dump(handlers or HANDLERS, sort_keys=False))
     for rel, text in (append or {}).items():
         with open(str(tree / rel), "a", encoding="utf-8") as fh:
             fh.write(text)
     (tree / "inv.yml").write_text(yaml.safe_dump({"all": {"children": {"g": {"hosts": hosts}}}}))
     (tree / "ansible" / "ansible.cfg").write_text("[defaults]\nroles_path = roles\nretry_files_enabled = False\n"
-                                                  "[ssh_connection]\npipelining = True\n")
+                                                  + cfg + "[ssh_connection]\npipelining = True\n")
     keys = tmp_path / "keys"
     keys.mkdir(mode=0o700)
     (keys / "h.key").write_text("not a key: a stale file the cleanup must remove\n")
@@ -152,14 +168,17 @@ def _task(out, name):
     return out[at:min(ends)] if ends else out[at:]
 
 
-def _wire(tmp_path, extra, role=WIRE_ROLE, env_extra=None, refused=True, only=None, append=None, args=()):
+def _wire(tmp_path, extra, role=WIRE_ROLE, env_extra=None, refused=True, only=None, append=None, args=(),
+          handlers=None, host_vars=None, cfg=""):
     hosts = {"a": _ssh("192.0.2.36"), "b": _ssh("192.0.2.37")}
     if only:
         hosts = {h: hosts[h] for h in only}
     if refused:
         hosts["n"] = {"ansible_connection": "local", "ansible_host": "192.0.2.30"}
+    for host, more in (host_vars or {}).items():
+        hosts[host].update(more)
     return _run(tmp_path, "wire-logging.yml", WIRE_ROLE, hosts, dict(role=role, target="probe", **extra), env_extra,
-                append, args)
+                append, args, handlers=handlers, cfg=cfg)
 
 
 def _stopped(host, task, what="wiring"):
@@ -168,7 +187,7 @@ def _stopped(host, task, what="wiring"):
 
 def _no_task_of_its_own(host, role="the wiring role %s" % WIRE_ROLE):
     return ('"msg": "%s: stopped with no failed task of its own: %s could not be loaded, or another host\'s failure '
-            'stopped it (a run_once task, a caller\'s any_errors_fatal, under which before ansible-core 2.19 its '
+            'stopped it (a run_once task, a caller\'s any_errors_fatal, under which before ansible-core 2.19.2 its '
             'own failed handler names no task either); the cause is printed above"' % (host, role))
 
 
@@ -231,13 +250,19 @@ def test_a_refused_request_targets_no_host_whatever_wire_group_holds(tmp_path, w
     assert "STUB " not in out and "Refused for this host" not in out and ": FAILED: the wiring" not in out, out
 
 
-def test_a_wiring_role_that_cannot_be_loaded_fails_its_host_beside_a_good_one(tmp_path):
+@pytest.mark.parametrize("stale", [False, True], ids=["no-marker", "stale-marker"])
+def test_a_wiring_role_that_cannot_be_loaded_fails_its_host_beside_a_good_one(tmp_path, stale):
     """Host a's stub includes a task file that does not exist, which is no task failure: the host reaches the rescue
     with no failed task, and the rescue's `fail` fails it with the message that names both causes it cannot tell apart
     (its recap counts the load error and the `fail`, on both cores); b is wired, the key dir is gone, and the run fails
     (rc 2). Guards the load failure left to the record alone: the host is dropped from every later play, so no summary
-    would fail it and the run would end green (the I-12 reads' S1, in backup-configs.yml's rescue)."""
-    rc, out, recap, gone = _wire(tmp_path, {"stub_load_fail": ["a"]})
+    would fail it and the run would end green (the I-12 reads' S1, in backup-configs.yml's rescue). With a carrying
+    `_kontroll_handlers_due: true` into the play (an inventory var here; a marker kept from an earlier play of a run
+    that imports both playbooks does the same), the outcome is the same: the block clears the marker first. Without
+    the clearing, the rescue recorded a as stopped while its handlers ran, and no later play named it (I-86, both
+    reads)."""
+    rc, out, recap, gone = _wire(tmp_path, {"stub_load_fail": ["a"]},
+                                 host_vars={"a": {"_kontroll_handlers_due": True}} if stale else None)
     assert rc == 2 and gone, out
     assert recap == {"a": 2, "b": 0, "n": 1, "localhost": 0}, (recap, out)
     assert _no_task_of_its_own("a") in out, out
@@ -408,19 +433,20 @@ def test_a_limit_with_localhost_wires_the_limited_host_alone(tmp_path):
 
 
 def _core():
-    """(major, minor) of the ansible-core on PATH, from `ansible-playbook --version`. Called in a row's body only: a
-    file's top level runs at collection, before the module's skip (I-98)."""
+    """(major, minor, patch) of the ansible-core on PATH, from `ansible-playbook --version`: the patch matters, the
+    rescue's view of a failed handler changing at 2.19.2 (NAMED_HANDLER). Called in a row's body only: a file's top
+    level runs at collection, before the module's skip (I-98)."""
     out = subprocess.run(["ansible-playbook", "--version"], capture_output=True, text=True, timeout=60).stdout
-    m = re.search(r"\[core (\d+)\.(\d+)", out)
+    m = re.search(r"\[core (\d+)\.(\d+)\.(\d+)", out)
     assert m, out
-    return int(m.group(1)), int(m.group(2))
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
-def _handler_stopped(host, what):
-    """The summary's line for a host whose handler failed: by the handler's name from ansible-core 2.19, which gives
-    the rescue the handler as its failed task, and by the rescue's fixed text before 2.19, which gives it none."""
-    if _core() >= (2, 19):
-        return _stopped(host, "Stub handler", what)
+def _handler_stopped(host, what, handler="Stub handler"):
+    """The summary's line for a host whose handler failed: by the handler's name from ansible-core 2.19.2, which gives
+    the rescue the handler as its failed task, and by the rescue's fixed text before it, which gives it none."""
+    if _core() >= NAMED_HANDLER:
+        return _stopped(host, handler, what)
     return '"msg": "%s: FAILED: the %s stopped while the role\'s handlers ran (the failure is printed above)"' % (
         host, what)
 
@@ -428,19 +454,42 @@ def _handler_stopped(host, what):
 @pytest.mark.parametrize("what", ["install", "wiring"])
 def test_a_handler_that_fails_on_every_host_removes_the_keys_and_names_each_host(tmp_path, what):
     """The stub's handler fails on both hosts, after every stub step ran: the run fails (rc 2) at the summary, after
-    the key cleanup, which removed the key dir, and names each host (by the handler's name from 2.19; before it, as
+    the key cleanup, which removed the key dir, and names each host (by the handler's name from 2.19.2; before it, as
     stopped while the role's handlers ran). Guards I-86: the role's handlers ran at the play's end, outside the block,
     so a handler that failed on every host ended the run there, before the cleanup, and the keys stayed; with the
-    flush dropped that is so again, and before 2.19, with the marker dropped, the rescue fails each host and the run
+    flush dropped that is so again, and before 2.19.2, with the marker dropped, the rescue fails each host and the run
     ends there too."""
     extra = {"handler_fail": ["a", "b"]}
     rc, out, recap, gone = _install(tmp_path, extra) if what == "install" else _wire(tmp_path, extra, refused=False)
     assert rc == 2 and gone, out
-    per_host = 1 if _core() >= (2, 19) else 2     # before 2.19 the handler's failure counts, beside the summary's
+    per_host = 1 if _core() >= NAMED_HANDLER else 2     # before 2.19.2 the handler's failure counts too
     assert {h: recap[h] for h in ("a", "b")} == {"a": per_host, "b": per_host}, (recap, out)
     for host in ("a", "b"):
         assert _handler_stopped(host, what) in out, out
         assert "AFTER %s" % host in out and "HANDLER RAN %s" % host in out, out
+
+
+@pytest.mark.parametrize("what", ["install", "wiring"])
+def test_a_handler_a_handler_notifies_runs_inside_the_block(tmp_path, what):
+    """The stub's handler notifies one defined after it (CHAIN), which fails on both hosts: both run inside the block's
+    flush, so the run fails (rc 2) at the summary, after the key cleanup, which removed the key dir, and names each
+    host (by the second handler's name from 2.19.2; before it, as stopped while the role's handlers ran). Holds the
+    premise of tests/unit/test_fleet_play_rescue.py's handler row, which lets a role's handlers notify forward only:
+    a chain defined backward runs its second handler at the play's end, outside the block, and failing on every host
+    ends the run before the cleanup with the keys kept (both reads of I-86 measured it on all three cores)."""
+    extra = {"handler_fail": ["a", "b"]}
+    if what == "install":
+        hosts = {h: _ssh(address) for h, address in ADDRESS.items()}
+        rc, out, recap, gone = _run(tmp_path, "install-node-exporter.yml", "node_exporter", hosts,
+                                    dict(target="g", **extra), up=list(ADDRESS.values()), handlers=CHAIN)
+    else:
+        rc, out, recap, gone = _wire(tmp_path, extra, refused=False, handlers=CHAIN)
+    assert rc == 2 and gone, out
+    per_host = 1 if _core() >= NAMED_HANDLER else 2
+    assert {h: recap[h] for h in ("a", "b")} == {"a": per_host, "b": per_host}, (recap, out)
+    for host in ("a", "b"):
+        assert _handler_stopped(host, what, "Stub handler next") in out, out
+        assert "HANDLER RAN %s" % host in out and "NEXT RAN %s" % host in out, out
 
 
 def test_a_handler_that_fails_on_one_host_leaves_the_other_installed(tmp_path):
@@ -452,39 +501,44 @@ def test_a_handler_that_fails_on_one_host_leaves_the_other_installed(tmp_path):
     assert "AFTER b" in out and "HANDLER RAN b" in out, out
 
 
-@pytest.mark.parametrize("what", ["install", "wiring"])
-def test_a_callers_any_errors_fatal_over_two_hosts_and_a_failed_handler_names_the_host_it_stopped(tmp_path, what):
-    """Under ANSIBLE_ANY_ERRORS_FATAL=True the stub's handler fails on host a: b, which a's failure stopped, is failed
-    in the rescue by name, and the run ends at that play with the key dir kept, as for a task failure under the
-    setting (the residual the docs name); from 2.19 a is rescued and recorded, before it a is failed in the rescue
-    too (the rescue cannot tell its failed handler from another host's stop). Guards the fail's `when` losing the
-    config's clause: b would be recorded alone, then dropped from every later play, and never named."""
+@pytest.mark.parametrize("what,source", [("install", "env"), ("wiring", "env"), ("install", "cfg")])
+def test_a_callers_any_errors_fatal_over_two_hosts_and_a_failed_handler_names_the_host_it_stopped(tmp_path, what,
+                                                                                                   source):
+    """Under any_errors_fatal the stub's handler fails on host a: b, which a's failure stopped, is failed in the rescue
+    by name, and the run ends at that play with the key dir kept, as for a task failure under the setting (the residual
+    the docs name); from 2.19.2 a is rescued and recorded, before it a is failed in the rescue too (the rescue cannot
+    tell its failed handler from another host's stop). The setting comes from ANSIBLE_ANY_ERRORS_FATAL=True, or (the
+    install) from ansible.cfg's `any_errors_fatal = True` with no such variable. Guards the fail's `when` losing the
+    config's clause (b would be recorded alone, then dropped from every later play, and never named), and reading the
+    setting from the environment alone (the second read's mutant passed every row that set it there: ansible.cfg's is
+    the same setting)."""
     extra = {"handler_fail": ["a"]}
+    env, cfg = (AEF, "") if source == "env" else (None, "any_errors_fatal = True\n")
     if what == "install":
         rc, out, recap, gone = _run(tmp_path, "install-node-exporter.yml", "node_exporter",
                                     {h: _ssh(address) for h, address in ADDRESS.items()}, dict(target="g", **extra),
-                                    AEF, up=list(ADDRESS.values()))
+                                    env, up=list(ADDRESS.values()), cfg=cfg)
         role = "the node_exporter role"
     else:
-        rc, out, recap, gone = _wire(tmp_path, extra, env_extra=AEF, refused=False)
+        rc, out, recap, gone = _wire(tmp_path, extra, env_extra=env, refused=False, cfg=cfg)
         role = "the wiring role %s" % WIRE_ROLE
     assert rc == 2 and not gone, out
     assert _no_task_of_its_own("b", role) in out and ": FAILED: the %s" % what not in out, out
-    if _core() >= (2, 19):
+    if _core() >= NAMED_HANDLER:
         assert recap.get("a") == 0 and _recap(out, "rescued").get("a") == 1 and recap.get("b") == 1, (recap, out)
     else:
         assert _no_task_of_its_own("a", role) in out and recap.get("b") == 1, (recap, out)
 
 
 def test_a_callers_any_errors_fatal_over_one_host_and_a_failed_handler(tmp_path):
-    """Under ANSIBLE_ANY_ERRORS_FATAL=True with host a alone, the stub's handler fails: from 2.19 the rescue records
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True with host a alone, the stub's handler fails: from 2.19.2 the rescue records
     it by the handler's name, the run reaches the cleanup, which removed the key dir, and the summary names a; before
-    2.19 the rescue fails a there (the residual the headers name) and the key dir stays. rc 2 either way. Guards the
-    docs' account of a one-host run under the setting on each side of 2.19."""
+    2.19.2 the rescue fails a there (the residual the headers name) and the key dir stays. rc 2 either way. Guards the
+    docs' account of a one-host run under the setting on each side of 2.19.2."""
     rc, out, recap, gone = _run(tmp_path, "install-node-exporter.yml", "node_exporter", {"a": _ssh(ADDRESS["a"])},
                                 dict(target="g", handler_fail=["a"]), AEF, up=[ADDRESS["a"]])
     assert rc == 2, out
-    if _core() >= (2, 19):
+    if _core() >= NAMED_HANDLER:
         assert gone and _handler_stopped("a", "install") in out, out
     else:
         assert not gone and _no_task_of_its_own("a", "the node_exporter role") in out, out
