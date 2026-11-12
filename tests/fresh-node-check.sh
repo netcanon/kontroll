@@ -26,15 +26,15 @@
 #      installer image bakes, are skipped. Those are the legacy host path's, and their check reads the host's own
 #      packages (apt in check mode needs the host's python3-apt), not what a fresh node installs. It must pass and
 #      reach its summary.
-#   7. ping.yml and backup-configs.yml --check against tests/mock-inventory.yml (one fake host per shipped device
-#      class, `ansible_connection: local`, RFC-5737 addresses): the fleet plays dispatch every class's `check` and
-#      `backup` entrypoint and reach their summaries. No device is contacted and none answers: the step proves the
-#      plays evaluate, not that a device does. ping.yml must pass, rescuing exactly the classes whose check reads a
-#      device, each at that task and for that reason; backup-configs.yml must fail, at exactly the classes whose
-#      capture does, each at that task (both lists below), and write no capture. Such a class is evaluated up to that
-#      task, not past it. The API class needs a credential a fresh node has none of, so these two passes give its
-#      host a placeholder token, and its check and capture must run past the GET a dry-run skips, to OK and to its
-#      write. Each play then runs once more for that host alone, without the token, and must stop it at its
+#   7. ping.yml and backup-configs.yml --check against tests/mock-inventory.yml (one fake host per shipped device class,
+#      `ansible_connection: local`, RFC-5737 addresses): the fleet plays dispatch every class's `check` and `backup`
+#      entrypoint and reach their summaries. No device is contacted and none answers: the step proves the plays
+#      evaluate, not that a device does. ping.yml must pass, rescuing exactly the classes whose check reads a device,
+#      each at that task and for that reason; backup-configs.yml must fail, at exactly the classes whose capture does,
+#      each named in its summary as stopped at that task (both lists below), and write no capture. Such a class is
+#      evaluated up to that task, not past it. The API class needs a credential a fresh node has none of, so these two
+#      passes give its host a placeholder token, and its check and capture must run past the GET a dry-run skips, to OK
+#      and to its write. Each play then runs once more for that host alone, without the token, and must stop it at its
 #      credential gate.
 #
 # What it never does: keep a file outside its temporary directory (HOME and TMPDIR are moved there before
@@ -257,30 +257,41 @@ stops ping-check-gate --rescued \
 needs ping-check-gate '"msg": "mock-fortigate: no API token is in scope' \
   "mock-fortigate stopped at its credential gate"
 needs ping-check-gate '"msg": "mock-fortigate: UNREACHABLE"' "mock-fortigate was reported UNREACHABLE"
-# The backup pass must FAIL, and only where the mock inventory stops it. backup-configs.yml rescues nothing (a
-# capture that fails is a failed run), so under `ansible_connection: local` a class whose capture reads its device
-# fails at that task. Every other host must pass and the run must reach its summary. A host failing anywhere else, or
-# a listed one passing or failing at another task, fails the check: a class added to the mock inventory whose backup
-# reaches a device is listed here, at that task. A listed host is held to its task, not its reason (its read is
-# `no_log`, and ansible-core 2.18 prints no reason for it). mock-fortigate must say its pull was not made, and
-# record its capture, which backend_api records only where its write ran.
+# The backup pass must FAIL, and only where the mock inventory stops it. Under `ansible_connection: local` a class
+# whose capture reads its device fails at that task; the capture play's rescue records it (I-12), so the host goes on
+# to the summary, whose line names that task, and fails at the summary's last task. Every other host must pass and
+# the run must reach its summary. A host failing anywhere else, or a listed one passing or named at another task,
+# fails the check: a class added to the mock inventory whose backup reaches a device is listed here, at that task. A
+# listed host is held to its task, not its reason (its read is `no_log`, and ansible-core 2.18 prints no reason for
+# it). mock-fortigate must say its pull was not made, and record its capture, which backend_api records only where
+# its write ran.
 step backup-check fail ansible-playbook -i ../tests/mock-inventory.yml playbooks/backup-configs.yml --check \
   -e "$api_token" -e "config_backup_dir=$tmp/backups"
 needs backup-check '^PLAY \[Backup run summary\]' "the run reached its summary"
 stops backup-check \
-  "mock-edge=opnsense : Read /conf/config.xml" \
-  "mock-switch=backend_netcommon_cli : Pull config via cli_command" \
-  "mock-xe=backend_netcommon_cli : Pull config via cli_command"
+  "mock-edge=Fail the run if any capture failed" \
+  "mock-switch=Fail the run if any capture failed" \
+  "mock-xe=Fail the run if any capture failed"
+needs backup-check 'mock-edge \(opnsense\): FAILED: the capture stopped at the task \\"Read /conf/config\.xml\\"' \
+  "mock-edge's capture stopped at its read"
+needs backup-check \
+  'mock-switch \(cisco_ios\): FAILED: the capture stopped at the task \\"Pull config via cli_command\\"' \
+  "mock-switch's capture stopped at its read"
+needs backup-check \
+  'mock-xe \(backend_netcommon_cli\): FAILED: the capture stopped at the task \\"Pull config via cli_command\\"' \
+  "mock-xe's capture stopped at its read"
 needs backup-check '"msg": "mock-fortigate: the fortios backup endpoint is not read in a dry-run' \
   "mock-fortigate's capture went past its credential gate to the pull a dry-run skips"
 needs backup-check '"msg": "mock-fortigate \(fortigate\): captured -> FortiGate_192-0-2-4_full-configuration\.conf"' \
   "mock-fortigate's capture went past its credential gate to its write"
-# Without the token, mock-fortigate fails at its credential gate, for that reason. The run ends there: its one host
-# failed, so Ansible runs no later play, and there is no summary to reach.
+# Without the token, mock-fortigate fails at its credential gate, for that reason. The capture play's rescue records
+# it (I-12), so the run goes on to the summary, whose line names the gate, and fails there.
 step backup-check-gate fail ansible-playbook -i ../tests/mock-inventory.yml playbooks/backup-configs.yml --check \
   --limit mock-fortigate -e "config_backup_dir=$tmp/backups"
-stops backup-check-gate \
-  "mock-fortigate=backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"
+stops backup-check-gate "mock-fortigate=Fail the run if any capture failed"
+needs backup-check-gate \
+  'mock-fortigate \(fortigate\): FAILED: the capture stopped at the task \\"Refuse an unresolvable API credential' \
+  "the summary names the credential gate"
 needs backup-check-gate '"msg": "mock-fortigate: no API token is in scope' \
   "the API class stopped at its credential gate"
 # A --check run writes no capture: the writes preview an empty one, and the directory stays as it was.

@@ -4,9 +4,10 @@ WHY. The summary play's assert fails each host whose capture was recorded as fai
 API answer that is not 200). When that is every host of the run, Ansible ends the playbook at that play, and no play
 after it runs. The history, the prune and the per-run SSH-key cleanup came after it, so such a run (since I-5, a
 one-host scheduled backup of a device that answers nothing) left the run's SSH keys in their per-run directory.
-SECURITY.md accepts that residue for a run that ends before the cleanup on its own (a hard abort; a capture that
-fails as a task on every host, which ends the run at the capture play: I-12). These rows hold the order, and what
-lets the summary follow the key cleanup: nothing after the cleanup connects to anything.
+SECURITY.md accepts that residue for a run that ends before the cleanup on its own (a hard abort; a failing local
+play: I-48). A capture that fails as a task is recorded as failed by the capture play's rescue (I-12), so it is
+this case too. These rows hold the order, and what lets the summary follow the key cleanup: nothing after the
+cleanup connects to anything.
 tests/integration/test_backup_failed_run_cleans_up.py runs it for real.
 """
 import os

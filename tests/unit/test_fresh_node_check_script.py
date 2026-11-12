@@ -61,10 +61,12 @@ done
 # naming a storage root) the mode of the onboard-gui key there; answers by FAKE_MODE. Every pass that must succeed
 # prints its landmark (the stack play's last task, bootstrap's Summary, ping's summary play) and a clean recap.
 # ping.yml and backup-configs.yml answer as the real ones do against the mock inventory: ping rescues two hosts at
-# their checks, backup stops three at their device's read (every host in the recap, exit 2), and mock-fortigate goes
-# past its credential gate where the pass gives it a token (ping says its GET was not made, then OK; backup records
-# its capture) and stops there where it has none. `--limit mock-fortigate` runs that host alone. A `<how>:<play>`
-# mode bends one play (`ping-gate` and `backup-gate` the limited passes); `ping:<how>` and `backup:<how>` bend those.
+# their checks; backup's capture play rescues three at their device's read, its summary names each one's read, and
+# its last task fails them (I-12; every host in the recap, exit 2); and mock-fortigate goes past its credential gate
+# where the pass gives it a token (ping says its GET was not made, then OK; backup records its capture) and is
+# stopped there where it has none (ping rescues it; backup's summary names the gate and fails it, as it fails the
+# three). `--limit mock-fortigate` runs that host alone. A `<how>:<play>` mode bends one play (`ping-gate` and
+# `backup-gate` the limited passes); `ping:<how>` and `backup:<how>` bend those.
 _PLAYBOOK = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys
 sys.stdout.reconfigure(encoding="utf-8")
@@ -178,6 +180,10 @@ if pb == "playbooks/backup-configs.yml":
         stops.append(("mock-ap", "backend_raw_ssh : Write capture"))
     elif mode == "backup:other-task":
         stops[0] = ("mock-edge", "opnsense : Resolve capture filename")
+    elif mode == "backup:other-task-switch":
+        stops[1] = ("mock-switch", "backend_netcommon_cli : Resolve capture filename")
+    elif mode == "backup:other-task-xe":
+        stops[2] = ("mock-xe", "backend_netcommon_cli : Resolve capture filename")
     elif mode == "backup:listed-passes":
         stops = stops[:-1]
     elif mode == "backup:gate-other-task" and limited:
@@ -191,18 +197,11 @@ if pb == "playbooks/backup-configs.yml":
         why = ("%s: no API token is in scope, so this capture cannot authenticate." % h
                if h == "mock-fortigate" and mode != "backup:no-token-message" else "censored")
         out += ["", "TASK [%s] ****" % t, 'fatal: [%s]: FAILED! => {"msg": "%s"}' % (h, why)]
-    failed = {h for h, _ in stops}
+    rescued = dict(stops)  # the capture play's rescue records each (I-12): the summary names it, its last task fails it
+    hard = set()           # failed where no rescue reaches: such a host runs no later play
     if mode == "backup:handler":
         out += ["", "RUNNING HANDLER [proxmox : Note the capture] ****", 'fatal: [mock-hv]: FAILED! => {}']
-        failed.add("mock-hv")
-    if mode == "backup:ignored-after":
-        out += ["", "TASK [backend_netcommon_cli : Clean up, errors ignored] ****",
-                'fatal: [mock-switch]: FAILED! => {', '    "msg": "nothing to clean"', '}', "...ignoring"]
-    if mode == "backup:ignored-loop-after":
-        out += ["", "TASK [backend_netcommon_cli : Clean up each, errors ignored] ****",
-                'failed: [mock-switch] (item=a) => {"msg": "nothing to clean"}',
-                'failed: [mock-switch] (item=b) => {"msg": "nothing to clean"}',
-                'fatal: [mock-switch]: FAILED! => {"msg": "One or more items failed"}', "...ignoring"]
+        hard.add("mock-hv")
     unreach = set()
     if mode == "backup:unreachable-host":
         out += ["", "TASK [proxmox : SSH capture] ****", 'fatal: [mock-hv]: UNREACHABLE! => {"msg": "no route"}']
@@ -214,14 +213,33 @@ if pb == "playbooks/backup-configs.yml":
                 "ok: [mock-fortigate] => {", '    "msg": "mock-fortigate: the fortios backup endpoint is not read in a '
                 'dry-run (`uri` has no check mode), so no config was pulled and none is written; a real run pulls it."',
                 "}"]
-    if mode != "backup:no-summary" and not set(hosts) <= failed:  # every host failed: Ansible runs no later play
+    summary = mode != "backup:no-summary" and not set(hosts) <= hard | unreach  # else Ansible runs no later play
+    if summary:
         out += ["", "PLAY [Backup run summary] ****", "", "TASK [Per-host backup result] ****"]
         if token and mode != "backup:api-not-captured":
             out += ["ok: [mock-fortigate] => {",
                     '    "msg": "mock-fortigate (fortigate): captured -> FortiGate_192-0-2-4_full-configuration.conf"',
                     "}"]
+        for h, t in rescued.items():
+            msg = ('%s (%s): FAILED: the capture stopped at the task "%s" (a no_log task prints only that it '
+                   'failed).' % (h, CLASS[h], t.split(" : ", 1)[-1]))
+            out += ["ok: [%s] => {" % h, '    "msg": ' + json.dumps(msg, ensure_ascii=False), "}"]
+        out += ["", "TASK [Fail the run if any capture failed] ****"]
+        for h in rescued:
+            out += ['fatal: [%s]: FAILED! => {"changed": false, "msg": "%s: config-backup capture FAILED (see summary '
+                    'above)."}' % (h, h)]
+    # A cleanup whose failure is ignored, after the line that stopped the host: the parse must keep that line.
+    if mode == "backup:ignored-after":
+        out += ["", "TASK [backend_netcommon_cli : Clean up, errors ignored] ****",
+                'fatal: [mock-switch]: FAILED! => {', '    "msg": "nothing to clean"', '}', "...ignoring"]
+    if mode == "backup:ignored-loop-after":
+        out += ["", "TASK [backend_netcommon_cli : Clean up each, errors ignored] ****",
+                'failed: [mock-switch] (item=a) => {"msg": "nothing to clean"}',
+                'failed: [mock-switch] (item=b) => {"msg": "nothing to clean"}',
+                'fatal: [mock-switch]: FAILED! => {"msg": "One or more items failed"}', "...ignoring"]
+    failed = set(rescued) | hard
     if mode != "backup:no-recap":
-        out += [recap([(h, h in unreach, h in failed, 0) for h in hosts])]
+        out += [recap([(h, h in unreach, h in failed, h in rescued) for h in hosts])]
     print("\n".join(out)); sys.exit(2 if failed else 0)
 print(land + ok)
 '''.replace("ENV", repr(ENV)).replace("RESCUES", repr([
@@ -231,7 +249,10 @@ print(land + ok)
         ("mock-switch", "backend_netcommon_cli : Pull config via cli_command"),
         ("mock-xe", "backend_netcommon_cli : Pull config via cli_command")])).replace("HOSTS", repr(
             ["mock-ap", "mock-docker", "mock-edge", "mock-fortigate", "mock-hv", "mock-routeros", "mock-switch",
-             "mock-xe"]))
+             "mock-xe"])).replace("CLASS", repr({  # each mock host's device_role, as the summary names it
+                 "mock-ap": "openwrt", "mock-docker": "docker_host", "mock-edge": "opnsense",
+                 "mock-fortigate": "fortigate", "mock-hv": "proxmox", "mock-routeros": "routeros",
+                 "mock-switch": "cisco_ios", "mock-xe": "backend_netcommon_cli"}))
 
 
 def _exe(path, text):
@@ -535,36 +556,42 @@ def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp
     ("backup:no-summary", "backup-check's log does not say the run reached its summary"),
     ("red:playbooks/backup-configs.yml", "backup-check's log does not say the run reached its summary"),
     ("backup:no-token-message", "backup-check-gate's log does not say the API class stopped at its credential gate"),
-    ("backup:token-ignored", "'mock-fortigate': 'backend_api : Refuse an unresolvable API credential"),
+    ("backup:token-ignored", "'mock-fortigate': 'Fail the run if any capture failed'"),
     ("backup:api-pull-unsaid",
      "backup-check's log does not say mock-fortigate's capture went past its credential gate to the pull a dry-run"),
     ("backup:api-not-captured",
      "backup-check's log does not say mock-fortigate's capture went past its credential gate to its write"),
     ("backup:gate-passes", "backup-check-gate exited 0, expected fail"),
-    ("backup:gate-other-task", "'mock-fortigate': \"backend_api : Pull config via the recipe's backup endpoint\""),
+    ("backup:gate-other-task", "backup-check-gate's log does not say the summary names the credential gate"),
     ("backup:no-recap", "backup-check: the hosts that failed are not the listed ones"),
-    ("backup:other-host", "'mock-ap': 'backend_raw_ssh : Write capture'"),
-    ("backup:other-task", "'mock-edge': 'opnsense : Resolve capture filename'"),
+    ("backup:other-host", "'mock-ap': 'Fail the run if any capture failed'"),
+    ("backup:other-task", "backup-check's log does not say mock-edge's capture stopped at its read"),
+    ("backup:other-task-switch", "backup-check's log does not say mock-switch's capture stopped at its read"),
+    ("backup:other-task-xe", "backup-check's log does not say mock-xe's capture stopped at its read"),
     ("backup:handler", "'mock-hv': 'proxmox : Note the capture'"),
     ("backup:listed-passes", "backup-check: the hosts that failed are not the listed ones"),
     ("backup:unreachable-host", "'mock-hv': 'proxmox : SSH capture'"),
     ("backup:wrote-capture", "a --check run wrote a capture under")])
 def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere_else(tmp_path, mode, says):
     """The backup pass against the mock inventory must fail, reach its summary, have exactly the listed hosts fail,
-    each at its listed task (the read of its device), say mock-fortigate's pull was not made and record its capture
-    (given a placeholder token, it goes past its credential gate to the pull a dry-run skips, and to its write,
-    which the record follows), and write no capture; the pass for that host alone without the token must fail it at
-    its credential gate, for that reason (its one host failed, so that run has no summary). It passing, dying before
-    its summary, printing no recap, failing one more host (in a task or in a handler, which is charged to the
-    handler and not to the task before it) or leaving one unreachable, failing a listed host at another task, a
-    listed host passing, mock-fortigate stopped at its gate though the token was given, saying nothing of its pull
-    or recording no capture, the pass without the token passing or stopping it elsewhere or for another reason, or a
-    capture written by the dry-run each fails the script at that step, and a stop mismatch names what the log held,
-    with the step to take. A dry-run that writes a capture would, on a real fleet, overwrite the last good one with
-    the empty preview (T27's fold-2 read planted `check_mode: false` on the raw-SSH write and the step passed, N6).
-    Guards the step degrading to "any red is fine": backup-configs.yml rescues nothing, so under the mock's local
-    connection those classes fail by design, and a host that fails anywhere else is a play that did not evaluate
-    (T27's first real run: the openwrt and RouterOS captures failed their write in every --check run). And it guards
+    each at the summary's last task with its summary line naming its listed task (the read of its device), say
+    mock-fortigate's pull was not made and record its capture (given a placeholder token, it goes past its credential
+    gate to the pull a dry-run skips, and to its write, which the record follows), and write no capture; the pass for
+    that host alone without the token must stop it at its credential gate, for that reason, and fail it where it
+    fails the others, its summary line naming the gate. It passing, dying before its summary, printing no recap,
+    failing one more host (in a task or in a handler, which is charged to the handler and not to the task before it)
+    or leaving one unreachable, a listed host's summary line naming another task (each of the three), a listed host
+    passing, mock-fortigate stopped at its gate though the token was given, saying nothing of its pull or recording
+    no capture, the pass without the token passing or stopping it elsewhere or for another reason, or a capture
+    written by the dry-run each fails the script at that step, and a stop mismatch names what the log held, with the
+    step to take. A dry-run that writes a capture would, on a real fleet, overwrite the last good one with the empty
+    preview (T27's fold-2 read planted `check_mode: false` on the raw-SSH write and the step passed, N6). Guards the
+    step degrading to "any red is fine": under the mock's local connection those classes fail by design, and a host
+    that fails anywhere else is a play that did not evaluate (T27's first real run: the openwrt and RouterOS captures
+    failed their write in every --check run). Since I-12 the capture play rescues a failed capture, records it and
+    fails the host at the summary's last task, so every listed host stops at that one task and only its summary line
+    still tells its read from another task: a pattern dropped for one host would pass that host stopped anywhere. And
+    it guards
     I-6: with a credential, the API class's capture read the pull a dry-run skips as a failed answer and failed the
     host; it now reaches its write, which the empty-directory check holds as it holds the others. Its record
     followed a copy of the write's condition, not the write, so a dry-run write skipped still said "captured" and
@@ -581,7 +608,8 @@ def test_the_backup_pass_must_fail_where_the_mock_inventory_stops_it_and_nowhere
 def test_the_backup_pass_says_where_each_host_stopped(tmp_path, mode):
     """With the fake answering as the real play does against the mock inventory, the backup step passes and says the
     run reached its summary and the hosts that failed were the listed ones, each host's stop read from its last
-    failure line that was not ignored: mock-switch's after an ignored one, and before one that is (its result printed
+    failure line that was not ignored (for a listed host, the summary's last task, which fails it since I-12):
+    mock-switch's after an ignored one, and before one that is (its result printed
     over several lines, as Ansible does for a structured one, or a loop's, whose items fail one line each before the
     task's own line); mock-xe's after a failure a `rescue` took, which is not where it stopped. Guards the parse
     reading the recap or the failure lines wrongly (a host's first failure, which `ignore_errors` may have let pass or

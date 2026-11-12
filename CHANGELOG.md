@@ -11,6 +11,46 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a backup capture that fails as a task is named in the summary, and its run still removes its SSH keys (I-12, 2026-11-11)
+
+A capture that failed as a task (a read that exits non-zero or errors, a module or permission error, the API
+credential gate's assert, a write that fails) failed its host at backup-configs.yml's capture play. The summary
+printed no line for it, so the run's output named no host for the failure its recap counted; and when every host
+failed so, Ansible ended the run at the capture play, before the capture history, the retention prune and the per-run
+SSH-key cleanup, and the run's key-auth hosts' keys stayed on disk until the next run (the I-9 reads' S1: a one-host
+scheduled backup of a device whose read errors).
+
+- **Fixed.** The capture play dispatches inside a block whose rescue records the host as a failed capture: `FAILED:
+  the capture stopped at the task "<name>" (a no_log task prints only that it failed).` The rescue reads the failed
+  task's name and nothing of its result (the reads and writes are `no_log`, the summary's line is not). The host goes
+  on to the history, the prune and the key cleanup, and the summary names it and fails the run, as it does for an
+  answer that is empty. An unreachable host is not failed (`ignore_unreachable`), so the rescue does not run for it;
+  the `device_role` refusal stays outside the block, so a refused host fails there as before. An include that cannot
+  be loaded (a `device_role` no installed role answers, a file or role the class's backup includes that is missing) is
+  no task failure: Ansible moves its host into the rescue with no failed task and out of every later play, so the
+  rescue's second task fails it and the run fails (with the record alone, a run of that host alone ended with rc 0).
+  The capture play sets `any_errors_fatal: false`: a caller's `ANSIBLE_ANY_ERRORS_FATAL` failed every other host once
+  one host's capture failed, so a host whose read had answered was dropped, its capture never written and no summary
+  line for it.
+- **Not changed.** A failing local play (the backup dir's check, the history commit, the prune's retention check; a
+  capture dir that is not writable fails the history commit) still ends the run before the cleanup: I-48. A class
+  whose backup entrypoint cannot be loaded gets no summary line, and where it is every host of the run, the run's keys
+  stay, as before: I-66.
+- **Tests.** `tests/unit/test_backup_capture_rescue.py` holds the capture play's keywords, the block, its one include
+  and its rescue: the record, which reads nothing of the failed task but its name, and the load failure's `fail`.
+  `tests/integration/test_backup_failed_run_cleans_up.py` runs the playbook for real with one host whose command exits
+  non-zero (named FAILED by the task, the key directory gone, its good capture kept), with that host beside a good one
+  (the good one captured and committed alone), the same under `ANSIBLE_ANY_ERRORS_FATAL=True`, and with one host whose
+  `device_role` names no installed role, alone (a dry run and a real run each fail) and beside a good one (the good
+  one captured and committed, the key directory gone). `tests/fresh-node-check.sh` (CI's fresh-node check) holds each
+  mock host whose capture reads its device at the summary's last task, its line naming the read, and the API host
+  without its token the same, its line naming the credential gate: those hosts now reach the summary, where they used
+  to stop at the read. `tests/unit/test_fresh_node_check_script.py`'s fake prints the playbook's new shape, and a row
+  for each of the three fails the script where that host's summary line names another task.
+- **Docs.** backup-configs.yml's comments, `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row no longer list a
+  capture that fails as a task among the runs that leave keys, and list a class whose backup entrypoint cannot be
+  loaded; the rows' docstrings say so.
+
 ### fix(ansible): inside the installer the deploy uses the storage root it binds, and refuses another (I-26, 2026-11-09)
 
 The installer binds one storage root from the host, at the same path: the one `KONTROLL_STORAGE_ROOT` names in the
