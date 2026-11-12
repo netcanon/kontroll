@@ -730,7 +730,8 @@ def api_onboard():
     git = gitio.commit_and_push(
         applied["paths"],
         ["feat(onboard): %s -> %s via %s backend" % (d["collection"], d["key"], plan["backend"]),
-         "Onboarded via the kontroll onboarding GUI (run_id %s). Host %s in group %s; run ping.yml --limit HOST to verify." % (
+         "Onboarded via the kontroll onboarding GUI (run_id %s). Host %s in group %s; verify with ping.yml "
+         "--limit HOST -e kontroll_ping_require_reachable=true (a bare run passes a down host)." % (
              run_id, plan["host_name"], plan["group"])],   # the plan's group: a reuse ADOPTS the class's
         push_origin=bool(d.get("push")), run_id=run_id)   # staging GUI ⇒ proposed/<run_id> (C10)
     _audit("onboard-result", "key=%s committed=%s staged=%s run_id=%s" % (

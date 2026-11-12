@@ -194,9 +194,10 @@
       # green result was actively misleading, and this is the highest-blast-radius device in the fleet.
       #
       # ping.yml wraps the class check in block/rescue, so failing here is how a device is correctly
-      # recorded CHECK FAILED, naming this task (UNREACHABLE before I-84). Only `status`, the recipe's path and the names its auth reads are surfaced — the
-      # response BODY can be device configuration and the request carried the token, so neither is safe to
-      # print. That is precisely why this is a separate task rather than dropping `no_log` on the GET.
+      # recorded CHECK FAILED, naming this task (UNREACHABLE before I-84). Only `status`, the recipe's path
+      # and the names its auth reads are surfaced — the response BODY can be device configuration and the
+      # request carried the token, so neither is safe to print. That is precisely why this is a separate
+      # task rather than dropping `no_log` on the GET.
       #
       # The remedy names the variables the recipe's auth reads, never their values: a `basic` recipe has
       # `username_var`/`password_var` and no `token_var` (naming `token_var` failed the message itself on a basic

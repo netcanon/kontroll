@@ -59,19 +59,20 @@ def test_the_reach_play_refuses_a_missing_check_entrypoint_before_its_probe():
 
 def test_the_run_fails_a_refused_host_in_its_last_play_after_the_key_cleanup():
     """ping.yml ends with the summary play, whose line names a recorded host REFUSED before it reads
-    `kontroll_reachable`; then the `_cleanup-ssh-keys.yml` import; then one play of one task, an `assert` whose first
-    condition is that `kontroll_class_refused` is not set, its message the host's summary line. Guards a failing play
+    `kontroll_reachable`; then the `_cleanup-ssh-keys.yml` import; then one play of two tasks, the refusal of a dry run
+    asked to prove each host reachable (I-84) and an `assert` whose first condition is that `kontroll_class_refused`
+    is not set, its message the host's summary line. Guards a failing play
     before the cleanup (where every host is refused it would end the run there and leave the run's keys: I-9's
     lesson), a last play that does not fail a refused host (the run would pass with a class that checks nothing) or
     reads another var, and a summary that names a refused host OK, CHECK FAILED or UNREACHABLE.
-    tests/unit/test_ping_check_failed.py holds the play's other conditions (I-84)."""
+    tests/unit/test_ping_check_failed.py holds the play's other conditions and its first task (I-84)."""
     plays = _plays()
     summary, cleanup, last = plays[-3:]
     line = summary["tasks"][0]["ansible.builtin.set_fact"]["kontroll_ping_line"]
     assert line.index("REFUSED") < line.index(RECORDED) < line.index("kontroll_reachable"), line
     assert cleanup.get("ansible.builtin.import_playbook") == "_cleanup-ssh-keys.yml", cleanup
-    assert len(last["tasks"]) == 1, last
-    check = last["tasks"][0]["ansible.builtin.assert"]
+    assert len(last["tasks"]) == 2, last
+    check = last["tasks"][1]["ansible.builtin.assert"]
     assert check["that"][0] == "not (%s | default(false))" % RECORDED, check
     assert "kontroll_ping_line" in check["fail_msg"], check
 

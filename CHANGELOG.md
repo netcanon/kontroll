@@ -17,10 +17,11 @@ ping.yml's probe and its class check share one block, and the block's rescue rep
 state a run tolerates (a down device is no failure). So a device that answered on its port but failed its check (a
 credential it rejects, a protocol error) read as down, and the run passed: the smoke gate (`scripts/run-smoke-gate.sh`,
 the `ping-fleet` template), whose header and README promised that "a reachable host whose check errors fails the run",
-passed a fleet whose every reachable device rejected its credentials. `galaxy.py onboard --bootstrap` verifies the new
-host by ping's exit code, so it printed `OK <host> — reachable & managed.` for a host that did not answer, and for one
-whose check failed (measured on ansible-core 2.18.19 and 2.19.4: both rc 0, both summarised UNREACHABLE). And in a dry
-run (`--check`) the probe is skipped, so a host whose port nothing listens on was summarised OK (I-85).
+passed a fleet whose every reachable API or network-CLI device rejected its credentials (a raw-SSH login that is refused
+already ended the run rc 4). `galaxy.py onboard --bootstrap` verifies the new host by ping's exit code, so it printed
+`OK <host> — reachable & managed.` for a host that did not answer, and for one whose check failed (measured on
+ansible-core 2.18.19 and 2.19.4: both rc 0, both summarised UNREACHABLE). And in a dry run (`--check`) the probe is
+skipped, so a host whose port nothing listens on was summarised OK (I-85).
 
 - **Fixed.** The probe registers its result, and the rescue records whether the probe failed or a later task did:
   the summary says `UNREACHABLE` for the first and `CHECK FAILED: its check stopped at the task: <name>` for the
@@ -29,27 +30,38 @@ run (`--check`) the probe is skipped, so a host whose port nothing listens on wa
   host is still tolerated. A dry run's summary ends `(dry run: the port was not probed)` and a dry run does not fail
   for a check, which cannot run against every device in check mode (`tests/fresh-node-check.sh` runs ping in check
   mode on a mock inventory and needs it to pass). A caller that needs every host reachable passes
-  `-e kontroll_ping_require_reachable=true`, and the last play then fails an UNREACHABLE host too: galaxy's verify
-  does (`VERIFY_PING`), so its rc 0 means the host's port answered and its check passed, and its PENDING line points
-  at the summary's word instead of always naming credentials.
+  `-e kontroll_ping_require_reachable=true`, and the last play then fails an UNREACHABLE host too; a dry run given it
+  is refused, every host failed by name, since it probes no port and so cannot prove one reachable. galaxy's verify
+  passes it (`VERIFY_PING`) and runs with `ANSIBLE_HOST_PATTERN_MISMATCH=error` (`VERIFY_ENV`, through a new `env`
+  argument of `gitio._run`), so a run that read no inventory, whose `--limit` matched no host and skipped every play
+  with rc 0, fails rc 1 instead: its rc 0 means the host's port answered and its check passed. Its PENDING line points
+  at the summary's word instead of always naming credentials, and the onboard's commit message (galaxy's, the API's
+  and the GUI's) says to verify with the require var.
 - **Not changed.** A check whose connection fails (an SSH login or banner failure on a raw-SSH host) is no task
   failure, so no rescue sees it: the host leaves the run with no summary line, and the run ends rc 4 (galaxy's verify
   says PENDING); where it is the only host, before the key cleanup. A scheduled ping with a down device still passes.
+  The onboarded module's banner still says `run ping.yml --limit <host> after promote`: a re-onboard compares a
+  module file with the banner it writes, so a new banner would refuse every class onboarded before it.
 - **Tests.** `tests/integration/test_ping_check_failed_runs.py` runs ping.yml for real with a host that answers and
   passes, one that does not answer, one that answers and whose check is a `fail`, and one of that class that does not
   answer: a real run fails for the failing check alone (its line names the task, never the device's answer; the down
   hosts UNREACHABLE, rescued, not failed; the key dir gone); a dry run passes, every line saying the port was not
   probed; and, under `--limit` alone, bare, with the require var `false` and with galaxy's own `VERIFY_PING`
-  arguments, only a host that answered and passed passes the verify. `tests/unit/test_ping_check_failed.py` holds the shape (the probe's register, the
-  rescue's record, the summary's words in order, the last play's three conditions, galaxy's arguments and lines).
+  arguments and environment, only a host that answered and passed passes the verify; a dry run given the require var
+  is refused, every host by name, after the key cleanup; and a verify that read no inventory fails under
+  `VERIFY_ENV` (rc 1) where it passed bare. `tests/unit/test_ping_check_failed.py` holds the shape (the probe's
+  register, the rescue's record, the summary's words, the last play's refusal and its three conditions, galaxy's
+  arguments, environment and lines, `gitio._run`'s `env`).
   `tests/unit/test_ping_entrypoint_refusal.py`, `tests/integration/test_ping_refused_class_runs.py` and
   `tests/unit/test_fresh_node_check_script.py` follow the new words and play names; `tests/fresh-node-check.sh`'s
   ping steps now need `mock-fortigate: OK (dry run: the port was not probed)` and, without its token, `CHECK FAILED`
-  at its credential gate. `tests/validate.sh`'s no-skip runtime step runs the new integration file.
+  at its credential gate, and two fake modes print the old words (a bare `OK`, `UNREACHABLE` at the gate), which
+  fail them. `tests/validate.sh`'s no-skip runtime step runs the new integration file.
 - **Docs.** ping.yml's header and comments; `docs/troubleshooting.md` (CHECK FAILED, and a host with no line);
   `docs/capability-matrix.md` (the operator's ping reads `OK`, or runs with the require var); `scripts/README.md`'s
-  smoke gate; the API and network-CLI roles' READMEs and the API check's comments. No log line is added: each summary
-  line, under the run's stamped kontroll_run_id, names the host and the task its check stopped at.
+  smoke gate; the API and network-CLI roles' READMEs and the API role's check and backup comments; `tests/README.md`.
+  No log line is added: each summary line, under the run's stamped kontroll_run_id, names the host and the task its
+  check stopped at.
 
 ### fix(ansible): a backup run under a `--limit` commits its captures and prunes, and a wiring run whose limit leaves localhost out fails (I-90, I-88, I-91, 2026-11-12)
 

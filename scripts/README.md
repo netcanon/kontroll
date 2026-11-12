@@ -287,7 +287,9 @@ the prior:
   stays committed in the checkout and is NOT landed: the printed sentence names what to correct (rc 2).
 - `--push` — **optional** offsite backup to GitHub `origin`; not needed to operate. Fails
   clean (the instance is unaffected) if there's no write-capable remote.
-- `--bootstrap` — installs the new collection + live-verifies via `ping --limit`.
+- `--bootstrap` — installs the new collection + live-verifies via `ping.yml --limit <host>` with
+  `-e kontroll_ping_require_reachable=true` under `ANSIBLE_HOST_PATTERN_MISMATCH=error`: OK only when the host's
+  port answered and its check passed (I-84).
 
 The **only** inputs are the search selection (the collection) and the connection details
 (host + creds) — everything else is automated. This is the engine a GUI drives.

@@ -40,7 +40,8 @@
 # (`dry run: the port was not probed`), and it never fails for a check, which cannot run against every device in check
 # mode (tests/fresh-node-check.sh runs it on a mock inventory). A caller that needs every host reachable (galaxy.py's
 # onboard verify, which reads the rc) passes `-e kontroll_ping_require_reachable=true`, and the last play then fails
-# an UNREACHABLE host too. A check whose connection fails (an SSH login or banner failure on a raw-SSH host) is no
+# an UNREACHABLE host too; a dry run asked that is refused, every host failed by name, since it probes no port and so
+# cannot prove one reachable. A check whose connection fails (an SSH login or banner failure on a raw-SSH host) is no
 # task failure: the host leaves the run with no summary line and the run ends rc 4, as before.
 
 - name: Fleet preamble — stamp the run id + materialize per-host SSH keys
@@ -138,12 +139,22 @@
 
 # Last, after the key cleanup, so that a run whose every host is refused still removes its keys (as
 # backup-configs.yml's summary follows it: I-9). It connects to nothing. It fails a refused host, a reachable host
-# whose check failed (not in a dry run: I-84), and, when the caller requires it, an unreachable one.
+# whose check failed (not in a dry run: I-84), and, when the caller requires it, an unreachable one, or in a dry run
+# every host.
 - name: Fail the run for a host refused, whose check failed, or unreachable where the caller requires it
   hosts: all
   gather_facts: false
   connection: local
   tasks:
+    # A dry run probes no port, so it cannot prove a host reachable: asked to, it is refused by name, where it would
+    # pass a closed port as OK and fail a check it cannot run on every device (I-84).
+    - name: Refuse a dry run asked to prove each host reachable
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }}: kontroll_ping_require_reachable asks the run to prove the host reachable, which a
+          dry run cannot (it probes no port): run it without --check.
+      when: ansible_check_mode and (kontroll_ping_require_reachable | default(false) | bool)
+
     - name: Fail a host refused, whose check failed, or unreachable where the caller requires it
       ansible.builtin.assert:
         that:

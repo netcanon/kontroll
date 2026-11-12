@@ -168,13 +168,17 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
   | default(ansible_port | default(kontroll_probe_port | default(22, true), true), true) }}'"`.
 - **`ping.yml` reports a host `CHECK FAILED: its check stopped at the task: …`, and the run fails** → its port
   answered, and its class's check failed at that task: the task's own error, earlier in the run's output, says why
-  (a task that handles a credential is `no_log` and prints only that it failed, so its name is the clue). Most often
-  its credential is missing from its SOPS domain or rejected by the device. The other hosts are checked as usual,
-  and the run's SSH keys are still removed. In a dry run (`--check`) the line ends `(dry run: the port was not
-  probed)` and the run does not fail for it: a dry run skips the probe and runs each check in check mode, where a
-  check can stop at a read it does not make; an `OK (dry run: the port was not probed)` says nothing of the port
-  either. Before I-84 such a host read `UNREACHABLE` and the run passed. A host with no summary line at all, the run
-  ending rc 4, is one whose check could not connect (an SSH login or banner failure): the run's output names it.
+  (a task that handles a credential is `no_log`, and on the shipped runtimes prints only that it failed, so its name
+  is the clue; SECURITY.md's I-75 row names where ansible-core prints more). For an API device, most often its
+  credential is missing from its SOPS domain or rejected by the device; a network-CLI device whose SSH login is
+  rejected reads CHECK FAILED too, at its `cli_command` task. The other hosts are checked as usual, and the run's SSH
+  keys are still removed. In a dry run (`--check`) the line ends `(dry run: the port was not probed)` and the run
+  does not fail for it: a dry run skips the probe and runs each check in check mode, where a check can stop at a
+  read it does not make; an `OK (dry run: the port was not probed)` says nothing of the port either, and a dry run
+  given `-e kontroll_ping_require_reachable=true` is refused, every host failed by name, since it cannot prove one
+  reachable. Before I-84 such a host read `UNREACHABLE` and the run passed. A host with no summary line at all, the
+  run ending rc 4, is a raw-SSH host whose check could not connect (an SSH login or banner failure): the run's output
+  names it.
 - **A script prints `run-log: cannot make …` or `run-log: cannot write … continuing without a run-log`, a launcher
   prints `kontroll: cannot make ~/.local/state/kontroll/runs`, or `~/.local` is root's** → Docker made the run-log
   directory Vector binds (`~/.local/state/kontroll/runs`) and its missing parents, as root, at an `up` before anything

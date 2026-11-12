@@ -44,7 +44,7 @@
       # As in tasks/check.yml: `default=''` below catches a name not in scope. It cannot catch a name that is defined
       # and whose own value fails when it is read: an inline community.sops lookup whose domain file is missing or
       # cannot be decrypted on this box (no age key), or, on 2.19, lacks the key it reads. Such a value fails the
-      # no_log resolve, censored, and on 2.18 nothing else is printed (ping.yml would say only UNREACHABLE); the
+      # no_log resolve, censored, and on 2.18 nothing else is printed (ping.yml would name only the task); the
       # rescue refuses the host by name instead (I-16's reads).
       block:
         - name: Resolve the auth token — the recipe's token_var, else the onboarded per-host convention

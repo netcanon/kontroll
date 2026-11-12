@@ -208,8 +208,12 @@ def cmd_scaffold(args):
 # The onboard's verify (`--bootstrap`): ping.yml for the new host, which must be reachable. ping.yml tolerates an
 # UNREACHABLE host unless it is asked not to, so the verify asks: its rc 0 then means the host's port answered and its
 # class's check passed. Before I-84 it ran ping.yml bare and printed "reachable & managed" for a host that did not
-# answer, or whose check failed (both were summarised UNREACHABLE, and the run passed).
+# answer, or whose check failed (both were summarised UNREACHABLE, and the run passed). Where Ansible read no
+# inventory at all (a checkout on a world-writable mount, whose ansible.cfg it ignores; an ANSIBLE_CONFIG naming a cfg
+# without one) a `--limit` matches no host, every play is skipped and the run passes, so the verify runs with
+# VERIFY_ENV, under which a limit that matches no host fails the run (rc 1) before any play.
 VERIFY_PING = ["ansible-playbook", "playbooks/ping.yml", "-e", "kontroll_ping_require_reachable=true"]
+VERIFY_ENV = {"ANSIBLE_HOST_PATTERN_MISMATCH": "error"}
 
 
 def verify_line(host_name, rc):
@@ -219,8 +223,9 @@ def verify_line(host_name, rc):
         return "OK %s — reachable & managed: its port answered and its check passed." % host_name
     return ("PENDING %s — not verified (ping rc=%d). Its summary line above says why: UNREACHABLE (nothing answered "
             "on its port), CHECK FAILED (it answered and its check failed: often its creds, not yet in the SOPS "
-            "domain), REFUSED (its class has no check installed); no line: its check's connection failed (an SSH "
-            "login or banner). Fix that, then re-run ping.yml --limit %s." % (host_name, rc, host_name))
+            "domain), REFUSED (its class has no check installed); with no line for it, the run's output above says "
+            "why (at rc 4 most often its check's SSH login or banner failed; at rc 1 no inventory host matched it). "
+            "Fix that, then re-run ping.yml --limit %s." % (host_name, rc, host_name))
 
 
 def cmd_onboard(args):
@@ -274,7 +279,8 @@ def cmd_onboard(args):
         crc = gitio._run(["git", "commit"] + gitio.commit_message_args([   # + the one configurable trailer
             "feat(onboard): %s -> %s via %s backend" % (args.collection, args.key, backend),
             "Machine-onboarded by scripts/galaxy.py onboard. Host %s in group %s; "
-            "run ping.yml --limit %s to verify." % (host_name, plan["group"], host_name)]))
+            "verify with ping.yml --limit %s -e kontroll_ping_require_reachable=true (a bare run passes a down "
+            "host)." % (host_name, plan["group"], host_name)]))
         if crc != 0:                                # never push a stale HEAD on a failed commit
             sys.exit("  ! commit failed (rc=%d) — not pushing; nothing took effect." % crc)
         # Land on the LOCAL CANONICAL (the instance source of truth) so Semaphore sees it — offline, no GitHub
@@ -298,7 +304,8 @@ def cmd_onboard(args):
         rc = gitio._run(["ansible-playbook", "playbooks/bootstrap.yml"], cwd=os.path.join(paths.ROOT, "ansible"))
         if rc == 0:
             print("--- verify (ping the onboarded host; needs its creds present) ---")
-            vrc = gitio._run(VERIFY_PING + ["--limit", host_name], cwd=os.path.join(paths.ROOT, "ansible"))
+            vrc = gitio._run(VERIFY_PING + ["--limit", host_name], cwd=os.path.join(paths.ROOT, "ansible"),
+                             env=VERIFY_ENV)
             print("\n" + verify_line(host_name, vrc))
         else:
             print("  bootstrap failed (rc=%d) — fix before verifying." % rc)
