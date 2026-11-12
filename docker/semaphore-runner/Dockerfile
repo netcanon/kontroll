@@ -69,6 +69,20 @@ RUN VENV="$(dirname "$(ls /opt/semaphore/apps/ansible/*/venv/bin/pip)")" \
  && "$VENV/python" -c "import paramiko, yaml, flask, fastapi, uvicorn" \
  && rm -rf /tmp/k
 
+# A failing `no_log: true` task's error message must print nothing it was given (I-75). ansible-core 2.19 and later
+# keep a censored result's `exception`, and the default callback prints its message: a `fail` message, a command line,
+# a path (CVE-2026-123036, ansible/ansible#85696, no fixed release; the base at this pin ships 2.20.10, which no test
+# leg runs: I-80). The script drops `exception` from the censor's preserved keys in the venv's ansible-core, under a
+# notice that the file was modified, and refuses any other shape of that file, so a base bump that moves it fails the
+# build here. Then it runs, with this core, a no_log task that fails with a marker: the build fails if the marker
+# prints, on stdout, stderr or in the ansible log, or if the same failure without no_log stops printing it. Warnings,
+# include names and -vvv lines still pass the censor (SECURITY.md's accepted risks). No later step may install
+# ansible-core again. Held by tests/unit/test_no_log_censor.py and tests/integration/test_no_log_censor_runs.py.
+COPY docker/semaphore-runner/no_log_censor.py /tmp/k/no_log_censor.py
+RUN VENV="$(dirname "$(ls /opt/semaphore/apps/ansible/*/venv/bin/python)")" \
+ && "$VENV/python" /tmp/k/no_log_censor.py \
+ && rm -rf /tmp/k
+
 # The local canonical bare repo (instance source of truth) is operator-owned (uid
 # 1000) but cloned by the runner (uid 1001) → git's dubious-ownership guard. Trust any
 # repo path inside this image (single-tenant control node). See docs/local-source-of-truth.md.

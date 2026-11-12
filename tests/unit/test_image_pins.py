@@ -116,6 +116,9 @@ import pytest
 import yaml
 from _build_read import commands as _commands
 from _build_read import gate_faults, image_reference
+from _build_read import dockerfile_lines as _lines
+from _build_read import instructions
+from _build_read import unwrapped as _unwrapped
 from _build_read import unquote as _unquote
 
 pytestmark = pytest.mark.unit
@@ -182,46 +185,8 @@ def dockerfiles_outside_docker(root=ROOT):
     return sorted(out)
 
 
-def _lines(text):
-    """A Dockerfile's lines as BuildKit splits them: a byte-order mark dropped, split on LF only, a CR before it
-    dropped."""
-    text = text[1:] if text.startswith("\ufeff") else text
-    return [line.rstrip("\r") for line in text.split("\n")]
-
-
 # Every whitespace character but a space, a tab and a line feed (a CR before a line feed or at the end is dropped).
 _ODD_SPACE = re.compile(r"(?!\r\n|\r$)[^\S \t\n]")
-
-
-def instructions(text):
-    """[(KEYWORD, arguments)] of a Dockerfile: continuation lines joined, comment and blank lines dropped. As in
-    BuildKit, a blank or comment line inside a continued instruction neither ends nor joins it."""
-    out, buf = [], ""
-    for line in _lines(text):
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        m = re.search(r"(?:^|[^\\])(\\[ \t]*)$", line)
-        if m:
-            buf += line[:m.start(1)]
-            continue
-        buf += line.rstrip()
-        keyword, args = (re.split(r"[\t\v\f\r ]+", buf.strip(), maxsplit=1) + [""])[:2]
-        out.append((keyword.upper(), args.strip()))
-        buf = ""
-    return out
-
-
-def _unwrapped(text):
-    """[(KEYWORD, arguments, onbuild)] of a Dockerfile's `instructions`, an ONBUILD read as the instruction it holds,
-    its keyword in any case, with `onbuild` True: BuildKit runs it in each stage built FROM this one (read 170, S3)."""
-    out = []
-    for keyword, args in instructions(text):
-        onbuild = keyword == "ONBUILD"
-        if onbuild:
-            keyword, args = (re.split(r"[\t\v\f\r ]+", args.strip(), maxsplit=1) + [""])[:2]
-            keyword, args = keyword.upper(), args.strip()
-        out.append((keyword, args, onbuild))
-    return out
 
 
 def _runs(text):

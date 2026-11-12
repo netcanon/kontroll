@@ -82,7 +82,12 @@ a backquoted command, a glob, a brace expansion or an extended glob (`set $o`, `
 +{e,}`, `set +@(e)`), and by a `shopt` naming errexit or given any of those (`shopt -ou $x`). A `set -e` the reader
 cannot place switches nothing on, and a `set` it cannot rule out switches errexit off, so each misreading of these that
 it knows of refuses. The reader refuses what it knows it cannot read; what it still cannot see is listed in
-tests/unit/test_image_pins.py's docstring ("What the checks still cannot see"). """
+tests/unit/test_image_pins.py's docstring ("What the checks still cannot see").
+
+It also reads a Dockerfile into its instructions as BuildKit joins them (`dockerfile_lines`, `instructions`,
+`unwrapped`: an ONBUILD read as the instruction it holds), for tests/unit/test_image_pins.py and
+tests/unit/test_no_log_censor.py, so neither test module imports the other.
+"""
 import re
 
 _OPERATORS = re.compile(r"(&&|\|\||;|\||\x02)")
@@ -836,3 +841,41 @@ def gate_faults(what, cmds, i, on=False, unit="RUN"):
                             and cmds[_pipeline_start(cmds, i)][1] in ("", ";", "&"))):
         faults.append("%s not followed by && (its failure would not fail the %s): %s" % (what, unit, command))
     return faults
+
+
+def dockerfile_lines(text):
+    """A Dockerfile's lines as BuildKit splits them: a byte-order mark dropped, split on LF only, a CR before it
+    dropped."""
+    text = text[1:] if text.startswith("\ufeff") else text
+    return [line.rstrip("\r") for line in text.split("\n")]
+
+
+def instructions(text):
+    """[(KEYWORD, arguments)] of a Dockerfile: continuation lines joined, comment and blank lines dropped. As in
+    BuildKit, a blank or comment line inside a continued instruction neither ends nor joins it."""
+    out, buf = [], ""
+    for line in dockerfile_lines(text):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        m = re.search(r"(?:^|[^\\])(\\[ \t]*)$", line)
+        if m:
+            buf += line[:m.start(1)]
+            continue
+        buf += line.rstrip()
+        keyword, args = (re.split(r"[\t\v\f\r ]+", buf.strip(), maxsplit=1) + [""])[:2]
+        out.append((keyword.upper(), args.strip()))
+        buf = ""
+    return out
+
+
+def unwrapped(text):
+    """[(KEYWORD, arguments, onbuild)] of a Dockerfile's `instructions`, an ONBUILD read as the instruction it holds,
+    its keyword in any case, with `onbuild` True: BuildKit runs it in each stage built FROM this one (read 170, S3)."""
+    out = []
+    for keyword, args in instructions(text):
+        onbuild = keyword == "ONBUILD"
+        if onbuild:
+            keyword, args = (re.split(r"[\t\v\f\r ]+", args.strip(), maxsplit=1) + [""])[:2]
+            keyword, args = keyword.upper(), args.strip()
+        out.append((keyword, args, onbuild))
+    return out

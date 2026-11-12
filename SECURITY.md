@@ -143,11 +143,23 @@ OS-keyring Fernet key, with a different mechanism (documented choice, PLAN.md §
 ### C2 — Secrets never logged  ◑ partial
 
 **Implements:** `no_log: true` on every Ansible task handling a credential or
-decrypted value; `ansible.cfg` `log_path`.
+decrypted value; `ansible.cfg` `log_path`. On ansible-core 2.19 and later `no_log`
+alone does not hide a failing task's error message: the censor keeps `exception`, which
+the default callback prints (CVE-2026-123036, ansible/ansible#85696, no fixed release),
+and the runner image's base ships such a core. The image's build drops `exception` from
+the censor and fails unless a failing no_log task's error message then prints nothing it
+was given, on stdout, on stderr or in the ansible log
+(`docker/semaphore-runner/no_log_censor.py`, I-75); what still prints a value given to a
+no_log task is in the accepted risks.
 **Proves (built):** every capture under `config_backup_dir` is written, and read,
 `no_log`, since `--check --diff` prints a write whole:
 `tests/unit/test_capture_no_log.py` (I-13; its exemptions name the file and why
-it holds no credential). Not a capture of this kind, and not held there:
+it holds no credential). The runner image's censor step, the script's rules and every
+branch of its check: `tests/unit/test_no_log_censor.py`; the script on a copy of the
+core the run's subprocesses import, a failing no_log task's value printed before and
+nowhere after, and its refusals: `tests/integration/test_no_log_censor_runs.py` (I-75;
+it runs in CI's validate job, and is skipped in the pytest legs, which have no
+ansible-core). Not a capture of this kind, and not held there:
 logging_journald_receiver's rollback copy of a systemd unit, written under the
 playbook's directory.
 **Planned, not built:** a grep gate in `tests/validate` that flags
@@ -2560,6 +2572,7 @@ another key file named absolute and quoted, in every read-back of a run; shown o
 
 | Item | Risk | Accepted? | Rationale |
 |---|---|---|---|
+| What a `no_log` task can still print of a value it was given (I-75) | On every core, patched or not: a module's warnings and deprecations (the censor keeps them; core's `copy`, `file` and `command` can name an argument in one: a source path, an owner, an executable); an `include_tasks`, `import_tasks` or `include_role` file or role name templated from a value, with the source lines `include_role` quotes around it; connection lines at `-vvv` and above. On an unpatched 2.19 or later, a failing task's error message too: CI's validate job and the validate images (2.19.4), and a host toolchain installed outside the legacy toolchain's `<2.19` ceiling (`--with-host-ansible`) | Yes | None of these is where kontroll puts a credential: a secret reaches a task from a SOPS lookup or the inventory, and no shipped task names a file, a role, an owner or an executable by one (read, not measured); scheduled jobs never run `-vvvv`; CI and the validate images handle test values only; the shipped runtimes are patched (the runner image, C2) or on 2.18 (the installer's 2.18.19). Upstream tracks the warnings path as ansible/ansible#85696. Re-measure on each core bump (docker/README.md § Refreshing a pin) |
 | Single operator, no RBAC beyond Semaphore | Anyone with control-VM access controls the fleet | Yes | Single-user homelab; Semaphore adds per-user RBAC for the UI layer in Phase 3 |
 | **R-KEY-1** — age key loss | Encrypted secrets become **permanently** unrecoverable | Yes (**uncompensated** for an instance with one recipient) | **Corrected 2026-07-28; narrowed 2026-10-23 (a break-glass choice at `--fresh`).** An instance created by `kontroll-init --fresh` with `--break-glass-recipient` or `--mint-break-glass` has a second recipient on every domain from its first secret. An instance created with `--no-break-glass`, or before `--fresh` asked, has **ONE** recipient per domain: losing its control key destroys every device credential, API token and service password in it. Secrets are low-volume and re-enterable *in principle*, but re-entering them means recovering each one from its device, and for a token-only credential (an API token) the plaintext exists nowhere else and must be reissued on the device. **Fix for such an instance:** [docs/break-glass.md](docs/break-glass.md) — add the recipient, re-wrap, verify. The risk stays open for every instance whose break-glass key has not been proven to open every domain (kontroll counts recipients; it cannot know whether the private half was kept), and an off-box **copy of the private key** never closes it — a copy shares the single point of failure. See [C1](#c1--secrets-encrypted-at-rest-sops--age). |
 | API rate-limit counters in-process | Counters reset on restart + are per-process (wrong if the API is ever run multi-worker / multi-replica) | Yes | One uvicorn container today (mgmt-only, single-operator); the store is a swappable seam → move to a shared backend (Redis) the moment the API scales horizontally |

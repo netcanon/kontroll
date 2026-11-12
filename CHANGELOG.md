@@ -11,6 +11,51 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(docker): a failing `no_log` task's error message prints nothing it was given, on the runner image's ansible-core (I-75, 2026-11-12)
+
+ansible-core 2.19 and later keep `exception` in a censored `no_log: true` result, and the default callback prints its
+message, so a no_log task that failed printed `[ERROR]: Task failed: …` with what it was given in it: a `fail` or
+`assert` message, a command line, a path (CVE-2026-123036, upstream ansible/ansible#85696; no fixed release). The
+runner image's base, semaphoreui/semaphore v2.19.17, ships ansible-core 2.20.10, so every Semaphore job's kept output
+and the API's and the onboard GUI's Ansible runs could carry it. Measured on 2.19.4 and 2.20.10, alone, under a
+block's `rescue` and with `ignore_errors`; 2.18 (the installer's 2.18.19, and the legacy host toolchain's `<2.19`
+ceiling, `--with-host-ansible`) keeps no `exception`.
+
+- **Fixed.** The runner image's build runs docker/semaphore-runner/no_log_censor.py, as root, with the base's ansible
+  venv Python. It drops `exception` from the censor's preserved keys (`ansible/executor/task_result.py`) under a
+  one-line notice that the file was modified (ansible-core is GPL-3.0), compiles the module again (no cached bytecode
+  from before runs), leaves the file and its cache their owner's (the venv is uid 1001's), and refuses any other shape
+  of that line, `exception` alone among them, so a base bump that moves the censor (2.21 keeps it in
+  `ansible/_internal/_task.py`) fails the build. Then it runs, with that core, a no_log `fail` given a marker and a
+  no_log `command` whose argv names it: the build fails if the marker prints, on stdout, on stderr or in the ansible
+  log, if either run does not fail saying its output is hidden, or if the same `fail` without no_log stops printing
+  it.
+- **What a failing no_log task prints now.** Only its `fatal: … censored` line, as on 2.18: the `[ERROR]: Task
+  failed:` block goes whole, its reason (`non-zero return code`, `Failed to connect to the host via ssh`), its Origin
+  file:line and its source lines with the value. The run's rc, the recap and a rescue's `ansible_failed_result`
+  (which still holds `msg` and `exception`) are unchanged.
+- **Not changed.** On every core, patched or not, these still print a value a no_log task was given: a module's
+  warnings and deprecations (core's `copy`, `file` and `command` can name an argument in one), an include's or
+  import's file or role name templated from it (`include_role` also quotes the source lines around it), and
+  connection lines at `-vvv` (SECURITY.md's accepted risks). CI's validate job and the validate images (2.19.4) still
+  print the message: they handle test values only. The runtime's core is in no test leg (I-80).
+- **Tests.** `unit/test_no_log_censor.py`: the Dockerfile's step (root, the venv's Python, a RUN its failure fails, no
+  later step that runs pip or names ansible-core); the rewrite drops `exception` alone, under the notice, and refuses
+  every other shape (a frozenset, a name, a dict, several lines, an annotation, one in a class, a union, an empty one,
+  `exception` alone), the refusal for no line naming where each core keeps the censor; the check, against a stand-in
+  core, reports a marker on stdout only, on stderr only or in the log only, a run that passes or prints no `FAILED!`,
+  no notice that its output is hidden, and a control that prints nothing. `integration/test_no_log_censor_runs.py`:
+  the script on a copy of the ansible-core the run's subprocesses import (skipped where there is none, as in CI's
+  pytest legs: the repo's own `ansible/` cannot stand in). Before it, a failing no_log `fail`, `assert`, `command` and
+  `slurp` print the marker (2.19, 2.20); after it none does, alone, rescued or ignored, in the output or the ansible
+  log; an ordinary failure still prints; the rewritten file carries the notice; a second run writes nothing; a censor
+  of another shape is refused unwritten; a core that prints the value by another path fails the check; stale
+  unchecked bytecode files (the plain one, the `-O` one) are replaced or removed; run as root on a copy uid 1001 owns,
+  the file and its cache stay 1001's and the lookup leaves no other cache. `unit/_build_read.py` now holds the
+  Dockerfile readers `test_image_pins.py` and the unit file both use.
+- **Docs.** SECURITY.md C2 and its accepted risks; docker/README.md § Refreshing a pin; docs/logging-architecture.md
+  §4; THIRD-PARTY-NOTICES.md; tests/README.md.
+
 ### fix(ansible): every playbook a run can start with prints the run's id, once, on the controller (I-41, 2026-11-12)
 
 bootstrap.yml (the first step of the installer's `init`, and of the onboard's `--bootstrap`) and local-canonical.yml
