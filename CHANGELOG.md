@@ -11,6 +11,27 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the node_exporter install runs nothing on a host whose fact gathering was unreachable, so a down host no longer fails the run (I-89, 2026-11-12)
+
+install-node-exporter.yml's play sets `ignore_unreachable` (CLAUDE.md: never let one unreachable host fail a fleet-wide
+run), so a host whose fact gathering was unreachable went on to the role with no facts, and the role's first task, which
+picks the OS family's tasks by `ansible_os_family`, failed it: measured on ansible-core 2.18.19 and 2.19.4, an install
+over two down hosts failed both (`'ansible_os_family' is undefined`) and ended rc 2. A backfill over the fleet with one
+host down failed the run.
+
+- **Fixed.** The fact gathering registers `_kontroll_gather`, and the role's include runs only when that result is not
+  unreachable: such a host's gathering prints `UNREACHABLE!`, its install `skipping:`, and the run passes for it. The
+  play's header says so.
+- **Not changed.** A host that answers the gathering and drops later is not skipped: `ignore_unreachable` ignores each
+  task it does not answer, and the run can pass with its install unfinished (I-92). The summary play names no
+  unreachable host: it holds one `fail` task, and the gathering's own line names it.
+- **Tests.** `tests/integration/test_fleet_play_failure_cleans_up.py`'s install rows gather facts through a stand-in
+  `ssh` that runs the command on the test's own machine for the addresses a row lists as up and refuses the rest (the
+  validate image has no ssh client): two down hosts have their install skipped and the run passes; a down host beside an
+  up one, the up one installs and the down one is skipped; the shipped node_exporter role over two down hosts passes
+  with none of its tasks run (it failed both before). `tests/unit/test_fleet_play_rescue.py` pins the register and the
+  `when`.
+
 ### fix(tests): the suite collects on a machine with no ansible-playbook (I-98, 2026-11-12)
 
 tests/integration/test_refuse_missing_entrypoint_runs.py reads the core's version at its top level, by running
@@ -253,19 +274,20 @@ stayed in its key dir until the next run that completed.
   wire-logging.yml's role) in a block after the connection refusal, whose rescue records the host's failure by the
   failed task's name, fails a host that reaches it with no failed task of its own (its role could not be loaded, or
   another host's failure stopped it: a `run_once` task, a caller's any_errors_fatal; no later play would see it), and
-  ends that play for the host, as its failure did, so a handler a task notified before it does not run. That holds
-  under a caller's force_handlers too, where the failed host's handlers ran before. wire-logging.yml's validation play
-  records a refusal the same way, and the device play and the summary read that record first, so a refused request
-  targets no host whatever `_wire_group` a vars file or an `-e` holds. After the key cleanup, an `Install run summary`
-  / `Wiring run summary` play fails each recorded host, naming the task it stopped at, and wire-logging.yml's `Fail a
-  refused wiring request` fails a refused request; their one task is a `fail`, which connects to nothing. A run with a
-  failure still fails (rc 2), now after its keys are removed. Unchanged: a refused host still fails at the refusal;
-  both plays tolerate an unreachable host, though node_exporter's role then fails a host whose facts are missing, at
-  its OS-family task, as before (I-89). Under a caller's any_errors_fatal every host's work stops at the first
-  failure, as before: the failing host is recorded, every other host is failed as stopped by another host's failure,
-  and with more than one host the run ends at that play, with the keys left; with one host it reaches the cleanup,
-  and the summary names it. Every host refused, every host's role failing to load (I-66) and a handler that fails on
-  every host (I-86) still end the run before the cleanup, and the keys stay.
+  ends that play for the host, as its failure did, so a handler a task notified before it does not run. That holds under
+  a caller's force_handlers too, where the failed host's handlers ran before. wire-logging.yml's validation play records
+  a refusal the same way, and the device play and the summary read that record first, so a refused request targets no
+  host whatever `_wire_group` a vars file or an `-e` holds. After the key cleanup, an `Install run summary` / `Wiring
+  run summary` play fails each recorded host, naming the task it stopped at, and wire-logging.yml's `Fail a refused
+  wiring request` fails a refused request; their one task is a `fail`, which connects to nothing. A run with a failure
+  still fails (rc 2), now after its keys are removed. Unchanged: a refused host still fails at the refusal; both plays
+  tolerate an unreachable host, though node_exporter's role then fails a host whose facts are missing, at its OS-family
+  task, as before (I-89; since its fix the install skips a host whose gathering was unreachable). Under a caller's
+  any_errors_fatal every host's work stops at the first failure, as before: the failing host is recorded, every other
+  host is failed as stopped by another host's failure, and with more than one host the run ends at that play, with the
+  keys left; with one host it reaches the cleanup, and the summary names it. Every host refused, every host's role
+  failing to load (I-66) and a handler that fails on every host (I-86) still end the run before the cleanup, and the
+  keys stay.
 - **Tests.** `unit/test_fleet_play_rescue.py`: the dispatching play's refusal, then one rescued block holding the
   work, the play's `ignore_unreachable` true; the rescue's record (the failed task's name alone), its `fail` and
   `end_host`, and no `failed_when`, `ignore_errors`, `tags` or `loop` on a rescue or summary task; the summaries

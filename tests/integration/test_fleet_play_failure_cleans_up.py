@@ -8,22 +8,25 @@ run's keys stayed in its key dir (I-64). The rows hold that such a run now remov
 each host and the task it stopped at; that a host the work did not fail is not failed; that a handler a failed host's
 task notified does not run, as it did not before; that a host with no failed task of its own (its role could not be
 loaded, or a `run_once` task failed on another host) is failed by name; that a refused request targets no host
-whatever `_wire_group` an `-e` or a vars file holds; that the play still tolerates an unreachable host; and what a
-caller's any_errors_fatal does: every host's work stops at the first failure, and with more than one host the run
-ends there with the keys kept (a residual the docs name), with one it reaches the cleanup; and that a wiring run under
-a `--limit` that leaves localhost out, which skips the validation play and so wired nothing and passed, now fails
-naming the limit to use (I-88), while `--limit <host>:localhost` wires that host alone.
-tests/unit/test_fleet_play_rescue.py pins the shapes. The stubs run `debug`, `fail` and `include_tasks`, which open
-no connection; install-node-exporter.yml's fact gathering meets a stand-in `ssh` first on PATH that answers as a
-refused connection does (exit 255), so the host is unreachable, which the play ignores, whether or not the machine has
-an ssh client (the validate image has none). The refused host is `ansible_connection: local`, which the plays'
-refusal refuses as it does a network plugin's host, so no row needs a collection. It needs ansible-playbook on PATH;
-tests/validate.sh runs it in the validate image.
+whatever `_wire_group` an `-e` or a vars file holds; that the install play still tolerates an unreachable host, and
+since I-89 runs nothing more on it, the real node_exporter role included (it failed such a host at its OS-family task,
+its facts missing); and what a caller's any_errors_fatal does: every host's work stops at the first failure, and with
+more than one host the run ends there with the keys kept (a residual the docs name), with one it reaches the cleanup;
+and that a wiring run under a `--limit` that leaves localhost out, which skips the validation play and so wired nothing
+and passed, now fails naming the limit to use (I-88), while `--limit <host>:localhost` wires that host alone.
+tests/unit/test_fleet_play_rescue.py pins the shapes. The stubs run `debug`, `fail` and `include_tasks`, which open no
+connection. install-node-exporter.yml's fact gathering meets a stand-in `ssh` first on PATH (FAKE_SSH), whether or not
+the machine has an ssh client (the validate image has none): for a host whose address the row lists as up it runs the
+command on the row's own machine, which stands in for the device (pipelined, so the module comes on its stdin), and for
+any other it answers as a refused connection does (exit 255), so the host is unreachable. The refused host is
+`ansible_connection: local`, which the plays' refusal refuses as it does a network plugin's host, so no row needs a
+collection. It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image.
 """
 import os
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -53,14 +56,35 @@ STUB = [
     {"name": "Stub step after", "ansible.builtin.debug": {"msg": "AFTER {{ inventory_hostname }}"}},
 ]
 HANDLERS = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN {{ inventory_hostname }}"}}]
+# The stand-in `ssh`: for a host in $FAKESSH_UP (a comma list of addresses) it runs the remote command here, under
+# /bin/sh, as an ssh login would on the device; for any other it answers as a refused connection does (exit 255).
+FAKE_SSH = """#!%s
+import os, sys
+argv, i, host, cmd = sys.argv[1:], 0, None, []
+WITH_ARG = set("BbcDEeFIiJLlmOoPpQRSWw")
+while i < len(argv):
+    a = argv[i]
+    if a.startswith("-") and len(a) > 1:
+        i += 2 if a[1] in WITH_ARG and len(a) == 2 else 1
+        continue
+    host, cmd = a, argv[i + 1:]
+    break
+if host is None or host not in os.environ.get("FAKESSH_UP", "").split(","):
+    sys.stderr.write("ssh: connect to host %%s port 22: Connection refused\\n" %% host)
+    sys.exit(255)
+os.execv("/bin/sh", ["/bin/sh", "-c", " ".join(cmd)])
+""" % sys.executable
+ADDRESS = {"a": "192.0.2.36", "b": "192.0.2.37"}
+INSTALL = "Install + start node_exporter (the via:host host metrics agent)"
 
 
-def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=None, args=()):
+def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=None, args=(), up=(), real=False):
     """Run the shipped `playbook` from a copy of ansible/playbooks (with logging/, a probe module whose group is `g`
-    and an instance.yml), the role `role` a stub (STUB, HANDLERS), over `hosts` in group `g`, with `extra` as one JSON
-    `-e` and `args` after it, each text in `append` added to the copy's file it names, a key dir under `tmp_path`
-    holding one stale key, and a stand-in `ssh` first on PATH. Return the exit code, the output, each host's failed count from the recap, and
-    whether the key dir is gone."""
+    and an instance.yml), the role `role` a stub (STUB, HANDLERS) or, when `real`, the shipped role of that name, over
+    `hosts` in group `g`, with `extra` as one JSON `-e` and `args` after it, each text in `append` added to the copy's
+    file it names, a key dir under `tmp_path` holding one stale key, and FAKE_SSH first on PATH, answering for the
+    addresses in `up`. Return the exit code, the output, each host's failed count from the recap, and whether the key
+    dir is gone."""
     tree = tmp_path / "t"
     shutil.copytree(os.path.join(ROOT, "ansible", "playbooks"), str(tree / "ansible" / "playbooks"))
     shutil.copytree(os.path.join(ROOT, "logging"), str(tree / "logging"))
@@ -69,29 +93,34 @@ def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=Non
     (tree / "instance").mkdir()
     (tree / "instance" / "instance.yml").write_text("mgmt_ip: 192.0.2.5\n")
     stub = tree / "ansible" / "roles" / role
-    (stub / "tasks").mkdir(parents=True)
-    (stub / "handlers").mkdir()
-    (stub / "tasks" / "main.yml").write_text(yaml.safe_dump(STUB, sort_keys=False))
-    (stub / "tasks" / "ok.yml").write_text(yaml.safe_dump([{"name": "Stub loaded", "ansible.builtin.debug": {
-        "msg": "LOADED {{ inventory_hostname }}"}}]))
-    (stub / "handlers" / "main.yml").write_text(yaml.safe_dump(HANDLERS))
+    if real:
+        shutil.copytree(os.path.join(ROOT, "ansible", "roles", role), str(stub))
+    else:
+        (stub / "tasks").mkdir(parents=True)
+        (stub / "handlers").mkdir()
+        (stub / "tasks" / "main.yml").write_text(yaml.safe_dump(STUB, sort_keys=False))
+        (stub / "tasks" / "ok.yml").write_text(yaml.safe_dump([{"name": "Stub loaded", "ansible.builtin.debug": {
+            "msg": "LOADED {{ inventory_hostname }}"}}]))
+        (stub / "handlers" / "main.yml").write_text(yaml.safe_dump(HANDLERS))
     for rel, text in (append or {}).items():
         with open(str(tree / rel), "a", encoding="utf-8") as fh:
             fh.write(text)
     (tree / "inv.yml").write_text(yaml.safe_dump({"all": {"children": {"g": {"hosts": hosts}}}}))
-    (tree / "ansible" / "ansible.cfg").write_text("[defaults]\nroles_path = roles\nretry_files_enabled = False\n")
+    (tree / "ansible" / "ansible.cfg").write_text("[defaults]\nroles_path = roles\nretry_files_enabled = False\n"
+                                                  "[ssh_connection]\npipelining = True\n")
     keys = tmp_path / "keys"
     keys.mkdir(mode=0o700)
     (keys / "h.key").write_text("not a key: a stale file the cleanup must remove\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "ssh").write_text("#!/bin/sh\necho 'ssh: connect to host port 22: Connection refused' >&2\nexit 255\n")
+    (bin_dir / "ssh").write_text(FAKE_SSH)
     os.chmod(str(bin_dir / "ssh"), 0o755)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
     env.update(ANSIBLE_CONFIG=str(tree / "ansible" / "ansible.cfg"), ANSIBLE_NOCOLOR="1",
                ANSIBLE_LOCAL_TEMP=str(tmp_path / "tmp"), ANSIBLE_LOCALHOST_WARNING="0",
                ANSIBLE_HOST_KEY_CHECKING="False", KONTROLL_SSH_KEY_DIR=str(keys),
-               PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), **(env_extra or {}))
+               PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), FAKESSH_UP=",".join(up),
+               **(env_extra or {}))
     cmd = ["ansible-playbook", "-i", str(tree / "inv.yml"), "playbooks/" + playbook]
     if extra is not None:
         cmd += ["-e", yaml.safe_dump(extra, default_flow_style=True).strip()]
@@ -109,7 +138,16 @@ def _recap(stdout, field):
 
 
 def _ssh(address):
-    return {"ansible_connection": "ssh", "ansible_host": address}
+    return {"ansible_connection": "ssh", "ansible_host": address,
+            "ansible_python_interpreter": "{{ ansible_playbook_python }}"}
+
+
+def _task(out, name):
+    """The output of the task `name` (from its banner to the next banner or play)."""
+    at = out.find("TASK [%s] " % name)
+    assert at != -1, (name, out)
+    ends = [i for i in (out.find("\nTASK [", at + 1), out.find("\nPLAY [", at + 1)) if i != -1]
+    return out[at:min(ends)] if ends else out[at:]
 
 
 def _wire(tmp_path, extra, role=WIRE_ROLE, env_extra=None, refused=True, only=None, append=None, args=()):
@@ -243,16 +281,18 @@ def test_a_callers_any_errors_fatal_over_one_host_reaches_the_cleanup(tmp_path):
     assert _stopped("a", "Stub step that fails") in out and '"msg": "a: stopped with no failed task' not in out, out
 
 
-def _install(tmp_path, extra):
-    hosts = {"a": _ssh("192.0.2.36"), "b": _ssh("192.0.2.37")}
-    return _run(tmp_path, "install-node-exporter.yml", "node_exporter", hosts, dict(target="g", **extra))
+def _install(tmp_path, extra, up=("a", "b"), real=False):
+    """install-node-exporter.yml over hosts a and b, those in `up` answering through FAKE_SSH."""
+    hosts = {h: _ssh(address) for h, address in ADDRESS.items()}
+    return _run(tmp_path, "install-node-exporter.yml", "node_exporter", hosts, dict(target="g", **extra),
+                up=[ADDRESS[h] for h in up], real=real)
 
 
 def test_an_install_that_fails_on_every_host_removes_the_keys_and_names_each_host(tmp_path):
-    """Both hosts' stub install fails (their fact gathering meets the stand-in `ssh`, an unreachable host the play
-    ignores): the run fails (rc 2) at the summary, after the key cleanup, which removed the key dir, naming each host
-    and the task it stopped at; neither runs its notified handler. The run prints the preamble's kontroll_run_id stamp
-    (a cheap check that the run is the shipped playbook's). Guards I-64 for install-node-exporter.yml."""
+    """Both hosts' stub install fails (their fact gathering answered through the stand-in `ssh`): the run fails (rc 2)
+    at the summary, after the key cleanup, which removed the key dir, naming each host and the task it stopped at;
+    neither runs its notified handler. The run prints the preamble's kontroll_run_id stamp (a cheap check that the run
+    is the shipped playbook's). Guards I-64 for install-node-exporter.yml."""
     rc, out, recap, gone = _install(tmp_path, {"stub_fail": ["a", "b"]})
     assert rc == 2 and gone, out
     assert recap == {"a": 1, "b": 1}, (recap, out)
@@ -275,16 +315,46 @@ def test_an_install_role_that_cannot_be_loaded_fails_its_host_beside_a_good_one(
 
 
 def test_an_unreachable_host_is_tolerated_and_not_recorded(tmp_path):
-    """Both hosts are unreachable at the fact gathering, and the stub install, which reads no facts, passes: the run
-    passes (rc 0), no host is named FAILED, and the key dir is gone. Guards the rescue taking an unreachable host for
-    a failed install, which would turn the play's `ignore_unreachable` (a down host is tolerated, not fatal: CLAUDE.md)
-    into a failed run. It holds the play, not the role: the real node_exporter role fails such a host at its OS-family
-    task, whose facts are missing, as it did before I-64 (I-89)."""
-    rc, out, recap, gone = _install(tmp_path, {})
+    """Both hosts are unreachable at the fact gathering: the install is skipped for both (the stub never runs), the run
+    passes (rc 0), no host is named FAILED, and the key dir is gone. Guards the rescue taking an unreachable host for a
+    failed install, which would turn the play's `ignore_unreachable` (a down host is tolerated, not fatal: CLAUDE.md)
+    into a failed run; and I-89: the install ran on a host whose gathering was unreachable, with no facts."""
+    rc, out, recap, gone = _install(tmp_path, {}, up=())
     assert rc == 0 and gone, out
     assert recap == {"a": 0, "b": 0}, (recap, out)
-    assert "FAILED: the install" not in out and "AFTER a" in out and "AFTER b" in out, out
+    assert "FAILED: the install" not in out and "STUB a" not in out and "STUB b" not in out, out
     assert re.search(r"\[a\]: UNREACHABLE!", out) and re.search(r"\[b\]: UNREACHABLE!", out), out
+    skipped = _task(out, INSTALL)
+    assert "skipping: [a]" in skipped and "skipping: [b]" in skipped, skipped
+
+
+def test_a_down_host_beside_an_up_one_gets_nothing_run_and_the_up_one_installs(tmp_path):
+    """Host a answers through the stand-in `ssh` and b does not: a's gathering and its stub install run (to its last
+    step), b's install is skipped, the run passes (rc 0) with neither named FAILED, and the key dir is gone. Guards
+    I-89's skip against reading another host's gathering (a skipped beside a down host, or b run beside an up one),
+    and the up host's gathering, through the stand-in, against a row that cannot reach the stub at all."""
+    rc, out, recap, gone = _install(tmp_path, {}, up=("a",))
+    assert rc == 0 and gone, out
+    assert recap == {"a": 0, "b": 0}, (recap, out)
+    assert "AFTER a" in out and "STUB b" not in out and "FAILED: the install" not in out, out
+    assert not re.search(r"\[a\]: UNREACHABLE!", out) and re.search(r"\[b\]: UNREACHABLE!", out), out
+    included = _task(out, INSTALL)
+    assert "skipping: [b]" in included and "skipping: [a]" not in included, included
+
+
+def test_the_real_role_runs_nothing_on_a_down_host(tmp_path):
+    """The shipped node_exporter role, over two hosts whose gathering is unreachable: the run passes (rc 0), no host is
+    named FAILED, its include is skipped for both and none of the role's tasks runs, and the key dir is gone. Guards
+    I-89 with the role a run installs: its first task's `when` read the facts the gathering did not bring, so each down
+    host failed ("'ansible_os_family' is undefined"), the run failed (rc 2), and CLAUDE.md's "never let one unreachable
+    host fail a fleet-wide run" was false for it (measured on 2.18.19 and 2.19.4 before the fix)."""
+    rc, out, recap, gone = _install(tmp_path, {}, up=(), real=True)
+    assert rc == 0 and gone, out
+    assert recap == {"a": 0, "b": 0}, (recap, out)
+    assert "FAILED!" not in out and "is undefined" not in out and "FAILED: the install" not in out, out
+    skipped = _task(out, INSTALL)
+    assert "skipping: [a]" in skipped and "skipping: [b]" in skipped, skipped
+    assert "TASK [node_exporter : " not in out, out
 
 
 NOT_VALIDATED = ("the wiring request was not validated, so no host was wired: the validation play runs on localhost, "
