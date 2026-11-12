@@ -85,12 +85,33 @@ A few guards read the overlay on purpose, by its own path and not through the re
 check it: the leak guard's instance-token list, the vendor-neutral `group_vars` lint, the topology-leak test, and
 validate's `sops-encrypted` step.
 
+## A row that reads the tree through git (`requires_checkout`)
+
+A few rows read the repository through git, not through the files on disk: the index's modes, the tracked list,
+what is ignored, a `git archive HEAD` build. Each carries `@pytest.mark.requires_checkout` (a module-level
+`pytestmark` works too), and the conftest hook skips them, with the reason, where the tree is not a git checkout: a
+`git archive` copy (every container check runs on one) or a source tarball. [_checkout.py](_checkout.py) gives the
+answer. The tree is a checkout when git names it ITSELF as the top of its work tree; the reason is git's own "not a
+git repository", a copy inside another repository's directory, a `GIT_DIR` handed down that names another repository,
+no git on the PATH, or git not answering. A tree git finds and REFUSES (dubious ownership: another uid owns it) has no
+reason: its rows run and fail with git's own error. Before the marker, those rows FAILED outside a checkout with a
+CalledProcessError that said nothing of why (I-51).
+
+Where `KONTROLL_REQUIRE_CHECKOUT=1` a reason is a session error instead of a skip: validate's pytest step and CI's
+offline pytest job set it, since both run in a checkout, where a skipped marked row would pass a gate that never ran it.
+
+A new row that shells out to git about this tree takes the marker, unless it can read the files on disk instead
+when git cannot list them and stay a whole check on an archive (as the doc-link and bind-source checks do); a row
+that builds its own repository in `tmp_path` does not need it. `unit/test_requires_checkout.py` pins the answer, and
+runs the marked files in tests/unit and tests/integration (the two it scans) in a copy that is not a checkout.
+
 ## Adding tests
 
 1. **L1**: nothing to add — new YAML is linted automatically. Keep it valid.
 2. **L2 syntax**: a new playbook is picked up by `validate` automatically.
 3. **L2 pytest**: drop a `test_*.py` under `unit/` (pure logic) or `integration/`
-   (a command driven as a black box). Mark it `@pytest.mark.unit`/`integration`.
+   (a command driven as a black box). Mark it `@pytest.mark.unit`/`integration`, and a row that reads this tree
+   through git `requires_checkout` (see [the section above](#a-row-that-reads-the-tree-through-git-requires_checkout)).
 4. **L2 vector test**: a new internal Vector shape (`docker/vector/config.d/transforms/`) gets a case in
    `docker/vector/tests/` — one event in, the label fields asserted out. The static row in
    `unit/test_compose_logging.py` already holds it to setting every templated label.
@@ -221,6 +242,7 @@ tests/unit/          # pure functions, no I/O
   test_run_id_stamp_imported.py # I-15: which playbooks print the run id, read as YAML by the path each import runs — the fleet preamble, deploy-stack, promote and reload-observability import _log-run-id.yml as their first entry, once, with nothing but its name on it; every playbook that imports the preamble does so first and once, and does not import the stamp as well
   test_installer_journal_dir.py # I-25: each launcher (no verb, `check`, `shell`; a stand-in docker; its probe pointed at a stand-in for /var/log/journal in each shape) exports KONTROLL_HOST_JOURNAL_DIR as the host's own answer — the persistent journal where the path is a directory or a link to one, else the volatile one — over a value exported in the shell; the three scripts hold the same probe; installer.yaml passes it into the installer
   test_journald_role_flush.py # I-25: the logging_journald_remote role notifies a restart of journald and then a `journalctl --flush`, so /var/log/journal is there for the next deploy
+  test_requires_checkout.py # I-51: tests/_checkout.py's answer (a plain tree, a checkout's top and one reached through a link, a copy inside another repository, a `GIT_DIR` handed down, a checkout git refuses, no git) and the `requires_checkout` marker — registered, every marked row and no unmarked one skipped by the hook with the reason exactly when this tree is not a checkout; in a copy that is not one, run from another checkout, the marked files skip, none failing, an unmarked row runs, and KONTROLL_REQUIRE_CHECKOUT=1 is an error; validate and CI set it
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked; the AS ROOT rows and the backup, reload, run-log-dir and journal-dir runs call the real tools
   test_local_canonical_as_root.py # C10, AS ROOT: local-canonical.yml run by ansible-playbook on a scratch node (the installer's mode: root, KONTROLL_IN_CONTAINER=1) — a fresh node's dry-run does not fail (nor one whose canonical path is the empty directory a bind mount leaves, or holds a mounted filesystem's `lost+found` and no repository, whose entries the ownership pass names, or a repository whose HEAD is gone, which its note says the real run restores, or a link to an empty directory or to nothing, which the first apply lands in the directory it names; a link to a landed canonical is audited, judged and deploys 0 changed — I-40); a canonical with a top-level name that is not UTF-8 is audited, judged and deployed, the first apply lands HEAD as a first seed and leaves the canonical the operator's, the second and third applies and a closing dry-run report 0 changed (the ownership pass runs again after the landing), a hand push of main is refused
   test_canonical_normalise_as_root.py # C10 / F-CANON, AS ROOT: the ownership pass chowns a root-made canonical to `<operator>:1001` outside hooks/ — every regular file and directory, through its descriptor; a link's own owner, what a link points at outside the tree, and hooks/ stay root's; the second run has nothing to do

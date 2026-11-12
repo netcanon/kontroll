@@ -11,6 +11,24 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(tests): a row that reads the tree through git skips, with the reason, outside a checkout (I-51, 2026-11-10)
+
+- **Fixed.** The rows that read the repository through git (the executable bits from the index, the tracked list
+  against the ignores, the portal env file's ignore, the leak guard's tree scan and overlay invariant, the plaintext
+  guard's run over the shipped tree, the bundle and launch-kit builds from `git archive HEAD`) failed in a tree that
+  is not a checkout, a `git archive` copy or a source tarball, with an error that said nothing of why. They carry a
+  new `requires_checkout` marker, and `tests/conftest.py` skips them there with the reason `tests/_checkout.py` gives:
+  git's own "not a git repository", a copy inside another repository's directory, a `GIT_DIR` handed down that names
+  another repository, no git on the PATH, or git not answering in 30 s. A checkout git refuses (another uid owns it)
+  is no reason: its rows run and fail with git's error, as before. In a checkout (the gate, CI) they run as before,
+  and there `KONTROLL_REQUIRE_CHECKOUT=1` (set by `tests/validate.sh`'s pytest step and CI's offline pytest job) turns
+  a would-be skip into a session error, so neither passes without having run them.
+- **Tests.** `tests/unit/test_requires_checkout.py` pins the answer (a plain tree, a checkout's top and one reached
+  through a link, a copy inside another repository, a `GIT_DIR` handed down, a checkout git refuses, no git) and, in a
+  copy of the tree that is not a checkout and from a working directory that is another checkout, that the marked rows
+  skip, none failing, an unmarked row runs, and the variable makes the skip an error; and that validate and CI set it.
+- **Docs.** `tests/README.md` (the marker, when a new row takes it or reads the disk instead, and the variable).
+
 ### fix(docker): Vector binds the host journal the host has, and makes none (I-25, 2026-11-08)
 
 `docker/services/vector.yaml` bound `/var/log/journal` from the host. On a control node whose journald is volatile

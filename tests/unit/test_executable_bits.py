@@ -35,6 +35,7 @@ def _has_shebang(rel):
         return fh.read(2) == b"#!"
 
 
+@pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
 def test_shebang_files_are_executable_and_only_those():
     """Every tracked file (outside docs/) with a `#!` first line is mode 100755, and every 100755 file has one.
     Guards both the cut dropping the bit (a Linux clone cannot run ./bootstrap.sh) and a stray executable bit on a

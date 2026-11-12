@@ -769,13 +769,16 @@ def test_every_blanket_add_a_node_runs_is_gated_or_explained(tmp_path):
         ("scripts/terse.sh", 1), ("scripts/terse.sh", 2), ("scripts/terse.sh", 3), ("scripts/terse.sh", 4)]
 
 
+@pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
 def test_the_shipped_tree_passes_the_guard(tmp_path):
     """A default run over a scratch copy of every tracked file outside the two instance-only trees (`instance/`,
     `docs/reviews/`) exits 0 — an unborn repository, so everything is a candidate, which is what a launch kit's
     first capture is. Guards a false positive introduced later — a fixture or a document with a line that reads
     as a key — which would stop the published install path at its first command. It reads neither an operator's
     overlay nor a secrets directory of the checkout it runs in: tests/validate.sh's `sops-encrypted` step is the
-    seat for those."""
+    seat for those. It lists the files through git, so it carries the `requires_checkout` marker: outside a
+    checkout it is skipped with the reason, and the gate and CI, which must run it, stop instead (I-51). Its own skip
+    stays, for a checkout with no usable index."""
     listing = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"], capture_output=True)
     if listing.returncode != 0 or not listing.stdout:
         pytest.skip("this checkout has no usable git index to list the tracked files from")
