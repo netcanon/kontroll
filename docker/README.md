@@ -28,7 +28,8 @@ up -d` with no service named would start every service in the stack.
 - `installer/` — the ephemeral, portless compose-native installer image + entrypoint (the install glue; NOT a
   stack service — see [installer/README.md](installer/README.md)).
 - `.env.example` — template for `docker/.env` (gitignored); real values come from
-  the SOPS `dashboards`/`semaphore` domains at deploy.
+  the SOPS `dashboards`/`semaphore` domains at deploy. The gate also sources it with a shell, so a value
+  holding whitespace is quoted (compose drops the quotes; `tests/unit/test_env_example_sources_cleanly.py`).
 - The shared `kontroll` network is **external** (declared so in every fragment so
   they can run standalone); `deploy-stack.yml` creates it once.
 
