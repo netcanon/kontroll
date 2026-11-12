@@ -44,6 +44,8 @@ MAIN = "- ansible.builtin.debug:\n    msg: MAIN\n"
 # one has set when the check runs, and Ansible's own `!unsafe` tag, which `from_yaml` refuses on 2.18, 2.19 and 2.20.
 ENTRY_LATER = (ENTRY_YAML + "- ansible.builtin.debug:\n    msg: \"{{ zz_set_later }}\"\n"
                "- ansible.builtin.debug:\n    msg: !unsafe '{{ zz_raw }}'\n")
+# An entry whose every line is indented: YAML takes the indented list as the document.
+INDENTED = "  - ansible.builtin.debug:\n      msg: LOADED\n"
 _ABSENT = object()
 
 
@@ -78,6 +80,8 @@ CASES = {
     "a-role-without-the-entry": ("zz", {"cfg1/zz/tasks/main.yml": MAIN}, {}),
     "a-role-without-a-tasks-dir": ("zz", {"cfg1/zz/defaults/main.yml": "x: 1\n"}, {}),
     "an-entry-that-is-a-directory": ("zz", {"cfg1/zz/tasks/backup.yml/main.yml": ENTRY_YAML}, {}),
+    "a-directory-of-the-bare-name-ahead-of-the-entry": ("zz", {"cfg1/zz/tasks/backup": None,
+                                                              "cfg1/zz/tasks/backup.yml": ENTRY_YAML}, {}),
     "shadowed-by-the-playbooks-roles-dir": ("zz", {"pb/roles/zz/tasks/main.yml": MAIN,
                                                    "cfg1/zz/tasks/backup.yml": ENTRY_YAML}, {}),
     "shadowed-by-an-earlier-roles-path-entry": ("zz", {"cfg1/zz/tasks/main.yml": MAIN,
@@ -93,6 +97,7 @@ CASES = {
     "an-empty-entry": ("zz", {"cfg1/zz/tasks/backup.yml": ""}, {}),
     "a-comment-only-entry": ("zz", {"cfg1/zz/tasks/backup.yml": "---\n# tasks file for zz\n\n"}, {}),
     "an-entry-under-a-document-marker": ("zz", {"cfg1/zz/tasks/backup.yml": "--- # backup\n" + ENTRY_YAML}, {}),
+    "an-entry-indented-throughout": ("zz", {"cfg1/zz/tasks/backup.yml": INDENTED}, {}),
     "an-entry-the-run-cannot-read": ("zz", {"cfg1/zz/tasks/backup.yml": _mode(ENTRY_YAML, 0)}, {}),
     "an-entry-a-yaml-or-template-read-would-trip-on": ("zz", {"cfg1/zz/tasks/backup.yml": ENTRY_LATER}, {}),
     # each candidate resolved as unfrackpath resolves it (A N1)
@@ -109,6 +114,8 @@ CASES = {
                                                         "cfg1/zz/tasks/backup.yml": ENTRY_YAML}, {}),
     "a-dangling-link-in-the-playbooks-roles-dir": ("zz", {"pb/roles/zz": _link("@TMP@/nowhere"),
                                                           "cfg1/zz/tasks/backup.yml": ENTRY_YAML}, {}),
+    "a-link-loop-in-the-playbooks-roles-dir": ("zz", {"pb/roles/zz": _link("@TMP@/pb/roles/zz"),
+                                                      "cfg1/zz/tasks/backup.yml": ENTRY_YAML}, {}),
     "a-dotted-name-that-is-no-collection-name": ("zz.one.two-x", {}, {}),
 }
 
@@ -172,22 +179,22 @@ def _verdicts(out):
 
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_the_check_passes_exactly_where_include_role_runs_the_entrypoint(tmp_path, case):
-    """For each case the check's verdict matches what the include_role after it did: it passes where the include ran
-    the role's tasks/backup entry (printing LOADED), and refuses where the include did not, whether the include then
-    failed, ended the run or loaded a role that runs nothing. The cases are each place ansible-core searches, in its
-    order (the playbook's roles/, each roles_path entry, from ansible.cfg or from a relative ANSIBLE_ROLES_PATH, which
-    replaces it, as Semaphore's Environment sets it; the playbook directory; the name as a relative or absolute path;
-    a roles_path entry ahead of the playbook directory and of the name as a path), each entry file name (`.yml`,
-    `.yaml`, `.json`, bare), each way a host's class has no entry (no role, a role without the file or without tasks/,
-    an entry that is a directory, a role shadowed by an earlier one or by a file of that name, no, an empty or a
-    non-string `device_role`, a dotted name that is no collection name), each way an entry holds no task or cannot be
-    read (empty, comments only, mode 0 to the run's uid: as root it is read and runs, so the row agrees either way),
-    an entry a YAML or template read would trip on (a variable set later, Ansible's `!unsafe` tag: the check reads its
-    text only), and each path ansible-core resolves before it looks (`~`, an environment variable, a `..` through a
-    directory that does not exist, a trailing slash past a file of that name, a dangling link). Guards I-66's check
-    against a mirror of the search that would refuse a class that runs (its good host's capture recorded as failed) or
-    pass one that cannot (the run ending before the key cleanup, as before, or a class that checks nothing reported
-    as passing: the I-66 reads' S1, N1, N2)."""
+    """For each case the check's verdict matches what the include_role after it did: it passes where the include ran the
+    role's tasks/backup entry (printing LOADED), and refuses where the include did not, whether the include then failed,
+    ended the run or loaded a role that runs nothing. The cases are each place ansible-core searches, in its order (the
+    playbook's roles/, each roles_path entry, from ansible.cfg or from a relative ANSIBLE_ROLES_PATH, which replaces it,
+    as Semaphore's Environment sets it; the playbook directory; the name as a relative or absolute path; a roles_path
+    entry ahead of the playbook directory and of the name as a path), each entry file name (`.yml`, `.yaml`, `.json`,
+    bare; a directory of an earlier name passed over), each way a host's class has no entry (no role, a role without the
+    file or without tasks/, an entry that is a directory, a role shadowed by an earlier one or by a file of that name,
+    no, an empty or a non-string `device_role`, a dotted name that is no collection name), an entry indented throughout,
+    each way an entry holds no task or cannot be read (empty, comments only, mode 0 to the run's uid: as root it is read
+    and runs, so the row agrees either way), an entry a YAML or template read would trip on (a variable set later,
+    Ansible's `!unsafe` tag: the check reads its text only), and each path ansible-core resolves before it looks (`~`,
+    an environment variable, a `..` through a directory that does not exist, a trailing slash past a file of that name,
+    a dangling link, a link loop). Guards I-66's check against a mirror of the search that would refuse a class that
+    runs (its good host's capture recorded as failed) or pass one that cannot (the run ending before the key cleanup, as
+    before, or a class that checks nothing reported as passing: the I-66 reads' S1, N1, N2)."""
     device_role, files, extra_env = CASES[case]
     out, _ = _run(tmp_path, device_role, files, extra_env)
     checked, loaded = _verdicts(out)

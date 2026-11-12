@@ -46,7 +46,8 @@
       - device_role is string
       - device_role | length > 0
       - device_role is match(_kontroll_collection_form) or _kontroll_entrypoint_files | length > 0
-      # Read here, not through a var: on 2.18 a var's text that starts `[` or `{` comes back as a list or a dict.
+      # Read here, not through a var: on 2.18 a var's text that starts `[` or `{` comes back as a list or a dict
+      # (the `search` test turns it back into text, so it matches the same entries; read here, it stays the text).
       - >-
         device_role is match(_kontroll_collection_form)
         or lookup('ansible.builtin.file', _kontroll_entrypoint_files | first) is search(_kontroll_entry_line)

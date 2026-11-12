@@ -101,7 +101,8 @@ task in it loaded and ran nothing: the host's summary read "not run" and the run
   `ANSIBLE_ROLES_PATH` as Semaphore's Environment sets it, no, an empty or a non-string `device_role`, a dotted name
   that is no collection name), each way an entry holds no task (empty, comments only) or cannot be read, an entry a YAML
   or template read would trip on (a variable set later, `!unsafe`), and each path ansible-core resolves before it looks
-  (`~`, an environment variable, a `..` through a missing directory, a trailing slash, a dangling link): the check
+  (`~`, an environment variable, a `..` through a missing directory, a trailing slash, a dangling link, a link loop),
+  a directory of the bare name ahead of the entry and an entry indented throughout: the check
   passes where the include runs the entry and refuses where it does not. Its last rows hold what the check leaves to the
   include: a class in collection form, installed, not installed or with no entry; an entry that does not parse, is not a
   list or holds `[]`; defaults that do not parse; a dependency that is not installed.
