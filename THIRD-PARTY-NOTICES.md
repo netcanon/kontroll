@@ -23,7 +23,10 @@ The images kontroll publishes itself (`kontroll-{control,vector,installer}`, pin
 Semaphore and Vector images, ansible-core and the all-modules Ansible Galaxy collection superset,
 sops, age, net-snmp and the base distribution's userland — under those projects' own licences.
 The source of kontroll's own layers is this repository at the commit the image's
-`org.opencontainers.image.revision` label names.
+`org.opencontainers.image.revision` label names. One file in the control image is modified from
+its upstream: the build drops `exception` from the no_log censor's preserved keys in
+ansible-core's `ansible/executor/task_result.py` (GPL-3.0), and the file carries a line saying
+so, with the date (`docker/semaphore-runner/no_log_censor.py`, I-75; SECURITY.md C2).
 
 If you add a vendored file, add a row here in the same commit (CLAUDE.md, Documentation Sync
 Checklist) and confirm its licence permits redistribution under these terms.

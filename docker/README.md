@@ -159,7 +159,13 @@ it runs on a deploy path.
    scripts/gen-requirements.py --all-modules`, as the publish workflow does) — `pip check`, the import line, the
    checksums and the apk constraints run in the build. In the built control image, `ansible --version`, `sops
    --version`, `age --version`, `snmpbulkwalk -V` and `ssh -V`; copy `/opt/kontroll` out and run
-   `scripts/gen-code-manifest.py --verify` on it. In the installer, `ansible --version`, `ansible-galaxy collection
+   `scripts/gen-code-manifest.py --verify` on it. The control image's build prints what its no-log censor step did
+   (I-75, `semaphore-runner/no_log_censor.py`); a new base whose ansible-core moved the censor is refused there: read
+   that core's censor (`_PRESERVE` in `ansible/executor/task_result.py` on 2.19 and 2.20, `PRESERVE` in
+   `ansible/_internal/_task.py` on 2.21 and later), and whether CVE-2026-123036 (ansible/ansible#85696) is fixed in
+   it, before changing the script. On any core bump, run a failing no_log task, an include of a templated missing
+   file and a module warning given a marker, under the image's own `/etc/ansible/ansible.cfg` as well as the
+   script's, and check what prints against SECURITY.md's accepted risks. In the installer, `ansible --version`, `ansible-galaxy collection
    list` and `docker compose version`. A Semaphore base must be at least the version every live box runs: Semaphore
    migrates its database forward on start, so an older pin is a downgrade over a migrated schema. No pull-request
    job builds an image, so a PR that moves an image is merged only after this step.

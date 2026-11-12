@@ -331,7 +331,11 @@ carries a collector address/credential follows the SOPS path, never a committed 
 
 - **At the source:** `no_log: true` already keeps creds out of the ansible log (the only
   log that ever sees decrypted SOPS); the GUI audit log logs *who/when/what*, never creds;
-  scheduled jobs never run `-vvvv`. Layer 0 changes preserve all three.
+  scheduled jobs never run `-vvvv`. Layer 0 changes preserve all three. On ansible-core 2.19
+  and later `no_log` alone let a failing task's error message into the output and the ansible
+  log (CVE-2026-123036); the runner image's build closes that path for its core (I-75,
+  SECURITY.md C2, whose accepted risks name what still prints a value: a module's warnings,
+  an include's templated name, `-vvv` connection lines).
 - **In transit/store:** Vector ships only already-clean sources; **no secret-valued
   labels** (the label schema is a closed, structural allow-list — SECURITY.md **C12**). Loki + Grafana bind
   to the mgmt VLAN only, behind the existing boundary (SECURITY.md C3) — never WAN. Vector publishes only the
