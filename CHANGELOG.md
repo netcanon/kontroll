@@ -20,17 +20,25 @@ over two down hosts failed both (`'ansible_os_family' is undefined`) and ended r
 host down failed the run.
 
 - **Fixed.** The fact gathering registers `_kontroll_gather`, and the role's include runs only when that result is not
-  unreachable: such a host's gathering prints `UNREACHABLE!`, its install `skipping:`, and the run passes for it. The
-  play's header says so.
+  unreachable. ansible-core counts as unreachable a host that is down, refuses or times out the connection, refuses the
+  run's key or its host key, and on 2.19+ one whose become never prompts (2.18.19 fails that one at the gathering, as
+  before). Such a host's gathering prints `UNREACHABLE!` and its install `skipping:`, in a `--check --diff` run too,
+  and the run passes for it (rc 0; its recap counts it `ignored`, not `unreachable`). Only that gathering line names
+  it, so a one-host onboard of an unreachable host is now a green run with nothing installed. The play's header says
+  so.
 - **Not changed.** A host that answers the gathering and drops later is not skipped: `ignore_unreachable` ignores each
   task it does not answer, and the run can pass with its install unfinished (I-92). The summary play names no
-  unreachable host: it holds one `fail` task, and the gathering's own line names it.
+  unreachable host: it holds one `fail` task, and the gathering's own line names it. Under a caller's any_errors_fatal
+  an ignored unreachable result trips it as a failure does: every host is failed in the rescue (its message blames
+  another host's failure, the unreachable host's own included) and the run ends before the cleanup with the keys kept,
+  with one host or more (I-97; measured, and the same before the fix).
 - **Tests.** `tests/integration/test_fleet_play_failure_cleans_up.py`'s install rows gather facts through a stand-in
   `ssh` that runs the command on the test's own machine for the addresses a row lists as up and refuses the rest (the
   validate image has no ssh client): two down hosts have their install skipped and the run passes; a down host beside an
-  up one, the up one installs and the down one is skipped; the shipped node_exporter role over two down hosts passes
-  with none of its tasks run (it failed both before). `tests/unit/test_fleet_play_rescue.py` pins the register and the
-  `when`.
+  up one, the up one installs and the down one is skipped, in a real run and in a `--check --diff` one; the shipped
+  node_exporter role over two down hosts passes with none of its tasks run (that row guards the `when` with the real
+  role in place; that the role failed both before was measured once, not by the row).
+  `tests/unit/test_fleet_play_rescue.py` pins the register and the `when`.
 
 ### fix(tests): the suite collects on a machine with no ansible-playbook (I-98, 2026-11-12)
 
@@ -284,8 +292,9 @@ stayed in its key dir until the next run that completed.
   tolerate an unreachable host, though node_exporter's role then fails a host whose facts are missing, at its OS-family
   task, as before (I-89; since its fix the install skips a host whose gathering was unreachable). Under a caller's
   any_errors_fatal every host's work stops at the first failure, as before: the failing host is recorded, every other
-  host is failed as stopped by another host's failure, and with more than one host the run ends at that play, with the
-  keys left; with one host it reaches the cleanup, and the summary names it. Every host refused, every host's role
+  host is failed as stopped by another host's failure, and with more than one host, or where an ignored unreachable
+  result trips it (I-97), the run ends at that play, with the keys left; with one host whose work fails it reaches the
+  cleanup, and the summary names it. Every host refused, every host's role
   failing to load (I-66) and a handler that fails on every host (I-86) still end the run before the cleanup, and the
   keys stay.
 - **Tests.** `unit/test_fleet_play_rescue.py`: the dispatching play's refusal, then one rescued block holding the

@@ -4,13 +4,18 @@
 # the default group pattern in sync with those modules, or pass -e target=<host>/<group>). The scrape
 # targets for these hosts are already GENERATED (scripts/gen-observability.py); this play lands the agent so
 # those targets go UP. State-changing -> run with --check --diff FIRST (CLAUDE.md). The play tolerates a down host
-# (`ignore_unreachable`): a host whose fact gathering is unreachable gets nothing more run on it (its gathering's
-# `UNREACHABLE!` line, then the install's `skipping:`, name it). Before I-89 the role ran on it anyway and failed it at
-# its OS-family task, its facts missing, so one down host failed the run. A host that answers the gathering and drops
-# later is not skipped: each task it does not answer is ignored, as before (I-92).
+# (`ignore_unreachable`): a host whose fact gathering is unreachable (down, refusing or timing out the connection,
+# refusing the run's key or its host key, and on 2.19+ a become that never prompts: ansible-core counts each as
+# unreachable) gets nothing more run on it, in a dry run too. The run passes for it (rc 0; its recap counts it
+# `ignored`, not `unreachable`), and only its gathering's `UNREACHABLE!` line, then the install's `skipping:`, name it.
+# Before I-89 the role ran on it anyway and failed it at its OS-family task, its facts missing, so one down host failed
+# the run. A host that answers the gathering and drops later is not skipped: each task it does not answer is ignored,
+# as before (I-92). Under a caller's any_errors_fatal an ignored unreachable result trips it as a failure does: every
+# host is failed in the rescue and the run ends before the cleanup with the keys kept, with one host or more (I-97).
 #
 # Backfill the fleet:   ansible-playbook playbooks/install-node-exporter.yml --check --diff   (then for real)
 # One host (onboard):   ansible-playbook playbooks/install-node-exporter.yml -e target=<host>
+#                       (an unreachable host passes with nothing installed: its gathering's line says so)
 #
 # The play runs node_exporter on every host of the target pattern, whatever the host's device_role, so a host whose
 # connection is not of the ssh family is refused before anything runs on it (tasks/refuse-local-connection.yml).
@@ -22,10 +27,11 @@
 # task notified before it does not run (a caller's force_handlers is not honoured for such a host: its handlers ran
 # before). A host that reaches the rescue with no failed task of its own is failed there: its role could not be
 # loaded, or another host's failure stopped it (a `run_once` task, a caller's any_errors_fatal). Under a caller's
-# any_errors_fatal every host's install stops at the first failure: with one host the run reaches the cleanup and the
-# summary names it; with more, the run ends at that play and the keys stay. What else still ends the run before the
-# cleanup: every host refused, every host's role failing to load (I-66) and a handler that fails on every host (a
-# role's handlers run at the play's end, outside the block: I-86); _cleanup-ssh-keys.yml's header lists them.
+# any_errors_fatal every host's install stops at the first failure: with one host whose install fails the run reaches
+# the cleanup and the summary names it; with more, or where an unreachable gathering trips it (above), the run ends at
+# that play and the keys stay. What else still ends the run before the cleanup: every host refused, every host's role
+# failing to load (I-66) and a handler that fails on every host (a role's handlers run at the play's end, outside the
+# block: I-86); _cleanup-ssh-keys.yml's header lists them.
 #
 # Access chain used:   control VM (mgmt VLAN) -> target hosts (SSH, root key ~/.ssh/ansible_ed25519)
 # May break:           none — additive read-only agent (:9100); no firewall/network change

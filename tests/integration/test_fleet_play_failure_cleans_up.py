@@ -281,11 +281,11 @@ def test_a_callers_any_errors_fatal_over_one_host_reaches_the_cleanup(tmp_path):
     assert _stopped("a", "Stub step that fails") in out and '"msg": "a: stopped with no failed task' not in out, out
 
 
-def _install(tmp_path, extra, up=("a", "b"), real=False):
-    """install-node-exporter.yml over hosts a and b, those in `up` answering through FAKE_SSH."""
+def _install(tmp_path, extra, up=("a", "b"), real=False, args=()):
+    """install-node-exporter.yml over hosts a and b, those in `up` answering through FAKE_SSH, `args` after the `-e`."""
     hosts = {h: _ssh(address) for h, address in ADDRESS.items()}
     return _run(tmp_path, "install-node-exporter.yml", "node_exporter", hosts, dict(target="g", **extra),
-                up=[ADDRESS[h] for h in up], real=real)
+                up=[ADDRESS[h] for h in up], real=real, args=args)
 
 
 def test_an_install_that_fails_on_every_host_removes_the_keys_and_names_each_host(tmp_path):
@@ -342,12 +342,28 @@ def test_a_down_host_beside_an_up_one_gets_nothing_run_and_the_up_one_installs(t
     assert "skipping: [b]" in included and "skipping: [a]" not in included, included
 
 
+def test_a_dry_run_over_a_down_host_beside_an_up_one_skips_the_down_one(tmp_path):
+    """`--check --diff`, the dry run CLAUDE.md asks for first, over host a answering through the stand-in `ssh` and b
+    not: a's stub install runs (to its last step), b's install is skipped, and the run passes (rc 0) with neither named
+    FAILED. Guards I-89 in the dry run, which a down host failed too before the fix: a `when` that lets a dry run past
+    the skip (`... or ansible_check_mode`) passes every real-run row. The key dir is not asserted here: what a dry
+    run's cleanup removes is tests/integration/test_ssh_key_render_runs.py's."""
+    rc, out, recap, _gone = _install(tmp_path, {}, up=("a",), args=("--check", "--diff"))
+    assert rc == 0, out
+    assert recap == {"a": 0, "b": 0}, (recap, out)
+    assert "AFTER a" in out and "STUB b" not in out and "FAILED: the install" not in out, out
+    assert re.search(r"\[b\]: UNREACHABLE!", out), out
+    included = _task(out, INSTALL)
+    assert "skipping: [b]" in included and "skipping: [a]" not in included, included
+
+
 def test_the_real_role_runs_nothing_on_a_down_host(tmp_path):
     """The shipped node_exporter role, over two hosts whose gathering is unreachable: the run passes (rc 0), no host is
     named FAILED, its include is skipped for both and none of the role's tasks runs, and the key dir is gone. Guards
-    I-89 with the role a run installs: its first task's `when` read the facts the gathering did not bring, so each down
-    host failed ("'ansible_os_family' is undefined"), the run failed (rc 2), and CLAUDE.md's "never let one unreachable
-    host fail a fleet-wide run" was false for it (measured on 2.18.19 and 2.19.4 before the fix)."""
+    I-89's `when` with the role a run installs in place (without the `when` the role is included for both hosts). A
+    skipped include never loads the role, so the row passes with an empty role too: that the shipped role then failed
+    each down host ("'ansible_os_family' is undefined", rc 2, so CLAUDE.md's "never let one unreachable host fail a
+    fleet-wide run" was false for it) was measured on 2.18.19 and 2.19.4 before the fix, not by this row."""
     rc, out, recap, gone = _install(tmp_path, {}, up=(), real=True)
     assert rc == 0 and gone, out
     assert recap == {"a": 0, "b": 0}, (recap, out)
