@@ -1477,9 +1477,14 @@ stack; the **capability** half — device-side wiring `no_log` + a per-method `s
   value is ever a credential, token, or secret-bearing field; the set is fixed at config time, never derived
   from a log *value*. High-cardinality / sensitive fields (IP, user, message) stay in the JSON **body**
   (LogQL-filterable, not indexed).
-- **Collector privilege is minimal + read-only.** Vector mounts the docker socket **`:ro`**, host journald
-  **`:ro`**, and every audit/log path **`:ro`** — it reads, never writes the host, and actuates nothing on the
-  fleet (a collector, not a controller — like the C9 exporters, a tail failure blanks a panel, not a device).
+- **Collector privilege is minimal + read-only.** Vector holds no raw Docker socket (its container logs come
+  through the GET/HEAD-only `docker-socket-proxy`), and mounts host journald **`:ro`** and every audit/log path
+  **`:ro`** — it reads, never writes the host, and actuates nothing on the fleet (a collector, not a controller —
+  like the C9 exporters, a tail failure blanks a panel, not a device). Its journal bind changes no host setting
+  either: deploy-stack binds `/var/log/journal` only where the host has it, else `/run/log/journal`, and refuses a
+  `kontroll_journal_dir` naming `/var/log/journal` where the host's own answer is that it has none, since a bind to
+  a missing path makes Docker create it and journald's default `Storage=auto` then persists (I-25;
+  `test_compose_logging.py`, `test_journal_dir_choice.py`, `test_installer_journal_dir.py`).
 - **mgmt-VLAN-only, never WAN (C3 parity).** Loki publishes its HTTP API on the **mgmt IP only**
   (`${KONTROLL_MGMT_IP}:3100`, fail-closed `:?`, never `0.0.0.0`); **Vector publishes only the mgmt-bound syslog
   ingress** (`${KONTROLL_MGMT_IP}:5514/tcp`, fail-closed `:?`, never `0.0.0.0`) for the `syslog_push` method —

@@ -75,6 +75,14 @@ case "${1:-init}" in
 esac
 export KONTROLL_INSTALLER_LOG_DRIVER
 
+# The host's journal directory (I-25), read here on the host: the installer container cannot see the host's /var/log.
+# deploy-stack binds Vector's journald read to it, /var/log/journal where journald persists, else /run/log/journal; a
+# bind to a /var/log/journal the host lacks would make Docker create it, and journald's default Storage=auto then
+# persists from the next boot. A host fact, so a value exported in the operator's shell never chooses it.
+if [ -d /var/log/journal ]; then KONTROLL_HOST_JOURNAL_DIR=/var/log/journal
+else KONTROLL_HOST_JOURNAL_DIR=/run/log/journal; fi
+export KONTROLL_HOST_JOURNAL_DIR
+
 # A verb other than `shell` runs with stdin at /dev/null when stdin is no terminal (I-4). Compose's `run` keeps the
 # container's stdin open and reads it, so a verb run where stdin carries a later command's input (`ssh <node>
 # 'scripts/kontroll-installer.sh init; bash -s' < verify.sh`) ate that input, and the later command ran nothing. No

@@ -58,13 +58,54 @@ def test_vector_publishes_only_the_mgmt_bound_syslog_ingress():
 def test_vector_host_log_mounts_are_read_only():
     """Every host-log source mount in vector.yaml (docker.sock, journald, the audit/run-log dirs) is `:ro`.
     Guards a writable mount giving the privileged collector host-write — C12 minimal-privilege (Vector reads,
-    never writes a source). The config-tree mount (/etc/vector) and the vector-data buffer are exempt."""
+    never writes a source). The config-tree mount (/etc/vector) and the vector-data buffer are exempt. The journal's
+    source is a variable since I-25 (`${KONTROLL_JOURNAL_DIR…}`), so it is named here: a literal-path filter alone
+    would let that mount lose its `:ro` unseen."""
     vol = _load("docker/services/vector.yaml")["services"]["vector"]["volumes"]
-    host_mounts = [v for v in vol if v.startswith("/") or v.startswith("${KONTROLL_OPERATOR_HOME")]
+    host_mounts = [v for v in vol if v.startswith(("/", "${KONTROLL_OPERATOR_HOME", "${KONTROLL_JOURNAL_DIR"))]
+    assert any(v.startswith("${KONTROLL_JOURNAL_DIR") for v in host_mounts), "the journal mount moved — name it here"
     assert host_mounts, "vector must mount the host log sources"
     for m in host_mounts:
         # the named-volume buffer (vector-data:/var/lib/vector) is not a host path; only host paths are checked.
         assert m.endswith(":ro"), "vector host mount must be read-only (:ro): %r" % m
+
+
+def test_vector_binds_only_the_journal_deploy_stack_chose():
+    """vector.yaml's one host-journal mount takes its source from KONTROLL_JOURNAL_DIR (deploy-stack's choice), with
+    the volatile /run/log/journal as the default, onto the directory the journald source reads (internal_journald's
+    `journal_directory`), read-only; no mount has a literal /var/log/journal or /run/log/journal source, and
+    deploy-stack renders the variable into docker/.env from its choice. Guards I-25: a literal /var/log/journal bind
+    on a host whose journald is volatile made Docker create the directory (root:root 0755), and journald's default
+    `Storage=auto` then persisted the journal from the next boot, a host setting changed by a deploy. It guards too
+    a mount that lands where the source does not read (Vector ships no host journal at all), and a default that
+    names /var/log/journal, which brings the bind back whenever .env lacks the value."""
+    vol = _load("docker/services/vector.yaml")["services"]["vector"]["volumes"]
+    reads = _load("docker/vector/config.d/sources/internal_journald.yaml")["journal_directory"]
+    literal = [v for v in vol if v.split(":", 1)[0] in ("/var/log/journal", "/run/log/journal")]
+    assert not literal, "a literal journal source makes Docker create it where the host lacks it: %r" % literal
+    journal = [v for v in vol if "KONTROLL_JOURNAL_DIR" in v]
+    assert journal == ["${KONTROLL_JOURNAL_DIR:-/run/log/journal}:%s:ro" % reads], journal
+    with open(os.path.join(_ROOT, "ansible", "playbooks", "deploy-stack.yml"), encoding="utf-8") as fh:
+        play = fh.read()
+    assert play.count("KONTROLL_JOURNAL_DIR={{ _journal_dir | default('') }}\n") == 1, \
+        "docker/.env must carry deploy-stack's choice (else compose takes the default on every host)"
+
+
+def test_no_service_binds_a_literal_host_journal():
+    """No service in any docker/services/*.yaml fragment mounts a literal /var/log/journal or /run/log/journal source,
+    in compose's short form or its long form. Guards I-25 coming back through another fragment or another service (the
+    I-25 read B's N7: the row above reads vector.yaml's vector service alone): a literal /var/log/journal source makes
+    Docker create the directory on a host whose journald is volatile, and journald then persists from the next boot."""
+    found = []
+    for path in sorted(glob.glob(os.path.join(_ROOT, "docker", "services", "*.yaml"))):
+        with open(path, encoding="utf-8") as fh:
+            services = (yaml.safe_load(fh) or {}).get("services") or {}
+        for name, svc in services.items():
+            for vol in (svc or {}).get("volumes") or []:
+                src = vol.get("source", "") if isinstance(vol, dict) else str(vol).split(":", 1)[0]
+                if str(src).rstrip("/") in ("/var/log/journal", "/run/log/journal"):
+                    found.append((os.path.basename(path), name, vol))
+    assert not found, "a literal journal source makes Docker create it where the host lacks it: %r" % found
 
 
 def test_loki_store_is_a_bind_mount_not_a_named_volume():

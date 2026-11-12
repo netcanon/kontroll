@@ -1,9 +1,10 @@
 ---
 # Enable persistent systemd-journald on the target host (so the journal survives reboots and Vector reads a
 # complete journal) and OPTIONALLY ship it to the collector via systemd-journal-upload. The control-VM-LOCAL
-# journal needs NO wiring (Vector bind-mounts /var/log/journal directly — docker/services/vector.yaml); this
-# role guarantees persistence everywhere + handles the REMOTE-host upload (opt-in; see README + the access
-# chain below).
+# journal needs NO wiring (Vector bind-mounts the host's journal directly — docker/services/vector.yaml; deploy-stack
+# binds /var/log/journal once it exists, and this role's handlers restart journald and flush the journal there, so a
+# deploy after this role's first run binds it, I-25); this role guarantees persistence everywhere + handles the
+# REMOTE-host upload (opt-in; see README + the access chain below).
 #
 # Access chain used:   control VM (mgmt VLAN) -> target host (SSH, root key ~/.ssh/ansible_ed25519)
 # May break:           none on the LOCAL host (a read-only mount + Storage=persistent); REMOTE upload adds one
@@ -21,7 +22,9 @@
     line: "Storage=persistent"
     backup: true
   become: true
-  notify: Restart systemd-journald
+  notify:
+    - Restart systemd-journald
+    - Flush the journal to /var/log/journal
 
 - name: Ship the journal to the collector (REMOTE hosts; opt-in until the receiver is built)
   when: logging_journald_upload_enabled | default(false) | bool

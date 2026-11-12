@@ -3,5 +3,5 @@
 type: journald
 current_boot_only: true
 since_now: false                         # read backlog from the checkpoint, not only new entries
-journal_directory: /var/log/journal
+journal_directory: /var/log/journal      # the host journal deploy-stack chose is bound here, persistent or volatile
 data_dir: /var/lib/vector                # checkpoint so a restart resumes

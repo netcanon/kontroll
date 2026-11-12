@@ -26,7 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 ALL = ["semaphore", "homepage", "prometheus", "grafana", "loki", "vector", "api", "onboard-gui"]
 ENV = ("HOME", "SOPS_AGE_KEY_FILE", "KONTROLL_IN_CONTAINER", "ANSIBLE_COLLECTIONS_PATH", "KONTROLL_OPERATOR_USER",
        "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID", "TMPDIR", "PYTHONDONTWRITEBYTECODE", "ANSIBLE_NOCOLOR",
-       "ANSIBLE_FORCE_COLOR", "ANSIBLE_CONFIG")
+       "ANSIBLE_FORCE_COLOR", "ANSIBLE_CONFIG", "KONTROLL_HOST_JOURNAL_DIR")
 
 # The stub kontroll-init: records how it was run, writes the key and instance/.sops.yaml as the real one does, and
 # ends with the real one's last line; FAKE_MODE leaves one of the three out.
@@ -240,15 +240,21 @@ def _exe(path, text):
     os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _run(tmp_path, mode="", extra_env=None):
+def _run(tmp_path, mode="", extra_env=None, journal=None):
     """A scratch checkout (the real script, the stub kontroll-init, one commit), fake tools first on PATH, an empty
     caller HOME and TMPDIR, and none of the variables the script must set itself inherited (a caller that exports
     PYTHONDONTWRITEBYTECODE, as a mutation harness does, would otherwise meet the test's check for the script); runs
-    the script from the checkout and returns (result, calls, paths)."""
+    the script from the checkout and returns (result, calls, paths). `journal`, when given, is a stand-in path the
+    script's one `[ -d /var/log/journal ]` tests in place of /var/log/journal."""
     repo = tmp_path / "repo"
     for d in ("tests", "scripts", "ansible/playbooks"):
         (repo / d).mkdir(parents=True)
     shutil.copy(os.path.join(ROOT, "tests", "fresh-node-check.sh"), repo / "tests" / "fresh-node-check.sh")
+    if journal is not None:
+        script = repo / "tests" / "fresh-node-check.sh"
+        text = script.read_text(encoding="utf-8")
+        assert text.count(" /var/log/journal ]") == 1, "the path the script's journal probe tests changed"
+        script.write_text(text.replace(" /var/log/journal ]", " %s ]" % journal), encoding="utf-8")
     _exe(repo / "scripts" / "kontroll-init.py", _INIT)
     (repo / "ansible" / "playbooks" / "deploy-stack.yml").write_text("---\n")
     git = ["git", "-C", str(repo)]
@@ -267,7 +273,7 @@ def _run(tmp_path, mode="", extra_env=None):
                FAKE_LOG=str(log), FAKE_MODE=mode)
     env.pop("ANSIBLE_COLLECTIONS_PATH", None)
     for k in ("KONTROLL_FRESH_KEEP", "PYTHONDONTWRITEBYTECODE", "ANSIBLE_NOCOLOR", "KONTROLL_OPERATOR_USER",
-              "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID"):
+              "KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_GID", "KONTROLL_HOST_JOURNAL_DIR"):
         env.pop(k, None)
     env.update(extra_env or {})
     r = subprocess.run(["bash", str(repo / "tests" / "fresh-node-check.sh")], cwd=str(repo), env=env,
@@ -354,6 +360,45 @@ def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_f
         assert e["TMPDIR"].startswith(inside) and e["TMPDIR"].endswith("/tmp"), c
         assert e["PYTHONDONTWRITEBYTECODE"] == "1" and e["ANSIBLE_NOCOLOR"] == "1", c
         assert e["ANSIBLE_CONFIG"] is None and e["ANSIBLE_FORCE_COLOR"] is None, c
+
+
+def _journal_shape(tmp_path, shape):
+    """A stand-in for /var/log/journal in `shape`; returns (its path, the answer the launchers give for it): the
+    persistent journal for a directory or a link to one, else the volatile one."""
+    stand_in, target = tmp_path / "var-log-journal", tmp_path / "journal-target"
+    if shape == "dir":
+        stand_in.mkdir()
+    elif shape == "link-to-dir":
+        target.mkdir()
+        stand_in.symlink_to(target)
+    elif shape == "file":
+        stand_in.write_text("", encoding="utf-8")
+    elif shape == "link-to-file":
+        target.write_text("", encoding="utf-8")
+        stand_in.symlink_to(target)
+    elif shape == "dangling":
+        stand_in.symlink_to(target)
+    return str(stand_in), ("/var/log/journal" if shape in ("dir", "link-to-dir") else "/run/log/journal")
+
+
+@pytest.mark.parametrize("shape", ["dir", "link-to-dir", "file", "link-to-file", "dangling", "absent"])
+@pytest.mark.parametrize("caller", [None, "/elsewhere"])
+def test_every_play_gets_this_hosts_journal_directory_as_the_launchers_give_it(tmp_path, caller, shape):
+    """Every `ansible-playbook` runs with KONTROLL_HOST_JOURNAL_DIR exported as the host's own answer, the one the
+    launchers give (`/var/log/journal` where that path is a directory or a link to one, else `/run/log/journal`),
+    whether the caller exported none or another value; the script's probe is pointed at a stand-in in each shape, so
+    both branches run on every machine. Guards the deploy passes, which run with KONTROLL_IN_CONTAINER=1 as the
+    installer does: there deploy-stack.yml takes the host journal directory from this variable alone (the container
+    cannot see the host's /var/log), so without the export every pass took the NOT KNOWN path, which no launcher run
+    takes (I-25's mutant fresh-node-export-dropped survived every row); a caller's value must not stand in for the
+    host's answer; and a row of the machine's own /var/log/journal ran one branch only (the I-25 reads' N4)."""
+    journal, want = _journal_shape(tmp_path, shape)
+    r, calls, p = _run(tmp_path, extra_env={"KONTROLL_HOST_JOURNAL_DIR": caller} if caller else None, journal=journal)
+    assert r.returncode == 0, r
+    plays = _plays(calls)
+    assert len(plays) == 8, calls
+    for c in plays:
+        assert c["env"]["KONTROLL_HOST_JOURNAL_DIR"] == want, c
 
 
 def test_every_play_runs_in_a_repository_on_main_holding_heads_tree(tmp_path):

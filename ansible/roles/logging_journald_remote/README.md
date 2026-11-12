@@ -16,7 +16,11 @@ host's journal to the collector via `systemd-journal-upload`. Registry descripto
 
 - **Persistent journald (always on):** the default + only-by-default action. Universal and safe — it sets
   `Storage=persistent` in `journald.conf`. This is what the **control-VM-local** journald source needs (Vector
-  bind-mounts `/var/log/journal` and reads it directly), so the local case is fully wired by this alone.
+  bind-mounts the host's journal and reads it directly), so the local case is wired by this and one more deploy:
+  deploy-stack binds `/var/log/journal` only where the host has it, else the volatile `/run/log/journal` (a bind to
+  a missing path would make Docker create it, I-25). The role's handlers restart journald and then run
+  `journalctl --flush`, which makes `/var/log/journal` at once (since systemd 252 a restart alone leaves it to the
+  next boot), so re-run deploy-stack after this role first makes the control VM's journal persistent.
 - **Remote upload (opt-in, `logging_journald_upload_enabled: true`):** installs + points
   `systemd-journal-upload` at `http://<collector>:<port>`. ⚠ The **collector-side receiver**
   (`systemd-journal-remote` → a Vector source, or a Vector `http_server` ingest) is **not built yet** — a

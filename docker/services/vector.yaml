@@ -3,7 +3,7 @@
 # filename = id). ADDING A SOURCE = one new file under vector/config.d/sources/ + a transform + wiring it into
 # the loki sink's `inputs` — NEVER an edit to a hub. (10-research-vector-loki.md §1.2.)
 #
-# Access chain used:   reads host journald (/var/log/journal RO), the Docker API socket (RO), and bind-mounted
+# Access chain used:   reads the host journal (RO), the Docker API socket (RO), and bind-mounted
 #                      audit/run-log files (RO); writes ONLY to Loki over the kontroll network.
 # May break:           nothing on the lab — Vector is read-only on every source; a Vector outage loses log
 #                      SHIPPING, not the source logs (files/journald/Semaphore DB persist).
@@ -33,7 +33,7 @@ services:
     user: "10002:10002"                      # NON-ROOT (C12). Distinct from Loki's 10001 (a shared uid would let a
                                              # Vector RCE read the Loki store) — pinned by test_vector_uid_distinct.
     group_add:
-      - "${KONTROLL_JOURNAL_GID:-65534}"     # host systemd-journal GID (deploy-stack getent), to read /var/log/journal.
+      - "${KONTROLL_JOURNAL_GID:-65534}"     # host systemd-journal GID (deploy-stack getent), to read the journal.
                                              # 65534 (nogroup) is an inert fail-closed default (reads nothing extra).
     security_opt:
       - no-new-privileges:true               # guard the non-root switch from any setuid escalation (free, DiD).
@@ -74,8 +74,13 @@ services:
       # --- internal sources (all RO — Vector reads, never writes the host; C12 minimal-privilege) ---
       # NB: the raw /var/run/docker.sock is NOT mounted here — docker_logs targets the docker-socket-proxy
       # (GET/HEAD-only) over the kontroll net, so non-root Vector never holds the root-equivalent socket (C12).
-      - /var/log/journal:/var/log/journal:ro                     # host journald (persistent)
-      - /run/log/journal:/run/log/journal:ro                     # host journald (volatile)
+      # Host journald: the directory deploy-stack chose (KONTROLL_JOURNAL_DIR, I-25), /var/log/journal where the host
+      # keeps a persistent journal, /run/log/journal (volatile) where it does not, mounted where the journald source
+      # reads (config.d/sources/internal_journald.yaml's journal_directory). Never a literal /var/log/journal source:
+      # on a host without it Docker would create it, and journald's default Storage=auto then persists from the next
+      # boot (a host setting changed by a bind). The default is the volatile one, which makes no directory journald
+      # reads.
+      - ${KONTROLL_JOURNAL_DIR:-/run/log/journal}:/var/log/journal:ro
       # Remote hosts' journals: received by the host systemd-journal-remote (roles/logging_journald_receiver) and
       # read by the journald_remote method's `exec` journalctl source. A SEPARATE top-level dir (NOT under
       # /var/log/journal) so internal_journald never double-ingests the uploads (logging/journald_remote.yml). The

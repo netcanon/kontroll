@@ -198,6 +198,13 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   dead by the attach a "409 … marked for removal", and one under `--log-driver none` a 501 ("not using either
   the `jsonfile` or `journald` logging driver"). A name under the prefix is neither inspected nor attached, so
   it costs none (I-1). The installer's own `compose run init` is not under the prefix, and its lines ship.
+  The host journal Vector reads is the one the host has: deploy-stack binds `/var/log/journal` where it
+  exists, else the volatile `/run/log/journal` (`KONTROLL_JOURNAL_DIR`; the launchers read the host's answer, which
+  the installer container cannot see, and `kontroll_journal_dir` overrides). It never binds a `/var/log/journal`
+  the host lacks, and refuses an override naming it there: Docker would create it, and journald's default
+  `Storage=auto` then persists from the next boot, a host setting changed by a bind (I-25). Its log says which
+  ("Vector reads the host journal at …", or NOT KNOWN in the installer container run without a launcher, which binds
+  the volatile one and takes an override as given).
   (Built on branch; pending the dogfood deploy.)
 
 ### Layer 2 — Store + query: Loki  🟡 built (`feat/logging-vector`)

@@ -107,6 +107,14 @@ case "$verb" in
 esac
 export KONTROLL_INSTALLER_LOG_DRIVER
 
+# The host's journal directory (I-25), read here on the host: the installer container cannot see the host's /var/log.
+# deploy-stack binds Vector's journald read to it, /var/log/journal where journald persists, else /run/log/journal; a
+# bind to a /var/log/journal the host lacks would make Docker create it, and journald's default Storage=auto then
+# persists from the next boot. A host fact, so a value exported in the operator's shell never chooses it.
+if [ -d /var/log/journal ]; then KONTROLL_HOST_JOURNAL_DIR=/var/log/journal
+else KONTROLL_HOST_JOURNAL_DIR=/run/log/journal; fi
+export KONTROLL_HOST_JOURNAL_DIR
+
 # The C10 canonical is seeded from THIS working tree's git (local-canonical adds a `local` remote to it + lands HEAD). A
 # launch kit is a tarball extract with NO .git, so git-init it (the step scripts/install.sh does for the bundle path)
 # and capture the current tree — including a freshly-scaffolded instance/ — so the canonical seed has a HEAD to land.

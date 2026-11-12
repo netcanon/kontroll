@@ -407,6 +407,73 @@
         kontroll_journal_gid: "{{ (_journal_grp.stdout.split(':')[2]) if (_journal_grp.stdout | default('')) else '' }}"
       when: "'vector' in stack_services"
 
+    - name: Look for the host's persistent journal (the journal Vector reads, I-25)
+      # Vector binds the host's journal at the directory its journald source reads. /var/log/journal is bound only
+      # where the host has it (kontroll_journal_dir naming it where the host's own answer is that it has none is
+      # refused below): a bind to a path the host lacks makes Docker create it (root:root 0755), and journald's
+      # default `Storage=auto` reads that directory as "persist" from the next boot, so a deploy would change a host
+      # setting. On the host path this play sees the host's /var/log; the installer container does not, and the
+      # launcher's KONTROLL_HOST_JOURNAL_DIR answers there instead. `stat` changes nothing and runs under --check too.
+      ansible.builtin.stat:
+        path: /var/log/journal
+        follow: true            # Docker binds a symlink's target; the launchers' `[ -d ]` follows one too
+      register: _journal_persistent
+      when: "'vector' in stack_services and not in_container"
+
+    - name: Choose the host journal directory Vector reads (I-25)
+      # kontroll_journal_dir (the control node's inventory, or -e) wins: /run/log/journal for a node set to
+      # Storage=volatile in journald.conf that still has an old /var/log/journal (on a node whose journald persists it
+      # would leave Vector reading a directory each boot's flush empties). Else the host's own answer: the launcher's
+      # value in the installer container, the stat above on the host path. Not known (the installer container run
+      # without a launcher): /run/log/journal, which makes no directory journald reads; the note below says so.
+      vars:
+        _given: "{{ kontroll_journal_dir | default('', true) }}"
+        _launcher: "{{ lookup('env', 'KONTROLL_HOST_JOURNAL_DIR') if in_container else '' }}"
+        _seen: >-
+          {{ '' if in_container else
+             ('/var/log/journal' if (_journal_persistent.stat.isdir | default(false)) else '/run/log/journal') }}
+      ansible.builtin.set_fact:
+        _journal_dir: "{{ _given or _launcher or _seen or '/run/log/journal' }}"
+        _journal_how: >-
+          {{ 'kontroll_journal_dir' if _given else ('the launcher' if _launcher else
+             ('a stat of /var/log/journal' if _seen else 'NOT KNOWN')) }}
+        _journal_host: "{{ _launcher or _seen }}"
+        _journal_host_how: "{{ 'the launcher' if _launcher else ('a stat of /var/log/journal' if _seen else '') }}"
+      when: "'vector' in stack_services"
+
+    - name: Refuse a journal directory journald does not write, or one the host lacks (I-25)
+      # kontroll_journal_dir: /var/log/journal where the host's own answer is /run/log/journal would make Docker create
+      # the directory, and journald would persist from the next boot: I-25 through the override. Where nothing is
+      # known (the installer container run without a launcher) the override is taken as given.
+      ansible.builtin.assert:
+        that:
+          - _journal_dir in ['/var/log/journal', '/run/log/journal']
+          - >-
+            not (_journal_how == 'kontroll_journal_dir' and _journal_dir == '/var/log/journal'
+            and _journal_host == '/run/log/journal')
+        fail_msg: >-
+          {{ ('kontroll_journal_dir is /var/log/journal, and the host has none (from %s): binding it would make Docker
+          create it, and journald would keep the host journal on disk from the next boot. Make the journal persistent
+          first (roles/logging_journald_remote, which flushes it there), then deploy; or drop kontroll_journal_dir.'
+          % _journal_host_how) if _journal_dir in ['/var/log/journal', '/run/log/journal'] else
+          ('The host journal directory from %s is %s: journald writes /var/log/journal (persistent) or
+          /run/log/journal (volatile), and Vector binds one of those two.' % (_journal_how, _journal_dir)) }}
+        quiet: true
+      when: "'vector' in stack_services"
+
+    - name: Say which host journal Vector reads (I-25)
+      vars:
+        _not_known: >-
+          NOT KNOWN — the host journal directory: this run is in the installer container, which cannot see the
+          host's /var/log, and no launcher gave KONTROLL_HOST_JOURNAL_DIR, so Vector reads /run/log/journal, which
+          makes no directory journald reads. Where the host keeps a persistent journal Vector then ships none of it:
+          run through scripts/kontroll-installer.sh or ./kontroll, or set kontroll_journal_dir.
+      ansible.builtin.debug:
+        msg: >-
+          {{ _not_known if _journal_how == 'NOT KNOWN' else
+             'Vector reads the host journal at %s (from %s).' % (_journal_dir, _journal_how) }}
+      when: "'vector' in stack_services"
+
     - name: Render docker/.env (secrets — never logged)
       ansible.builtin.copy:
         dest: "{{ stack_dir }}/.env"
@@ -443,6 +510,7 @@
           KONTROLL_GUI_AUDIT_DIR={{ kontroll_gui_audit_dir }}
           KONTROLL_ANSIBLE_LOG_DIR={{ kontroll_ansible_log_dir }}
           KONTROLL_JOURNAL_GID={{ kontroll_journal_gid | default('') }}
+          KONTROLL_JOURNAL_DIR={{ _journal_dir | default('') }}
           {# Phase B (bake-code): when bake_code, the flipped services run code from the BAKED control image at
              /opt/kontroll (KONTROLL_CODE_ROOT — working_dir/PYTHONPATH) and write the C10 propose tree at /propose
              (KONTROLL_WRITE_ROOT, the paths.write_root() seam + the mount target). ABSENT by default ⇒ the compose
