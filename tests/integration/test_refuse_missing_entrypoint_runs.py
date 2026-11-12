@@ -172,7 +172,10 @@ def _run(tmp_path, device_role, files, extra_env):
 
 def _core():
     """(major, minor) of the ansible-core the `ansible-playbook` on PATH runs, read from its `--version` line
-    (`ansible-playbook [core 2.19.4]`); None where the line does not parse."""
+    (`ansible-playbook [core 2.19.4]`); None where there is none or the line does not parse. It runs at import, before
+    the module's skip, so it must not need the tool (I-98)."""
+    if shutil.which("ansible-playbook") is None:
+        return None
     out = subprocess.run(["ansible-playbook", "--version"], capture_output=True, text=True, timeout=300).stdout
     m = re.search(r"\[core (\d+)\.(\d+)", out)
     return (int(m.group(1)), int(m.group(2))) if m else None
