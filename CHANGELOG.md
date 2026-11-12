@@ -45,7 +45,8 @@ scheduled backup of a device whose read errors).
   one captured and committed, the key directory gone). `tests/fresh-node-check.sh` (CI's fresh-node check) holds each
   mock host whose capture reads its device at the summary's last task, its line naming the read, and the API host
   without its token the same, its line naming the credential gate: those hosts now reach the summary, where they used
-  to stop at the read.
+  to stop at the read. `tests/unit/test_fresh_node_check_script.py`'s fake prints the playbook's new shape, and a row
+  for each of the three fails the script where that host's summary line names another task.
 - **Docs.** backup-configs.yml's comments, `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row no longer list a
   capture that fails as a task among the runs that leave keys, and list a class whose backup entrypoint cannot be
   loaded; the rows' docstrings say so.
