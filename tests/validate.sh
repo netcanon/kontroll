@@ -105,11 +105,12 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
   # puts in `ansible_connection` is its own, and a bump that changes it for an allowed spelling, or lets a refused row
   # through, must fail HERE. The entrypoint check (tasks/refuse-missing-entrypoint.yml) mirrors that core's role
   # search beside a real include_role, and ping.yml runs it: a bump that moves the search must fail here too (I-66,
-  # I-83). Behind `have ansible-playbook`, and no test may be skipped (as above).
+  # I-83); and ping.yml's rescue tells a failed probe from a failed check by the probe's registered result (I-84).
+  # Behind `have ansible-playbook`, and no test may be skipped (as above).
   have ansible-playbook; step refuse-local-runtime $? bash -c '
     t=tests/integration; t="$t/test_refuse_local_connection_runtime.py $t/test_wire_logging_allowlist_runtime.py
       $t/test_device_role_fact_guard_runtime.py $t/test_refuse_missing_entrypoint_runs.py
-      $t/test_ping_refused_class_runs.py"
+      $t/test_ping_refused_class_runs.py $t/test_ping_check_failed_runs.py"
     out="$(PYTEST_ADDOPTS= "$0" -m pytest $t -rs --color=no 2>&1)"; rc=$?
     printf "%s\n" "$out"
     [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"

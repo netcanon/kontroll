@@ -3,7 +3,7 @@
 WHY. `ansible.builtin.uri` has no check mode, so `--check` skips the backend_api role's GET and its pull, and a
 skipped task's result has no `status`. The check's refusal and the backup's failure record read that as status 0. So
 in the mandated `--check --diff` dry-run an API-class host with a good credential failed its check, which ping.yml's
-rescue reports as UNREACHABLE, and failed its backup, which fails the run (T27's runtime read, N8; until then
+rescue reported as UNREACHABLE (CHECK FAILED since I-84), and failed its backup, which fails the run (T27's runtime read, N8; until then
 tests/fresh-node-check.sh could take the class no further than its credential gate). Each now tells a read check mode
 skipped apart, and nothing else: a real run reads the status as before, a read a real run left skipped is still
 refused, a dry-run read a `when` skipped is refused as a real run's is, and a dry-run read that did answer (were `uri`

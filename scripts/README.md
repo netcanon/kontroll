@@ -99,7 +99,8 @@ and [docs/local-source-of-truth.md](../docs/local-source-of-truth.md).
 ## `run-smoke-gate.sh` — callable live smoke gate
 
 `bash scripts/run-smoke-gate.sh` triggers the fleet liveness gate (TCP probe + each class's
-read-only `check` + an honest pass/fail assertion — `ansible/playbooks/ping.yml`, run as the
+read-only `check` + an honest pass/fail assertion: a reachable host whose check fails, `CHECK FAILED`,
+fails the run, a down one is tolerated — `ansible/playbooks/ping.yml`, run as the
 `ping-fleet` Semaphore template), polls to completion, and reports **PASS/FAIL** with the task
 id. Callable post-deploy or from a webhook handler (pass `SEMAPHORE_ADMIN_PASSWORD` in the env
 for a remote caller); results stay **queryable** via the Semaphore task API, correlatable by the
@@ -286,7 +287,9 @@ the prior:
   stays committed in the checkout and is NOT landed: the printed sentence names what to correct (rc 2).
 - `--push` — **optional** offsite backup to GitHub `origin`; not needed to operate. Fails
   clean (the instance is unaffected) if there's no write-capable remote.
-- `--bootstrap` — installs the new collection + live-verifies via `ping --limit`.
+- `--bootstrap` — installs the new collection + live-verifies via `ping.yml --limit <host>` with
+  `-e kontroll_ping_require_reachable=true` under `ANSIBLE_HOST_PATTERN_MISMATCH=error`: OK only when the host's
+  port answered and its check passed (I-84).
 
 The **only** inputs are the search selection (the collection) and the connection details
 (host + creds) — everything else is automated. This is the engine a GUI drives.

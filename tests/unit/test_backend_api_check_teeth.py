@@ -162,7 +162,8 @@ def test_the_liveness_result_is_actually_evaluated():
 
 def test_a_non_success_status_fails_the_host():
     """The evaluation must key on HTTP status and treat only real successes as success. ping.yml's
-    block/rescue converts this failure into UNREACHABLE, which is the intended reporting path."""
+    block/rescue records this failure as CHECK FAILED, naming this task, and fails the run after the key cleanup
+    (UNREACHABLE before I-84, which passed the run): the intended reporting path."""
     task = _named(_CHECK, "Refuse unless the API actually answered")
     assert _module_of(task) == "ansible.builtin.fail", "must FAIL the host, not merely warn"
     cond = str(task.get("when", ""))

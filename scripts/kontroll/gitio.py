@@ -54,10 +54,12 @@ def commit_message_args(message_lines):
     return args
 
 
-def _run(cmd, cwd=None, quiet_args=0):
+def _run(cmd, cwd=None, quiet_args=0, env=None):
+    """Run `cmd` (shown, its last `quiet_args` arguments masked) and return its exit code; `env` adds variables to
+    the caller's environment for this command alone."""
     shown = cmd[:len(cmd) - quiet_args] + (["***"] if quiet_args else [])
     print("  $ %s" % " ".join(shown))
-    return subprocess.run(cmd, cwd=cwd or paths.write_root()).returncode
+    return subprocess.run(cmd, cwd=cwd or paths.write_root(), env=dict(os.environ, **env) if env else None).returncode
 
 
 def offsite_remote_exists():

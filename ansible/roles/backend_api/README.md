@@ -110,7 +110,8 @@ carries the token or the pair, the response the secret-bearing config.
 **In a dry-run (`--check`)** the credential is still resolved and refused when it is
 missing, but no request is made: `uri` has no check mode, so the GET and the pull are
 skipped. The check then says "the <recipe> check endpoint is not read in a dry-run" and
-does not refuse, so `ping.yml --check` reports the host OK without having asked it; the
+does not refuse, so `ping.yml --check` reports the host `OK (dry run: the port was not probed)`
+without having asked it; the
 backup says "the <recipe> backup endpoint is not read in a dry-run", previews an empty
 capture, as the raw-SSH and RouterOS backups do, and records it (the record follows the
 write, so "captured" is never said for a write that did not run). Only a check-mode skip
