@@ -998,8 +998,11 @@
       # here — exactly like every other config-as-data artifact above — so deploy-stack is SELF-SUFFICIENT and a
       # fresh install needs no prior bootstrap.yml. (Found live by the blind-human install walkthrough, 2026-06-19;
       # gen-requirements.py is the same single-source generator bootstrap uses — never a hand-listed set, CLAUDE.md.)
+      # -B: the task runs under the play's become, so on a host deploy it is root's (sudo, whose reset environment
+      # drops any PYTHONDONTWRITEBYTECODE) over the operator's checkout, and its imports of scripts/kontroll/ would
+      # leave a root-owned __pycache__ there (I-54; the installer sets the variable for its whole run).
       ansible.builtin.command:
-        cmd: python3 scripts/gen-requirements.py
+        cmd: python3 -B scripts/gen-requirements.py
         chdir: "{{ playbook_dir }}/../.."
       changed_when: false
       when:

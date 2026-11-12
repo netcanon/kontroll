@@ -3,11 +3,13 @@
 WHY. The installer runs as root with the operator's checkout bound at its own path (docker/services/installer.yaml),
 and its first `init` wrote root-owned `__pycache__` directories into it (the I-3 read A listed them under
 scripts/kontroll/ and ansible/filter_plugins/). Two writers: each `python3 scripts/<generator>.py` a play runs
-without `-B` (bootstrap's lockfile task; deploy-stack's frontend resolver, its generators and its own lockfile task)
-compiles scripts/kontroll/ in place, and Ansible compiles the repo's filter plugins when a play loads them. A
+without `-B` that imports scripts/kontroll/ (bootstrap's lockfile task; deploy-stack's generators and its own lockfile
+task) compiles it in place, and Ansible compiles the repo's filter plugins when a play loads them. A script run as
+itself is not cached, so the frontend and path resolvers, which import only the standard library, write nothing. A
 root-owned cache in the operator's tree is the I-23 shape: a later run as the operator cannot replace or remove it.
 The installer's environment now sets PYTHONDONTWRITEBYTECODE, a literal, which every Python of the run inherits:
-ansible-playbook's own and each command a task runs, so no call needs its own `-B`.
+ansible-playbook's own and each command a task runs, so no call needs its own `-B`. A host deploy has no such
+variable, and deploy-stack's lockfile task runs there as root (the play's become), so that task carries `-B`.
 
 The run rows take bootstrap.yml's generate task from the playbook as it is (not rewritten), and a task that applies
 one of the repo's filters, and run them with ansible-playbook against a copy of the tree: with the installer's value
@@ -27,6 +29,9 @@ pytestmark = pytest.mark.integration
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 INSTALLER = os.path.join(ROOT, "docker", "services", "installer.yaml")
 BOOTSTRAP = os.path.join(ROOT, "ansible", "playbooks", "bootstrap.yml")
+DEPLOY = os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml")
+LAUNCHERS = [os.path.join(ROOT, *p) for p in (("scripts", "kontroll.sh"), ("scripts", "kontroll-installer.sh"),
+                                              ("docker", "installer", "entrypoint.sh"))]
 _NEEDS = pytest.mark.skipif(not shutil.which("ansible-playbook"), reason="needs ansible-playbook (it runs the task)")
 
 
@@ -37,10 +42,41 @@ def _installer_env():
 
 def test_the_installer_sets_no_bytecode_as_a_literal():
     """installer.yaml's environment sets PYTHONDONTWRITEBYTECODE to "1", written as a literal: an interpolation
-    (`${PYTHONDONTWRITEBYTECODE:-1}`, say) would let an operator's exported empty value turn it off, and the root-owned
-    cache would come back (I-54). Both launchers run this one fragment, so the value reaches every verb."""
+    (`${PYTHONDONTWRITEBYTECODE:-1}`, say) would let an operator's exported `0` turn it off (compose's `:-` covers
+    only an empty or unset value, and CPython reads `0` as off), and `${PYTHONDONTWRITEBYTECODE-1}` an exported empty
+    one, and the root-owned cache would come back (I-54)."""
     value = _installer_env().get("PYTHONDONTWRITEBYTECODE")
     assert value == "1", value
+
+
+def test_no_launcher_passes_or_drops_the_value():
+    """Neither launcher (scripts/kontroll.sh, the launch kit's; scripts/kontroll-installer.sh, a checkout's) nor the
+    installer's entrypoint names PYTHONDONTWRITEBYTECODE: both launchers run installer.yaml's one `init` service, and
+    every verb runs in it through the entrypoint, so the fragment's value reaches every verb only while none of the
+    three passes its own (`-e PYTHONDONTWRITEBYTECODE=` on the `run` outranks the fragment) or drops it (`unset`, `env
+    -u`), each of which would need its name. Guards the claim the row above rests on, which the reads of the change
+    found held by reading alone (an `unset` in the entrypoint and an `-e` on a launcher's `run` passed every row)."""
+    for path in LAUNCHERS:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        assert "installer.yaml" in text or path.endswith("entrypoint.sh"), path
+        assert "PYTHONDONTWRITEBYTECODE" not in text, path
+
+
+def test_deploy_stacks_lockfile_task_runs_without_bytecode():
+    """deploy-stack.yml's runner-lockfile task, which runs under the play's `become`, runs `python3 -B`. On a host
+    deploy that become is sudo to root over the operator's checkout, sudo's reset environment drops any
+    PYTHONDONTWRITEBYTECODE, and the generator imports scripts/kontroll/, so without `-B` it left a root-owned
+    `scripts/kontroll/__pycache__` there (the reads of I-54: the fix covered the installer alone). Its sibling
+    generators run as the operator (`become: false`); a task that leaves the play's become must keep `-B`."""
+    with open(DEPLOY, encoding="utf-8") as fh:
+        plays = yaml.safe_load(fh)
+    found = [t for p in plays for t in p.get("tasks", []) if str(t.get("name", "")).startswith(
+        "Regenerate the runner's collection lockfile")]
+    assert len(found) == 1, "deploy-stack's lockfile task moved — move this test with it"
+    task = found[0]
+    cmd = task["ansible.builtin.command"]["cmd"]
+    assert task.get("become") is False or cmd.split()[:2] == ["python3", "-B"], task
 
 
 def _generate_task():

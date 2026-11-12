@@ -14,15 +14,23 @@ NetConfig project.
 ### fix(docker): the installer leaves no root-owned bytecode in the operator's checkout (I-54, 2026-11-10)
 
 The installer runs as root with the operator's checkout bound in, and its first `init` left root-owned `__pycache__`
-directories under scripts/kontroll/ and ansible/filter_plugins/: each `python3` a play runs without `-B` (bootstrap's
-lockfile task, deploy-stack's generators and frontend resolver) compiled scripts/kontroll/ in place, and Ansible
-compiled the repo's filter plugins as it loaded them. A later run as the operator could not replace or remove them.
-`docker/services/installer.yaml` now sets `PYTHONDONTWRITEBYTECODE: "1"`, which every Python of the run inherits, so
-no call needs its own `-B`. Caches an earlier run left stay until removed, and they are root's: from the checkout,
-`sudo find scripts ansible -name __pycache__ -user root -prune -exec rm -rf {} +` removes them once.
+directories under scripts/kontroll/ and ansible/filter_plugins/: each `python3` a play runs without `-B` that imports
+scripts/kontroll/ (bootstrap's lockfile task, deploy-stack's generators and its lockfile task) compiled it in place,
+and Ansible compiled the repo's filter plugins as it loaded them. A later run as the operator could not replace or
+remove them. `docker/services/installer.yaml` now sets `PYTHONDONTWRITEBYTECODE: "1"`, which every Python of the run
+inherits, so no call needs its own `-B`. Caches an earlier run left stay until removed, and they are root's: from the
+checkout, `sudo find scripts ansible -name __pycache__ -user root -prune -exec rm -rf {} +` removes them once.
 
-- Tests: `integration/test_installer_leaves_no_bytecode.py` — the value is a literal; bootstrap's own lockfile task
-  and a filter task, run over a copy of the tree with it, leave no cache, and without it leave both.
+A host deploy (deploy-stack.yml run on the control node itself) did the same from one task: the lockfile task runs
+under the play's `become`, as root through sudo, whose reset environment drops the variable, so its imports left a
+root-owned `scripts/kontroll/__pycache__` too. It now runs `python3 -B`, as the generators beside it run as the
+operator. The files it generates (`ansible/collections/requirements.generated.yml`, `trust.generated.yml`) are still
+written as root there, and by the installer, which is logged as its own issue.
+
+- Tests: `integration/test_installer_leaves_no_bytecode.py` — the value is a literal; neither launcher passes the
+  variable to the run and the installer's entrypoint does not drop it; deploy-stack's lockfile task runs `python3
+  -B`; bootstrap's own lockfile task and a filter task, run over a copy of the tree with the value, leave no cache,
+  and without it leave both.
 
 ### fix(scripts): a deploy restarts a service whose key came back with another mode or owner (I-31, 2026-11-09)
 
