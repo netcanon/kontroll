@@ -170,6 +170,22 @@ def _run(tmp_path, device_role, files, extra_env):
     return p.stdout + p.stderr, p.returncode
 
 
+def _core():
+    """(major, minor) of the ansible-core the `ansible-playbook` on PATH runs, read from its `--version` line
+    (`ansible-playbook [core 2.19.4]`); None where the line does not parse."""
+    out = subprocess.run(["ansible-playbook", "--version"], capture_output=True, text=True, timeout=300).stdout
+    m = re.search(r"\[core (\d+)\.(\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+# The rc a role the include cannot load gives, by core. The pinned cores (2.18 and 2.19, the validate legs) and the
+# runner's 2.20 end the whole run at the include (rc 4). The CI's pytest jobs run the core their runner ships, from 2.21
+# (test_refuse_local_connection_runtime.py's paramiko note): there an installed collection whose role has no backup
+# entry failed the host instead (rc 2, measured on the CI's core, 2026-11-12), so a core from 2.21 may give either. A
+# version line that does not parse is held to rc 4, so a misread fails the row rather than widens it.
+_ABORT_RC = {4} if (_core() or (0, 0)) < (2, 21) else {2, 4}
+
+
 def _verdicts(out):
     """(the check's verdict, whether the include ran the entrypoint) read from a run's output."""
     checked = re.findall(r'"msg": "CHECK=(passed|refused)"', out)
@@ -224,7 +240,9 @@ def test_a_class_in_collection_form_is_left_to_the_include(tmp_path):
     run at the include (rc 4). Guards against refusing a class a collection ships (the check does not search the
     collections, which ansible-core looks in first for such a name, then the roles path), and records what the check
     leaves to the include: the first to the capture play's rescue (its second task fails the host), the last two to
-    the hard abort the headers and SECURITY.md's key row name (every host's keys left: the I-66 reads' B S2)."""
+    the hard abort the headers and SECURITY.md's key row name (every host's keys left: the I-66 reads' B S2). The
+    abort is held exactly on the cores the project ships (2.18 to 2.20); a core from 2.21 may fail the host instead
+    (_ABORT_RC), and never runs the entry."""
     out, _ = _run(tmp_path / "installed", "zz.lab.raw",
                   {"coll/ansible_collections/zz/lab/roles/raw/tasks/backup.yml": ENTRY_YAML}, {})
     assert _verdicts(out) == ("passed", True), out
@@ -232,9 +250,9 @@ def test_a_class_in_collection_form_is_left_to_the_include(tmp_path):
     assert _verdicts(out) == ("passed", False), out
     out, rc = _run(tmp_path / "no-entry", "zz.lab.raw",
                    {"coll/ansible_collections/zz/lab/roles/raw/tasks/main.yml": MAIN}, {})
-    assert _verdicts(out) == ("passed", False) and rc == 4, (rc, out)
+    assert _verdicts(out) == ("passed", False) and rc in _ABORT_RC, (_core(), rc, out)
     out, rc = _run(tmp_path / "dotted", "zz.one.two", {"cfg1/zz.one.two/tasks/main.yml": MAIN}, {})
-    assert _verdicts(out) == ("passed", False) and rc == 4, (rc, out)
+    assert _verdicts(out) == ("passed", False) and rc in _ABORT_RC, (_core(), rc, out)
 
 
 RESIDUE = {  # name: (files, the include's rc)

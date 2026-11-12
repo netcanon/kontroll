@@ -101,17 +101,19 @@ task in it loaded and ran nothing: the host's summary read "not run" and the run
   `ANSIBLE_ROLES_PATH` as Semaphore's Environment sets it, no, an empty or a non-string `device_role`, a dotted name
   that is no collection name), each way an entry holds no task (empty, comments only) or cannot be read, an entry a YAML
   or template read would trip on (a variable set later, `!unsafe`), and each path ansible-core resolves before it looks
-  (`~`, an environment variable, a `..` through a missing directory, a trailing slash, a dangling link, a link loop),
-  a directory of the bare name ahead of the entry and an entry indented throughout: the check
-  passes where the include runs the entry and refuses where it does not. Its last rows hold what the check leaves to the
-  include: a class in collection form, installed, not installed or with no entry; an entry that does not parse, is not a
-  list or holds `[]`; defaults that do not parse; a dependency that is not installed.
-  `tests/unit/test_backup_capture_rescue.py` holds the check first in the block, its entrypoint the include's
-  `tasks_from`, and the file one quiet `assert`. `tests/integration/test_backup_failed_run_cleans_up.py` runs
-  backup-configs.yml with a host of each refused kind, alone (a dry run and a real run fail at the summary, which names
-  it; the real run removes the keys) and beside a good host (captured and committed), and with a class whose backup
-  includes a missing file (the rescue's second task, alone and beside a good host). `tests/validate.sh`'s no-skip
-  runtime step runs the agreement rows, so a core bump that moves the role search fails the gate.
+  (`~`, an environment variable, a `..` through a missing directory, a trailing slash, a dangling link, a link loop), a
+  directory of the bare name ahead of the entry and an entry indented throughout: the check passes where the include
+  runs the entry and refuses where it does not. Its last rows hold what the check leaves to the include: a class in
+  collection form, installed, not installed or with no entry; an entry that does not parse, is not a list or holds `[]`;
+  defaults that do not parse; a dependency that is not installed (a run the include ends is held to rc 4 on the cores
+  the project ships; the CI's pytest jobs run their runner's core, from 2.21, where an installed collection's role with
+  no entry fails the host instead, rc 2). `tests/unit/test_backup_capture_rescue.py` holds the check first in the block,
+  its entrypoint the include's `tasks_from`, and the file one quiet `assert`.
+  `tests/integration/test_backup_failed_run_cleans_up.py` runs backup-configs.yml with a host of each refused kind,
+  alone (a dry run and a real run fail at the summary, which names it; the real run removes the keys) and beside a good
+  host (captured and committed), and with a class whose backup includes a missing file (the rescue's second task, alone
+  and beside a good host). `tests/validate.sh`'s no-skip runtime step runs the agreement rows, so a core bump that moves
+  the role search fails the gate.
 - **Docs.** backup-configs.yml's comments, `_cleanup-ssh-keys.yml`'s header and SECURITY.md's C4 residual and key row
   say which runs still leave keys (a class whose installed entrypoint cannot be loaded, where it is every host; an entry
   or a role file that does not parse, on any host); `docs/troubleshooting.md` says what the backup refusal reads like
