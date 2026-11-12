@@ -1,17 +1,18 @@
 ---
 # Post-run: remove the per-run ephemeral SSH key dir _render-ssh-keys.yml created. Imported LAST by every fleet play
 # (after the fleet connections are done); only a play that connects to nothing may follow it, as backup-configs.yml's,
-# install-node-exporter.yml's and wire-logging.yml's summaries do, so that a run whose every capture was recorded as
-# failed (a read that answered nothing, an API answer that is not 200, a capture that failed as a task: I-12, a class
-# whose backup entrypoint is not installed, which the capture block refuses as such a task: I-66), whose every install
-# or wiring failed, or whose wiring request was refused (I-64) still gets here (I-9). The device keys are EPHEMERAL
-# (unlike file_tail_ssh's persistent bind-mounted read key). A hard-aborted run skips this, and so does a run that an
-# earlier play stops: one whose every target is refused (by tasks/refuse-local-connection.yml, or in backup-configs.yml
-# a `device_role` fact refused), whose every host's role cannot be loaded (in backup-configs.yml, a class whose
-# installed backup entrypoint includes a file or role that is missing, or whose collection is not installed: I-66; in
-# ping.yml, a class with no `check` entrypoint: I-83), whose failing local play ends it (in backup-configs.yml: I-48),
-# whose caller's any_errors_fatal stops more than one host at a failure (a capture's play overrides it; an install or a
-# wiring honours it, and reaches this play where the failing host is its only one), whose handler fails on every host
+# install-node-exporter.yml's and wire-logging.yml's summaries and ping.yml's last play do, so that a run whose every
+# capture was recorded as failed (a read that answered nothing, an API answer that is not 200, a capture that failed as
+# a task: I-12, a class whose backup entrypoint is not installed, which the capture block refuses as such a task: I-66),
+# whose every install or wiring failed, or whose wiring request was refused (I-64), or whose every ping host's class has
+# no `check` entrypoint installed (I-83) still gets here (I-9). The device keys are EPHEMERAL (unlike file_tail_ssh's
+# persistent bind-mounted read key). A hard-aborted run skips this, and so does a run that an earlier play stops: one
+# whose every target is refused (by tasks/refuse-local-connection.yml, or in backup-configs.yml a `device_role` fact
+# refused), whose every host's role cannot be loaded (in backup-configs.yml, a class whose installed backup entrypoint
+# includes a file or role that is missing, or whose collection is not installed: I-66; in ping.yml, a class whose
+# installed `check` entrypoint cannot be loaded), whose failing local play ends it (in backup-configs.yml: I-48), whose
+# caller's any_errors_fatal stops more than one host at a failure (a capture's play overrides it; an install or a wiring
+# honours it, and reaches this play where the failing host is its only one), whose handler fails on every host
 # (install-node-exporter.yml and wire-logging.yml run a role's handlers at the play's end, outside their rescued block:
 # I-86), or (in ping.yml, whose reach play does not ignore unreachable hosts) that cannot be logged in to: ansible-core
 # runs no later play once every host of a play's batch has failed or been unreachable, and a later play whose every host

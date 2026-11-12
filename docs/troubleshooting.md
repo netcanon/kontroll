@@ -135,6 +135,11 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
 - **A device's syslog never arrives** (`{source="capability"}` empty) → confirm `docker/services/vector.yaml`
   publishes the mgmt-bound `:5514`, the device is configured to ship there (the `logging_syslog_push` wiring
   role), and the device can reach the collector on the mgmt VLAN.
+- **`ping.yml` reports a host `REFUSED: its class has no check entrypoint installed`, and the run fails** → the
+  host's `device_role` is missing, empty, or names no role that holds `tasks/check.yml` (`.yaml`, `.json` or a bare
+  `check` too) where Ansible looks for roles; the refusal's own message, earlier in the run's output, names the class
+  and the roles path searched. The other hosts are probed and checked as usual, and the run's SSH keys are still
+  removed. Fix the host's `device_role` in its inventory drop-in, or give its class's role a `tasks/check.yml`.
 - **`ping.yml` reports a host `UNREACHABLE` that answers otherwise** → the probe is a TCP connect from the control
   node, and its port is the first set of `mgmt_port`, `ansible_port`, `kontroll_probe_port`, then 22
   (`ansible/playbooks/ping.yml`'s header). An SSH host on another port needs its port typed at onboard (it is

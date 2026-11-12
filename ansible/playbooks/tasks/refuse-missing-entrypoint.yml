@@ -1,22 +1,23 @@
 ---
 # Refuse a host whose class has no entrypoint for this play installed: its `device_role` is missing or names a role
 # that holds no `tasks/<kontroll_entrypoint>` where include_role would load it from (I-66). A play imports this file
-# as the first task of the block whose rescue records a failed host, with `kontroll_entrypoint` set to the
-# `tasks_from` of the include_role after it (backup-configs.yml's capture play: `backup`).
+# in a block whose rescue records the refused host, before the include_role it guards, with `kontroll_entrypoint` set
+# to that include's `tasks_from`: backup-configs.yml's capture play, first in the capture block (`backup`); ping.yml's
+# reach play, in a block of its own before the probe's (`check`, I-83).
 #
 # An include_role that cannot load its entrypoint is no task failure. A `device_role` no search path holds moves the
 # host into the rescue with no failed task and drops it from every later play; a role that holds no such file ends
-# the whole run (rc 4), the other hosts' captures with it; a host that names no `device_role` ends it on 2.18 (rc 1).
-# Where that was every host, the run ended before the key cleanup and left the run's SSH keys on disk. This check
-# fails each of those as a task, which the rescue records, so the host goes on to the cleanup and the summary.
+# the whole run (rc 4), the other hosts with it; a host that names no `device_role` ends it on 2.18 (rc 1). Where
+# that was every host, the run ended before the key cleanup and left the run's SSH keys on disk. This check fails
+# each of those as a task, which the rescue records, so the host goes on to the cleanup and the summary.
 #
 # It looks where ansible-core's RoleDefinition._load_role_path looks (the same on 2.18, 2.19 and 2.20), in its order,
 # and takes the first path that exists: the playbook directory's `roles/`, each roles_path entry as the run's own
 # configuration resolves it (ANSIBLE_ROLES_PATH, or `roles_path` in the ansible.cfg in use), the playbook directory
 # itself, then the name as a path from the run's working directory. In that role it wants a file
 # `tasks/<entrypoint>`, `.yml`, `.yaml` or `.json` (Role._load_role_yaml's names for a `tasks_from`). A role with no
-# `tasks/` directory, which ansible-core loads as a role that runs nothing (the summary then read "not run"), is
-# refused too.
+# `tasks/` directory, which ansible-core loads as a role that runs nothing (backup's summary then read "not run", and
+# ping's "OK"), is refused too.
 #
 # Not checked, so each still fails at the include as before: a name in collection form (`ns.collection.role`, looked
 # up among the installed collections), a play or task that sets `collections:` (the dispatch scan,
