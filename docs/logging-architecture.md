@@ -150,7 +150,10 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   0700/uid-1001 dir, never pushed — as protected as the captures). `git diff` now answers
   "what changed on this device?" (G3). **Verified live** via a real Semaphore backup run:
   `/var/lib/kontroll/backups/.git` created, captures tracked, a `git diff` cleanly shows a
-  device config delta.
+  device config delta. That run predates the per-class schedules, each of which runs
+  `--limit <inventory_group>`: the snapshot play was `hosts: localhost`, which such a limit leaves
+  out, so no scheduled run committed (I-90). It now starts from `localhost:all` and runs once, on
+  the controller, under any limit.
 - ✅ **Capture-exception matrix** — some captures misbehave (the **FortiGate** full-config
   export is non-deterministic: ~570 non-secret lines re-serialize each fetch, so an
   *unchanged* config still diffs ~600 lines). Rather than a per-vendor hack, a **sparse,

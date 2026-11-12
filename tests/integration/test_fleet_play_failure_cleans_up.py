@@ -10,7 +10,9 @@ task notified does not run, as it did not before; that a host with no failed tas
 loaded, or a `run_once` task failed on another host) is failed by name; that a refused request targets no host
 whatever `_wire_group` an `-e` or a vars file holds; that the play still tolerates an unreachable host; and what a
 caller's any_errors_fatal does: every host's work stops at the first failure, and with more than one host the run
-ends there with the keys kept (a residual the docs name), with one it reaches the cleanup.
+ends there with the keys kept (a residual the docs name), with one it reaches the cleanup; and that a wiring run under
+a `--limit` that leaves localhost out, which skips the validation play and so wired nothing and passed, now fails
+naming the limit to use (I-88), while `--limit <host>:localhost` wires that host alone.
 tests/unit/test_fleet_play_rescue.py pins the shapes. The stubs run `debug`, `fail` and `include_tasks`, which open
 no connection; install-node-exporter.yml's fact gathering meets a stand-in `ssh` first on PATH that answers as a
 refused connection does (exit 255), so the host is unreachable, which the play ignores, whether or not the machine has
@@ -53,11 +55,11 @@ STUB = [
 HANDLERS = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN {{ inventory_hostname }}"}}]
 
 
-def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=None):
+def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=None, args=()):
     """Run the shipped `playbook` from a copy of ansible/playbooks (with logging/, a probe module whose group is `g`
     and an instance.yml), the role `role` a stub (STUB, HANDLERS), over `hosts` in group `g`, with `extra` as one JSON
-    `-e`, each text in `append` added to the copy's file it names, a key dir under `tmp_path` holding one stale key,
-    and a stand-in `ssh` first on PATH. Return the exit code, the output, each host's failed count from the recap, and
+    `-e` and `args` after it, each text in `append` added to the copy's file it names, a key dir under `tmp_path`
+    holding one stale key, and a stand-in `ssh` first on PATH. Return the exit code, the output, each host's failed count from the recap, and
     whether the key dir is gone."""
     tree = tmp_path / "t"
     shutil.copytree(os.path.join(ROOT, "ansible", "playbooks"), str(tree / "ansible" / "playbooks"))
@@ -93,6 +95,7 @@ def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=Non
     cmd = ["ansible-playbook", "-i", str(tree / "inv.yml"), "playbooks/" + playbook]
     if extra is not None:
         cmd += ["-e", yaml.safe_dump(extra, default_flow_style=True).strip()]
+    cmd += list(args)
     p = subprocess.run(cmd, cwd=str(tree / "ansible"), env=env, capture_output=True, text=True, timeout=300)
     out = p.stdout + p.stderr
     assert "PLAY RECAP" in out, out
@@ -109,14 +112,14 @@ def _ssh(address):
     return {"ansible_connection": "ssh", "ansible_host": address}
 
 
-def _wire(tmp_path, extra, role=WIRE_ROLE, env_extra=None, refused=True, only=None, append=None):
+def _wire(tmp_path, extra, role=WIRE_ROLE, env_extra=None, refused=True, only=None, append=None, args=()):
     hosts = {"a": _ssh("192.0.2.36"), "b": _ssh("192.0.2.37")}
     if only:
         hosts = {h: hosts[h] for h in only}
     if refused:
         hosts["n"] = {"ansible_connection": "local", "ansible_host": "192.0.2.30"}
     return _run(tmp_path, "wire-logging.yml", WIRE_ROLE, hosts, dict(role=role, target="probe", **extra), env_extra,
-                append)
+                append, args)
 
 
 def _stopped(host, task, what="wiring"):
@@ -282,3 +285,34 @@ def test_an_unreachable_host_is_tolerated_and_not_recorded(tmp_path):
     assert recap == {"a": 0, "b": 0}, (recap, out)
     assert "FAILED: the install" not in out and "AFTER a" in out and "AFTER b" in out, out
     assert re.search(r"\[a\]: UNREACHABLE!", out) and re.search(r"\[b\]: UNREACHABLE!", out), out
+
+
+NOT_VALIDATED = ("the wiring request was not validated, so no host was wired: the validation play runs on localhost, "
+                 "which this run's --limit leaves out (or its --tags left out its tasks). Add localhost to the limit "
+                 "(--limit <host>:localhost), or run it without --tags.")
+
+
+@pytest.mark.parametrize("limit,check", [("a", False), ("a", True), ("g", False)], ids=["real", "check", "group"])
+def test_a_limit_that_leaves_localhost_out_fails_the_run_and_wires_nothing(tmp_path, limit, check):
+    """A wiring run, real and `--check`, under `--limit a`, and a real one under `--limit g` (both hosts): the
+    validation play (`hosts: localhost`) does not run, so no host is wired, and the run fails (rc 2) at the guard play
+    after the key cleanup, naming the limit to use, once (one message, over two limited hosts too); the real run's key
+    dir is gone. Guards I-88: the device play then matched no host, every play after the preamble printed `skipping: no
+    hosts matched`, and the run (the mandated dry-run too) passed having wired nothing; and the guard's `run_once`
+    (the I-88 reads' B-2: over one host, a guard without it fails once as well)."""
+    rc, out, recap, gone = _wire(tmp_path, {}, refused=False, args=["--limit", limit] + (["--check"] if check else []))
+    assert rc == 2, out
+    assert set(recap) == ({"a"} if limit == "a" else {"a", "b"}) and recap["a"] == 1, (recap, out)
+    assert out.count('"msg": "%s"' % NOT_VALIDATED) == 1, out
+    assert "STUB " not in out, out
+    assert gone or check, out
+
+
+def test_a_limit_with_localhost_wires_the_limited_host_alone(tmp_path):
+    """A real wiring run under `--limit a:localhost` (the header's usage line): the validation play runs, host a is
+    wired and b is not, the guard play does not fail it, the key dir is gone, and the run passes. Guards the guard's
+    `when` against failing a run whose request was validated, and the usage line the header and the failure name."""
+    rc, out, recap, gone = _wire(tmp_path, {}, refused=False, args=["--limit", "a:localhost"])
+    assert rc == 0 and gone, out
+    assert recap == {"a": 0, "localhost": 0}, (recap, out)
+    assert "STUB a" in out and "STUB b" not in out and NOT_VALIDATED not in out, out

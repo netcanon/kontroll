@@ -71,7 +71,8 @@ def test_prune_play_exists_and_is_gated_on_retention():
     the carried var — the heart of #125."""
     p = _prune_play()
     assert p is not None, "no retention-prune play (PRUNE_DONE shell) found in backup-configs.yml — #125 not enforced"
-    assert p.get("hosts") == "localhost" and p.get("connection") == "local", "the prune is a control-node-local op"
+    # localhost:all + run_once, every task delegated to localhost: tests/unit/test_backup_controller_plays.py (I-90)
+    assert p.get("hosts") == "localhost:all" and p.get("connection") == "local", "the prune is a control-node-local op"
     assert p.get("gather_facts") is False, "match the snapshot play's gather_facts:false idiom"
     vars_blob = yaml.safe_dump(p.get("vars") or {})
     assert "kontroll_backup_retention" in vars_blob, "the prune must derive its window from kontroll_backup_retention"

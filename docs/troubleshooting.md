@@ -148,6 +148,11 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
   entrypoint installed (as above, with `backup` for `check`). The summary's "(a no_log task prints only that it
   failed)" is its general wording: this task is not no_log, and its own message, earlier in the run's output, names
   the class and the roles path searched. The other hosts' captures go on, and the run's SSH keys are still removed.
+- **`wire-logging.yml` fails with `the wiring request was not validated, so no host was wired`** → the run's
+  `--limit` leaves out localhost, where the validation play runs (or its `--tags` left out the validation's tasks), so
+  no host was wired. Run it again with `--limit <host>:localhost`, or with no limit to wire every host of the class;
+  where `--tags` left the validation out, run it without `--tags`. The run's SSH keys are removed as usual (not in a
+  `--tags` or a `--check` run, which remove none: I-93, I-87).
 - **`ping.yml` reports a host `UNREACHABLE` that answers otherwise** → the probe is a TCP connect from the control
   node, and its port is the first set of `mgmt_port`, `ansible_port`, `kontroll_probe_port`, then 22
   (`ansible/playbooks/ping.yml`'s header). An SSH host on another port needs its port typed at onboard (it is

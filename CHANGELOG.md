@@ -11,6 +11,58 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a backup run under a `--limit` commits its captures and prunes, and a wiring run whose limit leaves localhost out fails (I-90, I-88, I-91, 2026-11-12)
+
+A `--limit` that does not name localhost leaves the implicit localhost out, so a `hosts: localhost` play prints
+`skipping: no hosts matched`. Measured on ansible-core 2.18.19 and 2.19.4: backup-configs.yml under `--limit <group>`,
+`--limit <host>` or `--limit all` wrote each capture and skipped the capture dir's check, the history commit and the
+prune, and passed; every Semaphore backup schedule runs it `--limit <inventory_group>` (scripts/gen-backup.py), and only
+the schedules pass a retention window, so no scheduled run committed a capture to the history or pruned it (I-90:
+the first half of I-48, which the I-9 entry below names).
+wire-logging.yml under `--limit <host>` skipped its validation play, so the device play matched no host: a real run and
+the mandated dry-run alike wired nothing and passed (I-88).
+
+- **Fixed.** backup-configs.yml's controller plays (the capture dir's check, the history, the prune) start from
+  `localhost:all`, run once under the linear strategy (which outranks a caller's `ANSIBLE_STRATEGY`: the free strategy
+  does not honour `run_once`), and delegate every task to localhost: unlimited, localhost is their first host, so each
+  task runs there as before; under a limit, each runs once, for the first limited host, on the controller with the
+  controller's connection (a host's own `ansible_connection` outranks `connection: local`), reading its variables as
+  that host. A limited run now commits the limited hosts' captures, prunes under a finite window and refuses a missing
+  capture dir.
+- **Fixed.** wire-logging.yml holds a guard play after the key cleanup, over `all`, run once: it fails a run whose
+  request no validation play read (neither `_wire_group` nor `_wire_refused` set on localhost), naming the limit to use,
+  `--limit <host>:localhost` (or, for a `--tags` run, to run it without `--tags`); its `always` tag keeps it in a
+  `--tags` run that skips the validation's tasks. A `--skip-tags always`, a `--start-at-task` past it or an
+  `-e _wire_refused` skips it. The header's usage line names that limit.
+- **Fixed.** backup-configs.yml's capture-dir check names its remedy: an `assert` templates its messages before it
+  tests, so the success message's undefined `config_backup_dir` ended the task on an undefined-variable error and the
+  remedy was never printed (I-91, since the check was added). The success message now defaults it.
+- **Not changed.** wire-logging.yml's validation play stays on localhost: its facts are read across plays through
+  `hostvars['localhost']`, so a limited wiring run is refused, not run. A failing controller play of backup-configs.yml
+  still ends the run there, before the key cleanup (I-48's second half). A limited run now reaches those plays too, so
+  a scheduled run whose capture dir check, history commit or prune fails now fails, and keeps that run's SSH keys until
+  the next completed run; its recap names the first limited host for that failure. A limit that names no host of the
+  class's group still wires nothing, and passes (`--limit localhost` alone errors before any play).
+- **Upgrade.** Every scheduled backup now commits to the capture history, which none did. Where the captures dir's
+  `.git` is not writable by the uid the schedule runs as (the Semaphore runner's), each scheduled run now fails at the
+  history play, where it passed before having committed nothing: check that dir's ownership after the upgrade.
+- **Tests.** `tests/integration/test_backup_limited_run.py` runs backup-configs.yml for real under a group's, a host's
+  and `all`'s limit (the limited hosts' captures committed, once, on the controller for the first limited host, the
+  keys removed), unlimited (on localhost, as before), with a 30-day window over a 40-day-old history (pruned) and with
+  no capture dir (refused on the controller, naming the remedy); each host's own interpreter does not exist, so a
+  controller task run as a device fails. `tests/unit/test_backup_controller_plays.py` holds every play of a fleet
+  playbook whose `hosts` names localhost (a string or a list) to that shape: `localhost:all`, run once, the linear
+  strategy, every task delegated, wire-logging.yml's localhost plays (which its guard covers) excepted by name;
+  `tests/unit/test_backup_prune.py` reads the new `hosts`. `tests/integration/test_fleet_play_failure_cleans_up.py`
+  runs a wiring under `--limit a`, real and `--check`, and under `--limit g` (rc 2, the guard's message once, nothing
+  wired), and under `--limit a:localhost` (a wired alone); `tests/unit/test_fleet_play_rescue.py` holds the guard
+  play, and lets a play after the cleanup run once and a task there carry only the `always` tag.
+- **Docs.** The controller plays' comment and wire-logging.yml's header; scripts/README.md's schedules line;
+  docs/logging-architecture.md's capture history (its live verification predates the per-class schedules);
+  docs/troubleshooting.md for the guard's message (its `--tags` remedy; a `--tags` or a `--check` run removes no keys:
+  I-93, I-87). No log line is added: each run already prints its stamped `kontroll_run_id`, and the guard's failure
+  names the cause.
+
 ### fix(ansible): a ping host whose class has no check entrypoint installed is named REFUSED, and its run still removes its SSH keys (I-83, 2026-11-12)
 
 ping.yml's reach play includes the host's class (`device_role`) with `tasks_from: check` inside the probe's block, so
