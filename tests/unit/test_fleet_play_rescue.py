@@ -140,9 +140,9 @@ def test_the_rescue_records_the_task_fails_a_host_with_no_failed_task_and_ends_t
 @pytest.mark.parametrize("name", sorted(DISPATCH))
 def test_a_play_after_the_cleanup_fails_each_recorded_host_and_connects_to_nothing(name):
     """After the `_cleanup-ssh-keys.yml` import come only plays that gather no facts, run no role, hold no key but
-    their name, `hosts`, `gather_facts`, `connection` and `tasks`, and hold only controller-side actions (`debug`,
-    `assert`, `fail`, `set_fact`, `meta`) with no `delegate_to`, `failed_when`, `ignore_errors` or `loop`, and no
-    `tags` but `[always]` (I-88's guard; it keeps the task in a `--tags` run, never skips it); one
+    their name, `hosts`, `gather_facts`, `connection`, `run_once` and `tasks`, and hold only controller-side actions
+    (`debug`, `assert`, `fail`, `set_fact`, `meta`) with no `delegate_to`, `failed_when`, `ignore_errors` or `loop`,
+    and no `tags` but `[always]` (I-88's guard; it keeps the task in a `--tags` run, never skips it); one
     of them fails a host on the playbook's record, over the dispatching play's own `hosts:` pattern, with one task: its
     name, the `fail` and its `when`. Guards the summary moved before the cleanup (a run whose every host failed ends
     before the cleanup again), dropped or kept from failing (a failed install or wiring would end the run green), run

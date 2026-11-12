@@ -11,7 +11,9 @@ schedule's shape), to one host and to `all` commits the limited hosts' captures 
 window prunes; one with no capture dir is refused at the check, on the controller, naming the remedy (I-91); and an
 unlimited run still runs each task on localhost, as before. Hosts of the generic raw-SSH class on a local connection,
 each printing a config, with a good capture in place and in the history, and a stale key file in the run's key directory
-before the run.
+before the run. Each host's own interpreter is a path that does not exist (the raw-SSH capture needs none), so a
+controller task that ran as the first limited host, not delegated to the controller, fails (the I-88/I-90 reads' B-1:
+with the controller's interpreter on every host, a dropped `delegate_to` ran the same either way).
 
 It needs ansible-playbook and git: where either is missing the row is skipped. Nothing of the developer's Ansible or
 git reaches the play: its configuration, home and temporary directory, the inventory, the captures and the key
@@ -40,6 +42,7 @@ GROUP = "wireless_ap"
 HOSTS = {"ap-one": ("192.0.2.61", "config one\n"), "ap-two": ("192.0.2.62", "config two\n")}
 GOOD = "config before the run\n"
 COMMIT = "Commit a timestamped snapshot when configs changed"
+STAGE = "Stage all captures (excluded ones are gitignored)"
 REFUSED = "config_backup_dir is not defined, so there is nowhere to write captures"
 
 
@@ -65,7 +68,8 @@ def _lab(tmp_path, aged=False):
                    encoding="utf-8")
     inventory = tmp_path / "hosts.yml"
     hosts = {host: {"ansible_host": address, "device_role": "backend_raw_ssh",
-                    "backend_backup_command": "printf '%s'" % text.replace("\n", "\\n")}
+                    "backend_backup_command": "printf '%s'" % text.replace("\n", "\\n"),
+                    "ansible_python_interpreter": "/nonexistent/python3"}
              for host, (address, text) in HOSTS.items()}
     inventory.write_text(yaml.safe_dump({"all": {
         "vars": {"ansible_connection": "local", "ansible_python_interpreter": "{{ ansible_playbook_python }}"},
@@ -118,10 +122,11 @@ def test_a_limited_run_commits_the_limited_hosts_captures(tmp_path, limit):
     """A real run under `--limit <limit>` (the group, as a schedule runs it; one host; `all`, which the implicit
     localhost is no member of): it passes, the history gains one commit holding each limited host's new capture and no
     other host's (beside the .gitignore the play renders), the commit ran once, for the first limited host, on the
-    controller (`[ap-one -> localhost]`), the recap names no localhost, and the key directory is gone. Guards the three
-    controller plays' shape (I-90): as `hosts: localhost` plays they printed `skipping: no hosts matched` under each of
-    these limits, so the capture was written and never committed (the history kept its one commit) while the run
-    passed."""
+    controller (`[ap-one -> localhost]`; the stage and the commit name no other host), the recap names no localhost,
+    and the key directory is gone. Guards the controller plays' shape (I-90): as `hosts: localhost` plays they printed
+    `skipping: no hosts matched` under each of these limits, so the capture was written and never committed (the
+    history kept its one commit) while the run passed; and their `run_once` (without it the stage and the commit run
+    once per limited host, on one repo)."""
     lab = _lab(tmp_path)
     rc, out, recap = _play(lab, "--limit", limit)
     assert rc == 0, out
@@ -129,6 +134,7 @@ def test_a_limited_run_commits_the_limited_hosts_captures(tmp_path, limit):
     assert recap == {host: 0 for host in limited}, (recap, out)
     assert "skipping: no hosts matched" not in out, out
     assert "changed: [ap-one -> localhost]" in _task(out, COMMIT), out
+    assert "ap-two" not in _task(out, COMMIT) and "ap-two" not in _task(out, STAGE), out
     assert _git(lab.backups, "rev-list", "--count", "HEAD").strip() == "2", out
     changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
     assert sorted(n for n in changed if n.endswith(".cfg")) == sorted(_capture(host) for host in limited), changed
@@ -140,15 +146,17 @@ def test_a_limited_run_commits_the_limited_hosts_captures(tmp_path, limit):
 
 def test_an_unlimited_run_commits_on_localhost_as_before(tmp_path):
     """A real run with no limit: localhost is the controller plays' first host, so the commit runs there
-    (`changed: [localhost]`), as it did when the plays were `hosts: localhost`, and the recap names localhost; both
-    captures are committed. Guards the plays' host pattern order: `all:localhost` would run them for the first
-    device instead, which a fleet run never did, and its recap would lose localhost."""
+    (`changed: [localhost]`), as it did when the plays were `hosts: localhost`, and the recap names localhost; the
+    run's one commit holds both captures. Guards the plays' host pattern order: `all:localhost` would run them for the
+    first device instead, which a fleet run never did, and its recap would lose localhost."""
     lab = _lab(tmp_path)
     rc, out, recap = _play(lab)
     assert rc == 0, out
     assert recap == {"ap-one": 0, "ap-two": 0, "localhost": 0}, (recap, out)
     assert "changed: [localhost]" in _task(out, COMMIT), out
     assert _git(lab.backups, "rev-list", "--count", "HEAD").strip() == "2", out
+    changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
+    assert sorted(n for n in changed if n.endswith(".cfg")) == sorted(_capture(host) for host in HOSTS), changed
 
 
 def test_a_limited_run_with_a_retention_window_prunes_older_history(tmp_path):

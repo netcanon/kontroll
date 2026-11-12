@@ -175,7 +175,9 @@
 # Under a `--limit` that leaves localhost out (or a `--tags` that leaves out the validation's tasks), the validation
 # play does not run, so the device play matches no host: the run wired nothing and passed (I-88). This play starts
 # from `all`, so it runs under such a limit, and fails that run once, naming the limit to use; its `always` tag keeps
-# it in a `--tags` run. Its `fail` runs on the controller and connects to nothing.
+# it in a `--tags` run. Its `fail` opens no connection, though ansible-core loads the first host's connection plugin
+# for it: where that plugin is not installed, the run fails on that error in place of this message. A `--skip-tags
+# always`, a `--start-at-task` past it or an `-e _wire_refused` skips it.
 - name: Fail a wiring request no validation play read
   hosts: all
   gather_facts: false
@@ -186,8 +188,8 @@
       ansible.builtin.fail:
         msg: >-
           the wiring request was not validated, so no host was wired: the validation play runs on localhost, which
-          this run's --limit leaves out (or its --tags left out its tasks). Add localhost to the limit: --limit
-          <host>:localhost.
+          this run's --limit leaves out (or its --tags left out its tasks). Add localhost to the limit (--limit
+          <host>:localhost), or run it without --tags.
       when:
         - hostvars['localhost']._wire_group is not defined
         - hostvars['localhost']._wire_refused is not defined

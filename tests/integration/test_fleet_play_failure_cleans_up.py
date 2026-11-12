@@ -288,20 +288,22 @@ def test_an_unreachable_host_is_tolerated_and_not_recorded(tmp_path):
 
 
 NOT_VALIDATED = ("the wiring request was not validated, so no host was wired: the validation play runs on localhost, "
-                 "which this run's --limit leaves out (or its --tags left out its tasks). Add localhost to the limit: "
-                 "--limit <host>:localhost.")
+                 "which this run's --limit leaves out (or its --tags left out its tasks). Add localhost to the limit "
+                 "(--limit <host>:localhost), or run it without --tags.")
 
 
-@pytest.mark.parametrize("check", [False, True], ids=["real", "check"])
-def test_a_limit_that_leaves_localhost_out_fails_the_run_and_wires_nothing(tmp_path, check):
-    """A wiring run, real and `--check`, under `--limit a`: the validation play (`hosts: localhost`) does not run, so
-    no host is wired, and the run fails (rc 2) once, at the guard play after the key cleanup, naming the limit to use;
-    the real run's key dir is gone. Guards I-88: the device play then matched no host, every play after the preamble
-    printed `skipping: no hosts matched`, and the run (the mandated dry-run too) passed having wired nothing."""
-    rc, out, recap, gone = _wire(tmp_path, {}, refused=False, args=["--limit", "a"] + (["--check"] if check else []))
+@pytest.mark.parametrize("limit,check", [("a", False), ("a", True), ("g", False)], ids=["real", "check", "group"])
+def test_a_limit_that_leaves_localhost_out_fails_the_run_and_wires_nothing(tmp_path, limit, check):
+    """A wiring run, real and `--check`, under `--limit a`, and a real one under `--limit g` (both hosts): the
+    validation play (`hosts: localhost`) does not run, so no host is wired, and the run fails (rc 2) at the guard play
+    after the key cleanup, naming the limit to use, once (one message, over two limited hosts too); the real run's key
+    dir is gone. Guards I-88: the device play then matched no host, every play after the preamble printed `skipping: no
+    hosts matched`, and the run (the mandated dry-run too) passed having wired nothing; and the guard's `run_once`
+    (the I-88 reads' B-2: over one host, a guard without it fails once as well)."""
+    rc, out, recap, gone = _wire(tmp_path, {}, refused=False, args=["--limit", limit] + (["--check"] if check else []))
     assert rc == 2, out
-    assert recap == {"a": 1}, (recap, out)
-    assert ('"msg": "%s"' % NOT_VALIDATED) in out, out
+    assert set(recap) == ({"a"} if limit == "a" else {"a", "b"}) and recap["a"] == 1, (recap, out)
+    assert out.count('"msg": "%s"' % NOT_VALIDATED) == 1, out
     assert "STUB " not in out, out
     assert gone or check, out
 

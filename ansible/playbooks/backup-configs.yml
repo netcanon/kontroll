@@ -33,17 +33,22 @@
 - name: Fleet preamble — stamp the run id + materialize per-host SSH keys
   ansible.builtin.import_playbook: _fleet-preamble.yml
 
-# The three controller plays (this one, the history and the prune) start from `localhost:all`, run once and delegate
-# every task to localhost. A `--limit` that does not name localhost leaves the implicit localhost out, so a `hosts:
-# localhost` play was skipped (`skipping: no hosts matched`), and every Semaphore backup schedule runs this playbook
-# `--limit <its inventory group>` (scripts/gen-backup.py): no scheduled run checked the capture dir, committed a
-# capture to the history or pruned it, and each passed (I-90). Unlimited, localhost is the play's first host, so each
-# task runs there, as before; under a limit, it runs once, for the first host left in the play, on the controller,
-# with the controller's connection (a host's own `ansible_connection` outranks `connection: local`: I-41). Where every
-# host of the limit has failed, no host is left to run them; Ansible has ended the run already (I-48, I-66).
+# The controller plays (this one, the history and the prune) start from `localhost:all`, run once under the linear
+# strategy, and delegate every task to localhost. A `--limit` that does not name localhost leaves the implicit
+# localhost out, so a `hosts: localhost` play was skipped (`skipping: no hosts matched`), and every Semaphore backup
+# schedule runs this playbook `--limit <its inventory group>` (scripts/gen-backup.py): no scheduled run checked the
+# capture dir, committed a capture to the history or pruned it, and each passed (I-48's first half, I-90). Unlimited,
+# localhost is the play's first host, so each task runs there, as before; under a limit, it runs once, for the first
+# host left in the play, on the controller, with the controller's connection (a host's own `ansible_connection`
+# outranks `connection: local`: I-41), and reads its variables as that host: a device's group or host var that set
+# `config_backup_dir` or the retention would be the one used (none shipped does). `strategy: linear` outranks a
+# caller's `ANSIBLE_STRATEGY`: the free strategy does not honour `run_once`, and would run each task once per host, on
+# one repo. Where every host of the limit has failed, no host is left to run them; Ansible has ended the run already
+# (I-48, I-66).
 - name: Ensure backup dir exists
   hosts: localhost:all
   run_once: true
+  strategy: linear
   gather_facts: false
   tasks:
     # config_backup_dir is referenced throughout this playbook and defined in instance/inventory/group_vars/all.yml.
@@ -148,6 +153,7 @@
 - name: Snapshot the captures into local history (git)
   hosts: localhost:all  # under any --limit, as the play above (I-90)
   run_once: true
+  strategy: linear
   gather_facts: false
   connection: local
   vars:
@@ -249,6 +255,7 @@
 - name: Prune capture history older than the retention window (git)
   hosts: localhost:all  # under any --limit, as the play above (I-90)
   run_once: true
+  strategy: linear
   gather_facts: false
   connection: local
   vars:
@@ -431,7 +438,8 @@
 # (I-12), and so does a host whose class has no backup entrypoint installed, refused as a task first (I-66); a host
 # whose class's installed backup entrypoint could not be loaded is failed in that rescue, and does not.
 # A failing local play above (the backup dir's check, the history commit, the prune's retention check) still ends
-# the run there, before the cleanup and this summary (I-48).
+# the run there, before the cleanup and this summary (I-48's second half); since I-90 a limited run, as every schedule
+# is, reaches those plays, so this holds for it too.
 - name: Backup run summary
   hosts: all
   gather_facts: false
