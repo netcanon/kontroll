@@ -7,7 +7,9 @@ before it said so; uid 1001 is an ordinary uid (a host's second account, a GitHu
 now say it first, in the same words: install-prereqs.sh before its root check (run as root, the operator is the
 account that ran sudo; not root, the account running it), and each launcher for every verb, before it makes anything
 (its operator is the account running it, whoever ran sudo); `shell`, the escape hatch, is told and goes on.
-bootstrap.sh, run as root, hands install-prereqs.sh the outer sudo's operator.
+bootstrap.sh, run as root, hands install-prereqs.sh the outer sudo's operator. And `kontroll-init.py --fresh`, which
+the legacy host path runs by hand with no launcher before it, refuses the operator as its first check (I-59), the
+operator being the one a launcher passes in, else read as install-prereqs.sh reads it.
 
 Each row puts stand-ins first on PATH. An `id` whose `id -u` answers what the row needs (every other question goes to
 the real `id`), so the account running the suite decides nothing. A docker, a sudo, a groupadd and a usermod that each
@@ -18,12 +20,16 @@ groupadd`, the storage-root step (scripts/lib/storage-root.sh, I-35) its `sudo -
 either would show. The launchers run in an empty HOME, and a refusal leaves HOME and the launcher's own tree (the kit,
 the checkout) as they began.
 install-prereqs.sh runs beside a stand-in lib/ whose libraries stop the script the moment one is
-sourced: a run that gets past both checks installs nothing, even as root in a container.
+sourced: a run that gets past both checks installs nothing, even as root in a container. kontroll-init runs in a
+sandbox whose root holds nothing (its uid given by a replaced os.getuid), or, as a program, from a copy of the script
+and its package: a run let on past the refusal makes nothing in the checkout.
 """
+import importlib.util
 import os
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -296,16 +302,137 @@ def test_bootstrap_hands_install_prereqs_the_outer_sudos_operator(tmp_path, uid,
     assert ("storage-root.sh sourced" in said) == (rc == 99), said
 
 
+def _load_init():
+    """scripts/kontroll-init.py loaded as a module (its name has a hyphen), a fresh copy each time."""
+    spec = importlib.util.spec_from_file_location("kontroll_init_uid",
+                                                  os.path.join(ROOT, "scripts", "kontroll-init.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _sandboxed_init(tmp_path, monkeypatch, uid, env):
+    """kontroll-init loaded to run against an empty sandbox: kontroll.paths.ROOT is `tmp_path/root`, which holds no
+    instance.example/ (a run let on that got as far as the scaffold stops there, having made nothing), the control
+    key's default path is under it, KONTROLL_IN_CONTAINER is unset and the installer image's markers name a path that
+    is not there (a run on the operator's machine). The process's uid is `uid` (os.getuid replaced), and of
+    KONTROLL_OPERATOR_UID, KONTROLL_OPERATOR_USER, SUDO_UID and SUDO_USER only those in `env` are set. Returns (the
+    module, the sandbox root)."""
+    ki = _load_init()
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(ki.paths, "ROOT", str(root))
+    monkeypatch.delenv("KONTROLL_WRITE_ROOT", raising=False)
+    monkeypatch.setattr(ki, "AGE_KEY_FILE", str(root / "age" / "keys.txt"))
+    monkeypatch.delenv("KONTROLL_IN_CONTAINER", raising=False)
+    monkeypatch.setattr(ki, "INSTALLER_IMAGE_MARKERS", (str(tmp_path / "no-installer-image"),))
+    for name in ("KONTROLL_OPERATOR_UID", "KONTROLL_OPERATOR_USER", "SUDO_UID", "SUDO_USER"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(os, "getuid", lambda: uid, raising=False)
+    return ki, root
+
+
+def _name_of(uid):
+    """The account name of `uid` as the password database gives it, else the number (no such account, or no `pwd`)."""
+    try:
+        import pwd
+        return pwd.getpwuid(uid).pw_name
+    except (ImportError, KeyError):
+        return str(uid)
+
+
+@pytest.mark.parametrize("args", [[], ["--trust-mode", "separated", "--no-break-glass", "--mgmt-ip", "192.0.2.10"]],
+                         ids=["bare --fresh", "a whole --fresh"])
+@pytest.mark.parametrize("uid,env,name", [
+    (0, {"KONTROLL_OPERATOR_UID": "1001", "KONTROLL_OPERATOR_USER": "second"}, "second"),
+    (0, {"KONTROLL_OPERATOR_UID": "1001", "KONTROLL_OPERATOR_USER": "second", "KONTROLL_IN_CONTAINER": "1"}, "second"),
+    (0, {"SUDO_UID": "1001", "SUDO_USER": "second"}, "second"),
+    (1001, {}, None), (1001, {"SUDO_UID": "1000", "SUDO_USER": "first"}, None)],
+    ids=["a launcher's uid 1001 operator", "in the installer container, its key file elsewhere", "sudo by uid 1001",
+         "uid 1001 without sudo", "uid 1001 holding an inherited SUDO_UID"])
+def test_kontroll_init_fresh_refuses_an_operator_with_uid_1001_first(tmp_path, monkeypatch, capsys, uid, env, name,
+                                                                      args):
+    """`kontroll-init.py --fresh` whose operator has uid 1001 returns 1 having printed the sentence alone, naming the
+    operator, the section and that nothing was made, and the sandbox stays empty (no instance/, no key directory). The
+    operator is the one a launcher passes in (KONTROLL_OPERATOR_UID and _USER; the installer container runs this as
+    root), else, as root, the account that ran sudo, else the account running it, whatever SUDO_UID its shell
+    inherited. A bare `--fresh` gets the sentence, not the break-glass or trust-mode refusal, and in the installer
+    container (KONTROLL_IN_CONTAINER set) a key file other than the mounted one gets it, not that refusal: it is the
+    first check. Guards I-59 (a hand-run `--fresh` on the legacy host path scaffolded instance/ and minted the control
+    key, and the deploy refused the operator two steps later); a check after another refusal, which would send the
+    operator to fix the wrong thing first; and one reading `os.getuid()` alone (0 in the installer container and
+    under sudo)."""
+    ki, root = _sandboxed_init(tmp_path, monkeypatch, uid, env)
+    rc = ki.main(["--fresh"] + args)
+    out, err = capsys.readouterr()
+    said = " ".join(err.split())
+    assert rc == 1, said
+    assert said == ki.UID_1001 % (name or _name_of(1001)), said
+    assert said.startswith("kontroll-init: the operator (%s) %s." % (name or _name_of(1001), SENTENCE)), said
+    assert "troubleshooting.md section 10" in said and said.endswith("Nothing was made."), said
+    assert out == "" and os.listdir(str(root)) == [], (out, os.listdir(str(root)))
+
+
+@pytest.mark.parametrize("uid,env", [
+    (1001, {"KONTROLL_OPERATOR_UID": "1000", "KONTROLL_OPERATOR_USER": "first"}),
+    (0, {"SUDO_UID": "1000", "SUDO_USER": "first"}), (0, {"SUDO_UID": "10010", "SUDO_USER": "first"}),
+    (0, {"SUDO_UID": "11001", "SUDO_USER": "first"}), (0, {}), (1000, {}),
+    (1000, {"SUDO_UID": "1001", "SUDO_USER": "second"})],
+    ids=["a launcher's uid 1000 operator, run as uid 1001", "sudo by uid 1000", "sudo by uid 10010",
+         "sudo by uid 11001", "root without sudo", "uid 1000 without sudo",
+         "uid 1000 holding an inherited SUDO_UID 1001"])
+def test_kontroll_init_fresh_lets_every_other_operator_on(tmp_path, monkeypatch, capsys, uid, env):
+    """For any other operator a bare `kontroll-init.py --fresh` goes on to its next check, the break-glass choice's
+    refusal (rc 1), names no uid 1001 and makes nothing. A launcher's operator is read before the account running
+    this (the installer container runs it as root; tests/conftest.py's `not_the_service_uid_env` sets it so a runner
+    whose own uid is 1001 runs `--fresh` rows). Guards a check that refuses every run as root or under sudo, one
+    that matches the number by its prefix or suffix, and one that reads a SUDO_UID not set by sudo for this run."""
+    ki, root = _sandboxed_init(tmp_path, monkeypatch, uid, env)
+    rc = ki.main(["--fresh"])
+    said = " ".join(capsys.readouterr().err.split())
+    assert rc == 1, said
+    assert "uid 1001" not in said and said.startswith("ERROR: --fresh requires a break-glass choice"), said
+    assert os.listdir(str(root)) == [], os.listdir(str(root))
+
+
+def test_kontroll_init_run_as_a_program_refuses_a_uid_1001_operator(tmp_path):
+    """`python3 scripts/kontroll-init.py --fresh`, as docs/install-from-scratch.md runs it, from a copy of the script
+    and scripts/kontroll/ alone, with KONTROLL_OPERATOR_UID 1001: exit 1, the sentence on stderr naming
+    KONTROLL_OPERATOR_USER, nothing on stdout, and the copy's tree as it began. Guards the refusal from living
+    where the program's entry does not reach it, and its exit status from being lost on the way out; the copy keeps
+    a run let on away from the checkout's own instance/."""
+    s = tmp_path / "scripts"
+    s.mkdir()
+    shutil.copy(os.path.join(ROOT, "scripts", "kontroll-init.py"), str(s / "kontroll-init.py"))
+    shutil.copytree(os.path.join(ROOT, "scripts", "kontroll"), str(s / "kontroll"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("KONTROLL_", "SUDO_"))}
+    env.update(KONTROLL_OPERATOR_UID="1001", KONTROLL_OPERATOR_USER="second", HOME=str(tmp_path / "home"),
+               PYTHONDONTWRITEBYTECODE="1")
+    run = subprocess.run([sys.executable, str(s / "kontroll-init.py"), "--fresh", "--trust-mode", "separated",
+                          "--no-break-glass", "--key-file", str(tmp_path / "age" / "keys.txt")],
+                         capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=60)
+    said = " ".join(run.stderr.split())
+    assert run.returncode == 1, run.stderr
+    assert said.startswith("kontroll-init: the operator (second) " + SENTENCE), said
+    assert said.endswith("Nothing was made.") and run.stdout == "", (said, run.stdout)
+    assert sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*")) == before
+
+
 _SOURCES = {"scripts/install-prereqs.sh": "install-prereqs.sh: the operator (",
             "scripts/kontroll-installer.sh": "kontroll: the operator (",
             "scripts/kontroll.sh": "kontroll: the operator (",
+            "scripts/kontroll-init.py": "kontroll-init: the operator (",
             "ansible/playbooks/local-canonical.yml": "local-canonical: the operator ("}
 
 
 def _said_after(path, opening):
     """What `path`'s sentence says after its opening words and the operator's name: its text, whitespace folded, from
-    the `) ` that closes the name to the end of that string (a shell `echo` segment's closing quote; in the playbook,
-    the folded fail_msg and what follows it, of which the row's words must be a start)."""
+    the `) ` that closes the name to the end of that string (a shell `echo` segment's or a Python literal's closing
+    quote; in the playbook, the folded fail_msg and what follows it, of which the row's words must be a start)."""
     with open(os.path.join(ROOT, path), encoding="utf-8") as fh:
         text = " ".join(fh.read().split())
     assert text.count(opening) == 1, (path, opening, text.count(opening))
@@ -314,11 +441,12 @@ def _said_after(path, opening):
 
 
 def test_the_troubleshooting_row_quotes_each_refusal_as_its_source_says_it():
-    """docs/troubleshooting.md section 10 holds one row quoting each of the three sentences: install-prereqs.sh's, the
-    launchers' (both say the same one) and the deploy's (local-canonical.yml's fail_msg). Each quote, `<opening>(…)
-    <words> …`, is read against its source: the opening words as the script or playbook says them, and the words after
-    the operator's name a start of what the source says there. Guards the sentences' pointer (each of the three names
-    that section: the launcher and install-prereqs rows above, test_local_canonical.py for the deploy's): a row that
+    """docs/troubleshooting.md section 10 holds one row quoting each of the four sentences: install-prereqs.sh's, the
+    launchers' (both say the same one), kontroll-init.py's (I-59) and the deploy's (local-canonical.yml's fail_msg).
+    Each quote, `<opening>(…) <words> …`, is read against its source: the opening words as the script or playbook says
+    them, and the words after the operator's name a start of what the source says there (in kontroll-init.py, its
+    first string literal). Guards the sentences' pointer (each of the four names that section: the launcher,
+    install-prereqs and kontroll-init rows above, test_local_canonical.py for the deploy's): a row that
     quotes only the deploy's would leave an operator refused at install-prereqs.sh with nothing to find, and a
     sentence reworded in its source, or a quote reworded in the row, would send the operator looking for words the
     row does not hold (the I-18 read B's N-2)."""

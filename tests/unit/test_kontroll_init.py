@@ -26,7 +26,8 @@ from kontroll.service import secrets as secrets_service
 
 from _age_recipient import bech32, x25519_recipient
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit,
+              pytest.mark.usefixtures("not_the_service_uid_env")]   # --fresh refuses uid 1001, a hosted runner's (I-59)
 
 
 def _load():

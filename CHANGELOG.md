@@ -11,6 +11,36 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): `kontroll-init.py --fresh` refuses an operator with uid 1001 before it makes anything (I-59, 2026-11-12)
+
+install-prereqs.sh and both launchers refuse an operator whose uid is 1001, the network service's, before they make
+anything, and the deploy's first task refuses it behind them (the I-18 entry below): the canonical's grant and hook
+tell the service from everyone else by that one number. On the legacy host path no launcher comes first, so a
+hand-run `python3 scripts/kontroll-init.py --fresh` scaffolded `instance/` and minted the control key, and the deploy
+refused the operator two steps later.
+
+- **Fixed.** `scripts/kontroll-init.py`: a `--fresh` run whose operator has uid 1001 is refused as its first check,
+  before any other refusal could send the operator elsewhere, in the launchers' words (`kontroll-init: the operator
+  (…) has uid 1001, the uid the network service runs as. …`, docs/troubleshooting.md section 10, "Nothing was
+  made."), exit 1. The operator is the one a launcher passes in (`KONTROLL_OPERATOR_UID` and
+  `KONTROLL_OPERATOR_USER`: the installer container runs kontroll-init as root), else as install-prereqs.sh reads
+  it: run as root, the account that ran sudo (`SUDO_UID`), else root; not root, the account running it, whatever
+  `SUDO_UID` its shell inherited.
+- **Not changed.** A run without `--fresh` is not refused: it acts on an instance that is already there, and the
+  break-glass procedure runs it from the installer's `shell`, which a uid-1001 operator is told about and let into.
+- **Tests.** `tests/unit/test_operator_uid_1001_refused.py`: a bare `--fresh` and a whole one, by a launcher's
+  uid-1001 operator, by sudo from uid 1001, by uid 1001 itself and by uid 1001 holding an inherited `SUDO_UID`, each
+  get the sentence alone and leave the sandbox empty; every other operator (uid 1000, 10010, 11001, root without
+  sudo, a launcher's uid 1000 operator on a uid-1001 account) goes on to the break-glass refusal; the script run as a
+  program from a copy exits 1 with the sentence and changes nothing; troubleshooting §10's row is read against the
+  four sentences. `test_kontroll_init.py` and `test_break_glass_claim_is_honest.py` take `not_the_service_uid_env`
+  (tests/conftest.py), a `KONTROLL_OPERATOR_UID` other than 1001, so a runner whose own uid is 1001 runs their
+  `--fresh` rows.
+- **Docs.** docs/troubleshooting.md §10's row (the sentence, where it is said, nothing made after it), SECURITY.md
+  C10, docs/SETUP.md, docs/install-from-scratch.md's quickstart note, scripts/README.md, kontroll-init.py's
+  docstring, tests/README.md. No log line is added: kontroll-init runs before the stack and keeps no log, and the
+  refusal, on stderr, is its one output.
+
 ### fix(ansible): a dry run and a `--tags` run render and remove the per-run SSH keys, so the dry run reaches a key-auth host; a dry run's key dir is its own, and a key dir that holds anything else is refused (I-87, I-93, I-95, 2026-11-12)
 
 `_render-ssh-keys.yml` writes each key-auth host's private key from its SOPS domain to a 0600 file in the run's key

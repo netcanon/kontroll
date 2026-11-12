@@ -17,7 +17,8 @@
 > writes `scripts/kontroll-installer.sh`.
 > ```
 > # Run every line as the account that will operate the node, and not one with uid 1001: that is the network
-> #   service's uid, and install-prereqs.sh and the installer refuse it (docs/troubleshooting.md §10).
+> #   service's uid, and install-prereqs.sh, the installer and kontroll-init.py --fresh refuse it
+> #   (docs/troubleshooting.md §10).
 > # Get the tree and stand in it — one of:
 > #   a clone:           git clone <repo> kontroll && cd kontroll
 > #                      (all of it: a `--depth` clone shorter than the history cannot seed the canonical;
