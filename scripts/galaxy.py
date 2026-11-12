@@ -205,6 +205,24 @@ def cmd_scaffold(args):
           "backend params, then run ping.yml / backup-configs.yml against it once." % args.key)
 
 
+# The onboard's verify (`--bootstrap`): ping.yml for the new host, which must be reachable. ping.yml tolerates an
+# UNREACHABLE host unless it is asked not to, so the verify asks: its rc 0 then means the host's port answered and its
+# class's check passed. Before I-84 it ran ping.yml bare and printed "reachable & managed" for a host that did not
+# answer, or whose check failed (both were summarised UNREACHABLE, and the run passed).
+VERIFY_PING = ["ansible-playbook", "playbooks/ping.yml", "-e", "kontroll_ping_require_reachable=true"]
+
+
+def verify_line(host_name, rc):
+    """The verify's verdict on ping.yml's exit code for `host_name` (run as VERIFY_PING + --limit): OK only for 0;
+    otherwise PENDING, pointing at ping's own summary line, which says why, instead of guessing at a reason."""
+    if rc == 0:
+        return "OK %s — reachable & managed: its port answered and its check passed." % host_name
+    return ("PENDING %s — not verified (ping rc=%d). Its summary line above says why: UNREACHABLE (nothing answered "
+            "on its port), CHECK FAILED (it answered and its check failed: often its creds, not yet in the SOPS "
+            "domain), REFUSED (its class has no check installed); no line: its check's connection failed (an SSH "
+            "login or banner). Fix that, then re-run ping.yml --limit %s." % (host_name, rc, host_name))
+
+
 def cmd_onboard(args):
     """The operator's path: collection + host -> a managed device. Dry-run prints
     the plan; --apply performs the repo mutations (module + drop-in inventory host
@@ -280,12 +298,8 @@ def cmd_onboard(args):
         rc = gitio._run(["ansible-playbook", "playbooks/bootstrap.yml"], cwd=os.path.join(paths.ROOT, "ansible"))
         if rc == 0:
             print("--- verify (ping the onboarded host; needs its creds present) ---")
-            vrc = gitio._run(["ansible-playbook", "playbooks/ping.yml", "--limit", host_name],
-                             cwd=os.path.join(paths.ROOT, "ansible"))
-            print("\n%s %s — %s" % (
-                "OK" if vrc == 0 else "PENDING", host_name,
-                "reachable & managed." if vrc == 0
-                else "not yet reachable — provide creds in the SOPS domain, then re-run ping --limit %s." % host_name))
+            vrc = gitio._run(VERIFY_PING + ["--limit", host_name], cwd=os.path.join(paths.ROOT, "ansible"))
+            print("\n" + verify_line(host_name, vrc))
         else:
             print("  bootstrap failed (rc=%d) — fix before verifying." % rc)
 

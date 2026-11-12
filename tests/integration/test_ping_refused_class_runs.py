@@ -8,7 +8,7 @@ role with no tasks/check.yml, rc 4; no `device_role` on 2.18, rc 1) or reported 
 2.19), so the run's keys were left in their per-run directory where no later play ran; and a class ansible-core loads
 as a role that runs nothing (an empty `device_role`, a role with no tasks/ directory, a check with no task in it) was
 reported OK. The reach play now refuses such a host first, in a block of its own whose rescue records the refusal
-(the probe's rescue would report it UNREACHABLE); the summary names it REFUSED, and the run's last play, after the key
+(the probe's rescue would name it a failed check); the summary names it REFUSED, and the run's last play, after the key
 cleanup, fails it. The reach play also overrides a caller's any_errors_fatal, which otherwise failed the other hosts
 once one host's probe or refusal failed. tests/unit/test_ping_entrypoint_refusal.py holds that shape; these rows run
 it.
@@ -58,7 +58,7 @@ EXTRA_ROLES = {  # the lab's second roles_path entry
     "zz_broken_check/tasks/check.yml": "- ansible.builtin.include_tasks: no_such_file.yml\n",
 }
 PLAYS = ("Reach the fleet (per-class liveness)", "Reachability summary", "Remove the per-run ephemeral SSH key dir",
-         "Fail the run for a host whose class has no check entrypoint installed")
+         "Fail the run for a host refused, whose check failed, or unreachable where the caller requires it")
 SUMMARY = '"msg": "%s: %s"'
 BROKEN = ('"msg": "p-broken: the check entrypoint of the class zz_broken_check could not be loaded (a file or role it '
           'includes is missing, or the collection it names is not installed), so the run fails here."')
@@ -153,7 +153,8 @@ def test_a_class_whose_check_entrypoint_is_not_installed_is_refused_and_its_keys
         assert SUMMARY % (host, REFUSED) in out, (extra, out)
         at = [out.find("PLAY [%s]" % play) for play in PLAYS]
         assert -1 not in at and at == sorted(at), (extra, at, out)
-        assert "fatal: [%s]" % host in _task(out, "Fail a host whose class has no check entrypoint installed"), out
+        assert "fatal: [%s]" % host in _task(
+            out, "Fail a host refused, whose check failed, or unreachable where the caller requires it"), out
     assert re.search(r'"msg": "kontroll_run_id=[0-9]{8}T[0-9]{6}Z"', out), out
     assert not os.path.exists(lab.keys), os.listdir(lab.keys)
 
@@ -178,7 +179,8 @@ def test_a_run_that_refuses_no_class_passes_with_an_unreachable_host(tmp_path, p
     """A real run of p-good and p-down passes (rc 0): p-good is OK, p-down UNREACHABLE, the last play fails no host,
     and the key directory is gone. Guards the last play against failing a host the refusal did not record (one that
     is unreachable, or reachable): a ping with a down device passes, as the fresh-node check and a scheduled ping
-    read it, and only a class with no check entrypoint fails the run."""
+    read it; a class with no check entrypoint fails the run, as a failed check does
+    (tests/integration/test_ping_check_failed_runs.py)."""
     lab = _lab(tmp_path, ports, ["p-good", "p-down"])
     rc, out, recap = _play(lab)
     assert rc == 0, (rc, out)

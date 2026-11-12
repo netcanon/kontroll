@@ -230,10 +230,11 @@ needs bootstrap-check '^TASK \[Summary\]' "bootstrap reached its summary"
 # evaluated past their credential gate; a pass of each without it, for that host alone, holds the gate.
 api_token=mock_fortigate_api_token=placeholder
 
-# ping.yml rescues a host its check cannot reach and reports it UNREACHABLE: a class whose check reads its device
-# is rescued at that task. Held to the list, and each listed host to its reason, so a `check` that does not evaluate
-# (a template error is rescued too, at the same task) cannot pass as a device that did not answer. mock-fortigate
-# must say its GET was not made, and end OK.
+# ping.yml rescues a host whose check fails and names it CHECK FAILED at that task; a dry run says it did not probe the
+# port and does not fail the run for it (I-84, I-85): a class whose check reads its device is rescued at that task. Held
+# to the list, and each listed host to its reason, so a `check` that does not evaluate (a template error is rescued too,
+# at the same task) cannot pass as a device that did not answer. mock-fortigate must say its GET was not made, and end
+# OK.
 step ping-check pass ansible-playbook -i ../tests/mock-inventory.yml playbooks/ping.yml --check -e "$api_token"
 recap ping-check
 needs ping-check '^PLAY \[Reachability summary\]' "the run reached its summary"
@@ -246,8 +247,8 @@ needs ping-check '^fatal: \[mock-xe\]: .*Connection type local is not valid for 
   "mock-xe was refused its network_cli connection"
 needs ping-check '"msg": "mock-fortigate: the fortios check endpoint is not read in a dry-run' \
   "mock-fortigate's check went past its credential gate to the GET a dry-run skips"
-needs ping-check '"msg": "mock-fortigate: OK"' "mock-fortigate ended OK"
-# Without the token, mock-fortigate is rescued at its credential gate, for that reason, and reported UNREACHABLE.
+needs ping-check '"msg": "mock-fortigate: OK \(dry run: the port was not probed\)"' "mock-fortigate ended OK"
+# Without the token, mock-fortigate is rescued at its credential gate, for that reason, and named CHECK FAILED there.
 step ping-check-gate pass ansible-playbook -i ../tests/mock-inventory.yml playbooks/ping.yml --check \
   --limit mock-fortigate
 recap ping-check-gate
@@ -256,7 +257,8 @@ stops ping-check-gate --rescued \
   "mock-fortigate=backend_api : Refuse an unresolvable API credential (var NAMES only — never the value)"
 needs ping-check-gate '"msg": "mock-fortigate: no API token is in scope' \
   "mock-fortigate stopped at its credential gate"
-needs ping-check-gate '"msg": "mock-fortigate: UNREACHABLE"' "mock-fortigate was reported UNREACHABLE"
+needs ping-check-gate '"msg": "mock-fortigate: CHECK FAILED: its check stopped at the task: Refuse an unresolvable API credential' \
+  "mock-fortigate was named CHECK FAILED at its credential gate"
 # The backup pass must FAIL, and only where the mock inventory stops it. Under `ansible_connection: local` a class
 # whose capture reads its device fails at that task; the capture play's rescue records it (I-12), so the host goes on
 # to the summary, whose line names that task, and fails at the summary's last task. Every other host must pass and

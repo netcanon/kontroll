@@ -99,7 +99,8 @@ and [docs/local-source-of-truth.md](../docs/local-source-of-truth.md).
 ## `run-smoke-gate.sh` — callable live smoke gate
 
 `bash scripts/run-smoke-gate.sh` triggers the fleet liveness gate (TCP probe + each class's
-read-only `check` + an honest pass/fail assertion — `ansible/playbooks/ping.yml`, run as the
+read-only `check` + an honest pass/fail assertion: a reachable host whose check fails, `CHECK FAILED`,
+fails the run, a down one is tolerated — `ansible/playbooks/ping.yml`, run as the
 `ping-fleet` Semaphore template), polls to completion, and reports **PASS/FAIL** with the task
 id. Callable post-deploy or from a webhook handler (pass `SEMAPHORE_ADMIN_PASSWORD` in the env
 for a remote caller); results stay **queryable** via the Semaphore task API, correlatable by the

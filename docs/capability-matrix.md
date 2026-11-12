@@ -288,7 +288,9 @@ matched; the probe behind it was `shallow` or `deep`) and a provenance (`derived
 onboarded class against the device:** a class runs the moment `instance/fleet.yml`
 lists it, and the onboard enables it in the same change. The check is the
 operator's: `ansible/playbooks/ping.yml --limit <host>` (or the `ping-fleet`
-Semaphore template) and the first backup run, after the promote. Generation gets
+Semaphore template), whose summary line must read `OK` (with
+`-e kontroll_ping_require_reachable=true` an `UNREACHABLE` host fails the run too, as `galaxy.py
+onboard --bootstrap`'s verify runs it), and the first backup run, after the promote. Generation gets
 you 70–95%; that first run is where the last mile shows.
 
 ## 7. What stays human/AI (honest boundary)

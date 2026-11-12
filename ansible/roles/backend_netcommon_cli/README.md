@@ -32,7 +32,7 @@ capture and refuses nothing. A real run always reads.
 
 The `check` entrypoint runs `cli_command` the same way and has no such skip: under `--check`
 a `backend_liveness_command` that does not start with `show` is refused by the module, and
-ping.yml's rescue reports the host UNREACHABLE. Give a class a `show` liveness command
+ping.yml names the host CHECK FAILED at that task (a dry run does not fail for it). Give a class a `show` liveness command
 (every shipped class has one; I-74 tracks the rest).
 
 ## See also

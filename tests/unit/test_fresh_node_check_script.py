@@ -167,7 +167,9 @@ if pb == "playbooks/ping.yml":
     for h in hosts:
         down = (any(h == s for s, _ in rescued) and not (mode == "ping:gate-ok" and limited)) or (
             mode == "ping:api-not-ok" and h == "mock-fortigate")
-        out += ["ok: [%s] => {" % h, '    "msg": "%s: %s"' % (h, "UNREACHABLE" if down else "OK"), "}"]
+        at = dict(rescued).get(h, "backend_api : GET the check endpoint").split(" : ", 1)[-1]
+        said = "CHECK FAILED: its check stopped at the task: %s" % at if down else "OK"
+        out += ["ok: [%s] => {" % h, '    "msg": "%s: %s (dry run: the port was not probed)"' % (h, said), "}"]
     out += [recap([(h, 0, 0, any(h == s for s, _ in rescued)) for h in hosts])]
     print("\n".join(out)); sys.exit(0)
 if pb == "playbooks/backup-configs.yml":
@@ -530,21 +532,21 @@ def test_a_play_that_must_pass_and_exits_non_zero_fails_at_its_exit(tmp_path, st
     ("ping:gate-other-task", "'mock-fortigate': 'backend_api : GET the check endpoint'"),
     ("ping:other-reason-fortigate",
      "ping-check-gate's log does not say mock-fortigate stopped at its credential gate"),
-    ("ping:gate-ok", "ping-check-gate's log does not say mock-fortigate was reported UNREACHABLE")])
+    ("ping:gate-ok", "ping-check-gate's log does not say mock-fortigate was named CHECK FAILED at its credential gate")])
 def test_the_ping_pass_must_rescue_exactly_the_listed_hosts_each_at_its_task(tmp_path, mode, says):
-    """ping.yml must pass, and the hosts it rescues (and reports UNREACHABLE) must be exactly the listed ones, each
-    rescued from its listed task (the class's read of its device) for its listed reason; mock-fortigate, given a
-    placeholder token, must say the GET a dry-run skips was not made and end OK; and the pass for that host alone
-    without the token must rescue it at its credential gate, for that reason, and report it UNREACHABLE. None
-    rescued, one more, a listed host rescued from another task or at its task for another reason, mock-fortigate
-    stopped at its gate though the token was given, saying nothing of its GET or ending UNREACHABLE, or its gate
-    passed, missed or reported OK without the token, each fails the script at that step, naming what the log held.
+    """ping.yml must pass, and the hosts it rescues (and, in this dry run, names CHECK FAILED) must be exactly the
+    listed ones, each rescued from its listed task (the class's read of its device) for its listed reason;
+    mock-fortigate, given a placeholder token, must say the GET a dry-run skips was not made and end OK (dry run: the
+    port was not probed); and the pass for that host alone without the token must rescue it at its credential gate,
+    for that reason, and name it CHECK FAILED at that task. None rescued, one more, a listed host rescued from another
+    task or at its task for another reason, mock-fortigate stopped at its gate though the token was given, saying
+    nothing of its GET or not ending OK, or its gate passed, missed or reported OK without the token, each fails the script at that step, naming what the log held.
     Guards a class's `check` that does not evaluate passing as a device that did not answer: ping.yml's rescue
     catches a template error too, and T27's fold-1 read passed an undefined variable in proxmox's check that way
     (S2); the fold-2 read passed one in the very task the netcommon classes are listed at, which only the reason
     tells apart (its S2). And it guards I-6: with a credential, the API class's check read the GET a dry-run skips
-    as a failed answer, and ping reported the host UNREACHABLE; and a rescue widened so that host ended OK passed
-    the pass without the token (I-6's runtime read, N2)."""
+    as a failed answer, and ping reported the host UNREACHABLE (CHECK FAILED since I-84); and a rescue widened so
+    that host ended OK passed the pass without the token (I-6's runtime read, N2)."""
     r, _, p = _run(tmp_path, mode)
     assert r.returncode == 1 and "fresh-node-check: PASS" not in r.stdout, r
     assert says in r.stderr, r.stderr

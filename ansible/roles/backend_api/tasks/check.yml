@@ -25,7 +25,7 @@
       # `default=''` below catches a name not in scope. It cannot catch a name that is defined and whose own value
       # fails when it is read: an inline community.sops lookup whose domain file is missing or cannot be decrypted on
       # this box (no age key), or, on 2.19, lacks the key it reads. Such a value fails the no_log resolve, censored,
-      # and on 2.18 nothing else is printed (ping.yml would say only UNREACHABLE); the rescue refuses the host by name
+      # and on 2.18 nothing else is printed (ping.yml would name only the task); the rescue refuses the host by name
       # instead (I-16's reads).
       block:
         - name: Resolve the auth token — the recipe's token_var, else the onboarded per-host convention
@@ -194,7 +194,7 @@
       # green result was actively misleading, and this is the highest-blast-radius device in the fleet.
       #
       # ping.yml wraps the class check in block/rescue, so failing here is how a device is correctly
-      # recorded UNREACHABLE. Only `status`, the recipe's path and the names its auth reads are surfaced — the
+      # recorded CHECK FAILED, naming this task (UNREACHABLE before I-84). Only `status`, the recipe's path and the names its auth reads are surfaced — the
       # response BODY can be device configuration and the request carried the token, so neither is safe to
       # print. That is precisely why this is a separate task rather than dropping `no_log` on the GET.
       #
