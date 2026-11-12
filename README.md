@@ -48,8 +48,9 @@ checked against the tree. The dated record of every change is [CHANGELOG.md](CHA
 
 **From a clone, a release bundle or a launch kit, on a fresh Linux node** (no GitHub account needed for the
 last two): the complete, tested sequence is the quickstart at the top of
-**[docs/install-from-scratch.md](docs/install-from-scratch.md)**. The host needs only Docker and git; everything
-else runs in the installer container — which is also how a play is run later; that page says how.
+**[docs/install-from-scratch.md](docs/install-from-scratch.md)**. The host needs only Docker and git, which
+`scripts/install-prereqs.sh` puts there with the C10 group and the storage root; everything else runs in the
+installer container — which is also how a play is run later; that page says how.
 
 The first-run reference, continual configuration and the rebuild procedure are in
 **[docs/SETUP.md](docs/SETUP.md)**.

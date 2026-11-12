@@ -188,13 +188,17 @@ def _prereqs_run(tmp_path, args=(), sudo_user=None, **world):
     for its root-only commands first on the PATH and Docker present; return its exit code, its stdout and stderr
     merged in order, the stand-ins' calls, the path it was run by, and the lock-timeout file it wrote. The copy's
     one change is that file's path (asserted to occur once), since the real one is under /etc. The floor's own
-    packages are candidates (the stand-in apt-get reads the last package of an install)."""
+    packages are candidates (the stand-in apt-get reads the last package of an install). scripts/lib/storage-root.sh
+    is a stand-in that records its call: the storage root has its own rows (test_storage_root_floor.py), and the real
+    one would make the default root on the host running the tests."""
     world["candidates"] = ["curl", "python3-venv"] + list(world.get("candidates", ()))
     bindir, state = _world(tmp_path, floor=True, **world)
     kit = tmp_path / "kit" / "scripts"
     (kit / "lib").mkdir(parents=True)
     for rel in ("lib/pkg.sh", "lib/canonical-group.sh"):
         shutil.copyfile(os.path.join(ROOT, "scripts", rel), kit / rel)
+    (kit / "lib" / "storage-root.sh").write_text(
+        'storage_root_ensure() { echo "storage_root_ensure $*" >> "$STATE/calls"; }\n', encoding="utf-8", newline="\n")
     lock = tmp_path / "apt.conf.d" / "99kontroll-lock-timeout"
     lock.parent.mkdir()
     assert " " not in lock.as_posix(), "the script writes the lock file through an unquoted redirect"
@@ -474,14 +478,16 @@ def test_install_prereqs_asks_compose_after_either_docker_path_and_no_longer_hid
 def test_install_prereqs_exits_1_before_done_when_compose_does_not_answer():
     """install-prereqs.sh's text puts the gate on COMPOSE_OK after the summary and the rest of the floor (the
     canonical group and the optional toolchain come after the call), and its exit 1 before "Done", pointing at the
-    ERROR compose_ensure printed and the command as it was run. Before the fix it printed "Done" with compose
-    missing, and the installer failed later."""
+    ERROR compose_ensure printed and the command as it was run: `$ARGS`, the arguments as given, since the argument
+    loop shifts them away and `$*` is empty by then (the first form of I-24's rebase kept `$*` here and dropped the
+    flags; row test_install_prereqs_with_host_ansible_needs_roots_compose caught it). Before the fix it printed
+    "Done" with compose missing, and the installer failed later."""
     s = _prereqs()
     tail = s[s.index("==> Host floor installed:"):]
     gate = re.search(r'if \[ "\$COMPOSE_OK" -eq 0 \]; then\n(.*?)\nfi\n', tail, re.S)
     assert gate, "the gate on COMPOSE_OK sits after the summary"
     assert gate.group(1).rstrip().endswith("exit 1"), gate.group(1)
-    assert "the ERROR above names" in gate.group(1) and "sudo bash $0 $*" in gate.group(1), gate.group(1)
+    assert "the ERROR above names" in gate.group(1) and "sudo bash $0 $ARGS" in gate.group(1), gate.group(1)
     assert tail.index("exit 1") < tail.index("==> Done"), "it exits before saying Done"
     assert s.index('compose_ensure "$COMPOSE_AS" ||') < s.index("canonical_group_ensure"), "the rest still runs"
     assert re.search(r"^COMPOSE_OK=1$", s, re.M) and s.index("COMPOSE_OK=1") < s.index("compose_ensure \"$COMPOSE_AS")

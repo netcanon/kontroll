@@ -7,10 +7,11 @@ Each script is idempotent and reproducible (the cold-agent bar).
 
 `sudo bash scripts/install-prereqs.sh` installs the host floor — now just **Docker + compose + git** (the
 ansible/sops/age toolchain moved into the ephemeral installer image; `--with-host-ansible` restores the legacy host
-toolchain for rollback). `scripts/kontroll-installer.sh <verb>` is then the single entry point: it injects the
-operator identity (MF-1) + makes the operator's key directories (Docker makes the canonical's path and the storage
-root, empty and root's), then runs the installer container
-([docker/services/installer.yaml](../docker/services/installer.yaml)) which executes the unchanged
+toolchain for rollback) — and makes the C10 canonical group and a missing storage root (root's 0711, through
+`lib/storage-root.sh`; `--storage-root <root>` for a relocated one). `scripts/kontroll-installer.sh <verb>` is then
+the single entry point: it injects the operator identity (MF-1) + makes the operator's key directories (Docker makes
+the canonical's path, empty and root's, and a storage root install-prereqs.sh did not make), then runs the installer
+container ([docker/services/installer.yaml](../docker/services/installer.yaml)) which executes the unchanged
 bootstrap/local-canonical/deploy-stack playbooks. Verbs: `fresh-init` · `check` (the `--check --diff` dry-run) ·
 *(bare)* `init` · `configure-semaphore` · `shell`. install-prereqs.sh and both launchers refuse an operator whose
 uid is 1001, the network service's, before they install or make anything; `shell` is told and goes on
@@ -36,7 +37,8 @@ The published-image install path: instead of BUILDING the installer locally, pul
 from ghcr. `bash scripts/make-launch-kit.sh` (run AFTER a tagged publish + `gen-image-digests.py --refresh
 <tag>` + commit) assembles `dist/kontroll-launch-<ver>.tar.gz` — the same instance-stripped tree as `make-bundle.sh`
 **plus** `images.env` (the rendered `@sha256:` digest pins) and the `kontroll` launcher (`--allow-unpinned` builds an
-unrunnable skeleton for assembly testing). On a fresh node (host floor = **Docker + git only**), `./kontroll <verb>` is
+unrunnable skeleton for assembly testing). On a fresh node, after `sudo bash scripts/install-prereqs.sh` from the
+unpacked kit (the host floor: **Docker + git**, the C10 group, the storage root), `./kontroll <verb>` is
 the published-path sibling of `kontroll-installer.sh`: it sources the digest pins, pulls each image by digest
 (`docker pull`) and then does a plain `run` (the image is present, so the published one is used and nothing is
 rebuilt), and forces `use_published_images=true` for init/check so

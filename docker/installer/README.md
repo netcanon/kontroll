@@ -21,7 +21,8 @@ The sequence is written once: the quickstart at the top of
 `--trust-mode` and its break-glass choice, the three overlay files, `check`, the bare launcher,
 `configure-semaphore`. This file is the reference for what runs it: the verbs, the security model, and why the
 fragment is standalone. (The C10 canonical group, gid 1001, is provisioned by `install-prereqs.sh` and re-ensured
-by the launchers; there is no manual step.)
+by the launchers; there is no manual step. `install-prereqs.sh` also makes a missing storage root root's 0711; run
+before the installer's first `up`, which binds it, so that Docker does not make it 0755 first.)
 
 The image is built locally on every `kontroll-installer.sh` run (`docker compose run --build` — near-noop when
 nothing changed, but a bundle update that changes the Dockerfile is always reflected). A fleet change does **not**

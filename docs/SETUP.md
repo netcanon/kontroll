@@ -28,10 +28,10 @@ installer container, so the host distro is otherwise irrelevant.
 > The steps below are the legacy host-ansible path, still valid after `install-prereqs.sh --with-host-ansible`.
 
 On the compose-native path this is the quickstart's `sudo bash scripts/install-prereqs.sh` — Docker, compose and
-git, the whole host floor — and you follow the quickstart from there, as the account that will operate the node:
-not one with uid 1001, the network service's, which install-prereqs.sh and the installer refuse (troubleshooting.md
-§10). The commands in §4, §5 and §7 below belong
-to the legacy host-ansible path, which needs Ansible, sops and age on the host as well:
+git, the C10 group and a missing storage root, the whole host floor — and you follow the quickstart from there,
+as the account that will operate the node: not one with uid 1001, the network service's, which install-prereqs.sh
+and the installer refuse (troubleshooting.md §10). The commands in §4, §5 and §7 below belong to the legacy
+host-ansible path, which needs Ansible, sops and age on the host as well:
 
 ```bash
 ./bootstrap.sh --with-host-ansible     # → scripts/install-prereqs.sh: the host floor PLUS ansible-core, sops, age
@@ -229,7 +229,16 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > A root you make yourself (a mount, a directory on another disk) must be a directory of root's that neither its
 > group nor others may write and that others may pass through, with every directory above it passable too —
 > `sudo chown root:root <root>` and `sudo chmod 0711 <root>`; a deploy that brings up `api` or `onboard-gui`
-> refuses another ([troubleshooting.md](troubleshooting.md) §9). A root you leave missing, the deploy makes so.
+> refuses another ([troubleshooting.md](troubleshooting.md) §9). A root you leave missing is made so by
+> `install-prereqs.sh`, the first step of the quickstart and of a launch kit's install, and by a host deploy. Where
+> it did not run before the installer's first `up`, that `up` has Docker make the root `root:root 0755` (the
+> installer binds it), and the deploy, finding it there, passes it and leaves it; `sudo chmod 0711 <root>` closes it,
+> and `install-prereqs.sh` run later says so. It makes no root under a directory that is not root's, or that others
+> may write and is not sticky, each judged where its links lead (what it made there could be swapped before it is
+> root's). A relocated root has three names, and all three must be the same path: `sudo bash
+> scripts/install-prereqs.sh --storage-root <root>` (`./bootstrap.sh` passes the argument on), `KONTROLL_STORAGE_ROOT`
+> in the environment the launcher runs in (the installer's bind reads it), and the deploy's `kontroll_storage_root`
+> (which renders it into `docker/.env` for the stack). Nothing yet checks that they agree.
 
 ## 7. Distribute access + prove connectivity
 

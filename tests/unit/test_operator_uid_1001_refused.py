@@ -199,11 +199,12 @@ def test_a_launchers_operator_is_the_account_running_it(tmp_path, launcher, uid,
 
 def _prereqs(tmp_path):
     """install-prereqs.sh in a scripts/ beside a stand-in lib/: each library says it was sourced and stops the script
-    with exit 99, so a run that gets past the checks this file is about installs nothing."""
+    with exit 99, so a run that gets past the checks this file is about installs and makes nothing. The first one
+    sourced is storage-root.sh, whose step comes right after the root check (I-24)."""
     s = tmp_path / "scripts"
     (s / "lib").mkdir(parents=True)
     shutil.copy(PREREQS, str(s / "install-prereqs.sh"))
-    for lib in ("pkg.sh", "canonical-group.sh"):
+    for lib in ("storage-root.sh", "pkg.sh", "canonical-group.sh"):
         (s / "lib" / lib).write_text('echo "%s sourced" >&2\nexit 99\n' % lib, encoding="utf-8", newline="\n")
     return ["bash", str(s / "install-prereqs.sh")]
 
@@ -216,7 +217,7 @@ def test_install_prereqs_refuses_an_operator_with_uid_1001_first(tmp_path, uid, 
     """Run under sudo by an account with uid 1001 (SUDO_UID 1001, `id -u` 0), or by that account without sudo, even
     with a SUDO_UID its shell inherited (a `su` without `-` from a sudo shell keeps one), install-prereqs.sh exits 1
     with the sentence, naming the account (SUDO_USER as root, else the account itself), the section and that nothing
-    was installed; it neither sources its package library nor says it needs root. Guards I-18 (it made the gid-1001
+    was installed; it sources no library and does not say it needs root. Guards I-18 (it made the gid-1001
     group for this operator and pointed at fresh-init, and the refusal came two steps later); a check of `id -u`
     alone, which is 0 under sudo; of SUDO_UID alone, unset without sudo; one that takes SUDO_UID when not root (the
     I-18 read A's N1), which let the last row on to "needs root"; and one after the root check, which tells a run
@@ -241,16 +242,17 @@ def test_install_prereqs_refuses_an_operator_with_uid_1001_first(tmp_path, uid, 
                               "uid 1000 without sudo", "uid 1000 holding an inherited SUDO_UID 1001"])
 def test_install_prereqs_lets_every_other_operator_on(tmp_path, uid, sudo, rc):
     """Under sudo by any other uid (one beginning or ending in 1001 among them), or as root itself, the script
-    passes both checks and sources its package library (the stand-in stops it, exit 99); by uid 1000 without sudo,
-    even holding a SUDO_UID 1001 its shell inherited, it says it needs root (exit 1). None of them names uid 1001.
-    Guards a check that refuses every run under sudo or as root, one that matches the number by its prefix or
-    suffix, and one that reads a uid it should not: a SUDO_UID not set by sudo for this run (the I-18 read A's N1)."""
+    passes both checks and sources its first library, the storage root's (the stand-in stops it, exit 99); by uid
+    1000 without sudo, even holding a SUDO_UID 1001 its shell inherited, it says it needs root (exit 1). None of
+    them names uid 1001. Guards a check that refuses every run under sudo or as root, one that matches the number by
+    its prefix or suffix, and one that reads a uid it should not: a SUDO_UID not set by sudo for this run (the I-18
+    read A's N1)."""
     path, _ = _bin(tmp_path, uid)
     run = subprocess.run(_prereqs(tmp_path), capture_output=True, text=True, env=_env(path, **sudo),
                          cwd=str(tmp_path), timeout=60)
     assert run.returncode == rc, run.stderr
     assert "uid 1001" not in run.stderr, run.stderr
-    assert ("pkg.sh sourced" if rc == 99 else "needs root") in run.stderr, run.stderr
+    assert ("storage-root.sh sourced" if rc == 99 else "needs root") in run.stderr, run.stderr
 
 
 def _bootstrap(tmp_path):
@@ -267,10 +269,11 @@ def _bootstrap(tmp_path):
 def test_bootstrap_hands_install_prereqs_the_outer_sudos_operator(tmp_path, uid, sudo, rc):
     """bootstrap.sh run as root (`sudo ./bootstrap.sh`) runs install-prereqs.sh itself, so the outer sudo's SUDO_UID
     and SUDO_USER, the operator, reach it: by a uid-1001 account it is refused, naming that account; by another it
-    goes on (the stand-in package library stops it, exit 99); sudo is not called in either. Run by an account that is
-    not root, it hands install-prereqs.sh to sudo. Guards the shim's unconditional `exec sudo` (the I-18 read A's N2):
-    under an outer sudo the inner one is invoked by root and sets SUDO_UID 0, so install-prereqs.sh took root for the
-    operator, installed for a uid-1001 account and gave the docker and gid-1001 memberships to root."""
+    goes on (the stand-in storage-root library stops it, exit 99); sudo is not called in either. Run by an account
+    that is not root, it hands install-prereqs.sh to sudo. Guards the shim's unconditional `exec sudo` (the I-18
+    read A's N2): under an outer sudo the inner one is invoked by root and sets SUDO_UID 0, so install-prereqs.sh
+    took root for the operator, installed for a uid-1001 account and gave the docker and gid-1001 memberships to
+    root."""
     path, calls = _bin(tmp_path, uid)
     run = subprocess.run(_bootstrap(tmp_path), capture_output=True, text=True, env=_env(path, **sudo),
                          cwd=str(tmp_path), timeout=60)
@@ -282,7 +285,7 @@ def test_bootstrap_hands_install_prereqs_the_outer_sudos_operator(tmp_path, uid,
         return
     assert calls() == [], calls()
     assert ("the operator (second) " + SENTENCE in said) == (rc == 1), said
-    assert ("pkg.sh sourced" in said) == (rc == 99), said
+    assert ("storage-root.sh sourced" in said) == (rc == 99), said
 
 
 _SOURCES = {"scripts/install-prereqs.sh": "install-prereqs.sh: the operator (",
