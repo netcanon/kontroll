@@ -55,7 +55,9 @@ STUB = [
                                       "else 'ok.yml' }}"},
     {"name": "Stub step after", "ansible.builtin.debug": {"msg": "AFTER {{ inventory_hostname }}"}},
 ]
-HANDLERS = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN {{ inventory_hostname }}"}}]
+# The stub's handler prints its line, then fails on the hosts in `handler_fail`.
+HANDLERS = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN {{ inventory_hostname }}"},
+             "failed_when": "inventory_hostname in (handler_fail | default([]))"}]
 # The stand-in `ssh`: for a host in $FAKESSH_UP (a comma list of addresses) it runs the remote command here, under
 # /bin/sh, as an ssh login would on the device; for any other it answers as a refused connection does (exit 255).
 FAKE_SSH = """#!%s
@@ -166,7 +168,8 @@ def _stopped(host, task, what="wiring"):
 
 def _no_task_of_its_own(host, role="the wiring role %s" % WIRE_ROLE):
     return ('"msg": "%s: stopped with no failed task of its own: %s could not be loaded, or another host\'s failure '
-            'stopped it (a run_once task, a caller\'s any_errors_fatal); the cause is printed above"' % (host, role))
+            'stopped it (a run_once task, a caller\'s any_errors_fatal, under which before ansible-core 2.19 its '
+            'own failed handler names no task either); the cause is printed above"' % (host, role))
 
 
 def test_a_wiring_that_fails_on_every_host_removes_the_keys_and_names_each_host(tmp_path):
@@ -402,3 +405,86 @@ def test_a_limit_with_localhost_wires_the_limited_host_alone(tmp_path):
     assert rc == 0 and gone, out
     assert recap == {"a": 0, "localhost": 0}, (recap, out)
     assert "STUB a" in out and "STUB b" not in out and NOT_VALIDATED not in out, out
+
+
+def _core():
+    """(major, minor) of the ansible-core on PATH, from `ansible-playbook --version`. Called in a row's body only: a
+    file's top level runs at collection, before the module's skip (I-98)."""
+    out = subprocess.run(["ansible-playbook", "--version"], capture_output=True, text=True, timeout=60).stdout
+    m = re.search(r"\[core (\d+)\.(\d+)", out)
+    assert m, out
+    return int(m.group(1)), int(m.group(2))
+
+
+def _handler_stopped(host, what):
+    """The summary's line for a host whose handler failed: by the handler's name from ansible-core 2.19, which gives
+    the rescue the handler as its failed task, and by the rescue's fixed text before 2.19, which gives it none."""
+    if _core() >= (2, 19):
+        return _stopped(host, "Stub handler", what)
+    return '"msg": "%s: FAILED: the %s stopped while the role\'s handlers ran (the failure is printed above)"' % (
+        host, what)
+
+
+@pytest.mark.parametrize("what", ["install", "wiring"])
+def test_a_handler_that_fails_on_every_host_removes_the_keys_and_names_each_host(tmp_path, what):
+    """The stub's handler fails on both hosts, after every stub step ran: the run fails (rc 2) at the summary, after
+    the key cleanup, which removed the key dir, and names each host (by the handler's name from 2.19; before it, as
+    stopped while the role's handlers ran). Guards I-86: the role's handlers ran at the play's end, outside the block,
+    so a handler that failed on every host ended the run there, before the cleanup, and the keys stayed; with the
+    flush dropped that is so again, and before 2.19, with the marker dropped, the rescue fails each host and the run
+    ends there too."""
+    extra = {"handler_fail": ["a", "b"]}
+    rc, out, recap, gone = _install(tmp_path, extra) if what == "install" else _wire(tmp_path, extra, refused=False)
+    assert rc == 2 and gone, out
+    per_host = 1 if _core() >= (2, 19) else 2     # before 2.19 the handler's failure counts, beside the summary's
+    assert {h: recap[h] for h in ("a", "b")} == {"a": per_host, "b": per_host}, (recap, out)
+    for host in ("a", "b"):
+        assert _handler_stopped(host, what) in out, out
+        assert "AFTER %s" % host in out and "HANDLER RAN %s" % host in out, out
+
+
+def test_a_handler_that_fails_on_one_host_leaves_the_other_installed(tmp_path):
+    """The stub's handler fails on host a alone: b runs every step and its handler and is not named, a is named at the
+    summary, the key dir is gone, and the run fails (rc 2). Guards the handler's record reaching past its own host."""
+    rc, out, recap, gone = _install(tmp_path, {"handler_fail": ["a"]})
+    assert rc == 2 and gone, out
+    assert recap["b"] == 0 and _handler_stopped("a", "install") in out and '"msg": "b: FAILED' not in out, out
+    assert "AFTER b" in out and "HANDLER RAN b" in out, out
+
+
+@pytest.mark.parametrize("what", ["install", "wiring"])
+def test_a_callers_any_errors_fatal_over_two_hosts_and_a_failed_handler_names_the_host_it_stopped(tmp_path, what):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True the stub's handler fails on host a: b, which a's failure stopped, is failed
+    in the rescue by name, and the run ends at that play with the key dir kept, as for a task failure under the
+    setting (the residual the docs name); from 2.19 a is rescued and recorded, before it a is failed in the rescue
+    too (the rescue cannot tell its failed handler from another host's stop). Guards the fail's `when` losing the
+    config's clause: b would be recorded alone, then dropped from every later play, and never named."""
+    extra = {"handler_fail": ["a"]}
+    if what == "install":
+        rc, out, recap, gone = _run(tmp_path, "install-node-exporter.yml", "node_exporter",
+                                    {h: _ssh(address) for h, address in ADDRESS.items()}, dict(target="g", **extra),
+                                    AEF, up=list(ADDRESS.values()))
+        role = "the node_exporter role"
+    else:
+        rc, out, recap, gone = _wire(tmp_path, extra, env_extra=AEF, refused=False)
+        role = "the wiring role %s" % WIRE_ROLE
+    assert rc == 2 and not gone, out
+    assert _no_task_of_its_own("b", role) in out and ": FAILED: the %s" % what not in out, out
+    if _core() >= (2, 19):
+        assert recap.get("a") == 0 and _recap(out, "rescued").get("a") == 1 and recap.get("b") == 1, (recap, out)
+    else:
+        assert _no_task_of_its_own("a", role) in out and recap.get("b") == 1, (recap, out)
+
+
+def test_a_callers_any_errors_fatal_over_one_host_and_a_failed_handler(tmp_path):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True with host a alone, the stub's handler fails: from 2.19 the rescue records
+    it by the handler's name, the run reaches the cleanup, which removed the key dir, and the summary names a; before
+    2.19 the rescue fails a there (the residual the headers name) and the key dir stays. rc 2 either way. Guards the
+    docs' account of a one-host run under the setting on each side of 2.19."""
+    rc, out, recap, gone = _run(tmp_path, "install-node-exporter.yml", "node_exporter", {"a": _ssh(ADDRESS["a"])},
+                                dict(target="g", handler_fail=["a"]), AEF, up=[ADDRESS["a"]])
+    assert rc == 2, out
+    if _core() >= (2, 19):
+        assert gone and _handler_stopped("a", "install") in out, out
+    else:
+        assert not gone and _no_task_of_its_own("a", "the node_exporter role") in out, out

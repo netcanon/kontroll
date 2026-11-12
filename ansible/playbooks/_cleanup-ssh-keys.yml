@@ -15,13 +15,12 @@
 # collection that is not installed: I-66; in ping.yml, a class whose installed `check` entrypoint cannot be loaded),
 # whose failing local play ends it (in backup-configs.yml: I-48), whose caller's any_errors_fatal stops more than one
 # host at a failure (a capture's play and ping's reach play override it; an install or a wiring honours it, and reaches
-# this play where the failing host is its only one), whose handler fails on every host (install-node-exporter.yml and
-# wire-logging.yml run a role's handlers at the play's end, outside their rescued block: I-86), or (in ping.yml, whose
-# reach play does not ignore unreachable hosts) that cannot be logged in to: ansible-core runs no later play once every
-# host of a play's batch has failed or been unreachable, and a later play whose every host has failed by then runs
-# nothing. Every key-auth host's key rendered for that run then stays in that run's dir. No shipped caller passes
-# `kontroll_run_id` (the Semaphore templates and schedules and the enact commands pass none), so every run uses
-# `kontroll-ssh-keys.manual`, which the next run that completes outside `--check` removes (a `--check` run removes
+# this play where the failing host is its only one, unless before ansible-core 2.19 its handler is what fails: I-86), or
+# (in ping.yml, whose reach play does not ignore unreachable hosts) that cannot be logged in to: ansible-core runs no
+# later play once every host of a play's batch has failed or been unreachable, and a later play whose every host has
+# failed by then runs nothing. Every key-auth host's key rendered for that run then stays in that run's dir. No shipped
+# caller passes `kontroll_run_id` (the Semaphore templates and schedules and the enact commands pass none), so every run
+# uses `kontroll-ssh-keys.manual`, which the next run that completes outside `--check` removes (a `--check` run removes
 # nothing). On the Semaphore runner that is `/tmp/kontroll-ssh-keys.manual` in the container's writable layer: a host
 # reboot or a container restart keeps it, and the next Semaphore fleet job that completes outside `--check`, or
 # recreating the container, removes it. Two jobs that overlap share it, so one's cleanup removes the other's keys

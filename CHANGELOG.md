@@ -11,6 +11,32 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a fleet play's role handlers run inside its rescued block, so a handler that fails on every host no longer ends the run before the key cleanup (I-86, 2026-11-12)
+
+install-node-exporter.yml and wire-logging.yml run their role in a block whose rescue records a failure, so a run
+whose every host fails still reaches the key cleanup (the I-64 entry below). The role's handlers ran at the play's end,
+outside that block. Measured on ansible-core 2.18.19, 2.19.4 and the runner's 2.20.10 with a stub handler that fails,
+and by both reads of I-64 with the real logging_journald_remote role's `Restart systemd-journald`: a handler failing on
+every host failed every host, ansible-core ran no later play, and the run's SSH keys stayed in its key dir (with one
+host of two failing, the run reached the cleanup).
+
+- **Fixed.** The block ends with a `meta: flush_handlers`, so the role's handlers run inside it, and a failed handler
+  is rescued and recorded as a failed task is: by the handler's name from ansible-core 2.19, which gives the rescue the
+  handler as `ansible_failed_task`. Before 2.19, which gives it none, a marker set after the role's tasks lets the
+  rescue record the host as "stopped while the role's handlers ran". Where a caller sets any_errors_fatal (through the
+  config: these plays take no keyword from an importing playbook), a marked host with no failed task may be one that
+  another host's failure stopped, which is dropped from every later play, so the rescue fails it by name, as it does
+  a host stopped before its handlers.
+- **Not changed.** Under a caller's any_errors_fatal over more than one host the run still ends at that play with the
+  keys kept (the I-64 entry); before 2.19 so does a one-host run whose handler fails, which 2.19+ records and takes to
+  the cleanup.
+- **Tests.** tests/integration/test_fleet_play_failure_cleans_up.py: a handler that fails on every host (install and
+  wiring: rc 2, the key dir gone, each host named), on one host of two, and under any_errors_fatal over two hosts (the
+  stopped host named, the keys kept) and over one (each core's outcome); the stub's handler fails on the hosts a row
+  lists. tests/unit/test_fleet_play_rescue.py pins the marker, the flush, the rescue's second record and both `when`s.
+- **Docs.** Both playbooks' headers, _cleanup-ssh-keys.yml's header and SECURITY.md (the runs that end before the
+  cleanup), tests/README.md.
+
 ### fix(ci): each pytest leg runs an ansible-core the project ships, with every module's collections (I-94, I-80, I-81, 2026-11-12)
 
 CI's pytest legs installed no Ansible, so every row that runs `ansible-playbook` ran on the runner image's own,

@@ -9,7 +9,9 @@ a block whose rescue records the host's failure by the failed task's name, fails
 task of its own (its role could not be loaded, or another host's failure stopped it; no later play sees it), and ends
 the play for the host, as its failure did (a handler it notified does not run); wire-logging.yml's validation play
 records a refusal, which the device play reads first, so a refused request targets no host. Plays after the cleanup
-fail what was recorded; their one task is a `fail`, which connects to nothing.
+fail what was recorded; their one task is a `fail`, which connects to nothing. The role's handlers run inside the
+block, so a handler that fails is recorded as a failed task is, where at the play's end, outside it, one that failed
+on every host ended the run before the cleanup (I-86).
 tests/integration/test_fleet_play_failure_cleans_up.py runs both playbooks for real.
 """
 import os
@@ -20,15 +22,20 @@ import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PLAYBOOKS = os.path.join(ROOT, "ansible", "playbooks")
+# The block's last two tasks: the marker that the role's tasks are done, and the role's handlers run inside the block.
+HANDLERS_IN_BLOCK = [("ansible.builtin.set_fact", {"_kontroll_handlers_due": True}),
+                     ("ansible.builtin.meta", "flush_handlers")]
 # playbook: (the dispatching play's name, the record its rescue sets, the work its block holds, as (module, arg))
 DISPATCH = {
     "install-node-exporter.yml": ("Install node_exporter on the metrics-eligible hosts", "kontroll_install_failed",
                                   [("ansible.builtin.gather_facts", None),
-                                   ("ansible.builtin.include_role", {"name": "node_exporter"})]),
+                                   ("ansible.builtin.include_role", {"name": "node_exporter"})] + HANDLERS_IN_BLOCK),
     "wire-logging.yml": ("Wire the logging method onto the target device class", "kontroll_wire_failed",
-                         [("ansible.builtin.include_role", {"name": "{{ role }}"})]),
+                         [("ansible.builtin.include_role", {"name": "{{ role }}"})] + HANDLERS_IN_BLOCK),
 }
 NAMED = "ansible_failed_task.name | default('(unnamed)', true)"
+# How the rescue reads a caller's any_errors_fatal (the config is the only way a caller sets it for these plays).
+AEF = "(lookup('ansible.builtin.config', 'ANY_ERRORS_FATAL') | bool)"
 # The device play's and the summary's `hosts:` in wire-logging.yml: a refused request first, then the resolved group.
 WIRE_HOSTS = ("{{ '__no_target__' if hostvars['localhost']._wire_refused is defined "
               "else hostvars['localhost']._wire_group | default('__no_target__') }}")
@@ -86,13 +93,17 @@ def _module(task):
 def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_block(name):
     """The dispatching play holds two tasks: the connection refusal's import (first, outside the block, as
     tests/unit/test_group_dispatch_refuses_local.py requires, so a refused host fails there with nothing run on it) and
-    one block holding the work, with a rescue and no `always`. Its keys are the ones it had, so no
-    `any_errors_fatal`, `max_fail_percentage` or `serial` changes which hosts a failure stops, and `ignore_unreachable`
-    is true (a down host is tolerated, not fatal: CLAUDE.md). Guards the block dropped (an install or wiring that fails
-    on every host ends the run before the key cleanup again: I-64), the work moved out of the block, the refusal moved
-    into it (the rescue would record a refused host, and the scan's first-task rule would no longer hold), an `always`
-    that runs work on a failed host, and `ignore_unreachable` turned off (a down host would fail the run, and with
-    every host down end it before the cleanup)."""
+    one block holding the work, with a rescue and no `always`; the work ends with a `set_fact` of
+    `_kontroll_handlers_due: true` and a `meta: flush_handlers`, after the role's include. Its keys are the ones it
+    had, so no `any_errors_fatal`, `max_fail_percentage` or `serial` changes which hosts a failure stops, and
+    `ignore_unreachable` is true (a down host is tolerated, not fatal: CLAUDE.md). Guards the block dropped (an install
+    or wiring that fails on every host ends the run before the key cleanup again: I-64), the work moved out of the
+    block, the refusal moved into it (the rescue would record a refused host, and the scan's first-task rule would no
+    longer hold), an `always` that runs work on a failed host, `ignore_unreachable` turned off (a down host would fail
+    the run, and with every host down end it before the cleanup), and the flush dropped (the role's handlers run at the
+    play's end, outside the block, so one that fails on every host ends the run before the cleanup again: I-86) or the
+    marker dropped or moved before the include (before 2.19 the rescue reads it to tell a failed handler from a role
+    that could not be loaded)."""
     title, _record, work = DISPATCH[name]
     play = _play(name, title)
     assert set(play) == {"name", "hosts", "gather_facts", "ignore_unreachable", "tasks"}, play
@@ -117,31 +128,44 @@ def test_the_install_runs_its_role_only_on_a_host_whose_gathering_answered():
 
 @pytest.mark.parametrize("name", sorted(DISPATCH))
 def test_the_rescue_records_the_task_fails_a_host_with_no_failed_task_and_ends_the_host(name):
-    """The rescue is three tasks, in order, each holding its name, its module and (the first two) its `when`, and
+    """The rescue is four tasks, in order, each holding its name, its module and (the first three) its `when`, and
     nothing else: a `set_fact` of the playbook's record alone, `when: ansible_failed_task is defined`, whose value's
     one expression is `ansible_failed_task.name | default('(unnamed)', true)`, reading nothing of
-    `ansible_failed_result`; an `ansible.builtin.fail` `when: ansible_failed_task is not defined`, whose message names
-    both causes its condition cannot tell apart (the role could not be loaded, or another host's failure stopped it);
-    and `meta: end_host`. Guards: a record that reads the failed task's result (a role's task may handle what its log
-    must not show; the result is printed at that task already); an unnamed task's "" kept by a `default` without its
-    `true`; a host with no failed task of its own left to the record alone (it is dropped from every later play, so the
-    run would end with rc 0: the I-12 reads' S1); the fail running for a task failure too (the host would end the run
-    before the cleanup again); a `failed_when`, `ignore_errors`, `tags` or `loop` that keeps a task from running or
-    failing; a message that blames the role for another host's failure (the I-64 reads' S1); and the play going on for
-    the host past the rescue, which would run a handler a task notified before it failed, which its failure did not."""
+    `ansible_failed_result`; a `set_fact` of the record alone, a fixed text naming the role's handlers, when there is
+    no failed task and the handlers' marker is defined; an `ansible.builtin.fail` when there is no failed task and
+    either the marker is not defined or any_errors_fatal is on (read from the config), whose message names the causes
+    its condition cannot tell apart (the role could not be loaded, or another host's failure stopped it); and
+    `meta: end_host`. Guards: a record that reads the failed task's result (a role's task may handle what its log must
+    not show; the result is printed at that task already); an unnamed task's "" kept by a `default` without its
+    `true`; a host with no failed task of its own left to the record alone (it is dropped from every later play, so
+    the run would end with rc 0: the I-12 reads' S1), which a fail without the marker's clause would do for a host
+    whose handler failed before 2.19, and without the config's for a host another host's failure stopped under
+    any_errors_fatal (I-86's measured design); a handler record without the marker's clause, whose text would name
+    handlers for a role that could not be loaded (the fail then fails that host, so no run shows it: this row is its
+    only guard); the fail running for a task failure or a failed handler without any_errors_fatal too (the host would
+    end the run before the cleanup again); a
+    `failed_when`, `ignore_errors`, `tags` or `loop` that keeps a task from running or failing; a message that blames
+    the role for another host's failure (the I-64 reads' S1); and the play going on for the host past the rescue,
+    which would run a handler a task notified before it failed, which its failure did not."""
     _title, record, _work = DISPATCH[name]
     rescue = _play(name, DISPATCH[name][0])["tasks"][1]["rescue"]
-    assert [_module(t) for t in rescue] == ["ansible.builtin.set_fact", "ansible.builtin.fail",
-                                            "ansible.builtin.meta"], rescue
-    sets, fails, ends = rescue
-    assert set(sets) == {"name", "ansible.builtin.set_fact", "when"}, sets
+    assert [_module(t) for t in rescue] == ["ansible.builtin.set_fact", "ansible.builtin.set_fact",
+                                            "ansible.builtin.fail", "ansible.builtin.meta"], rescue
+    sets, handler_sets, fails, ends = rescue
+    for task in (sets, handler_sets):
+        assert set(task) == {"name", "ansible.builtin.set_fact", "when"}, task
+        assert list(task["ansible.builtin.set_fact"]) == [record], task
     assert set(fails) == {"name", "ansible.builtin.fail", "when"}, fails
     assert set(ends) == {"name", "ansible.builtin.meta"}, ends
-    assert list(sets["ansible.builtin.set_fact"]) == [record], sets
     assert _exprs(sets["ansible.builtin.set_fact"][record]) == [NAMED], sets
+    assert _exprs(handler_sets["ansible.builtin.set_fact"][record]) == [], handler_sets
+    assert "stopped while the role's handlers ran" in handler_sets["ansible.builtin.set_fact"][record], handler_sets
     assert "ansible_failed_result" not in yaml.safe_dump(rescue), rescue
     assert sets["when"] == "ansible_failed_task is defined", sets
-    assert fails["when"] == "ansible_failed_task is not defined", fails
+    assert handler_sets["when"] == "ansible_failed_task is not defined and _kontroll_handlers_due is defined", \
+        handler_sets
+    assert fails["when"] == ("ansible_failed_task is not defined and (_kontroll_handlers_due is not defined or "
+                             + AEF + ")"), fails
     msg = " ".join(str(fails["ansible.builtin.fail"]["msg"]).split())
     assert "could not be loaded" in msg and "another host's failure stopped it" in msg, msg
     assert ends["ansible.builtin.meta"] == "end_host", ends

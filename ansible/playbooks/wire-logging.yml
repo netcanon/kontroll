@@ -14,8 +14,9 @@
 # whose connection is not one the role is written for (the method's `wiring_connections`, logging/README.md) is
 # refused before the role runs (tasks/refuse-local-connection.yml).
 #
-# A request the validation play refuses, and a host whose wiring fails, are recorded, not failed, and the run's last
-# plays fail them, after the key cleanup: a refused request, or a wiring that fails on every host, no longer ends the
+# A request the validation play refuses, and a host whose wiring fails, at a task or at a handler (the role's
+# handlers run inside the block: I-86), are recorded, not failed, and the run's last plays fail them, after the key
+# cleanup: a refused request, or a wiring that fails on every host, no longer ends the
 # run before the cleanup, which would leave the run's SSH keys in its key dir (I-64). A refused request targets no
 # host: the device play and the summary read `_wire_refused` first, so no `_wire_group` from a vars file or an `-e`
 # dispatches it. The device play's rescue ends that play for the host, as the failure did, so a handler a task
@@ -23,9 +24,10 @@
 # before). A host that reaches the rescue with no failed task of its own is failed there: its role could not be
 # loaded, or another host's failure stopped it (a `run_once` task, a caller's any_errors_fatal). Under a caller's
 # any_errors_fatal every host's wiring stops at the first failure: with one host the run reaches the cleanup and the
-# summary names it; with more, the run ends at that play and the keys stay. What else still ends the run before the
-# cleanup: every host refused, every host's role failing to load (I-66) and a handler that fails on every host (a
-# role's handlers run at the play's end, outside the block: I-86); _cleanup-ssh-keys.yml's header lists them.
+# summary names it (before ansible-core 2.19, not where a handler fails: the rescue cannot tell that host from one
+# another's failure stopped, and fails it there); with more, the run ends at that play and the keys stay. What else
+# still ends the run before the cleanup: every host refused and every host's role failing to load (I-66);
+# _cleanup-ssh-keys.yml's header lists them.
 #
 # Access chain used:   control VM (mgmt VLAN) -> the target class's inventory_group (per the method's role)
 # May break:           per the dispatched role's access-chain header (e.g. a device's syslog config only)
@@ -137,6 +139,17 @@
             name: "{{ role }}"
           vars:
             logging_collector_host: "{{ hostvars['localhost']._wire_collector }}"
+
+        # The role's handlers run here, inside the block, not at the play's end, outside it, where one that failed
+        # failed its host and, on every host, ended the run before the cleanup (I-86). A failed handler is then
+        # recorded as a failed task is: by its name from ansible-core 2.19, which gives the rescue the handler as
+        # `ansible_failed_task`; before 2.19, which gives it none, by this marker.
+        - name: Mark the host's role tasks done and its handlers due (the rescue reads it, I-86)
+          ansible.builtin.set_fact:
+            _kontroll_handlers_due: true
+
+        - name: Run the role's handlers inside the block, so a failed one is recorded (I-86)
+          ansible.builtin.meta: flush_handlers
       rescue:
         - name: Record the failed wiring for the run's last play (the task's name; its result is printed above)
           ansible.builtin.set_fact:
@@ -144,13 +157,24 @@
               the wiring stopped at the task "{{ ansible_failed_task.name | default('(unnamed)', true) }}"
           when: ansible_failed_task is defined
 
+        # Without any_errors_fatal only its own handler, or a run_once one, brings a marked host here with no failed
+        # task. With it, another host's failure can too, and ansible-core then drops the host from every later play,
+        # so the task below fails it after this record, as it does a host stopped before its handlers (a caller
+        # sets any_errors_fatal only through the config: import_playbook takes no play keywords).
+        - name: Record a wiring stopped while its handlers ran (before 2.19 a failed handler is no failed task)
+          ansible.builtin.set_fact:
+            kontroll_wire_failed: the wiring stopped while the role's handlers ran (the failure is printed above)
+          when: ansible_failed_task is not defined and _kontroll_handlers_due is defined
+
         - name: Fail a host stopped with no failed task of its own (no later play would see it)
           ansible.builtin.fail:
             msg: >-
               {{ inventory_hostname }}: stopped with no failed task of its own: the wiring role {{ role }} could not
-              be loaded, or another host's failure stopped it (a run_once task, a caller's any_errors_fatal); the
-              cause is printed above
-          when: ansible_failed_task is not defined
+              be loaded, or another host's failure stopped it (a run_once task, a caller's any_errors_fatal, under
+              which before ansible-core 2.19 its own failed handler names no task either); the cause is printed above
+          when: >-
+            ansible_failed_task is not defined
+            and (_kontroll_handlers_due is not defined or (lookup('ansible.builtin.config', 'ANY_ERRORS_FATAL') | bool))
 
         - name: End the host's wiring play, as its failure did (no handler it notified runs, force_handlers or not)
           ansible.builtin.meta: end_host
