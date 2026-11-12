@@ -11,6 +11,21 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(tests): the suite collects on a machine with no ansible-playbook (I-98, 2026-11-12)
+
+tests/integration/test_refuse_missing_entrypoint_runs.py reads the core's version at its top level, by running
+`ansible-playbook --version`, to choose the return code its abort rows expect (the I-66 entry below). Code at
+a test file's top level runs when pytest collects the file, before the file's skip, so on a machine with no
+ansible-playbook every pytest run stopped at collection with `FileNotFoundError`, CI's offline selection included. CI
+runners with ansible-playbook on PATH passed it, so CI did not see it.
+
+- **Fixed.** The version read returns no core where no `ansible-playbook` is on PATH; the file's rows skip there, as
+  they did before.
+- **Tests.** tests/integration/test_suite_collects_without_tools.py collects the suite as CI's pytest job selects it
+  (`-m "not e2e and not slow"`), with PATH an empty directory, and fails on any collection error, so a top-level call
+  of a tool by name fails on every machine that runs the suite, not only on one that lacks the tool.
+- **Docs.** tests/README.md: a row's tool check belongs in its skip or its body, never at the file's top level.
+
 ### fix(ansible): ping names a reachable host whose check failed CHECK FAILED and fails the run; galaxy's onboard verify passes only a host that answered and passed (I-84, I-85, 2026-11-12)
 
 ping.yml's probe and its class check share one block, and the block's rescue reported any failure as UNREACHABLE, a
