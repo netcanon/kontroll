@@ -7,6 +7,8 @@
 #   dry-run first (CLAUDE.md):  ansible-playbook playbooks/wire-logging.yml -e role=<r> -e target=<key> --check --diff
 #   then apply:                 the same command without --check --diff
 #   collector override:         add -e collector_host=<ip>  (else instance/instance.yml mgmt_ip)
+#   one host of the class:      add --limit <host>:localhost  (the validation play runs on localhost; a limit that
+#                               leaves it out wires nothing, and the run fails saying so: I-88)
 #
 # The wiring play runs `-e role` on every host of the class's group, whatever the host's device_role, so a host
 # whose connection is not one the role is written for (the method's `wiring_connections`, logging/README.md) is
@@ -169,6 +171,27 @@
       ansible.builtin.fail:
         msg: "{{ _wire_refused }}"
       when: _wire_refused is defined
+
+# Under a `--limit` that leaves localhost out (or a `--tags` that leaves out the validation's tasks), the validation
+# play does not run, so the device play matches no host: the run wired nothing and passed (I-88). This play starts
+# from `all`, so it runs under such a limit, and fails that run once, naming the limit to use; its `always` tag keeps
+# it in a `--tags` run. Its `fail` runs on the controller and connects to nothing.
+- name: Fail a wiring request no validation play read
+  hosts: all
+  gather_facts: false
+  connection: local
+  run_once: true
+  tasks:
+    - name: Fail the run whose request was never validated, naming the limit to use
+      ansible.builtin.fail:
+        msg: >-
+          the wiring request was not validated, so no host was wired: the validation play runs on localhost, which
+          this run's --limit leaves out (or its --tags left out its tasks). Add localhost to the limit: --limit
+          <host>:localhost.
+      when:
+        - hostvars['localhost']._wire_group is not defined
+        - hostvars['localhost']._wire_refused is not defined
+      tags: [always]
 
 - name: Wiring run summary
   hosts: >-

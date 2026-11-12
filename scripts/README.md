@@ -181,7 +181,10 @@ Creates, in project **kontroll**:
 - **Inventory** — `instance/inventory` (directory; drop-in `onboarded-*.yml` host
   files are picked up additively), device SSH key attached.
 - **Templates** — one per file under `config/semaphore/templates/`.
-- **Schedules** — generated per class into `config/semaphore/schedules.generated.yml` by `gen-backup.py`.
+- **Schedules** — generated per class into `config/semaphore/schedules.generated.yml` by `gen-backup.py`. Each
+  runs `backup-configs.yml --limit <inventory_group>`, which leaves the implicit localhost out: the playbook's
+  controller plays (the capture dir's check, the history commit, the prune) start from `localhost:all` so they
+  run under it (I-90).
 
 Why env overrides (not the repo `ansible.cfg`): Semaphore runs from the repo
 **root**, but `ansible/ansible.cfg` uses paths relative to `ansible/`. The few

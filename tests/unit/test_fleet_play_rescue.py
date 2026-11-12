@@ -32,8 +32,10 @@ NAMED = "ansible_failed_task.name | default('(unnamed)', true)"
 # The device play's and the summary's `hosts:` in wire-logging.yml: a refused request first, then the resolved group.
 WIRE_HOSTS = ("{{ '__no_target__' if hostvars['localhost']._wire_refused is defined "
               "else hostvars['localhost']._wire_group | default('__no_target__') }}")
-# Keys a play after the cleanup may hold: nothing that skips it or its task (`tags`), or reaches a device.
-AFTER_PLAY_KEYS = {"name", "hosts", "gather_facts", "connection", "tasks"}
+# Keys a play after the cleanup may hold: nothing that skips it or its task, or reaches a device. `run_once` runs its
+# tasks for one host (wire-logging.yml's guard, I-88); a task's `tags` may only be `[always]`, which keeps it in a
+# `--tags` run.
+AFTER_PLAY_KEYS = {"name", "hosts", "gather_facts", "connection", "run_once", "tasks"}
 FAILERS = {"ansible.builtin.assert", "assert", "ansible.builtin.fail", "fail"}
 CONTROLLER_ONLY = FAILERS | {"ansible.builtin.debug", "debug", "ansible.builtin.set_fact", "set_fact",
                              "ansible.builtin.meta", "meta"}
@@ -139,7 +141,8 @@ def test_the_rescue_records_the_task_fails_a_host_with_no_failed_task_and_ends_t
 def test_a_play_after_the_cleanup_fails_each_recorded_host_and_connects_to_nothing(name):
     """After the `_cleanup-ssh-keys.yml` import come only plays that gather no facts, run no role, hold no key but
     their name, `hosts`, `gather_facts`, `connection` and `tasks`, and hold only controller-side actions (`debug`,
-    `assert`, `fail`, `set_fact`, `meta`) with no `delegate_to`, `failed_when`, `ignore_errors`, `tags` or `loop`; one
+    `assert`, `fail`, `set_fact`, `meta`) with no `delegate_to`, `failed_when`, `ignore_errors` or `loop`, and no
+    `tags` but `[always]` (I-88's guard; it keeps the task in a `--tags` run, never skips it); one
     of them fails a host on the playbook's record, over the dispatching play's own `hosts:` pattern, with one task: its
     name, the `fail` and its `when`. Guards the summary moved before the cleanup (a run whose every host failed ends
     before the cleanup again), dropped or kept from failing (a failed install or wiring would end the run green), run
@@ -152,7 +155,8 @@ def test_a_play_after_the_cleanup_fails_each_recorded_host_and_connects_to_nothi
     for play in after:
         assert play.get("gather_facts") is False and set(play) <= AFTER_PLAY_KEYS, play
         for task in _tasks(play):
-            assert not set(task) & {"failed_when", "ignore_errors", "tags", "loop", "loop_control"}, task
+            assert not set(task) & {"failed_when", "ignore_errors", "loop", "loop_control"}, task
+            assert task.get("tags", ["always"]) == ["always"], task
             keys = set(task) - TASK_KEYS
             if keys & BLOCK_KEYS:
                 assert keys <= BLOCK_KEYS, task
@@ -195,3 +199,26 @@ def test_the_validation_play_records_a_refusal_which_the_device_play_reads_first
     assert len(refused) == 1, after
     (task,) = refused[0]["tasks"]
     assert task["when"] == "_wire_refused is defined" and "_wire_refused" in task["ansible.builtin.fail"]["msg"], task
+
+
+def test_a_wiring_request_no_validation_play_read_fails_the_run_after_the_cleanup():
+    """wire-logging.yml holds, after the key cleanup, one play over `all` that runs once with one task: a `fail` whose
+    `when` is that neither `_wire_group` nor `_wire_refused` is defined on localhost (the validation play sets one or
+    the other), tagged `always`, whose message names `--limit <host>:localhost`; and the header's usage line names that
+    limit. Guards I-88: under a `--limit` that leaves localhost out the validation play does not run, so the device
+    play matches no host, and the run wired nothing and passed; over `all`, the guard runs under that limit, and once
+    (one failure, not one per host); without `always`, a `--tags` run that skips the validation's tasks would skip it
+    too. tests/integration/test_fleet_play_failure_cleans_up.py runs it."""
+    plays = _plays("wire-logging.yml")
+    after = plays[_cleanup_at(plays) + 1:]
+    guards = [p for p in after if "_wire_group is not defined" in yaml.safe_dump(p)]
+    assert len(guards) == 1, after
+    (guard,) = guards
+    assert guard["hosts"] == "all" and guard["run_once"] is True, guard
+    (task,) = guard["tasks"]
+    assert set(task) == {"name", "ansible.builtin.fail", "when", "tags"} and task["tags"] == ["always"], task
+    assert task["when"] == ["hostvars['localhost']._wire_group is not defined",
+                            "hostvars['localhost']._wire_refused is not defined"], task
+    assert "--limit <host>:localhost" in " ".join(task["ansible.builtin.fail"]["msg"].split()), task
+    with open(os.path.join(PLAYBOOKS, "wire-logging.yml"), encoding="utf-8") as fh:
+        assert "add --limit <host>:localhost" in fh.read()

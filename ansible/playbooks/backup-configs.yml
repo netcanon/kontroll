@@ -33,8 +33,17 @@
 - name: Fleet preamble — stamp the run id + materialize per-host SSH keys
   ansible.builtin.import_playbook: _fleet-preamble.yml
 
+# The three controller plays (this one, the history and the prune) start from `localhost:all`, run once and delegate
+# every task to localhost. A `--limit` that does not name localhost leaves the implicit localhost out, so a `hosts:
+# localhost` play was skipped (`skipping: no hosts matched`), and every Semaphore backup schedule runs this playbook
+# `--limit <its inventory group>` (scripts/gen-backup.py): no scheduled run checked the capture dir, committed a
+# capture to the history or pruned it, and each passed (I-90). Unlimited, localhost is the play's first host, so each
+# task runs there, as before; under a limit, it runs once, for the first host left in the play, on the controller,
+# with the controller's connection (a host's own `ansible_connection` outranks `connection: local`: I-41). Where every
+# host of the limit has failed, no host is left to run them; Ansible has ended the run already (I-48, I-66).
 - name: Ensure backup dir exists
-  hosts: localhost
+  hosts: localhost:all
+  run_once: true
   gather_facts: false
   tasks:
     # config_backup_dir is referenced throughout this playbook and defined in instance/inventory/group_vars/all.yml.
@@ -43,15 +52,19 @@
     # New boxes now scaffold the default; boxes built BEFORE that fix still need this message. Cheap, and it
     # fails at the first task instead of part-way through a fleet capture.
     - name: Refuse without a capture directory, naming the remedy
+      delegate_to: localhost
       ansible.builtin.assert:
         that: config_backup_dir is defined and (config_backup_dir | string | length > 0)
         fail_msg: >-
           config_backup_dir is not defined, so there is nowhere to write captures. Add it to
           instance/inventory/group_vars/all.yml (a box scaffolded before 2026-07-28 has no such file — copy
           instance.example/inventory/group_vars/all.yml), or pass -e config_backup_dir=/path for a one-off.
-        success_msg: "captures -> {{ config_backup_dir }}"
+        # A default here: an assert templates its messages before it tests, so an undefined var in this one ended the
+        # task on an undefined-variable error and the remedy above was never printed (I-91).
+        success_msg: "captures -> {{ config_backup_dir | default('') }}"
 
     - name: Ensure backup directory exists
+      delegate_to: localhost
       ansible.builtin.file:
         path: "{{ config_backup_dir }}"
         state: directory
@@ -133,7 +146,8 @@
 # Blast radius:        this VM's captures dir only
 # Idempotence:         no device change -> nothing staged -> no commit (0 changed)
 - name: Snapshot the captures into local history (git)
-  hosts: localhost
+  hosts: localhost:all  # under any --limit, as the play above (I-90)
+  run_once: true
   gather_facts: false
   connection: local
   vars:
@@ -150,11 +164,13 @@
          | selectattr('disposition', 'eq', 'exclude_from_history') | map(attribute='match') | list }}
   tasks:
     - name: Initialise the capture-history repo if absent  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.command:
         cmd: "git init -q {{ config_backup_dir }}"
         creates: "{{ config_backup_dir }}/.git"
 
     - name: Render the history .gitignore from the capture-exception matrix
+      delegate_to: localhost
       ansible.builtin.copy:
         dest: "{{ config_backup_dir }}/.gitignore"
         mode: "0644"
@@ -171,6 +187,7 @@
     # dubious-ownership guard. It is a no-op on the same-uid runner path and adds NO write capability (it only
     # suppresses the cross-uid guard for one dedicated dir). `git init` above needs none — it CREATES the repo.
     - name: Untrack any now-excluded captures (one-time cleanup; idempotent after)  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.command:
         cmd: >-
           git -c safe.directory={{ config_backup_dir }} -C {{ config_backup_dir }}
@@ -182,11 +199,13 @@
     # DESIGN (running-configs with hashes and pre-shared keys). Its protection is that it has no remote and lives
     # in the uid-1001 0700 store (SECURITY.md C8) — an is-encrypted gate here would refuse every capture.
     - name: Stage all captures (excluded ones are gitignored)  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.command:
         cmd: "git -c safe.directory={{ config_backup_dir }} -C {{ config_backup_dir }} add -A"
       changed_when: false
 
     - name: Commit a timestamped snapshot when configs changed  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.command:
         cmd: >-
           git -c safe.directory={{ config_backup_dir }} -C {{ config_backup_dir }}
@@ -228,7 +247,8 @@
 #                      ephemeral data (never the canonical, never the current capture — the next run re-captures
 #                      live device state). Mitigated by the staggered per-class crons (≥30 min apart).
 - name: Prune capture history older than the retention window (git)
-  hosts: localhost
+  hosts: localhost:all  # under any --limit, as the play above (I-90)
+  run_once: true
   gather_facts: false
   connection: local
   vars:
@@ -240,6 +260,7 @@
     # Tier 1 (UNCONDITIONAL): a hand-run `-e kontroll_backup_retention=7d` (a value the GUI never offers) FAILS
     # loudly rather than silently falling through to keep-all. keep-all / undefined pass (keep-all is allowed).
     - name: Fail-closed — reject a retention value that is not a known preset
+      delegate_to: localhost
       ansible.builtin.assert:
         that:
           - _retention in ['keep-all', '30d', '90d', '365d']
@@ -253,6 +274,7 @@
     # a clean no-op). The read-only guard resolvers carry check_mode:false (so a --check dry-run PROVES the
     # decision); the destructive prune does NOT (it stays check-skipped — a dry-run rewrites nothing).
     - name: Resolve the captures repo's real toplevel (read-only)  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.command:
         cmd: "git -C {{ config_backup_dir }} rev-parse --show-toplevel"
       register: _prune_toplevel
@@ -262,6 +284,7 @@
       when: _retention_days | int > 0
 
     - name: Stat the captures .git to confirm a real worktree repo
+      delegate_to: localhost
       ansible.builtin.stat:
         path: "{{ config_backup_dir }}/.git"
       register: _prune_dotgit
@@ -270,6 +293,7 @@
 
     # The captures repo must have NONE — the load-bearing guard (the canonical + deploy tree DO have remotes).
     - name: List the captures repo's remotes (must be empty)  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.command:
         cmd: "git -C {{ config_backup_dir }} remote"
       register: _prune_remotes
@@ -280,6 +304,7 @@
 
     # The canonical is a BARE repo; the captures dir is a worktree. A bare target ⇒ wrong repo ⇒ refuse.
     - name: Detect whether the captures repo is bare  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.command:
         cmd: "git -C {{ config_backup_dir }} rev-parse --is-bare-repository"
       register: _prune_is_bare
@@ -292,6 +317,7 @@
     # against rewriting the wrong repo; rc==0 on the discriminating reads means an ERRORED git read fails closed
     # rather than reading as a benign empty result.
     - name: Fail-closed — refuse the prune unless the target is provably the local-only captures repo
+      delegate_to: localhost
       ansible.builtin.assert:
         that:
           - _prune_dotgit.stat.exists
@@ -318,6 +344,7 @@
     # (defense in depth on the catastrophic wrong-repo mode). belt-and-suspenders `when:` re-asserts every guard
     # + `not ansible_check_mode` so a --check dry-run never rewrites and a future edit must defeat BOTH layers.
     - name: Enforce retention — prune capture-history commits older than the window  # noqa: command-instead-of-module
+      delegate_to: localhost
       ansible.builtin.shell: |
         set -euo pipefail
         repo='{{ config_backup_dir }}'
@@ -385,6 +412,7 @@
         - not ansible_check_mode
 
     - name: Report the prune outcome (run-id-correlated audit; counts only, never capture content)
+      delegate_to: localhost
       ansible.builtin.debug:
         msg: "retention prune ({{ _retention }}): {{ _prune.stdout | default('(skipped)') }}"
       when: _retention_days | int > 0

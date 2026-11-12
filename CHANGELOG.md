@@ -11,6 +11,46 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a backup run under a `--limit` commits its captures and prunes, and a wiring run under one that wires nothing fails (I-90, I-88, I-91, 2026-11-12)
+
+A `--limit` that does not name localhost leaves the implicit localhost out, so a `hosts: localhost` play prints
+`skipping: no hosts matched`. Measured on ansible-core 2.18.19 and 2.19.4: backup-configs.yml under `--limit <group>`,
+`--limit <host>` or `--limit all` wrote each capture and skipped the capture dir's check, the history commit and the
+prune, and passed; every Semaphore backup schedule runs it `--limit <inventory_group>` (scripts/gen-backup.py), and only
+the schedules pass a retention window, so no scheduled run committed a capture to the history or pruned it (I-90).
+wire-logging.yml under `--limit <host>` skipped its validation play, so the device play matched no host: a real run and
+the mandated dry-run alike wired nothing and passed (I-88).
+
+- **Fixed.** backup-configs.yml's three controller plays start from `localhost:all`, run once, and delegate every task
+  to localhost: unlimited, localhost is their first host, so each task runs there as before; under a limit, each runs
+  once, for the first limited host, on the controller with the controller's connection (a host's own
+  `ansible_connection` outranks `connection: local`). A limited run now commits the limited hosts' captures, prunes
+  under a finite window and refuses a missing capture dir.
+- **Fixed.** wire-logging.yml holds a guard play after the key cleanup, over `all`, run once: it fails a run whose
+  request no validation play read (neither `_wire_group` nor `_wire_refused` set on localhost), naming the limit to use,
+  `--limit <host>:localhost`; its `always` tag keeps it in a `--tags` run that skips the validation's tasks. The
+  header's usage line names that limit.
+- **Fixed.** backup-configs.yml's capture-dir check names its remedy: an `assert` templates its messages before it
+  tests, so the success message's undefined `config_backup_dir` ended the task on an undefined-variable error and the
+  remedy was never printed (I-91, since the check was added). The success message now defaults it.
+- **Not changed.** wire-logging.yml's validation play stays on localhost: its facts are read across plays through
+  `hostvars['localhost']`, so a limited wiring run is refused, not run. A failing controller play of backup-configs.yml
+  still ends the run there, before the key cleanup (I-48). A limit that names no host of the class's group still wires
+  nothing (`--limit localhost` alone errors before any play).
+- **Tests.** `tests/integration/test_backup_limited_run.py` runs backup-configs.yml for real under a group's, a host's
+  and `all`'s limit (the limited hosts' captures committed, on the controller for the first limited host, the keys
+  removed), unlimited (on localhost, as before), with a 30-day window over a 40-day-old history (pruned) and with no
+  capture dir (refused on the controller, naming the remedy). `tests/unit/test_backup_controller_plays.py` holds the
+  three plays' shape and that no play is `hosts: localhost` alone; `tests/unit/test_backup_prune.py` reads the new
+  `hosts`. `tests/integration/test_fleet_play_failure_cleans_up.py` runs a wiring under `--limit a`, real and `--check`
+  (rc 2, the guard's message, nothing wired), and under `--limit a:localhost` (a wired alone);
+  `tests/unit/test_fleet_play_rescue.py` holds the guard play, and lets a play after the cleanup run once and a task
+  there carry only the `always` tag.
+- **Docs.** The three plays' comment and wire-logging.yml's header; scripts/README.md's schedules line;
+  docs/logging-architecture.md's capture history (its live verification predates the per-class schedules);
+  docs/troubleshooting.md for the guard's message. No log line is added: each run already prints its stamped
+  `kontroll_run_id`, and the guard's failure names the cause.
+
 ### fix(ansible): a ping host whose class has no check entrypoint installed is named REFUSED, and its run still removes its SSH keys (I-83, 2026-11-12)
 
 ping.yml's reach play includes the host's class (`device_role`) with `tasks_from: check` inside the probe's block, so
