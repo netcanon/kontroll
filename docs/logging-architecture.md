@@ -204,7 +204,9 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   the host lacks, and refuses an override naming it there: Docker would create it, and journald's default
   `Storage=auto` then persists from the next boot, a host setting changed by a bind (I-25). Its log says which
   ("Vector reads the host journal at …", or NOT KNOWN in the installer container run without a launcher, which binds
-  the volatile one and takes an override as given).
+  the volatile one and takes an override as given). Every deploy makes the choice, with Vector in it or not, so
+  `docker/.env` names the journal and its group for any later `up` of Vector (I-60); the deploy's own `up` is given
+  both, since compose takes a shell's export over the file.
   (Built on branch; pending the dogfood deploy.)
 
 ### Layer 2 — Store + query: Loki  🟡 built (`feat/logging-vector`)

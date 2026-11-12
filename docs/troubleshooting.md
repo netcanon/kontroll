@@ -98,7 +98,9 @@ source logs — every surface persists locally and is readable without the stack
 
 Bring the stack back: `docker compose ... up -d loki vector` (or re-run `deploy-stack.yml` with `loki`/`vector`
 in `stack_services`). Vector resumes from its on-disk checkpoint (the `vector-data` volume), so a restart
-re-ships from where it stopped rather than re-reading everything.
+re-ships from where it stopped rather than re-reading everything. Every deploy, with Vector in it or not, writes
+the journal Vector binds and its group into `docker/.env` (`KONTROLL_JOURNAL_DIR`, `KONTROLL_JOURNAL_GID`).
+Run a hand `up` from a shell that does not export either: compose takes a shell's value over `--env-file`.
 
 A new build's Vector transforms or Grafana alert rules not in effect after a deploy: Vector, Grafana, Loki,
 Prometheus, Caddy, the exporters and the GUI (its age key) read their bound config only at start, and the deploy

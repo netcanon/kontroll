@@ -11,6 +11,29 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): every deploy writes the journal Vector binds, with Vector in the run or not (I-60, 2026-11-11)
+
+deploy-stack chose the host journal Vector binds, and read the journal's group, only when `vector` was in
+`stack_services`. A partial deploy (`-e '{"stack_services":["api"]}'`, as `api/README.md` shows) therefore
+rendered `KONTROLL_JOURNAL_DIR=` and `KONTROLL_JOURNAL_GID=` into `docker/.env`, and the documented hand
+`docker compose ... up -d loki vector` (`docs/troubleshooting.md`) then bound compose's volatile default, which a
+persistent host's journald empties at each boot, and ran Vector as gid 65534, which reads no journal. A shell that
+exported either variable outranked `docker/.env` on a hand `up`, and on the deploy's own `up` where that shell's
+environment reached it (a run from a root shell; not the installer, which passes neither variable in, and not a host
+deploy's sudo, whose reset environment drops both). The I-25 reads found it.
+
+- **Fixed.** The journal's probe, choice, refusal and note, and the `getent` of its group, run on every deploy (all
+  read-only, and under `--check`). The note adds, for a run without Vector, that it does not bring Vector up and that
+  `docker/.env` names the journal for the next `up` that does. A bad `kontroll_journal_dir` is refused on such a run
+  too, since the next `up` of Vector would bind it, and the refusal says so. The deploy's `up` gives compose both
+  values as `docker/.env` renders them, so a shell's export cannot outrank the choice there.
+- **Docs.** `docs/troubleshooting.md`: run a hand `up` from a shell that exports neither variable; SECURITY.md;
+  `docs/logging-architecture.md`.
+- **Tests.** `integration/test_journal_dir_choice.py`: a stack without Vector chooses (the installer with no launcher
+  too, NOT KNOWN), says so and refuses as one with it, saying why, in a dry-run and an apply (the I-25 row that held
+  it chose nothing is replaced); a run with Vector never says it has none; no journal or group task waits for Vector;
+  and the deploy's `up` is given the expressions the `.env` render uses.
+
 ### fix(docker): the env template sources cleanly as a shell file (I-58, 2026-11-10)
 
 tests/validate.sh's vector steps load `docker/.env.example` with `set -a; . docker/.env.example; set +a`, and

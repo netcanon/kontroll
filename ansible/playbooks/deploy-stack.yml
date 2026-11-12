@@ -474,19 +474,19 @@
       # and render it NUMERICALLY into .env (compose group_add needs a number, not a name). Same "discover the host
       # fact at deploy" pattern as the storage-root + arch-map resolution. Fail-SOFT: a host without the group
       # yields '' -> Vector's group_add falls back to the inert 65534 (nogroup) default (reads nothing extra), the
-      # honest degrade (GATE A then shows no journald lines), never a deploy failure.
+      # honest degrade (GATE A then shows no journald lines), never a deploy failure. Read on every run, Vector in
+      # it or not: docker/.env carries the GID for any later `up` of Vector, by a deploy or by hand (I-60: a deploy
+      # without Vector rendered it empty, and a hand `up` then ran Vector as 65534, reading no journal).
       ansible.builtin.command:
         cmd: getent group systemd-journal
       register: _journal_grp
       changed_when: false
       failed_when: false
-      check_mode: false   # read-only getent — resolve the GID under --check too (gated on vector)
-      when: "'vector' in stack_services"
+      check_mode: false   # read-only getent — resolve the GID under --check too
 
     - name: Extract the numeric systemd-journal GID (fail-soft empty)
       ansible.builtin.set_fact:
         kontroll_journal_gid: "{{ (_journal_grp.stdout.split(':')[2]) if (_journal_grp.stdout | default('')) else '' }}"
-      when: "'vector' in stack_services"
 
     - name: Look for the host's persistent journal (the journal Vector reads, I-25)
       # Vector binds the host's journal at the directory its journald source reads. /var/log/journal is bound only
@@ -495,11 +495,14 @@
       # default `Storage=auto` reads that directory as "persist" from the next boot, so a deploy would change a host
       # setting. On the host path this play sees the host's /var/log; the installer container does not, and the
       # launcher's KONTROLL_HOST_JOURNAL_DIR answers there instead. `stat` changes nothing and runs under --check too.
+      # This and the three tasks after it run whether or not this run brings Vector up: docker/.env carries the
+      # choice for any later `up` of Vector (I-60: a deploy without Vector rendered KONTROLL_JOURNAL_DIR empty, and a
+      # hand `up` then bound compose's volatile default, which a persistent host's journald empties at each boot).
       ansible.builtin.stat:
         path: /var/log/journal
         follow: true            # Docker binds a symlink's target; the launchers' `[ -d ]` follows one too
       register: _journal_persistent
-      when: "'vector' in stack_services and not in_container"
+      when: not in_container
 
     - name: Choose the host journal directory Vector reads (I-25)
       # kontroll_journal_dir (the control node's inventory, or -e) wins: /run/log/journal for a node set to
@@ -520,7 +523,6 @@
              ('a stat of /var/log/journal' if _seen else 'NOT KNOWN')) }}
         _journal_host: "{{ _launcher or _seen }}"
         _journal_host_how: "{{ 'the launcher' if _launcher else ('a stat of /var/log/journal' if _seen else '') }}"
-      when: "'vector' in stack_services"
 
     - name: Refuse a journal directory journald does not write, or one the host lacks (I-25)
       # kontroll_journal_dir: /var/log/journal where the host's own answer is /run/log/journal would make Docker create
@@ -538,9 +540,10 @@
           first (roles/logging_journald_remote, which flushes it there), then deploy; or drop kontroll_journal_dir.'
           % _journal_host_how) if _journal_dir in ['/var/log/journal', '/run/log/journal'] else
           ('The host journal directory from %s is %s: journald writes /var/log/journal (persistent) or
-          /run/log/journal (volatile), and Vector binds one of those two.' % (_journal_how, _journal_dir)) }}
+          /run/log/journal (volatile), and Vector binds one of those two.' % (_journal_how, _journal_dir)) }}{{ '' if
+          'vector' in stack_services else ' This run does not bring Vector up, but docker/.env would carry the value
+          to the next `up` that does.' }}
         quiet: true
-      when: "'vector' in stack_services"
 
     - name: Say which host journal Vector reads (I-25)
       vars:
@@ -552,8 +555,9 @@
       ansible.builtin.debug:
         msg: >-
           {{ _not_known if _journal_how == 'NOT KNOWN' else
-             'Vector reads the host journal at %s (from %s).' % (_journal_dir, _journal_how) }}
-      when: "'vector' in stack_services"
+             'Vector reads the host journal at %s (from %s).' % (_journal_dir, _journal_how) }}{{ '' if
+          'vector' in stack_services else ' This run does not bring Vector up; docker/.env names it for the next
+          `up` that does.' }}
 
     - name: Render docker/.env (secrets — never logged)
       ansible.builtin.copy:
@@ -1485,6 +1489,14 @@
         cmd: >-
           docker compose --progress plain --project-directory {{ stack_dir }} --file {{ stack_dir }}/compose.yaml
           --env-file {{ stack_dir }}/.env up -d {{ _up_services | join(' ') }}
+      # compose takes a variable from its own environment over --env-file, so a shell that exports either of these
+      # would bind its value, not the choice above (a /var/log/journal the host lacks: I-25 back). The values the
+      # play rendered into docker/.env are given to compose here as well (I-60), as the same expressions the render
+      # uses. Every run that reaches this task has made the choice: the render and this `up` need facts that
+      # resolvers before the choice set, so a run started past the choice stops before either.
+      environment:
+        KONTROLL_JOURNAL_DIR: "{{ _journal_dir | default('') }}"
+        KONTROLL_JOURNAL_GID: "{{ kontroll_journal_gid | default('') }}"
       register: _stack_up
       # compose prints a line per container, network and volume it touches — Creating/Created, Recreate/Recreated,
       # Starting/Started, Stopping/Stopped, Removing/Removed, Restarting — and `Running` for a container it left
