@@ -17,9 +17,9 @@ playbook's order, with the play's own `in_container`, and run them with ansible-
 four to one run of tasks before the task that renders docker/.env, with no other task setting the choice, since the
 rows run them lifted out of the play. The probe's path is the one change: a path under tmp_path that each row makes a
 directory, a symlink to one, a file or nothing, so no row reads or touches this host's /var/log. Each row runs as a
-dry-run (the mandated `--check --diff`), and three also as an apply (the two host shapes and the container with no
-launcher), as do the refusals of a journal the host lacks. Needs POSIX and ansible-playbook; without them every row is
-skipped.
+dry-run (the mandated `--check --diff`), and some also as an apply: three of the choosing rows (the two host shapes
+and the container with no launcher), the refusals of a journal the host lacks, and every row of a stack without
+Vector. Needs POSIX and ansible-playbook; without them every row is skipped.
 """
 import json
 import os
@@ -38,6 +38,9 @@ RENDER = "Render docker/.env (secrets — never logged)"
 GID_TASKS = ("Discover the host systemd-journal GID", "Extract the numeric systemd-journal GID")
 UP = "Bring up the selected stack service(s)"
 NOT_IN_RUN = "This run does not bring Vector up; docker/.env names it for the next `up` that does."
+REFUSED_NOT_IN_RUN = ("This run does not bring Vector up, but docker/.env would carry the value to the next `up` "
+                      "that does.")
+SUFFIX = "does not bring Vector up"   # in both, and short enough that no folding of the playbook's text splits it
 
 pytestmark = [
     pytest.mark.integration,
@@ -174,7 +177,7 @@ def test_vector_reads_the_journal_the_host_has(tmp_path, row):
             assert "NOT KNOWN — the host journal directory" in out and "Vector reads the host journal at" not in out
         else:
             assert "Vector reads the host journal at %s (from %s)." % (want, how) in out and "NOT KNOWN" not in out
-        assert NOT_IN_RUN not in out, "a run with Vector in it says it has none"
+        assert SUFFIX not in out, "a run with Vector in it says it has none"
         if host == "dir":
             assert (sub / "var-log-journal").is_dir() and not any((sub / "var-log-journal").iterdir())
         elif host is None:
@@ -197,6 +200,7 @@ def test_a_journal_directory_journald_does_not_write_is_refused(tmp_path, given,
     source = "kontroll_journal_dir" if given is not None else "the launcher"
     assert "The host journal directory from %s is" % source in out, out[-3000:]
     assert "Vector reads the host journal at" not in out and "NOT KNOWN —" not in out
+    assert SUFFIX not in out, "a run with Vector in it says it has none"
 
 
 @pytest.mark.parametrize("host,container,launcher,how", [
@@ -218,6 +222,7 @@ def test_kontroll_journal_dir_naming_a_journal_the_host_lacks_is_refused(tmp_pat
         assert rc != 0 and got is None, out[-3000:]
         assert "kontroll_journal_dir is /var/log/journal, and the host has none (from %s)" % how in out, out[-3000:]
         assert "Vector reads the host journal at" not in out and "NOT KNOWN —" not in out
+        assert SUFFIX not in out, "a run with Vector in it says it has none"
         if host is None:
             assert not (sub / "var-log-journal").exists(), "the probe made the path it looks for"
 
@@ -231,36 +236,50 @@ def test_the_refusal_names_exactly_the_two_directories_journald_writes():
     assert that[0] == "_journal_dir in ['/var/log/journal', '/run/log/journal']", that
 
 
-@pytest.mark.parametrize("host,want", [("dir", PERSISTENT), (None, VOLATILE)], ids=["persistent", "volatile"])
-def test_a_stack_without_vector_still_chooses_the_journal(tmp_path, host, want):
-    """With no `vector` in stack_services the four tasks run as with it, in a dry-run and an apply: the probe, the
-    host's answer, and the note, which adds that this run does not bring Vector up. Guards I-60: the four were
-    skipped there, so docker/.env rendered KONTROLL_JOURNAL_DIR empty, and the documented hand `up -d loki vector`
-    (docs/troubleshooting.md) then bound compose's volatile default, which a persistent host's journald empties at
-    each boot (the I-25 reads, A N5 / B N10)."""
+@pytest.mark.parametrize("host,container,want,how", [
+    ("dir", False, PERSISTENT, "a stat of /var/log/journal"),
+    (None, False, VOLATILE, "a stat of /var/log/journal"),
+    ("dir", True, VOLATILE, "NOT KNOWN"),
+], ids=["persistent", "volatile", "container-no-launcher"])
+def test_a_stack_without_vector_still_chooses_the_journal(tmp_path, host, container, want, how):
+    """With no `vector` in stack_services the four tasks run as with it, in a dry-run and an apply: the probe (on the
+    host path), the host's answer, and the note, which adds that this run does not bring Vector up, after the
+    directory and its source or after the NOT KNOWN text (the installer with no launcher; the suffix follows either
+    branch of the note, and a row of the host path alone let it drop from that one, the I-60 reads' N2). Guards
+    I-60: the four were skipped there, so docker/.env rendered KONTROLL_JOURNAL_DIR empty, and the documented hand
+    `up -d loki vector` (docs/troubleshooting.md) then bound compose's volatile default, which a persistent host's
+    journald empties at each boot (the I-25 reads, A N5 / B N10)."""
     for check in (True, False):
         sub = tmp_path / ("check" if check else "apply")
         sub.mkdir()
-        rc, out, got = _run(sub, host, check=check, services=("prometheus",))
+        rc, out, got = _run(sub, host, check=check, container=container, services=("prometheus",))
         assert rc == 0, out[-3000:]
-        assert got == {"dir": want, "how": "a stat of /var/log/journal", "probed": True}, (check, got)
-        assert "Vector reads the host journal at %s (from a stat of /var/log/journal). %s" % (want, NOT_IN_RUN) \
-            in out, out[-3000:]
+        assert got == {"dir": want, "how": how, "probed": not container}, (check, got)
+        if how == "NOT KNOWN":
+            assert "NOT KNOWN — the host journal directory" in out and NOT_IN_RUN in out, out[-3000:]
+            assert "Vector reads the host journal at" not in out, out[-3000:]
+        else:
+            assert "Vector reads the host journal at %s (from %s). %s" % (want, how, NOT_IN_RUN) in out, out[-3000:]
 
 
 def test_a_stack_without_vector_still_refuses_a_bad_journal(tmp_path):
     """With no `vector` in stack_services, kontroll_journal_dir naming a directory journald does not write, or a
-    /var/log/journal the host lacks, still stops the play at the refusal. Guards I-60's other half: docker/.env
-    would carry the value to the next `up` of Vector, which would bind it (and make a /var/log/journal the host
-    lacks, I-25), while the run that wrote it passed."""
+    /var/log/journal the host lacks, still stops the play at the refusal, in a dry-run and an apply, and the refusal
+    says that this run does not bring Vector up but docker/.env would carry the value to the next `up` that does.
+    Guards I-60's other half: docker/.env would carry the value to the next `up` of Vector, which would bind it (and
+    make a /var/log/journal the host lacks, I-25), while the run that wrote it passed; and a refusal that named only a
+    bind this run does not make, which told an operator deploying the api alone nothing of why (the I-60 reads, A N3;
+    the row ran a dry-run only, B N3)."""
     for case, given, host, said in (
             ("elsewhere", "/srv/journal", "dir", "The host journal directory from kontroll_journal_dir is"),
             ("lacked", PERSISTENT, None, "kontroll_journal_dir is /var/log/journal, and the host has none")):
-        sub = tmp_path / case
-        sub.mkdir()
-        rc, out, got = _run(sub, host, services=("prometheus",), given=given)
-        assert rc != 0 and got is None, out[-3000:]
-        assert said in out and "Vector reads the host journal at" not in out, out[-3000:]
+        for check in (True, False):
+            sub = tmp_path / ("%s-%s" % (case, "check" if check else "apply"))
+            sub.mkdir()
+            rc, out, got = _run(sub, host, check=check, services=("prometheus",), given=given)
+            assert rc != 0 and got is None, out[-3000:]
+            assert said in out and "Vector reads the host journal at" not in out, out[-3000:]
+            assert REFUSED_NOT_IN_RUN in out, out[-3000:]
 
 
 def _flat():

@@ -1488,9 +1488,10 @@ stack; the **capability** half — device-side wiring `no_log` + a per-method `s
   either: deploy-stack binds `/var/log/journal` only where the host has it, else `/run/log/journal`, and refuses a
   `kontroll_journal_dir` naming `/var/log/journal` where the host's own answer is that it has none, since a bind to
   a missing path makes Docker create it and journald's default `Storage=auto` then persists (I-25). Every deploy
-  renders the choice into `docker/.env`, Vector in the run or not, and its `up` gives compose the same value, so
-  the bind is the choice, not an empty line's default or a shell's export (I-60; `test_compose_logging.py`,
-  `test_journal_dir_choice.py`, `test_installer_journal_dir.py`).
+  renders the choice into `docker/.env`, Vector in the run or not, and the deploy's own `up` gives compose the same
+  value, so its bind is the choice, not an empty line's default or a shell's export; a hand `up` binds it too from a
+  shell that exports neither variable (`docs/troubleshooting.md`; a shell's export outranks the file there) (I-60;
+  `test_compose_logging.py`, `test_journal_dir_choice.py`, `test_installer_journal_dir.py`).
 - **mgmt-VLAN-only, never WAN (C3 parity).** Loki publishes its HTTP API on the **mgmt IP only**
   (`${KONTROLL_MGMT_IP}:3100`, fail-closed `:?`, never `0.0.0.0`); **Vector publishes only the mgmt-bound syslog
   ingress** (`${KONTROLL_MGMT_IP}:5514/tcp`, fail-closed `:?`, never `0.0.0.0`) for the `syslog_push` method —

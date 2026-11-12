@@ -540,7 +540,9 @@
           first (roles/logging_journald_remote, which flushes it there), then deploy; or drop kontroll_journal_dir.'
           % _journal_host_how) if _journal_dir in ['/var/log/journal', '/run/log/journal'] else
           ('The host journal directory from %s is %s: journald writes /var/log/journal (persistent) or
-          /run/log/journal (volatile), and Vector binds one of those two.' % (_journal_how, _journal_dir)) }}
+          /run/log/journal (volatile), and Vector binds one of those two.' % (_journal_how, _journal_dir)) }}{{ '' if
+          'vector' in stack_services else ' This run does not bring Vector up, but docker/.env would carry the value
+          to the next `up` that does.' }}
         quiet: true
 
     - name: Say which host journal Vector reads (I-25)
@@ -1489,9 +1491,11 @@
           --env-file {{ stack_dir }}/.env up -d {{ _up_services | join(' ') }}
       # compose takes a variable from its own environment over --env-file, so a shell that exports either of these
       # would bind its value, not the choice above (a /var/log/journal the host lacks: I-25 back). The values the
-      # play rendered into docker/.env are given to compose here as well (I-60).
+      # play rendered into docker/.env are given to compose here as well (I-60), as the same expressions the render
+      # uses. Every run that reaches this task has made the choice: the render and this `up` need facts that
+      # resolvers before the choice set, so a run started past the choice stops before either.
       environment:
-        KONTROLL_JOURNAL_DIR: "{{ _journal_dir | default('') }}"   # as .env renders it (a run started past the choice)
+        KONTROLL_JOURNAL_DIR: "{{ _journal_dir | default('') }}"
         KONTROLL_JOURNAL_GID: "{{ kontroll_journal_gid | default('') }}"
       register: _stack_up
       # compose prints a line per container, network and volume it touches — Creating/Created, Recreate/Recreated,
