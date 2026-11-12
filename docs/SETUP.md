@@ -242,10 +242,13 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > group nor others may write and that others may pass through, with every directory above it passable too —
 > `sudo chown root:root <root>` and `sudo chmod 0711 <root>`; a deploy that brings up `api` or `onboard-gui`
 > refuses another ([troubleshooting.md](troubleshooting.md) §9). A root you leave missing is made so by
-> `install-prereqs.sh`, the first step of the quickstart and of a launch kit's install, and by a host deploy. Where
-> it did not run before the installer's first `up`, that `up` has Docker make the root `root:root 0755` (the
-> installer binds it), and the deploy, finding it there, passes it and leaves it; `sudo chmod 0711 <root>` closes it,
-> and `install-prereqs.sh` run later says so. It makes no root under a directory that is not root's, or that others
+> `install-prereqs.sh`, the first step of the quickstart and of a launch kit's install; by each launcher
+> (`./kontroll`, `scripts/kontroll-installer.sh`) before its first `docker compose run`, as root or through a
+> `sudo -n` that asks no password, where install-prereqs.sh did not run (else the launcher prints the one command
+> that makes it, and goes on); and by a host deploy. Where none of them made it before the installer's first `up`,
+> that `up` has Docker make the root `root:root 0755` (the installer binds it), and the deploy, finding it there,
+> passes it and leaves it; `sudo chmod 0711 <root>` closes it, and `install-prereqs.sh` or a launcher run later says
+> so. Neither install-prereqs.sh nor a launcher makes a root under a directory that is not root's, or that others
 > may write and is not sticky, each judged where its links lead (what it made there could be swapped before it is
 > root's). A relocated root has three names, and all three must be the same path: `sudo bash
 > scripts/install-prereqs.sh --storage-root <root>` (`./bootstrap.sh` passes the argument on), `KONTROLL_STORAGE_ROOT`

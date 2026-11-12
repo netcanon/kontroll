@@ -11,10 +11,12 @@ bootstrap.sh, run as root, hands install-prereqs.sh the outer sudo's operator.
 
 Each row puts stand-ins first on PATH. An `id` whose `id -u` answers what the row needs (every other question goes to
 the real `id`), so the account running the suite decides nothing. A docker, a sudo, a groupadd and a usermod that each
-write their call down and run nothing, beside a `getent` that knows no gid-1001 group: so in every launcher row that
-goes on, the canonical-group step (scripts/lib/canonical-group.sh, the one step after the check that can change the
-system rather than the home) reaches its `sudo -n groupadd`, and a refusal that came after it would show. The launchers
-run in an empty HOME, and a refusal leaves HOME and the launcher's own tree (the kit, the checkout) as they began.
+write their call down and run nothing, beside a `getent` that knows no gid-1001 group, and KONTROLL_STORAGE_ROOT a
+missing directory: so in every launcher row that goes on, the two steps after the check that can change the system
+rather than the home reach their sudo: the canonical-group step (scripts/lib/canonical-group.sh) its `sudo -n
+groupadd`, the storage-root step (scripts/lib/storage-root.sh, I-35) its `sudo -n sh -c`; a refusal that came after
+either would show. The launchers run in an empty HOME, and a refusal leaves HOME and the launcher's own tree (the kit,
+the checkout) as they began.
 install-prereqs.sh runs beside a stand-in lib/ whose libraries stop the script the moment one is
 sourced: a run that gets past both checks installs nothing, even as root in a container.
 """
@@ -32,6 +34,7 @@ PREREQS = os.path.join(ROOT, "scripts", "install-prereqs.sh")
 CANONICAL_GROUP = os.path.join(ROOT, "scripts", "lib", "canonical-group.sh")
 SENTENCE = "has uid 1001, the uid the network service runs as"
 GROUP_STEP = "sudo -n groupadd -g 1001 kontroll"
+STORAGE_STEP = 'sudo -n sh -c . "$1" && storage_root_ensure "$2" sh '   # then the helper's path and the root
 _POSIX = pytest.mark.skipif(os.name == "nt" or not all(shutil.which(t) for t in ("sh", "bash", "git", "id")),
                             reason="runs the POSIX scripts with a stand-in id and docker on PATH (CI has them)")
 
@@ -87,12 +90,12 @@ def _real_name():
 
 def _launch_kit(tmp_path):
     """A launch kit reduced to what scripts/kontroll.sh reads before it hands over to docker, its canonical-group
-    library among them."""
+    and storage-root libraries among them."""
     kit = tmp_path / "kit"
     (kit / "scripts" / "lib").mkdir(parents=True)
     (kit / "docker" / "services").mkdir(parents=True)
     shutil.copy(os.path.join(ROOT, "scripts", "kontroll.sh"), str(kit / "kontroll"))
-    for lib in ("plaintext-guard.sh", "canonical-group.sh"):
+    for lib in ("plaintext-guard.sh", "canonical-group.sh", "storage-root.sh"):
         shutil.copy(os.path.join(ROOT, "scripts", "lib", lib), str(kit / "scripts" / "lib"))
     (kit / "docker" / "services" / "installer.yaml").write_text("services: {}\n", encoding="utf-8")
     (kit / "images.env").write_text("KONTROLL_INSTALLER_IMAGE=registry.example.test/installer@sha256:%s\n" % ("0" * 64),
@@ -102,11 +105,13 @@ def _launch_kit(tmp_path):
 
 
 def _source_tree(tmp_path):
-    """A source checkout reduced to scripts/kontroll-installer.sh and its canonical-group library."""
+    """A source checkout reduced to scripts/kontroll-installer.sh and its canonical-group and storage-root
+    libraries."""
     tree = tmp_path / "tree"
     (tree / "scripts" / "lib").mkdir(parents=True)
     shutil.copy(os.path.join(ROOT, "scripts", "kontroll-installer.sh"), str(tree / "scripts"))
-    shutil.copy(CANONICAL_GROUP, str(tree / "scripts" / "lib"))
+    for lib in (CANONICAL_GROUP, os.path.join(ROOT, "scripts", "lib", "storage-root.sh")):
+        shutil.copy(lib, str(tree / "scripts" / "lib"))
     return ["bash", str(tree / "scripts" / "kontroll-installer.sh")]
 
 
@@ -120,6 +125,7 @@ def _launch(tmp_path, launcher, uid, verb, **extra):
     path, calls = _bin(tmp_path, uid)
     argv = launcher(tmp_path) + ([verb] if verb else [])
     before = _paths(tmp_path)
+    extra.setdefault("KONTROLL_STORAGE_ROOT", str(tmp_path / "store"))
     run = subprocess.run(argv, capture_output=True, text=True, env=_env(path, HOME=str(home), **extra),
                          cwd=str(tmp_path))
     return run, calls(), home, sorted(_paths(tmp_path) ^ before)
@@ -139,7 +145,8 @@ def test_each_launcher_refuses_uid_1001_before_it_makes_anything(tmp_path, launc
     launcher's mkdirs, which would leave the binds' directories made for it; one placed after a write outside HOME
     (the kit's `git init`, an instance/ in the checkout; the I-18 read B's N-1); and one placed after the
     canonical-group step, which would have run `sudo -n groupadd` and `usermod` for it, changing the system for an
-    account it then refuses (the I-18 read A's S2)."""
+    account it then refuses (the I-18 read A's S2), or after the storage-root step, which would make a root for it
+    through `sudo -n sh -c` (I-35)."""
     run, calls, home, made = _launch(tmp_path, launcher, "1001", verb)
     assert run.returncode == 1, run.stderr
     assert SENTENCE in run.stderr and "troubleshooting.md section 10" in run.stderr, run.stderr
@@ -167,14 +174,15 @@ def test_shell_is_told_and_goes_on(tmp_path, launcher):
 @LAUNCHERS
 def test_every_other_uid_goes_on(tmp_path, launcher, uid):
     """With any other `id -u`, one beginning or ending in 1001 among them, each launcher says nothing of uid 1001,
-    runs the canonical-group step (its `sudo -n groupadd`, through the stand-ins) and then the compose service.
-    Guards a check that refuses everyone, or matches the number by its prefix or suffix; and the stand-ins
-    themselves: were the group step not reached here, the refusal rows' "no stand-in is called" would hold for
-    nothing."""
+    runs the canonical-group step (its `sudo -n groupadd`, through the stand-ins), the storage-root step (its `sudo -n
+    sh -c` for the missing root) and then the compose service. Guards a check that refuses everyone, or matches the
+    number by its prefix or suffix; and the stand-ins themselves: were the two steps not reached here, the refusal
+    rows' "no stand-in is called" would hold for nothing."""
     run, calls, _, _ = _launch(tmp_path, launcher, uid, "init")
     assert run.returncode == 0, run.stderr
     assert "uid 1001" not in run.stderr, run.stderr
     assert GROUP_STEP in calls and calls[-1].startswith("docker compose "), calls
+    assert [c for c in calls if c.startswith(STORAGE_STEP) and c.endswith(str(tmp_path / "store"))], calls
 
 
 @_POSIX

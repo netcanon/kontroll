@@ -5,11 +5,21 @@
 # the installer path the installer container binds the root (docker/services/installer.yaml interpolates
 # KONTROLL_STORAGE_ROOT from the launcher's environment), so Docker has already made it root:root 0755 by the time the
 # play looks, and the play leaves a root that exists as it is (I-24, 2026-11-08). install-prereqs.sh, run as root on
-# the host before the first installer `up`, makes the root here, the way the play would have; where it was not run
-# first, Docker's 0755 root is what there is, and docs/SETUP.md "Pre-provisioning storage" closes it.
+# the host before the first installer `up`, makes the root here, the way the play would have, and so does each launcher
+# before its first `docker compose run`, through storage_root_ensure_or_warn below (I-35); where neither could, Docker's
+# 0755 root is what there is, and docs/SETUP.md "Pre-provisioning storage" closes it.
 # POSIX sh (sourced under sh or bash); idempotent.
 
 KONTROLL_STORAGE_ROOT_DEFAULT=/var/lib/kontroll
+
+# storage_root_listable <root> — true if <root> itself (a link not followed) is a directory, uid 0's, written by no one
+# else, that others can list: what Docker's bind makes (root:root 0755), which a deploy passes and root's 0711 closes.
+storage_root_listable() {
+  _ls_is="$(stat -c '%u:%g %a' -- "$1" 2>/dev/null)" || return 1
+  _ls_mode="${_ls_is##* }"
+  case "$_ls_is" in 0:*) ;; *) return 1 ;; esac
+  [ -d "$1" ] && [ ! -L "$1" ] && [ $(( 0$_ls_mode & 022 )) -eq 0 ] && [ $(( 0$_ls_mode & 044 )) -ne 0 ]
+}
 
 # storage_root_ensure [<root>] — <root> (default /var/lib/kontroll) must be an absolute path other than `/`, as
 # deploy-stack's own assert requires; else return 2. A root that exists — a directory, a mount, a link, anything — is
@@ -37,14 +47,10 @@ storage_root_ensure() {
   if [ -e "$_root" ]; then
     _is="$(stat -c '%u:%g %a' -- "$_root" 2>/dev/null)" || _is='?'
     echo "    storage root $_root is there already ($_is): left as it is"
-    _mode="${_is##* }"
-    case "$_is" in
-      '?') ;;
-      0:*) if [ -d "$_root" ] && [ $(( 0$_mode & 022 )) -eq 0 ] && [ $(( 0$_mode & 044 )) -ne 0 ]; then
-             echo "    others can list it; the deploy passes it as it is, and root's 0711 closes it:" \
-                  "sudo chmod 0711 $_root"
-           fi ;;
-    esac
+    if storage_root_listable "$_root"; then
+      echo "    others can list it; the deploy passes it as it is, and root's 0711 closes it:" \
+           "sudo chmod 0711 $_root"
+    fi
     return 0
   fi
   # The directories on the way that are there come first; none is changed. Each, and every directory it lies in once
@@ -101,4 +107,55 @@ storage_root_ensure() {
     fi
   done
   echo "    made the storage root, root's 0711:$_made"
+}
+
+# storage_root_ensure_or_warn <root> <this file> — the launchers' convenience, as canonical_group_ensure_or_warn is
+# (I-35): their first `docker compose run` binds the root, and a bind makes a missing one root:root 0755, which a
+# deploy passes as it is. install-prereqs.sh makes it root's 0711 first, where it runs; a node it never ran on (Docker
+# already there, or the step skipped) meets this instead. A root that is there is left as it is, and said nothing of
+# unless others can list it, when the line that closes it is printed. A missing one is made by storage_root_ensure as
+# root: directly when this is root, else through `sudo -n` (this file sourced again under it) where that asks for no
+# password. Where neither can run, or the make fails (its reason printed above), a warning gives the one command that
+# makes it. A root that is not an absolute path other than `/` is named and left: deploy-stack refuses it, and no
+# command printed here should touch it. Never fatal (returns 0): the install goes on, and the deploy passes a root the
+# bind made.
+storage_root_ensure_or_warn() {
+  _ow_root="${1:-$KONTROLL_STORAGE_ROOT_DEFAULT}"
+  _ow_lib="${2:-}"
+  case "$_ow_root" in
+    /*) _ow_rest="$(printf '%s' "$_ow_root" | tr -d '/')" ;;
+    *) _ow_rest='' ;;
+  esac
+  if [ -z "$_ow_rest" ]; then
+    echo "kontroll: WARNING — the storage root '$_ow_root' is not an absolute path other than /, which the deploy" \
+         "refuses: nothing made. Set KONTROLL_STORAGE_ROOT to one, or unset it for $KONTROLL_STORAGE_ROOT_DEFAULT." >&2
+    return 0
+  fi
+  if [ -e "$_ow_root" ] || [ -L "$_ow_root" ]; then
+    if storage_root_listable "$_ow_root"; then
+      echo "kontroll: the storage root $_ow_root is root's and others can list it (a bind made it so);" \
+           "root's 0711 closes it: sudo chmod 0711 $_ow_root" >&2
+    fi
+    return 0
+  fi
+  _ow_how=''
+  if [ "$(id -u)" = 0 ]; then
+    _ow_how=root
+    storage_root_ensure "$_ow_root" && return 0
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    _ow_how=sudo
+    # shellcheck disable=SC2016  # $1 and $2 are the inner shell's: the file and the root, passed as arguments
+    sudo -n sh -c '. "$1" && storage_root_ensure "$2"' sh "$_ow_lib" "$_ow_root" && return 0
+  fi
+  if [ -n "$_ow_how" ]; then
+    echo "kontroll: WARNING — the storage root $_ow_root could not be made root's 0711 (the reason is above)." >&2
+  else
+    echo "kontroll: WARNING — the storage root $_ow_root is missing, and this run cannot make it root's 0711" \
+         "(it is not root, and has no sudo that needs no password)." >&2
+  fi
+  echo "          The installer's bind will make it root:root 0755, which others can list, and the deploy passes" >&2
+  echo "          it as it is. Make it first, once, then run this again:" >&2
+  echo "            sudo sh -c '. \"$_ow_lib\" && storage_root_ensure \"$_ow_root\"'" >&2
+  echo "          or close it after: sudo chmod 0711 $_ow_root. docs/SETUP.md \"Pre-provisioning storage\"." >&2
+  return 0
 }

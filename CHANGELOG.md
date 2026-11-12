@@ -11,6 +11,36 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): each launcher makes a missing storage root root's 0711 before its first compose run binds it, or says how (I-35, 2026-11-12)
+
+The installer's first `docker compose run` binds the storage root, and a bind makes a missing one `root:root 0755`,
+which every local account can list. deploy-stack makes a missing root root's `0711` but leaves one that is there, so
+it passed the bind's (SECURITY.md C10). I-24 made the root in `install-prereqs.sh`, which runs as root before the
+installer, but a node it never ran on (Docker already installed, the step skipped) still met the bind first, and
+nothing said so.
+
+- **Fixed.** `./kontroll` and `scripts/kontroll-installer.sh` run `storage_root_ensure_or_warn`
+  (`scripts/lib/storage-root.sh`) after their uid-1001 refusal and canonical-group step, before their first `docker
+  compose run`, for the root the bind uses (`KONTROLL_STORAGE_ROOT`, default `/var/lib/kontroll`). A missing root is
+  made root's `0711`, with each missing parent, by the `storage_root_ensure` install-prereqs.sh uses: directly when
+  the launcher is root, else through `sudo -n` (never a prompt), the launcher's own copy of the helper sourced again
+  under it. Where neither can run, or the make fails (its reason printed first), a warning gives the one command that
+  makes it and the `chmod` that closes it after, and the launcher goes on. A root that is there is left as it is; when
+  it is root's and others can list it (what a bind makes), one line gives `sudo chmod 0711 <root>`. A root that is not
+  an absolute path other than `/` (deploy-stack refuses it) is named and left, so no `chmod` of `/` is printed.
+- **Not changed.** A root that is there, a `0755` one a bind made among them, is not changed by the launcher (it says
+  how to close it), as install-prereqs.sh and the deploy leave one. The step's lines reach the terminal only, as the
+  canonical-group step's do: the launcher keeps no log of its own before the installer runs.
+- **Tests.** `tests/unit/test_storage_root_launchers.py` (new): the step's place and arguments in each launcher; the
+  helper under `sh -eu` on a PATH of stand-ins only (the sudo call recorded, and run as root; made directly as root;
+  the warning with a sudo that asks and with none, under each launcher's shell options; a failing make warned under
+  its reason; a root that is there left without a word, or with the chmod line when others can list it; `/` and a
+  relative root named); the warning's command run makes the root; each launcher run whole, its sudo make before the
+  first compose call. `tests/unit/test_operator_uid_1001_refused.py` copies the helper into its launcher trees, so a
+  refusal placed after the new step would show. The rows that need root run in `tests/validate.sh`'s as-root step.
+- **Docs.** docs/SETUP.md "Pre-provisioning storage", scripts/README.md, SECURITY.md C10, docker/.env.example and
+  tests/README.md say the launchers make the root too.
+
 ### fix(ansible): a fleet play's role handlers run inside its rescued block, so a handler that fails on every host no longer ends the run before the key cleanup (I-86, 2026-11-12)
 
 install-node-exporter.yml and wire-logging.yml run their role in a block whose rescue records a failure, so a run

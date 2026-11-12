@@ -95,6 +95,17 @@ if [ -f "$ROOT/scripts/lib/canonical-group.sh" ]; then
   canonical_group_ensure_or_warn "$KONTROLL_OPERATOR_USER"
 fi
 
+# The storage root (I-35): the installer's first `docker compose run` below binds it, and a bind makes a missing one
+# root:root 0755, which others can list and a deploy passes as it is (it makes a missing one root's 0711, but by then
+# the bind has made it). install-prereqs.sh makes it root's 0711 first, where it ran; a node it never ran on meets this
+# instead: made here as root (through `sudo -n` where that asks for no password), else a warning with the one command
+# that makes it. The root is the one the bind uses (KONTROLL_STORAGE_ROOT where this runs). Never fatal.
+if [ -f "$ROOT/scripts/lib/storage-root.sh" ]; then
+  # shellcheck source=scripts/lib/storage-root.sh
+  . "$ROOT/scripts/lib/storage-root.sh"
+  storage_root_ensure_or_warn "${KONTROLL_STORAGE_ROOT:-/var/lib/kontroll}" "$ROOT/scripts/lib/storage-root.sh"
+fi
+
 # The verb, read here because the capture below is not for every one of them.
 verb="${1:-init}"
 
