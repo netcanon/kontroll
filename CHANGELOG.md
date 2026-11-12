@@ -11,6 +11,44 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a backup host whose class has no backup entrypoint installed is named failed, and its run still removes its SSH keys (I-66, 2026-11-12)
+
+backup-configs.yml's capture play includes the host's class (`device_role`) with `tasks_from: backup`. Where that
+entrypoint was not installed (a host with no `device_role`, a `device_role` no installed role answers, a role with no
+tasks/backup.yml), the include could not be loaded, which is no task failure: Ansible moved the host into the
+capture play's rescue with no failed task and out of every later play (no such role), or ended the whole run, the
+other hosts' captures with it (a role with no entry, rc 4; no `device_role` on 2.18, rc 1). The host had no summary
+line, and where that was every host, the run ended before the history, the prune and the key cleanup, so every
+key-auth host's key rendered for the run stayed on disk (the I-12 reads' S1).
+
+- **Fixed.** The capture block's first task is `ansible/playbooks/tasks/refuse-missing-entrypoint.yml`, an `assert` on
+  the controller that the host names a `device_role` and that the first role of that name where ansible-core looks
+  (the playbook directory's `roles/`, each roles_path entry as the run's own configuration resolves it, the playbook
+  directory, then the name as a path) holds `tasks/backup` (bare, `.yml`, `.yaml` or `.json`). A host it refuses fails
+  a task, which the rescue records: `FAILED: the capture stopped at the task "Refuse a host whose class has no
+  entrypoint for this play installed"`. The host goes on to the history, the prune and the key cleanup, and the
+  summary names it and fails the run; the other hosts' captures go on. The refusal's own message names the host, the
+  class and the roles path. An empty `device_role`, a role with no `tasks/` directory and a file of the role's name,
+  which ansible-core loaded as a role that runs nothing (the host's summary read "not run" and the run passed), are
+  refused too.
+- **Not changed.** A class in collection form (`ns.collection.role`) is not checked (ansible-core looks for it among
+  the installed collections), nor is a file or role the class's backup itself includes: either still fails at the
+  include, the rescue's second task fails that host with no summary line, and where it is every host the run's keys
+  stay. ping.yml's reach play has the same gap for its `check` entrypoint; its rescue reports a failed host as
+  unreachable, so the check cannot go in its block as it is (I-83).
+- **Tests.** `tests/integration/test_refuse_missing_entrypoint_runs.py` runs the check beside a real include_role for
+  each place ansible-core searches, each entry file name and each way a class has no entry (shadowed roles, a relative
+  `ANSIBLE_ROLES_PATH` as Semaphore's Environment sets it, no, an empty or a non-string `device_role`): the check
+  passes exactly where the include runs the entry; a class in collection form is left to the include.
+  `tests/unit/test_backup_capture_rescue.py` holds the check first in the block, its entrypoint the include's
+  `tasks_from`, and the file one quiet `assert`. `tests/integration/test_backup_failed_run_cleans_up.py` runs
+  backup-configs.yml with a host of each refused kind, alone (a dry run and a real run fail at the summary, which names
+  it; the real run removes the keys) and beside a good host (captured and committed), and with a class whose backup
+  includes a missing file (the rescue's second task, alone and beside a good host).
+- **Docs.** backup-configs.yml's comments, `_cleanup-ssh-keys.yml`'s header and SECURITY.md's key row list only a class
+  whose installed entrypoint cannot be loaded among the runs that leave keys. No log line is added: the summary's line,
+  under the run's stamped `kontroll_run_id`, names the refused host.
+
 ### fix(ansible): an install or a wiring that fails on every host, or a refused wiring request, still removes the run's SSH keys (I-64, 2026-11-11)
 
 install-node-exporter.yml and wire-logging.yml render each key-auth host's SSH key into the run's key dir in their

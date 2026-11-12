@@ -7,7 +7,10 @@ SSH-key cleanup, so the run's key-auth hosts' keys stayed on disk (the I-9 reads
 now a block whose rescue records the host as a failed capture, naming the task it stopped at, so the host goes on to
 the cleanup, and the summary names it and fails the run. An include that cannot be loaded is no task failure: the
 rescue's second task fails that host, so the run fails (the I-12 reads' S1). The play sets `any_errors_fatal: false`,
-so a caller's setting cannot drop a host whose read answered (the reads' O1).
+so a caller's setting cannot drop a host whose read answered (the reads' O1). The block's first task refuses a class
+whose backup entrypoint is not installed (no `device_role`, no such role, a role with no tasks/backup.yml) as a task
+the rescue records, where the include's load failure had dropped the host or ended the run before the key cleanup
+(I-66).
 tests/integration/test_backup_failed_run_cleans_up.py runs it for real.
 """
 import os
@@ -52,7 +55,8 @@ def test_the_capture_play_sets_any_errors_fatal_false_and_no_other_play_keyword(
 
 def test_the_capture_dispatch_is_rescued_and_the_rescue_records_a_failed_capture():
     """The capture play's tasks are the `device_role` refusal's import, then one block and nothing else: the block
-    holds only the include_role of `{{ device_role }}` with `tasks_from: backup` and carries no other keyword (no
+    holds the entrypoint check's import (test_the_entrypoint_check_comes_first_and_checks_the_included_entry) then the
+    include_role of `{{ device_role }}` with `tasks_from: backup`, and carries no other keyword (no
     `always`, `when`, `ignore_errors`); its rescue's first task is a `set_fact` of `kontroll_backup_failed: true` and
     a `kontroll_backup_result` that starts "FAILED:" and reads nothing but `ansible_failed_task.name`, whose default
     "(unnamed)" applies to an empty name too (`default(..., true)`: an unnamed task's name is "", which a plain default
@@ -68,8 +72,8 @@ def test_the_capture_dispatch_is_rescued_and_the_rescue_records_a_failed_capture
     assert tasks[0].get("ansible.builtin.import_tasks") == "tasks/refuse-device-role-fact.yml", tasks[0]
     block = tasks[1]
     assert set(block) == {"name", "block", "rescue"}, block
-    assert len(block["block"]) == 1, block["block"]
-    include = block["block"][0]
+    assert len(block["block"]) == 2, block["block"]
+    include = block["block"][1]
     assert set(include) == {"name", "ansible.builtin.include_role"}, include
     assert include["ansible.builtin.include_role"] == {"name": "{{ device_role }}", "tasks_from": "backup"}
     assert len(block["rescue"]) == 2, block["rescue"]
@@ -89,11 +93,41 @@ def test_the_capture_dispatch_is_rescued_and_the_rescue_records_a_failed_capture
     assert len(defaults) == 1 and [a.value for a in defaults[0].args] == ["(unnamed)", True], defaults
 
 
+CHECK = os.path.join(ROOT, "ansible", "playbooks", "tasks", "refuse-missing-entrypoint.yml")
+
+
+def test_the_entrypoint_check_comes_first_and_checks_the_included_entry():
+    """The capture block's first task is a static import of tasks/refuse-missing-entrypoint.yml whose only keywords are
+    its name and `vars`, and those vars are exactly `kontroll_entrypoint` set to the include_role's `tasks_from`
+    (`backup`); the file is one `ansible.builtin.assert`, `quiet`, with no keyword that would let a refused host on or
+    run it elsewhere (no `when`, `ignore_errors`, `failed_when`, `delegate_to`, `tags`, `loop`, `check_mode`), whose
+    first conditions are that `device_role` is defined, a string and not empty. Guards I-66: outside the block a
+    refusal would fail its host before the rescue (the run's keys stay where every host is refused, as before); after
+    the include it would come too late (the include's load failure is no task failure); an entrypoint name other than
+    the include's would check a file the play never loads; and a refusal that a keyword skipped or softened would let
+    the include's load failure end the run again. tests/integration/test_refuse_missing_entrypoint_runs.py runs the
+    file beside a real include_role."""
+    block = _capture_play()["tasks"][1]["block"]
+    check, include = block[0], block[1]
+    assert set(check) == {"name", "ansible.builtin.import_tasks", "vars"}, check
+    assert check["ansible.builtin.import_tasks"] == "tasks/refuse-missing-entrypoint.yml", check
+    assert check["vars"] == {"kontroll_entrypoint": include["ansible.builtin.include_role"]["tasks_from"]}, check
+    with open(CHECK, encoding="utf-8") as fh:
+        tasks = yaml.safe_load(fh)
+    assert len(tasks) == 1, tasks
+    task = tasks[0]
+    assert set(task) == {"name", "ansible.builtin.assert", "vars"}, sorted(task)
+    args = task["ansible.builtin.assert"]
+    assert set(args) == {"that", "fail_msg", "quiet"} and args["quiet"] is True, args
+    assert args["that"][:3] == ["device_role is defined", "device_role is string", "device_role | length > 0"], args
+
+
 def test_a_host_whose_include_could_not_be_loaded_is_failed_in_the_rescue():
     """The rescue's second task is an `ansible.builtin.fail` that runs only `when: ansible_failed_task is not
     defined`, and its message reads nothing but `inventory_hostname` and `device_role`. Guards the I-12 reads' S1: an
-    include that cannot be loaded (a `device_role` no installed role answers, a file or role the class's backup
-    includes that is missing) is no task failure: Ansible moves the host into the rescue with no failed task and drops
+    include that cannot be loaded (a file or role the class's backup includes that is missing, a class in collection
+    form whose collection is not installed; the entrypoint check refuses a class that is not installed as a task first,
+    I-66) is no task failure: Ansible moves the host into the rescue with no failed task and drops
     it from every later play, and with the record alone the run's iterator no longer counted it failed, so a run of
     that host alone ended with rc 0; a task failure has a failed task, so the record alone runs for it.
     tests/integration/test_backup_failed_run_cleans_up.py runs both for real."""

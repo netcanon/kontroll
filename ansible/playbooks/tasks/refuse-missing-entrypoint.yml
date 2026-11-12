@@ -1,0 +1,50 @@
+---
+# Refuse a host whose class has no entrypoint for this play installed: its `device_role` is missing or names a role
+# that holds no `tasks/<kontroll_entrypoint>` where include_role would load it from (I-66). A play imports this file
+# as the first task of the block whose rescue records a failed host, with `kontroll_entrypoint` set to the
+# `tasks_from` of the include_role after it (backup-configs.yml's capture play: `backup`).
+#
+# An include_role that cannot load its entrypoint is no task failure. A `device_role` no search path holds moves the
+# host into the rescue with no failed task and drops it from every later play; a role that holds no such file ends
+# the whole run (rc 4), the other hosts' captures with it; a host that names no `device_role` ends it on 2.18 (rc 1).
+# Where that was every host, the run ended before the key cleanup and left the run's SSH keys on disk. This check
+# fails each of those as a task, which the rescue records, so the host goes on to the cleanup and the summary.
+#
+# It looks where ansible-core's RoleDefinition._load_role_path looks (the same on 2.18, 2.19 and 2.20), in its order,
+# and takes the first path that exists: the playbook directory's `roles/`, each roles_path entry as the run's own
+# configuration resolves it (ANSIBLE_ROLES_PATH, or `roles_path` in the ansible.cfg in use), the playbook directory
+# itself, then the name as a path from the run's working directory. In that role it wants a file
+# `tasks/<entrypoint>`, `.yml`, `.yaml` or `.json` (Role._load_role_yaml's names for a `tasks_from`). A role with no
+# `tasks/` directory, which ansible-core loads as a role that runs nothing (the summary then read "not run"), is
+# refused too.
+#
+# Not checked, so each still fails at the include as before: a name in collection form (`ns.collection.role`, looked
+# up among the installed collections), a play or task that sets `collections:` (the dispatch scan,
+# tests/unit/test_group_dispatch_refuses_local.py, reports one), a templated roles_path entry, and a file or role the
+# entrypoint itself includes.
+#
+# `assert` is an action that runs on the controller and touches no host; it reads only the control node's files.
+
+- name: Refuse a host whose class has no entrypoint for this play installed
+  ansible.builtin.assert:
+    that:
+      - device_role is defined
+      - device_role is string
+      - device_role | length > 0
+      - device_role is match(_kontroll_collection_form) or _kontroll_entrypoint_files | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }}: the class {{ device_role | default('(none: the host names no device_role)') }} has no
+      `{{ kontroll_entrypoint }}` entrypoint installed (no tasks/{{ kontroll_entrypoint }}.yml, .yaml or .json in the
+      first role of that name on the roles path: {{ _kontroll_roles_path | join(':') }}). Refused for this host; the
+      other hosts go on.
+    quiet: true
+  vars:
+    _kontroll_collection_form: '^[A-Za-z0-9_]+([.][A-Za-z0-9_]+){2,}$'
+    _kontroll_roles_path: "{{ query('ansible.builtin.config', 'DEFAULT_ROLES_PATH') | flatten(levels=1) }}"
+    _kontroll_role_dir: >-
+      {{ (([playbook_dir ~ '/roles'] + _kontroll_roles_path + [playbook_dir]) | product([device_role])
+          | map('ansible.builtin.path_join') | list + [device_role]) | select('exists') | first | default('') }}
+    _kontroll_entrypoint_files: >-
+      {{ [] if _kontroll_role_dir == '' else
+         ([_kontroll_role_dir ~ '/tasks/'] | product([kontroll_entrypoint] | product(['', '.yml', '.yaml', '.json'])
+          | map('join') | list) | map('join') | select('file') | list) }}

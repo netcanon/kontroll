@@ -19,9 +19,10 @@
 # whose scripts print a `### ` header before each read, do the same with an answer
 # of the headers alone. A capture that fails as a task is recorded as failed by the
 # capture play's rescue, so its host still reaches the history, the prune and the
-# key cleanup, and the summary names it (I-12). A class whose backup entrypoint
-# cannot be loaded (its role, or a file it includes, is missing) is failed in that
-# rescue and fails the run, with no summary line (I-66).
+# key cleanup, and the summary names it (I-12). A class whose backup entrypoint is
+# not installed is refused as a task first, so the rescue records it the same way
+# (I-66); one whose entrypoint is installed but cannot be loaded (a file it includes
+# is missing) is failed in that rescue and fails the run, with no summary line.
 #
 # Access chain used:   control node (mgmt VLAN) -> mgmt IPs over SSH/API
 # May break:           none (read-only captures)
@@ -77,13 +78,24 @@
     # unreachable host is not failed (ignore_unreachable), so the rescue does not run for it, and the refusal above
     # stays outside the block: a refused host fails here, as before.
     #
-    # An include that cannot be loaded (a `device_role` no installed role answers, or a file or role the class's
-    # backup includes that is missing) is no task failure: Ansible moves the host into the rescue with no failed task
-    # and drops it from every later play, so it gets no summary line, and where it was every host Ansible ended the
-    # run with rc 0. The rescue's second task fails it, so the run fails; where it is every host, the run's keys stay,
-    # as before the rescue (I-66).
+    # A class whose backup entrypoint is not installed (a host with no `device_role`, a `device_role` no installed role
+    # answers, a role with no tasks/backup.yml) is refused by the block's first task, a task failure the rescue
+    # records like any other, so the host reaches the cleanup and the summary names it (I-66). Before, its include
+    # could not be loaded, which is no task failure: Ansible dropped the host from every later play or ended the whole
+    # run, and where that was every host the run's keys stayed.
+    #
+    # An include that still cannot be loaded (a file or role the class's backup itself includes that is missing, or a
+    # class in collection form whose collection is not installed) is no task failure: Ansible moves the host into the
+    # rescue with no failed task and drops it from every later play, so it gets no summary line, and where it was every
+    # host Ansible ended the run with rc 0. The rescue's second task fails it, so the run fails; where it is every
+    # host, the run's keys stay (I-66).
     - name: Run the class-specific backup entrypoint
       block:
+        - name: Refuse a host whose class has no backup entrypoint installed
+          ansible.builtin.import_tasks: tasks/refuse-missing-entrypoint.yml
+          vars:
+            kontroll_entrypoint: backup
+
         - name: Run the class-specific backup entrypoint
           ansible.builtin.include_role:
             name: "{{ device_role }}"
@@ -99,7 +111,8 @@
           ansible.builtin.fail:
             msg: >-
               {{ inventory_hostname }}: the backup entrypoint of the class {{ device_role | default('?') }} could not
-              be loaded (its role, or a file it includes, is missing), so the run fails here (I-12).
+              be loaded (a file or role it includes is missing, or the collection it names is not installed), so the
+              run fails here (I-12).
           when: ansible_failed_task is not defined
 
 # Keep a per-run, diffable HISTORY of every device's config instead of overwriting
