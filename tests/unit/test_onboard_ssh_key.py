@@ -125,6 +125,10 @@ def test_render_and_cleanup_force_local_delegation():
     assert "delegate_to: localhost" in cleanup, "the cleanup rm must delegate_to: localhost (run_once host hijack)"
 
 
+# The playbooks whose summary plays follow the key cleanup (I-9, I-64); each such play connects to nothing.
+_SUMMARY_AFTER_CLEANUP = ("backup-configs.yml", "install-node-exporter.yml", "wire-logging.yml")
+
+
 def test_every_playbook_that_renders_device_keys_removes_them_last():
     """Every playbook under ansible/playbooks/ that imports `_fleet-preamble.yml` (which renders each key-auth host's
     private key into the run's key dir) or `_render-ssh-keys.yml` itself, judged by the path the import runs (fold 7's
@@ -132,9 +136,11 @@ def test_every_playbook_that_renders_device_keys_removes_them_last():
     is refused tree-wide by the dispatch scan, `imports a playbook the scan does not read`: fold 8's read A, N1; the
     pin reads YAML only, and a JSON-wrapped import is refused at playbook level by the gate (2.19's syntax-check,
     ansible-lint): fold 8's read B, S2), imports the shipped `ansible/playbooks/_cleanup-ssh-keys.yml` once, as its
-    last entry; in `backup-configs.yml` alone, plays may follow it, and no import: its summary runs after the cleanup
-    so that a run whose every capture is recorded as failed still removes its keys, and
-    `tests/unit/test_backup_summary_is_last.py` holds that each of those plays connects to nothing (I-9). Guards a
+    last entry; in `backup-configs.yml`, `install-node-exporter.yml` and `wire-logging.yml` alone, plays may follow
+    it, and no import: their summaries run after the cleanup so that a run whose every capture, install or wiring is
+    recorded as failed (or, in wire-logging.yml, whose request is refused) still removes its keys, and
+    `tests/unit/test_backup_summary_is_last.py` and `tests/unit/test_fleet_play_rescue.py` hold that each of those
+    plays connects to nothing (I-9, I-64). Guards a
     fleet play whose cleanup import is dropped, or moved above a play that still connects: no shipped caller passes
     `kontroll_run_id`, so every run shares `kontroll-ssh-keys.manual`, and its keys would then stay there after every
     run, not only after one an earlier play stops (SECURITY.md's accepted-risk row assumes the cleanup runs last;
@@ -167,7 +173,7 @@ def test_every_playbook_that_renders_device_keys_removes_them_last():
                 at = resolved.index("_cleanup-ssh-keys.yml")
                 assert set(doc[at]) <= {"name", "import_playbook", "ansible.builtin.import_playbook"}, (rel, doc[at])
                 after = resolved[at + 1:]   # None = a play, a string = an import
-                assert not after or (rel == "backup-configs.yml" and not any(after)), (rel, after)
+                assert not after or (rel in _SUMMARY_AFTER_CLEANUP and not any(after)), (rel, after)
     assert {"ping.yml", "backup-configs.yml", "wire-logging.yml", "install-node-exporter.yml"} <= set(found), found
 
 

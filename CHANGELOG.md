@@ -11,6 +11,46 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): an install or a wiring that fails on every host, or a refused wiring request, still removes the run's SSH keys (I-64, 2026-11-11)
+
+install-node-exporter.yml and wire-logging.yml render each key-auth host's SSH key into the run's key dir in their
+preamble and remove it in their last import. Ansible runs no later play once every host of a play's batch has failed,
+so an install or a wiring that failed on every host, or a wiring request the validation play refused (a missing role,
+no logging method whose wiring role is the requested one naming its connections, a target with no module), ended
+the run before the cleanup, and the run's keys
+stayed in its key dir until the next run that completed.
+
+- **Fixed.** Each playbook's dispatching play runs its work (install-node-exporter.yml's fact gathering and role,
+  wire-logging.yml's role) in a block after the connection refusal, whose rescue records the host's failure by the
+  failed task's name, fails a host that reaches it with no failed task of its own (its role could not be loaded, or
+  another host's failure stopped it: a `run_once` task, a caller's any_errors_fatal; no later play would see it), and
+  ends that play for the host, as its failure did, so a handler a task notified before it does not run. That holds
+  under a caller's force_handlers too, where the failed host's handlers ran before. wire-logging.yml's validation play
+  records a refusal the same way, and the device play and the summary read that record first, so a refused request
+  targets no host whatever `_wire_group` a vars file or an `-e` holds. After the key cleanup, an `Install run summary`
+  / `Wiring run summary` play fails each recorded host, naming the task it stopped at, and wire-logging.yml's `Fail a
+  refused wiring request` fails a refused request; their one task is a `fail`, which connects to nothing. A run with a
+  failure still fails (rc 2), now after its keys are removed. Unchanged: a refused host still fails at the refusal;
+  both plays tolerate an unreachable host, though node_exporter's role then fails a host whose facts are missing, at
+  its OS-family task, as before (I-89). Under a caller's any_errors_fatal every host's work stops at the first
+  failure, as before: the failing host is recorded, every other host is failed as stopped by another host's failure,
+  and with more than one host the run ends at that play, with the keys left; with one host it reaches the cleanup,
+  and the summary names it. Every host refused, every host's role failing to load (I-66) and a handler that fails on
+  every host (I-86) still end the run before the cleanup, and the keys stay.
+- **Tests.** `unit/test_fleet_play_rescue.py`: the dispatching play's refusal, then one rescued block holding the
+  work, the play's `ignore_unreachable` true; the rescue's record (the failed task's name alone), its `fail` and
+  `end_host`, and no `failed_when`, `ignore_errors`, `tags` or `loop` on a rescue or summary task; the summaries
+  after the cleanup, over the dispatching play's hosts, connecting to nothing; the validation play's rescue, and the
+  device play reading its record first. `integration/test_fleet_play_failure_cleans_up.py` runs wire-logging.yml for
+  real with a stub role: every host failing, one failing beside a good one (whose handler runs), a refused request
+  (also with `_wire_group` from an `-e` and from a vars file), a role that cannot be loaded beside a good one, a
+  `run_once` failure, and a caller's any_errors_fatal with two hosts and with one; and install-node-exporter.yml:
+  every host failing, a role that cannot be loaded beside a good one, and unreachable hosts (with a stub that reads no
+  facts). `unit/test_onboard_ssh_key.py` lets the two playbooks' summaries follow the cleanup.
+- **Docs.** `_cleanup-ssh-keys.yml`'s header and `SECURITY.md`'s C4 residual and key row say which runs still skip the
+  cleanup (any_errors_fatal over more than one host, a handler failing on every host among them); both playbooks'
+  headers say what is recorded, where it fails, and what a caller's any_errors_fatal and force_handlers now do.
+
 ### fix(docker): a failing `no_log` task's error message prints nothing it was given, on the runner image's ansible-core (I-75, 2026-11-12)
 
 ansible-core 2.19 and later keep `exception` in a censored `no_log: true` result, and the default callback prints its
