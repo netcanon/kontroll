@@ -104,7 +104,8 @@ ROLES.update({
                     _shell(*(h + "\n \t" for h in _DKR))),
 })
 # The check-mode skip of each read a dry-run does not make. `cli_command` runs a `show` command in check mode (and
-# fails any other), and `slurp` reads in check mode: those two have none.
+# fails any other: the role does not send it one there, test_a_cli_read_that_is_not_a_show_command_is_not_made_in_a_
+# dry_run), and `slurp` reads in check mode: those two have none.
 SKIPS = {
     "backend_raw_ssh": {"skipped": True, "failed": False, "changed": False},
     "routeros": {"skipped": True, "failed": False, "changed": False,
@@ -181,6 +182,7 @@ def _env():
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     env.tests["skipped"] = lambda r: bool(_result(r, "skipped").get("skipped", False))
     env.tests["unreachable"] = lambda r: bool(_result(r, "unreachable").get("unreachable", False))
+    env.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None   # Ansible's `match`
     env.filters["b64decode"] = lambda s: base64.b64decode(s).decode()
     env.tests["match"] = lambda value, pattern="": re.match(pattern, value) is not None   # Ansible's own
     return env
@@ -220,6 +222,59 @@ def test_an_answer_with_nothing_in_it_is_refused_and_never_written(role, check_m
     tasks = [NOTHING, WRITE] + ([FAILED] if role in RECORDS_FAILURE else [])
     ctx = {read: result, "ansible_check_mode": check_mode}
     assert [t for t in tasks if _runs(role, t, ctx)] == ([runs] if runs else [])
+
+
+READ, NOTE = "Pull config via cli_command", "Note a read a dry-run does not make"
+CLI = "backend_netcommon_cli"
+_CLI_GOOD, _CLI_EMPTY = ROLES[CLI][2], ROLES[CLI][3]
+
+
+@pytest.mark.parametrize("command, check_mode, result, runs", [
+    # a command that is not a `show`: a dry-run does not read, notes it, previews the write and refuses nothing
+    ("display current-configuration", True, WHEN_SKIPPED, [NOTE, WRITE]),
+    (" show running-config", True, WHEN_SKIPPED, [NOTE, WRITE]),         # the module's rule: it STARTS with show
+    ("Show running-config", True, WHEN_SKIPPED, [NOTE, WRITE]),
+    ("sh run", True, WHEN_SKIPPED, [NOTE, WRITE]),                      # an abbreviation is not a show to it
+    # ... and a real run reads, writes what it read and refuses what answered nothing, as for any command
+    ("display current-configuration", False, _CLI_GOOD, [READ, WRITE]),
+    ("display current-configuration", False, _CLI_EMPTY, [READ, NOTHING]),
+    ("display current-configuration", False, WHEN_SKIPPED, [READ, NOTHING]),
+    ("display current-configuration", False, UNREACHABLE, [READ]),
+    # a `show` command reads in a dry-run too, and is held to its answer there
+    ("show running-config", True, _CLI_GOOD, [READ, WRITE]),
+    ("show running-config", True, _CLI_EMPTY, [READ, NOTHING]),
+    ("showrun", True, _CLI_GOOD, [READ, WRITE]),                           # starts with show: the module runs it
+    ("show running-config", False, _CLI_GOOD, [READ, WRITE]),
+    # a class that sets no command takes the default, `show running-config` (ios_xe_auto does): read either way
+    (None, True, _CLI_GOOD, [READ, WRITE]),
+    (None, False, _CLI_GOOD, [READ, WRITE]),
+])
+def test_a_cli_read_that_is_not_a_show_command_is_not_made_in_a_dry_run(command, check_mode, result, runs):
+    """Of the CLI backup's read, its note, its refusal and its write, exactly the ones named run, for a backup command
+    that is not a `show`, for one that is, and for a class that sets none (`None`: the variable left undefined, so
+    the default applies): in a dry-run, a command that does not start with `show` (case, a leading space and an
+    abbreviation such as `sh run` count, as in cli_command's own check) is not read; the note says so, the write
+    previews an empty capture, and nothing is refused. A real run reads every command and is judged by its answer.
+    Guards I-11:
+    cli_command runs only a `show` command in check mode and fails the host on any other ("Only show commands are
+    supported when using check_mode"), so the mandated `--check` of a fleet with such a class failed at its read;
+    and a dry-run that would refuse the read it skipped (the run would fail at its summary instead), a skip that
+    reached a real run, or a rule that differs from the module's (a `show` command left unread in a dry-run, or
+    another command sent to the module there); and, from the I-11 reads (F3, F4), a condition that drops the
+    `default` (every dry-run of a class relying on it would fail on an undefined variable, I-11's own failure
+    back for ios_xe_auto), a `show` left unread in a real run, and a rule matching `sh` rather than `show`."""
+    ctx = {"_cfg": result, "ansible_check_mode": check_mode}
+    if command is not None:
+        ctx["backend_backup_command"] = command
+    assert [t for t in (READ, NOTE, NOTHING, WRITE) if _runs(CLI, t, ctx)] == runs
+
+
+def test_the_dry_run_note_names_the_command_and_nothing_of_an_answer():
+    """The note reads only the backup command, and starts `NOT PREVIEWED`. Guards a note that prints the read's
+    register (no_log: it holds the device's configuration) and one an operator cannot find in a long run's output."""
+    message = _task(CLI, NOTE)["ansible.builtin.debug"]["msg"]
+    assert jinja2.meta.find_undeclared_variables(jinja2.Environment().parse(message)) == {"backend_backup_command"}
+    assert message.startswith("NOT PREVIEWED — "), message
 
 
 @pytest.mark.parametrize("role", sorted(ROLES))
