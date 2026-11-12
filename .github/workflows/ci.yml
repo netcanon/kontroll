@@ -176,6 +176,9 @@ jobs:
         run: bash .github/scripts/apt-install.sh gawk mawk busybox original-awk
 
       - name: pytest (offline; e2e/slow excluded — the hermetic default)
+        # a row marked requires_checkout that would be skipped (no git checkout) stops the job instead (I-51)
+        env:
+          KONTROLL_REQUIRE_CHECKOUT: "1"
         run: pytest -m "not e2e and not slow" --cov=scripts --cov=gui --cov=api --cov-report=term-missing
 
   snmp-modules:

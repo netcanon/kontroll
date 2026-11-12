@@ -92,10 +92,15 @@ def pytest_collection_modifyitems(items):
 
     And a row marked `requires_checkout` is skipped, with the reason, where this tree is not a git checkout (a
     `git archive` copy, as the container checks run on; a source tarball): it would otherwise fail with a git error
-    that says nothing of why (I-51). The probe runs once, and only when such a row was collected."""
+    that says nothing of why (I-51). The probe runs once, and only when such a row was collected. Where
+    KONTROLL_REQUIRE_CHECKOUT=1 (tests/validate.sh's pytest step and CI's pytest job, which run in a checkout), a
+    reason is an error instead: a gate that skipped those rows would pass without having run them."""
     items.sort(key=lambda it: 1 if it.get_closest_marker("e2e") else 0)
     marked = [it for it in items if it.get_closest_marker("requires_checkout")]
     reason = _checkout.checkout_reason(ROOT) if marked else None
+    if reason and os.environ.get("KONTROLL_REQUIRE_CHECKOUT") == "1":
+        raise pytest.UsageError("KONTROLL_REQUIRE_CHECKOUT=1, and %d row(s) marked requires_checkout would be "
+                                "skipped: %s" % (len(marked), reason))
     if reason:
         for it in marked:
             it.add_marker(pytest.mark.skip(reason=reason))

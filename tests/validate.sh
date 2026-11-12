@@ -84,7 +84,9 @@ have ansible-playbook; step ansible-syntax $? bash -c '
 # (tests/requirements-dev.txt). e2e/slow excluded — the hermetic default.
 PY="$(command -v python3 || command -v python || true)"
 if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
-  step pytest 0 "$PY" -m pytest -m "not e2e and not slow" -q
+  # KONTROLL_REQUIRE_CHECKOUT=1: a row marked requires_checkout that would be skipped here (the tree is no git
+  # checkout) stops the session instead, so the gate cannot pass without having run them (I-51).
+  step pytest 0 env KONTROLL_REQUIRE_CHECKOUT=1 "$PY" -m pytest -m "not e2e and not slow" -q
   # the plaintext guard's predicate against a document the INSTALLED sops writes: the ciphertext token, the
   # encrypted comment and the metadata block are sops's shapes, not ours, and a sops bump that changes one must
   # fail HERE — not refuse every healthy secret file at the next deploy. A step of its own, behind `have sops`:
