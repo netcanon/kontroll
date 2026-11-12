@@ -3,7 +3,9 @@
 # declares a `via: host` metrics source (today: proxmox -> hypervisors, docker_host -> docker_hosts; keep
 # the default group pattern in sync with those modules, or pass -e target=<host>/<group>). The scrape
 # targets for these hosts are already GENERATED (scripts/gen-observability.py); this play lands the agent so
-# those targets go UP. State-changing -> run with --check --diff FIRST (CLAUDE.md). A down host is tolerated.
+# those targets go UP. State-changing -> run with --check --diff FIRST (CLAUDE.md). The play tolerates a down host
+# (`ignore_unreachable`), but node_exporter's role then fails a host whose facts are missing, at its OS-family task,
+# as it did before I-64 (I-89).
 #
 # Backfill the fleet:   ansible-playbook playbooks/install-node-exporter.yml --check --diff   (then for real)
 # One host (onboard):   ansible-playbook playbooks/install-node-exporter.yml -e target=<host>
@@ -11,6 +13,17 @@
 # The play runs node_exporter on every host of the target pattern, whatever the host's device_role, so a host whose
 # connection is not of the ssh family is refused before anything runs on it (tasks/refuse-local-connection.yml).
 # Facts are gathered after that, so a refused host has nothing run on it.
+#
+# A host whose install fails is recorded, not failed, at the install play, and failed by the last play, after the key
+# cleanup: an install that fails on every host no longer ends the run before the cleanup, which would leave the run's
+# SSH keys in its key dir (I-64). The rescue ends the install play for that host, as the failure did, so a handler a
+# task notified before it does not run (a caller's force_handlers is not honoured for such a host: its handlers ran
+# before). A host that reaches the rescue with no failed task of its own is failed there: its role could not be
+# loaded, or another host's failure stopped it (a `run_once` task, a caller's any_errors_fatal). Under a caller's
+# any_errors_fatal every host's install stops at the first failure: with one host the run reaches the cleanup and the
+# summary names it; with more, the run ends at that play and the keys stay. What else still ends the run before the
+# cleanup: every host refused, every host's role failing to load (I-66) and a handler that fails on every host (a
+# role's handlers run at the play's end, outside the block: I-86); _cleanup-ssh-keys.yml's header lists them.
 #
 # Access chain used:   control VM (mgmt VLAN) -> target hosts (SSH, root key ~/.ssh/ansible_ed25519)
 # May break:           none — additive read-only agent (:9100); no firewall/network change
@@ -33,18 +46,57 @@
       vars:
         refusal_connections: [ssh, ansible.builtin.ssh, paramiko_ssh, ansible.builtin.paramiko_ssh]
 
-    # The `gather_facts` action, as the play keyword runs it. Under a network plugin (refused above) `setup` ran on
-    # the controller and reported its facts; `gather_facts` picks the network OS's facts module instead. Untagged,
-    # like the refusal and the include: they share fate.
-    - name: Gather facts (ansible_os_family dispatches apt+systemd on Debian, apk+OpenRC on Alpine)
-      ansible.builtin.gather_facts:
+    # A task that failed here on every host ended the run at this play, before the key cleanup (I-64). The rescue
+    # records the host's failure by the failed task's name (not its result, which is printed at that task), and the
+    # run's last play fails the host, after the cleanup. A host reaches the rescue with no failed task of its own
+    # when its role cannot be loaded (no task failure) or another host's failure moved it there (a `run_once` task, a
+    # caller's any_errors_fatal). It would be dropped from every later play, so the rescue fails it here, as
+    # backup-configs.yml's capture rescue does (I-12); the condition cannot tell the two causes apart, so the message
+    # names both. Where every host's role fails to load, the keys stay (I-66).
+    - name: Gather facts and install node_exporter, a failure recorded for the run's last play (I-64)
+      block:
+        # The `gather_facts` action, as the play keyword runs it. Under a network plugin (refused above) `setup` ran
+        # on the controller and reported its facts; `gather_facts` picks the network OS's facts module instead.
+        # Untagged, like the refusal and the include: they share fate.
+        - name: Gather facts (ansible_os_family dispatches apt+systemd on Debian, apk+OpenRC on Alpine)
+          ansible.builtin.gather_facts:
 
-    # include_role (dynamic), matching the repo convention (ping.yml) — resolves via roles_path at runtime
-    # (cwd = ansible/, ansible.cfg roles_path=roles), and doesn't trip syntax-check's static role resolution.
-    - name: Install + start node_exporter (the via:host host metrics agent)
-      ansible.builtin.include_role:
-        name: node_exporter
+        # include_role (dynamic), matching the repo convention (ping.yml) — resolves via roles_path at runtime
+        # (cwd = ansible/, ansible.cfg roles_path=roles), and doesn't trip syntax-check's static role resolution.
+        - name: Install + start node_exporter (the via:host host metrics agent)
+          ansible.builtin.include_role:
+            name: node_exporter
+      rescue:
+        - name: Record the failed install for the run's last play (the task's name; its result is printed above)
+          ansible.builtin.set_fact:
+            kontroll_install_failed: >-
+              the install stopped at the task "{{ ansible_failed_task.name | default('(unnamed)', true) }}"
+          when: ansible_failed_task is defined
+
+        - name: Fail a host stopped with no failed task of its own (no later play would see it)
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: stopped with no failed task of its own: the node_exporter role could not be
+              loaded, or another host's failure stopped it (a run_once task, a caller's any_errors_fatal); the cause
+              is printed above
+          when: ansible_failed_task is not defined
+
+        - name: End the host's install play, as its failure did (no handler it notified runs, force_handlers or not)
+          ansible.builtin.meta: end_host
 
 # Post-run: remove the per-run ephemeral SSH key dir (imported LAST — after the fleet connections; MF-4).
 - name: Clean up the per-run ephemeral SSH key dir
   ansible.builtin.import_playbook: _cleanup-ssh-keys.yml
+
+# After the cleanup, so a run whose every install failed still removes its keys (I-64). It connects to nothing: its one
+# task is a `fail`, which runs on the controller (`connection: local` guards nothing: a host's own
+# `ansible_connection` outranks it).
+- name: Install run summary
+  hosts: "{{ target | default('hypervisors:docker_hosts') }}"
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Fail a host whose install failed, naming the task it stopped at
+      ansible.builtin.fail:
+        msg: "{{ inventory_hostname }}: FAILED: {{ kontroll_install_failed }}"
+      when: kontroll_install_failed is defined
