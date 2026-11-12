@@ -19,6 +19,11 @@
 #                      read-only pack files either way), so the deploy that follows a landing reports 0 changed
 #                      (measured in the gate image, 2026-10-20: tests/integration/test_local_canonical_as_root.py).
 
+# The run's correlation id first, when this runs alone (the recovery paths: state-restore.sh, update.sh,
+# update-from-bundle.sh). Under deploy-stack.yml, whose own stamp has run, this import says nothing (I-41).
+- name: Stamp the run correlation id
+  ansible.builtin.import_playbook: _log-run-id.yml
+
 - name: Ensure the local canonical bare repo
   hosts: localhost
   connection: local

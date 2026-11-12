@@ -23,8 +23,9 @@ LOCK = "{{ repo_root }}/ansible/collections/requirements.generated.yml"
 
 
 def _tasks():
-    """The bootstrap play's tasks, in order."""
-    plays = yaml.safe_load(open(os.path.join(ROOT, "ansible", "playbooks", "bootstrap.yml"), encoding="utf-8"))
+    """The bootstrap play's tasks, in order (the run-id stamp imported before it is not a play of its own)."""
+    plays = [p for p in yaml.safe_load(open(os.path.join(ROOT, "ansible", "playbooks", "bootstrap.yml"),
+                                            encoding="utf-8")) if "import_playbook" not in str(list(p))]
     assert len(plays) == 1
     return plays[0]["tasks"], plays[0]["vars"]
 

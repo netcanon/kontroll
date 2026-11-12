@@ -80,10 +80,10 @@ def node():
         shutil.rmtree(base, ignore_errors=True)
 
 
-def _play(node, check=False):
-    """Run the play as the installer does — root, `KONTROLL_IN_CONTAINER=1`, the operator's identity in the
-    environment, `become` through `su` — against the node's canonical and checkout. Returns the recap's counters
-    and the output; a failed run fails the row with its output."""
+def _play(node, check=False, playbook=PLAYBOOK):
+    """Run the play (or `playbook`, one that imports it) as the installer does — root, `KONTROLL_IN_CONTAINER=1`,
+    the operator's identity in the environment, `become` through `su` — against the node's canonical and
+    checkout. Returns the recap's counters and the output; a failed run fails the row with its output."""
     home = os.path.join(node.base, "ansible-home")
     os.makedirs(home, exist_ok=True)
     cfg = os.path.join(home, "ansible.cfg")                   # nothing of the developer's or the repository's
@@ -97,7 +97,7 @@ def _play(node, check=False):
     gitconfig = _gitconfig(node)
     with open(gitconfig, "w", encoding="utf-8") as fh:
         fh.write("[safe]\n\tdirectory = *\n")
-    argv = ["ansible-playbook", "-i", "localhost,", PLAYBOOK,
+    argv = ["ansible-playbook", "-i", "localhost,", playbook,
             "-e", json.dumps({"bare": node.bare, "worktree": node.wt})]
     if check:
         argv += ["--check", "--diff"]
@@ -414,6 +414,26 @@ def test_a_canonical_whose_head_is_gone_is_said_so_by_its_dry_run_and_the_real_r
     assert os.path.islink(node.bare) == through, "the link is left a link"
     after = _play(node)
     assert after["changed"] == 0 and after["failed"] == 0, after["out"]
+
+
+def test_the_play_prints_one_run_id_alone_and_under_another_stamp(node):
+    """The real play, run alone (as the recovery paths run it), prints one `kontroll_run_id=` line, and so does a
+    run of a playbook shaped as deploy-stack.yml: the stamp, then an import of this play, whose own import of the
+    stamp says nothing. Both are a fresh node's `--check --diff`, which makes nothing. Guards I-41 at the play
+    itself: local-canonical.yml started a run with no id, and a plain import of the stamp would print a second line
+    under deploy-stack.yml (`integration/test_run_id_stamp_runs.py` holds the stamp's rows on small playbooks).
+    """
+    ids = re.compile(r'"msg": "kontroll_run_id=([^"]+)"')
+    alone = _play(node, check=True)
+    assert len(ids.findall(alone["out"])) == 1, alone["out"]
+    outer = os.path.join(node.base, "outer.yml")
+    with open(outer, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("- name: Stamp the run correlation id\n  ansible.builtin.import_playbook: %s\n"
+                 "- name: The canonical\n  ansible.builtin.import_playbook: %s\n"
+                 % (os.path.join(ROOT, "ansible", "playbooks", "_log-run-id.yml"), PLAYBOOK))
+    under = _play(node, check=True, playbook=outer)
+    assert len(ids.findall(under["out"])) == 1, under["out"]
+    assert not os.path.exists(node.bare), "a dry-run made the canonical"
 
 
 def test_a_new_commit_is_landed_by_the_next_deploy_and_the_one_after_reports_0_changed(node):

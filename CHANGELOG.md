@@ -11,6 +11,43 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): every playbook a run can start with prints the run's id, once, on the controller (I-41, 2026-11-12)
+
+bootstrap.yml (the first step of the installer's `init`, and of the onboard's `--bootstrap`) and local-canonical.yml
+(the play the recovery paths state-restore.sh, update.sh and update-from-bundle.sh tell the operator to run) imported
+neither `_log-run-id.yml` nor the fleet preamble, so a run of either printed no `kontroll_run_id=` line.
+local-canonical.yml is also imported by deploy-stack.yml after deploy-stack's own stamp, and an unset id is `now()`,
+so a plain import would have printed a second line, and could have printed a second id, in one run. And the stamp
+loaded its first host's connection plugin for its debug: in front of bootstrap.yml, a first host on network_cli
+(ansible.netcommon, which bootstrap installs) would have ended every `init` at the stamp, before the install (the
+I-41 read A's B1; I-52, which ends deploy-stack, ping and the fleet playbooks the same way).
+
+- **Fixed.** Both import the stamp first. The stamp prints only while `_kontroll_run_stamped` is unset, and then sets
+  it, so a later import in the same run says nothing; it does not set `kontroll_run_id` (group_vars/all.yml keys the
+  run's ssh-key directory on it). Both its tasks run on the controller (`delegate_to: localhost`), so no fleet
+  host's connection plugin is loaded (they take localhost's connection and become settings: `local` and none, unless
+  the inventory names localhost with others): the line reads `[<host> -> localhost]`, and a first host whose plugin
+  is not installed is stamped and the run goes on, in every playbook that imports the stamp (I-52's first part; a
+  run started with
+  `--start-at-task` past the stamp still prints none). Both carry `tags: [always]`, so a `--tags` run is stamped too.
+  Once holds for the shipped playbooks (the linear strategy, no add_host); the stamp's header says where it does not.
+  bootstrap's and local-canonical's recaps now list the inventory's first host too (ok=2, changed=0: the stamp's two
+  tasks), as every stamped playbook's already does.
+- **Tests.** `unit/test_run_id_stamp_imported.py` now reads every top-level playbook, `.yml` or `.yaml`, whose name
+  does not start with `_`: its first entry imports the stamp or the fleet preamble (so the next playbook added without
+  it fails, with no list to keep; one in a subdirectory is refused by
+  `unit/test_group_dispatch_refuses_local.py`); deploy-stack.yml imports local-canonical.yml after its own stamp; the
+  stamp's play, guard, fact, delegation and tag. `integration/test_run_id_stamp_runs.py` gains a fleet whose first
+  host's plugin is not installed (stamped on the controller, the run passing), and small playbooks importing the real
+  stamp, an entry playbook and an outer one shaped as deploy-stack.yml, against no inventory hosts, two, `--limit` to
+  one, and a first host whose plugin is not installed: each run prints one id, a caller's `-e` id is the one printed,
+  and a `--tags` run prints one.
+  `integration/test_local_canonical_as_root.py` runs the real local-canonical.yml, alone and under a
+  deploy-stack-shaped playbook, in a fresh node's dry-run: one id each. `unit/test_bootstrap_summary_lockfile.py`
+  reads bootstrap's play past the import.
+- **Docs.** docs/logging-architecture.md §3 (every playbook a run can start with; once per run; on the controller);
+  docs/testing-standards.md; tests/README.md; the stamp's, bootstrap's and local-canonical's headers.
+
 ### fix(ansible): every deploy writes the journal Vector binds, with Vector in the run or not (I-60, 2026-11-11)
 
 deploy-stack chose the host journal Vector binds, and read the journal's group, only when `vector` was in
@@ -466,7 +503,7 @@ stamped while the run's localhost plays still acted: reload-observability's real
   pattern), the stamp's header (what `connection: local` does and does not do), `docs/testing-standards.md`,
   `docs/observability/delivery-runbook.md` (a line pointer the change made stale), tests/README.md.
 - **Not changed.** A fleet whose first host's connection plugin cannot load fails the stamp and ends the run, on
-  main too (I-52).
+  main too (I-52; I-41 above runs the stamp on the controller, which ends that).
 
 ### fix(ansible): a backup run whose every capture is recorded as failed still removes its SSH keys (I-9, 2026-11-09)
 
