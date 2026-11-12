@@ -366,8 +366,9 @@ def test_the_rows_that_need_root_run_in_the_gate_as_root():
 
 def test_the_helpers_default_root_is_the_installers_and_the_deploys():
     """The helper's default root is the one the installer binds when KONTROLL_STORAGE_ROOT is unset
-    (docker/services/installer.yaml) and the one deploy-stack.yml falls back to. Guards the three drifting apart,
-    which would have the host floor make a root nothing binds while Docker makes the real one 0755 again."""
+    (docker/services/installer.yaml) and the one deploy-stack.yml falls back to when neither the operator nor the
+    installer names one (I-26 put the installer's bound root before it). Guards the three drifting apart, which
+    would have the host floor make a root nothing binds while Docker makes the real one 0755 again."""
     with open(LIB, encoding="utf-8") as fh:
         default = re.search(r"^KONTROLL_STORAGE_ROOT_DEFAULT=(\S+)$", fh.read(), re.M).group(1)
     with open(os.path.join(ROOT, "docker", "services", "installer.yaml"), encoding="utf-8") as fh:
@@ -376,4 +377,6 @@ def test_the_helpers_default_root_is_the_installers_and_the_deploys():
     sources = [re.match(r"\$\{KONTROLL_STORAGE_ROOT:-([^}]*)\}:", v) for v in vols]
     assert vols and all(m and m.group(1) == default for m in sources), (default, vols)
     with open(os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml"), encoding="utf-8") as fh:
-        assert "kontroll_storage_root | default('%s', true)" % default in fh.read()
+        flat = " ".join(fh.read().split())   # the expression spans lines; compare it whitespace-blind
+    assert ("kontroll_storage_root | default(lookup('env', 'KONTROLL_INSTALLER_STORAGE_ROOT') or '%s', true)" % default
+            in flat)

@@ -78,7 +78,8 @@ tests/
 **kontroll-specific additions:**
 - ✅ **The plays evaluated in CI** — `tests/fresh-node-check.sh`, a step of `ci.yml`'s validate job:
   `ansible-playbook --check` of the install playbooks (deploy-stack, the local-canonical it imports,
-  bootstrap; with `KONTROLL_IN_CONTAINER=1` and an operator named, as the installer runs them) against
+  bootstrap; with `KONTROLL_IN_CONTAINER=1`, the storage root the installer binds and an operator
+  named, as the installer runs them) against
   the instance a real `kontroll-init --fresh` writes, in a throwaway export of HEAD with HOME and
   TMPDIR moved into it, and of the fleet plays (ping, backup-configs) against
   `tests/mock-inventory.yml`, so templating, role dispatch and `set_fact` logic are executed without

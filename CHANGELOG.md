@@ -11,6 +11,37 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): inside the installer the deploy uses the storage root it binds, and refuses another (I-26, 2026-11-09)
+
+The installer binds one storage root from the host, at the same path: the one `KONTROLL_STORAGE_ROOT` names in the
+launcher's shell, `/var/lib/kontroll` when it is unset. The deploy took its root from `-e` or the instance's vars
+alone. A root named only there was made in the installer's own filesystem and gone with the container, while the
+stack's binds of it on the host got Docker's `root:root 0755` directories, and the G9 gate stat'd the container's
+path, never the key the operator installed on the host; a root named only in the shell was bound and never used. A
+store with its own knob set outside the root went the same way.
+
+- `docker/services/installer.yaml` passes the root it binds into the container as `KONTROLL_INSTALLER_STORAGE_ROOT`,
+  written as the bind's source is. deploy-stack takes it as the root's default there, so an exported
+  `KONTROLL_STORAGE_ROOT` alone relocates the root and its stores.
+- Inside the installer deploy-stack refuses, before it makes anything under the root, a root other than the bound
+  one and a store set outside it. The root's refusal names both roots and the remedy: the `export` in every shell
+  that runs the launcher, with `kontroll_storage_root` kept in the instance vars as well, so that a later shell
+  without the export is refused, not moved back to `/var/lib/kontroll`. The store's names its knob, with a mount
+  under the root, at the knob's own name, as the remedy. Both compare real paths, so a `..` or a link under the root
+  that leads out of it is outside it. Off the installer the variable is unset and nothing changes.
+- Each run names the storage root it uses and where it came from (`storage root <root> (<source>)`): the default,
+  an `-e` or instance var, or the root the installer binds.
+- `tests/fresh-node-check.sh` runs the deploy with the installer's variable set, as the installer's `check` verb
+  does, so CI evaluates the refusals.
+- Docs: docs/SETUP.md (how the root and the stores are set, and through the installer; a missing root, Docker
+  makes there), docs/troubleshooting.md §13 (the two refusals), docker/installer/README.md, docker/.env.example,
+  SECURITY.md C8, docs/logging-architecture.md, docs/qa-and-release-pipeline.md.
+- Tests: `tests/integration/test_installer_storage_root.py` runs the playbook's own storage-root tasks under
+  ansible-playbook with the installer's variable set or not, the operator's `-e` and inventory vars: each store
+  by its knob, a `..` and a link under the root, the line naming the root, the refusals' place before anything is
+  made and the installer passing the root as it binds it. `tests/unit/test_storage_root_floor.py`'s row on the
+  three default roots (I-24) reads the deploy's fallback where it now is, after the installer's bound root.
+
 ### fix(tests): a row that reads the tree through git skips, with the reason, outside a checkout (I-51, 2026-11-10)
 
 - **Fixed.** The rows that read the repository through git (the executable bits from the index, the tracked list

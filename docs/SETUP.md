@@ -226,6 +226,16 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > preserve today's paths, so leaving them unset changes nothing. deploy-stack **creates each dir uid-scoped, at
 > the mode SECURITY.md C8 gives it, before the stack comes up** (the chown follows the path you set); named
 > volumes (Prometheus TSDB, Grafana, Postgres, Vector buffers) are Docker-managed and not relocated by these knobs.
+> The deploy renders `docker/.env` from Ansible variables, so set them there: `kontroll_storage_root`,
+> `kontroll_logs_dir`, `kontroll_backups_dir` and the rest, in the instance's inventory vars or with `-e`. Through
+> the installer (`scripts/kontroll.sh`, `scripts/kontroll-installer.sh`), which binds only the root its shell
+> names, `export KONTROLL_STORAGE_ROOT=<root>` before the launcher, in every shell that runs it, and keep
+> `kontroll_storage_root: <root>` in the instance's vars as well: the deploy takes the root the installer binds and
+> refuses another one, so a later shell without the export is refused, not moved back to `/var/lib/kontroll`. It
+> refuses a store set outside the root too (mount a data disk under the root: a mount, not a link, which would lead
+> the store back out of it); either would be made in the installer's own filesystem and lost with it
+> ([troubleshooting.md](troubleshooting.md) §13). Each run names the root it uses and where it came from:
+> `storage root <root> (<source>)`.
 > A root you make yourself (a mount, a directory on another disk) must be a directory of root's that neither its
 > group nor others may write and that others may pass through, with every directory above it passable too —
 > `sudo chown root:root <root>` and `sudo chmod 0711 <root>`; a deploy that brings up `api` or `onboard-gui`
@@ -238,7 +248,9 @@ Prometheus serve HTTP on these ports in every mode. Once up:
 > root's). A relocated root has three names, and all three must be the same path: `sudo bash
 > scripts/install-prereqs.sh --storage-root <root>` (`./bootstrap.sh` passes the argument on), `KONTROLL_STORAGE_ROOT`
 > in the environment the launcher runs in (the installer's bind reads it), and the deploy's `kontroll_storage_root`
-> (which renders it into `docker/.env` for the stack). Nothing yet checks that they agree.
+> (which renders it into `docker/.env` for the stack). Inside the installer the deploy refuses a
+> `kontroll_storage_root` other than the root the installer binds (above); nothing checks `install-prereqs.sh`'s
+> `--storage-root` against the other two.
 
 ## 7. Distribute access + prove connectivity
 

@@ -10,15 +10,17 @@
 #      with no instance/, in a worktree on `main`, as a fresh clone has.
 #   2. kontroll-init --fresh, with HOME and SOPS_AGE_KEY_FILE inside that directory: a throwaway control key and
 #      the bootstrap secrets, minted by the real code.
-#   3. deploy-stack.yml --check --diff, with KONTROLL_IN_CONTAINER=1 and an operator named, as the installer's
-#      `check` verb runs it (docker/installer/entrypoint.sh; its launcher always names the operator,
-#      docker/services/installer.yaml), so the host-Docker play is skipped; local-canonical.yml, which it imports,
-#      is evaluated too. It must pass and reach the stack play's last task.
+#   3. deploy-stack.yml --check --diff, with KONTROLL_IN_CONTAINER=1, the storage root the installer binds
+#      (KONTROLL_INSTALLER_STORAGE_ROOT, its default) and an operator named, as the installer's `check` verb runs it
+#      (docker/installer/entrypoint.sh; its launcher always names the operator, docker/services/installer.yaml), so
+#      the host-Docker play is skipped and the storage-root refusals are evaluated; local-canonical.yml, which it
+#      imports, is evaluated too. It must pass and reach the stack play's last task.
 #   4. The same with every service: it must FAIL, and fail for the one reason a fresh node must refuse — the
 #      onboard-gui's age key is missing (G9; deploy-stack never mints it). The message is matched, not just the
 #      exit, so a play that breaks for any other reason cannot pass this step.
-#   5. The same again, with a throwaway onboard-gui key under a storage root inside the directory: it must pass and
-#      reach the stack play's last task, so the onboard-gui's tasks after G9 are evaluated too.
+#   5. The same again, with a throwaway onboard-gui key under a storage root inside the directory, named as the
+#      installer binds it and by `-e`, which must agree: it must pass and reach the stack play's last task, so the
+#      onboard-gui's tasks after G9 are evaluated too.
 #   6. bootstrap.yml --check, with KONTROLL_IN_CONTAINER=1 as the installer's `init` verb runs it (its compose
 #      service sets it, docker/services/installer.yaml): the tasks that install the host's OS toolchain, which the
 #      installer image bakes, are skipped. Those are the legacy host path's, and their check reads the host's own
@@ -72,7 +74,7 @@ export SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/keys.txt"
 # caller's collections.
 export TMPDIR="$tmp/tmp" PYTHONDONTWRITEBYTECODE=1
 # The export's ansible.cfg is the one read, and every log is plain text (the checks below parse them).
-unset ANSIBLE_CONFIG ANSIBLE_FORCE_COLOR KONTROLL_IN_CONTAINER
+unset ANSIBLE_CONFIG ANSIBLE_FORCE_COLOR KONTROLL_IN_CONTAINER KONTROLL_INSTALLER_STORAGE_ROOT
 export ANSIBLE_NOCOLOR=1
 # The installer's launcher always names the operator (docker/services/installer.yaml requires it). Without one,
 # local-canonical.yml takes the caller's uid, and a GitHub-hosted runner's is 1001, the network service's uid, which
@@ -198,12 +200,13 @@ needs init '^==> kontroll-init done' "kontroll-init finished"
 all='["semaphore", "homepage", "prometheus", "grafana", "loki", "vector", "api", "onboard-gui"]'
 last_task='^TASK \[Report the running stack containers\]'
 
-step deploy-check pass env KONTROLL_IN_CONTAINER=1 ansible-playbook playbooks/deploy-stack.yml --check --diff
+step deploy-check pass env KONTROLL_IN_CONTAINER=1 KONTROLL_INSTALLER_STORAGE_ROOT=/var/lib/kontroll \
+  ansible-playbook playbooks/deploy-stack.yml --check --diff
 recap deploy-check
 needs deploy-check "$last_task" "the stack play ran to its last task"
 
-step deploy-check-all fail env KONTROLL_IN_CONTAINER=1 ansible-playbook playbooks/deploy-stack.yml --check --diff \
-  -e "{\"stack_services\": $all}"
+step deploy-check-all fail env KONTROLL_IN_CONTAINER=1 KONTROLL_INSTALLER_STORAGE_ROOT=/var/lib/kontroll \
+  ansible-playbook playbooks/deploy-stack.yml --check --diff -e "{\"stack_services\": $all}"
 needs deploy-check-all "onboard-gui's age key at .* is MISSING" "the onboard-gui's age key is missing (G9)"
 
 # The key G9 asks for, a throwaway, readable by the GUI's uid as G9 requires (other-read), under a storage root
@@ -212,7 +215,8 @@ age-keygen -o "$tmp/storage/onboard-gui/age.key" 2>/dev/null && chmod 0644 "$tmp
   echo "fresh-node-check: FAIL — age-keygen wrote no throwaway onboard-gui key under $tmp/storage" >&2
   exit 1
 }
-step deploy-check-gui pass env KONTROLL_IN_CONTAINER=1 ansible-playbook playbooks/deploy-stack.yml --check --diff \
+step deploy-check-gui pass env KONTROLL_IN_CONTAINER=1 KONTROLL_INSTALLER_STORAGE_ROOT="$tmp/storage" \
+  ansible-playbook playbooks/deploy-stack.yml --check --diff \
   -e "{\"stack_services\": $all, \"kontroll_storage_root\": \"$tmp/storage\"}"
 recap deploy-check-gui
 needs deploy-check-gui "$last_task" "the stack play ran to its last task"

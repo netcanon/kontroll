@@ -529,7 +529,11 @@ crown jewel — protect it where it lives, not at a remote.
   never a Docker-auto-created `root:root 0755` (world-readable) bind. Enforced fail-closed by
   **`tests/check-storage-chown.py`** (a bind source with no uid-scoped provisioner fails CI — the G9 guard); the
   same change **closed two pre-existing holes** (the onboard-gui `age.key` gained a fail-closed absence guard, the
-  `caddy/` dir gained an owner/group). An empty/`/` root is rejected by a deploy-stack assert. The `age.key` guard
+  `caddy/` dir gained an owner/group). An empty/`/` root is rejected by a deploy-stack assert; inside the installer,
+  which binds only the root its launcher's shell names, so is another root or a store outside it, compared as real
+  paths (a `..` or a link that leads out of the root is outside it), before anything is made (I-26: one would be
+  made in the installer's own filesystem, and the stack would bind Docker's `root:root 0755` directories on the host
+  in its place; `tests/integration/test_installer_storage_root.py`). The `age.key` guard
   admits only a non-empty **regular file** uid 1001 can read, judged on what Docker mounts (the stat follows a
   link) and by the mode bits as the kernel reads them for a process of uid and gid 1001 with no other group (owner
   bits if uid 1001 owns it, group bits if gid 1001 does, else other's; an ACL is not read, and no shipped path
