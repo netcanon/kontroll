@@ -16,6 +16,20 @@
 # declares, written at onboard: 443 for `api`) → 22. A host that sets none of the three is probed on 22, as before.
 # A var set to null or empty counts as unset (`default(…, true)`): `wait_for` with no port only sleeps and reports
 # ok, so a hand-written `ansible_port: ~` used to pass the probe with nothing listening.
+#
+# A host whose class has no `check` entrypoint installed (no `device_role`, one no installed role answers, a role with
+# no tasks/check.yml or one with no task in it) is refused before the probe, as a task its own block's rescue records:
+# the summary names it REFUSED, and the run's last play, after the key cleanup, fails it (I-83). The include of such a
+# class could not be loaded, which is no task failure: Ansible dropped the host from every later play or ended the
+# whole run, so the run's SSH keys stayed where no later play ran (no `device_role` was reported UNREACHABLE on 2.19
+# instead); and a class that loads as a role running nothing (an empty `device_role`, a role with no tasks/, an empty
+# or comment-only check) was reported OK. An unreachable host still leaves the run passing. An installed check that
+# cannot be loaded (a file or role it includes is missing, a role dependency or a class's collection that is not
+# installed) is not refused: the probe's rescue fails its host, which leaves every later play, so where that is every
+# host the run's keys stay (before I-83 such a run ended with rc 0; it now fails). A check that does not parse, an
+# installed collection whose role has no check, and a role whose defaults, vars or meta do not parse are not refused
+# either: ansible-core ends the whole run at the include (rc 4), every host's keys left (the entrypoint check's
+# header lists what it does not see).
 
 - name: Fleet preamble — stamp the run id + materialize per-host SSH keys
   ansible.builtin.import_playbook: _fleet-preamble.yml
@@ -23,12 +37,31 @@
 - name: Reach the fleet (per-class liveness)
   hosts: all
   gather_facts: false
+  # A caller's any_errors_fatal (ANSIBLE_ANY_ERRORS_FATAL, an ansible.cfg) failed every other host once one host's
+  # probe or refusal failed, rescue or not: a reachable host was dropped from every later play with no summary line,
+  # and where a down host stood beside it the run ended here, before the key cleanup (the I-83 reads' S3, as I-12's O1
+  # for the capture). The play's own keyword wins over that setting; the probe only reads.
+  any_errors_fatal: false
   tasks:
     # Outside the block: its rescue would report a refused host as UNREACHABLE.
     - name: Refuse a host whose device_role is a fact (only the inventory names the role it dispatches by)
       ansible.builtin.import_tasks: tasks/refuse-device-role-fact.yml
 
+    # Its own block: the probe's rescue would report a refused host as UNREACHABLE. The rescue records the refusal;
+    # the host skips the probe and the check, and fails in the last play, after the key cleanup (I-83).
+    - name: Refuse and record a host whose class has no check entrypoint installed
+      block:
+        - name: Refuse a host whose class has no check entrypoint installed
+          ansible.builtin.import_tasks: tasks/refuse-missing-entrypoint.yml
+          vars:
+            kontroll_entrypoint: check
+      rescue:
+        - name: Record the refused class (the run fails on it after the key cleanup)
+          ansible.builtin.set_fact:
+            kontroll_class_refused: true
+
     - name: Probe reachability, then run the class check
+      when: not (kontroll_class_refused | default(false))
       block:
         - name: TCP reachability probe from the control node
           ansible.builtin.wait_for:
@@ -50,6 +83,15 @@
         - name: Mark host unreachable
           ansible.builtin.set_fact:
             kontroll_reachable: false
+        # An include that cannot be loaded is no task failure: the host comes here with no failed task and leaves every
+        # later play, and where it was the only host the run ended with rc 0. Fail it, so the run does not pass.
+        - name: Fail a host whose class's check entrypoint could not be loaded
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: the check entrypoint of the class {{ device_role | default('?') }} could not
+              be loaded (a file or role it includes is missing, or the collection it names is not installed), so the
+              run fails here.
+          when: ansible_failed_task is not defined
 
 - name: Reachability summary
   hosts: all
@@ -58,8 +100,25 @@
   tasks:
     - name: Per-host reachability
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ 'OK' if kontroll_reachable | default(false) else 'UNREACHABLE' }}"
+        msg: >-
+          {{ inventory_hostname }}: {{ 'REFUSED: its class has no check entrypoint installed'
+          if kontroll_class_refused | default(false)
+          else 'OK' if kontroll_reachable | default(false) else 'UNREACHABLE' }}
 
-# Post-run: remove the per-run ephemeral SSH key dir (imported LAST — after the fleet connections; MF-4).
+# Post-run: remove the per-run ephemeral SSH key dir (imported after the last fleet connection: MF-4; only a play
+# that connects to nothing follows it).
 - name: Clean up the per-run ephemeral SSH key dir
   ansible.builtin.import_playbook: _cleanup-ssh-keys.yml
+
+# Last, after the key cleanup, so that a run whose every host is refused still removes its keys (as
+# backup-configs.yml's summary follows it: I-9). It connects to nothing.
+- name: Fail the run for a host whose class has no check entrypoint installed
+  hosts: all
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Fail a host whose class has no check entrypoint installed
+      ansible.builtin.assert:
+        that: not (kontroll_class_refused | default(false))
+        fail_msg: "{{ inventory_hostname }}: REFUSED: its class has no check entrypoint installed (see the refusal)."
+        quiet: true

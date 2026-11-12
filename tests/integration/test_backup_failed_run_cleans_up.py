@@ -6,12 +6,16 @@ Ansible ends the playbook at that play. The history, the prune and the per-run S
 run whose every capture was recorded as failed left the run's keys in their per-run directory. Since I-5 one device
 that answers nothing is enough: a one-host scheduled backup. A capture that fails as a task (a read that exits
 non-zero) failed its host at the capture play instead: no summary line, and when it was every host, the run ended
-there, before the cleanup (I-12); the capture play's rescue now records it as a failed capture.
+there, before the cleanup (I-12); the capture play's rescue now records it as a failed capture. A class whose backup
+entrypoint is not installed could not be loaded, which is no task failure: Ansible dropped its host from every later
+play or ended the whole run, so where that was every host the run's keys stayed (I-66); the capture block's first
+task now refuses it as a task, which the rescue records.
 tests/unit/test_backup_summary_is_last.py holds the order and tests/unit/test_backup_capture_rescue.py the rescue;
-these rows run them. Hosts of the generic raw-SSH backend, on a local connection: one whose backup command (`true`)
-answers nothing, one whose command exits 3, one that prints a config, and one whose `device_role` names no installed
-role; each has its good capture in place and in the history, and a stale key file in the run's key directory before
-the run.
+these rows run them. Hosts on a local connection: of the generic raw-SSH backend, one whose backup command (`true`)
+answers nothing, one whose command exits 3, and one that prints a config; and one whose `device_role` names no
+installed role, one whose role has no tasks/backup.yml, one with no `device_role`, and one whose role's backup
+includes a file that is missing. Each has its good capture in place and in the history, and a stale key file in the
+run's key directory before the run.
 
 It needs ansible-playbook and git: where either is missing the row is skipped (the gate's images and CI's validate job
 have both). Nothing of the developer's Ansible or git reaches the play: its configuration, home and temporary
@@ -39,9 +43,17 @@ HOSTS = {  # host: (address, its backup command)
     "ap-empty": ("192.0.2.51", "true"),               # answers nothing: recorded as failed by the role (I-5, I-9)
     "ap-erring": ("192.0.2.52", "echo partial; exit 3"),  # fails as a task: recorded by the capture play (I-12)
     "ap-good": ("192.0.2.53", "printf 'config system\\n'"),
-    "ap-missing": ("192.0.2.54", "true"),             # its class cannot be loaded: failed in the rescue (I-12)
+    "ap-missing": ("192.0.2.54", "true"),             # its class is not installed: refused as a task (I-66)
+    "ap-noentry": ("192.0.2.55", "true"),             # its class's role has no tasks/backup.yml: refused (I-66)
+    "ap-norole": ("192.0.2.56", "true"),              # it names no device_role: refused (I-66)
+    "ap-broken": ("192.0.2.57", "true"),              # its class's backup includes a missing file: failed in the
+}                                                     # rescue, as it cannot be loaded (I-12)
+ROLE = {"ap-missing": "zz_no_such_class", "ap-noentry": "zz_no_backup", "ap-norole": None,
+        "ap-broken": "zz_broken_include"}           # every other host: backend_raw_ssh; None: no device_role
+EXTRA_ROLES = {  # the lab's second roles_path entry: a role with no backup entry, one whose entry cannot be loaded
+    "zz_no_backup/tasks/main.yml": "- ansible.builtin.debug:\n    msg: not a backup\n",
+    "zz_broken_include/tasks/backup.yml": "- ansible.builtin.include_tasks: no_such_file.yml\n",
 }
-ROLE = {"ap-missing": "zz_no_such_class"}           # every other host: backend_raw_ssh
 HOST = "ap-empty"
 GOOD = "config wifi-iface 'default_radio0'\n"
 PLAYS = ("Snapshot the captures into local history (git)", "Prune capture history older than the retention window (git)",
@@ -77,34 +89,30 @@ def erring_good_lab(tmp_path, isolated_git):
     return _lab(tmp_path, ["ap-erring", "ap-good"])
 
 
-@pytest.fixture
-def missing_lab(tmp_path, isolated_git):
-    """ap-missing alone (see _lab)."""
-    return _lab(tmp_path, ["ap-missing"])
-
-
-@pytest.fixture
-def missing_good_lab(tmp_path, isolated_git):
-    """ap-missing and ap-good (see _lab)."""
-    return _lab(tmp_path, ["ap-missing", "ap-good"])
-
-
 def _lab(tmp_path, hosts):
-    """The inventory of `hosts`, an Ansible home and configuration of the row's own, a captures directory holding each
-    host's good capture, committed as the history play commits, and the run's key directory holding a stale key for
-    each."""
+    """The inventory of `hosts`, an Ansible home and configuration of the row's own (its roles path the repo's roles,
+    then EXTRA_ROLES), a captures directory holding each host's good capture, committed as the history play commits,
+    and the run's key directory holding a stale key for each."""
     home = tmp_path / "ansible-home"
-    home.mkdir()
+    home.mkdir(parents=True)
+    extra = tmp_path / "extra-roles"
+    for rel, content in EXTRA_ROLES.items():
+        (extra / rel).parent.mkdir(parents=True, exist_ok=True)
+        (extra / rel).write_text(content, encoding="utf-8")
     cfg = home / "ansible.cfg"
-    cfg.write_text("[defaults]\nroles_path = %s\nfilter_plugins = %s\nretry_files_enabled = False\n"
+    cfg.write_text("[defaults]\nroles_path = %s:%s\nfilter_plugins = %s\nretry_files_enabled = False\n"
                    "interpreter_python = auto_silent\n"
-                   % (os.path.join(ROOT, "ansible", "roles"), os.path.join(ROOT, "ansible", "filter_plugins")),
+                   % (os.path.join(ROOT, "ansible", "roles"), extra, os.path.join(ROOT, "ansible", "filter_plugins")),
                    encoding="utf-8")
     inventory = tmp_path / "hosts.yml"
+    entries = {host: {"ansible_host": HOSTS[host][0], "device_role": ROLE.get(host, "backend_raw_ssh"),
+                      "backend_backup_command": HOSTS[host][1]} for host in hosts}
+    for entry in entries.values():
+        if entry["device_role"] is None:
+            del entry["device_role"]
     inventory.write_text(yaml.safe_dump({"all": {
         "vars": {"ansible_connection": "local", "ansible_python_interpreter": "{{ ansible_playbook_python }}"},
-        "hosts": {host: {"ansible_host": HOSTS[host][0], "device_role": ROLE.get(host, "backend_raw_ssh"),
-                         "backend_backup_command": HOSTS[host][1]} for host in hosts}}}), encoding="utf-8")
+        "hosts": entries}}), encoding="utf-8")
     backups = tmp_path / "backups"
     backups.mkdir(mode=0o700)
     for host in hosts:
@@ -162,8 +170,10 @@ def test_a_run_whose_every_capture_failed_still_removes_its_keys_and_fails(lab):
 STOPPED = (r'"msg": "%s \(backend_raw_ssh\): FAILED: the capture stopped at the task '
            r'\\"Pull config via raw command\\" \(a no_log task prints only that it failed\)\."')
 STAMP = r'"msg": "kontroll_run_id=[0-9]{8}T[0-9]{6}Z"'
-MISSING = ('"msg": "ap-missing: the backup entrypoint of the class zz_no_such_class could not be loaded (its role, or '
-           'a file it includes, is missing), so the run fails here (I-12)."')
+REFUSED = ('"msg": "%s (%s): FAILED: the capture stopped at the task \\"Refuse a host whose class has no entrypoint '
+           'for this play installed\\" (a no_log task prints only that it failed)."')
+BROKEN = ('"msg": "ap-broken: the backup entrypoint of the class zz_broken_include could not be loaded (a file or role '
+          'it includes is missing, or the collection it names is not installed), so the run fails here (I-12)."')
 
 
 def test_a_run_whose_every_capture_fails_as_a_task_still_removes_its_keys_and_names_it(erring_lab):
@@ -233,38 +243,88 @@ def test_a_callers_any_errors_fatal_leaves_the_good_host_captured_beside_one_tha
     assert not os.path.exists(lab.keys), os.listdir(lab.keys)
 
 
-def test_a_class_whose_backup_entrypoint_cannot_be_loaded_fails_the_run(missing_lab):
-    """A dry run and a real run whose only host's `device_role` names no installed role each fail with rc 2, the
-    rescue's second task naming the host and its class, and neither runs the summary play. Guards the I-12 reads' S1:
-    an include that cannot be loaded is no task failure; Ansible moved the host into the rescue with no failed task and
-    out of every later play, so with the record alone the run's iterator no longer counted it failed, and Ansible ended
-    the run at the capture play with rc 0, a capture that failed reported as passed to a scheduler that reads the exit
-    code (main, with no rescue, gave rc 2). The host's recap counts two failures, the load and the rescue's `fail`.
-    The run's keys stay, as on main: the cleanup is a later play (I-66)."""
+@pytest.mark.parametrize("host", ["ap-missing", "ap-noentry", "ap-norole"])
+def test_a_class_whose_backup_entrypoint_is_not_installed_is_named_failed_and_its_keys_removed(tmp_path, host):
+    """A dry run, then a real run, of one host whose class's backup entrypoint is not installed (its `device_role`
+    names no installed role; names a role with no tasks/backup.yml; or is missing) each fail with rc 2 at the summary,
+    whose line says FAILED and names the entrypoint check as the task the capture stopped at; the real run runs the
+    history, prune and key-cleanup plays before the summary, and the run's key directory, stale key and all, is gone
+    after it; the good capture is kept byte for byte, and no commit touches it. Guards I-66: such an include could not
+    be loaded, which is no task failure; Ansible dropped the host from every later play (no role), or ended the whole
+    run (a role with no entry, rc 4; no `device_role` on 2.18, rc 1), so the run ended before the key cleanup and left
+    the run's keys on disk, with no summary line."""
+    lab = _lab(tmp_path, [host])
     for extra in (("--check", "--diff"), ()):
-        rc, out, recap = _play(missing_lab, *extra)
+        rc, out, recap = _play(lab, *extra)
         assert rc == 2, (extra, rc, out)
-        assert recap == {"ap-missing": 2, "localhost": 0}, (extra, recap, out)
-        assert MISSING in out, (extra, out)
-        assert "PLAY [Backup run summary]" not in out, (extra, out)
+        assert recap == {host: 1, "localhost": 0}, (extra, recap, out)
+        assert REFUSED % (host, ROLE[host] or "?") in out, (extra, out)
+    assert re.search(STAMP, out), out
+    at = [out.find("PLAY [%s]" % play) for play in PLAYS]
+    assert -1 not in at and at == sorted(at), (at, out)
+    assert not os.path.exists(lab.keys), os.listdir(lab.keys)
+    with open(os.path.join(lab.backups, _capture(host)), encoding="utf-8") as fh:
+        assert fh.read() == GOOD
+    assert len(_git(lab.backups, "log", "--format=%H", "--", _capture(host)).split()) == 1
+    assert _git(lab.backups, "status", "--porcelain", "--untracked-files=no").strip() == ""
 
 
-def test_a_class_that_cannot_be_loaded_beside_a_good_host_leaves_the_good_one_captured(missing_good_lab):
-    """A real run against ap-missing (its `device_role` names no installed role) and ap-good fails with rc 2: ap-good
-    is captured and committed (ap-missing's file is not in the run's commit) and its summary line printed, the key
-    directory is gone, and ap-missing gets the rescue's failure (its recap counts the load and that `fail`) and no
-    summary line. Guards the load failure's `fail` against stopping the other hosts: it fails its own host only, and
-    the good host's capture, the history, the prune and the key cleanup still run."""
-    lab = missing_good_lab
+@pytest.mark.parametrize("host", ["ap-missing", "ap-noentry"])
+def test_a_class_not_installed_beside_a_good_host_leaves_the_good_one_captured(tmp_path, host):
+    """A real run against a host whose class is not installed (no such role; a role with no tasks/backup.yml) and
+    ap-good fails with rc 2: ap-good is captured and committed (the other's file is not in the run's commit), both get
+    a summary line (the other's FAILED, naming the entrypoint check), and the key directory is gone. Guards I-66 where
+    the class is one host's among several: a role with no entry ended the whole run (rc 4), ap-good's capture, the
+    history and the key cleanup with it, and a missing role left its host with no summary line."""
+    lab = _lab(tmp_path, [host, "ap-good"])
     rc, out, recap = _play(lab)
     assert rc == 2, (rc, out)
-    assert recap == {"ap-missing": 2, "ap-good": 0, "localhost": 0}, (recap, out)
-    assert MISSING in out, out
+    assert recap == {host: 1, "ap-good": 0, "localhost": 0}, (recap, out)
+    assert REFUSED % (host, ROLE[host]) in out, out
     good = r'"msg": "ap-good \(backend_raw_ssh\): captured -> %s"' % re.escape(_capture("ap-good"))
     assert re.search(good, out), out
-    assert not re.search(r'"msg": "ap-missing \(', out), out
     with open(os.path.join(lab.backups, _capture("ap-good")), encoding="utf-8") as fh:
         assert fh.read() == "config system\n"
     changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
-    assert _capture("ap-good") in changed and _capture("ap-missing") not in changed, changed
+    assert _capture("ap-good") in changed and _capture(host) not in changed, changed
+    assert not os.path.exists(lab.keys), os.listdir(lab.keys)
+
+
+def test_a_class_whose_entrypoint_cannot_be_loaded_fails_the_run_in_the_rescue(tmp_path):
+    """A dry run and a real run whose only host's class is installed but whose backup entry includes a file that is
+    missing each fail with rc 2, the rescue's second task naming the host and its class, and neither runs the summary
+    play; the run's keys stay (the I-66 residue: the cleanup is a later play). Guards the I-12 reads' S1 for the load
+    failure the entrypoint check cannot see: an include that cannot be loaded is no task failure; Ansible moved the host
+    into the rescue with no failed task and out of every later play, so with the record alone the run's iterator no
+    longer counted it failed, and Ansible ended the run at the capture play with rc 0, a capture that failed reported
+    as passed to a scheduler that reads the exit code. The host's recap counts two failures, the load and the rescue's
+    `fail`."""
+    lab = _lab(tmp_path, ["ap-broken"])
+    for extra in (("--check", "--diff"), ()):
+        rc, out, recap = _play(lab, *extra)
+        assert rc == 2, (extra, rc, out)
+        assert recap == {"ap-broken": 2, "localhost": 0}, (extra, recap, out)
+        assert BROKEN in out, (extra, out)
+        assert "PLAY [Backup run summary]" not in out, (extra, out)
+    assert os.path.exists(lab.keys), out
+
+
+def test_a_class_that_cannot_be_loaded_beside_a_good_host_leaves_the_good_one_captured(tmp_path):
+    """A real run against ap-broken (its class's backup includes a missing file) and ap-good fails with rc 2: ap-good
+    is captured and committed (ap-broken's file is not in the run's commit) and its summary line printed, the key
+    directory is gone, and ap-broken gets the rescue's failure (its recap counts the load and that `fail`) and no
+    summary line. Guards the load failure's `fail` against stopping the other hosts: it fails its own host only, and
+    the good host's capture, the history, the prune and the key cleanup still run."""
+    lab = _lab(tmp_path, ["ap-broken", "ap-good"])
+    rc, out, recap = _play(lab)
+    assert rc == 2, (rc, out)
+    assert recap == {"ap-broken": 2, "ap-good": 0, "localhost": 0}, (recap, out)
+    assert BROKEN in out, out
+    good = r'"msg": "ap-good \(backend_raw_ssh\): captured -> %s"' % re.escape(_capture("ap-good"))
+    assert re.search(good, out), out
+    assert not re.search(r'"msg": "ap-broken \(', out), out
+    with open(os.path.join(lab.backups, _capture("ap-good")), encoding="utf-8") as fh:
+        assert fh.read() == "config system\n"
+    changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()
+    assert _capture("ap-good") in changed and _capture("ap-broken") not in changed, changed
     assert not os.path.exists(lab.keys), os.listdir(lab.keys)

@@ -11,6 +11,115 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a ping host whose class has no check entrypoint installed is named REFUSED, and its run still removes its SSH keys (I-83, 2026-11-12)
+
+ping.yml's reach play includes the host's class (`device_role`) with `tasks_from: check` inside the probe's block, so
+it had the gap I-66 closes for the backup. Measured against the parent on ansible-core 2.18.19 and 2.19.4: a
+`device_role` no installed role answers dropped its host from every later play with no summary line, and where it was
+the only host the run ended there with rc 0, the run's SSH keys left on disk; a role with no tasks/check.yml ended the
+whole run (rc 4), the other hosts' checks and the key cleanup with it; a host with no `device_role` did the same on
+2.18 (rc 1) and was reported UNREACHABLE on 2.19; and an empty `device_role` or a role with no `tasks/` directory,
+which ansible-core loads as a role that runs nothing, was reported OK.
+
+- **Fixed.** The reach play runs I-66's check (`tasks/refuse-missing-entrypoint.yml`, with `kontroll_entrypoint: check`)
+  before the probe, in a block of its own whose rescue records the refusal: inside the probe's block, its rescue would
+  report the host UNREACHABLE, and an unreachable host leaves the run passing. A refused host skips the probe and the
+  check, the summary names it `REFUSED: its class has no check entrypoint installed`, and a new last play, after the key
+  cleanup and connecting to nothing, fails it: the run exits 2 and still removes its keys. A check with no task in it
+  (empty, comments only), which ran nothing and was reported OK, is refused too, and so is one the run's user cannot
+  read. The other hosts are probed and checked as before, and a run that refuses no class still passes with an
+  unreachable host. A class whose installed check cannot be loaded (a file or role it includes is missing; a role it
+  depends on, or a class in collection form whose collection, is not installed) is not refused by the check: the probe's
+  rescue marked it UNREACHABLE while it left every later play, and on its own the run ended with rc 0. The rescue now
+  fails such a host (rc 2), as backup-configs.yml's capture rescue does (I-12).
+- **Fixed.** The reach play sets `any_errors_fatal: false`, as the capture play does (I-12): under a caller's
+  any_errors_fatal (ANSIBLE_ANY_ERRORS_FATAL, an ansible.cfg) one host's failed probe or refusal failed every other
+  host, rescue or not, so a down host beside a reachable one moved the reachable one into the probe's rescue, whose new
+  `fail` ended the run at the reach play with every key left, and a refused host dropped a reachable one with no summary
+  line. The probe only reads, so it does not honour the setting.
+- **Not changed.** Where every host's check cannot be loaded, the run still ends before the key cleanup and its keys
+  stay (I-66's residue, the same for the backup). A check that does not parse or is not a list, an installed collection
+  whose role has no check, and a role whose defaults, vars or meta do not parse still end the whole run at the include
+  (rc 4), every host's keys left. galaxy.py's `--bootstrap` verify reads ping's exit code, so for a refused class it now
+  answers PENDING, not "reachable & managed", though its reason still says to provide credentials (I-84).
+- **Tests.** `tests/integration/test_ping_refused_class_runs.py` runs ping.yml for real, at a port the row listens on,
+  with a host of each refused kind (a check with comments only among them), alone (a dry and a real run exit 2; the host
+  skips the probe, is named REFUSED and fails in the last play; the real run removes the key directory) and beside a
+  reachable and an unreachable host (OK and UNREACHABLE, neither failed), a run with no refused class (it passes), a
+  class whose check includes a missing file, alone (rc 2 from the probe's rescue, no summary, the keys kept) and beside
+  a reachable host, and a reachable host beside a down or a refused one under `ANSIBLE_ANY_ERRORS_FATAL=True` (every
+  host reported, the keys removed). `tests/unit/test_ping_entrypoint_refusal.py` holds the shape: the refusal's own
+  block between the fact refusal and the probe, its entrypoint the include's `tasks_from`, the record and the probe's
+  `when`, the summary's REFUSED, the last play's one `assert`, the probe rescue's `fail` when no task failed, and the
+  reach play's `any_errors_fatal: false`. `tests/unit/test_backup_summary_is_last.py`'s row on what follows the key
+  cleanup reads ping.yml too, and `tests/unit/test_onboard_ssh_key.py` lets plays follow ping.yml's cleanup.
+  `tests/validate.sh`'s no-skip runtime step runs the integration file.
+- **Docs.** ping.yml's header; `_cleanup-ssh-keys.yml`'s header and SECURITY.md's C4 residual and key row no longer
+  count such a ping run among the runs that leave keys; `docs/troubleshooting.md` says what REFUSED means and what to
+  fix (the first role of that name on the roles path must hold a check with a task in it);
+  `tasks/refuse-missing-entrypoint.yml` names both plays that import it. No log line is added: the summary's line, under
+  the run's stamped `kontroll_run_id`, names the refused host.
+
+### fix(ansible): a backup host whose class has no backup entrypoint installed is named failed, and its run still removes its SSH keys (I-66, 2026-11-12)
+
+backup-configs.yml's capture play includes the host's class (`device_role`) with `tasks_from: backup`. Where that
+entrypoint was not installed (a `device_role` no installed role answers, a role with no tasks/backup.yml or one the
+run's user cannot read, and on 2.18 a host with no `device_role`), the include could not be loaded, which is no task
+failure: Ansible moved the host into the capture play's rescue with no failed task and out of every later play (no such
+role), or ended the whole run, the other hosts' captures with it (a role with no entry, or one the run cannot read, rc
+4; no `device_role` on 2.18, rc 1; on 2.19 and 2.20 that host's include failed as a task, which the rescue recorded).
+The host had no summary line, and where that was every host, the run ended before the history, the prune and the key
+cleanup, so every key-auth host's key rendered for the run stayed on disk (the I-12 reads' S1). And an entry with no
+task in it loaded and ran nothing: the host's summary read "not run" and the run passed.
+
+- **Fixed.** The capture block's first task is `ansible/playbooks/tasks/refuse-missing-entrypoint.yml`, an `assert` on
+  the controller that the host names a `device_role` and that the first role of that name where ansible-core looks (the
+  playbook directory's `roles/`, each roles_path entry as the config lookup returns it, the playbook directory, then the
+  name as a path; each resolved as ansible-core's unfrackpath resolves it: environment variables, `~`, the real path)
+  holds `tasks/backup` (bare, `.yml`, `.yaml` or `.json`) with a task in it: the check reads the file, which must hold a
+  line that is not blank, a comment or a document marker. A host it refuses fails a task, which the rescue records:
+  `FAILED: the capture stopped at the task "Refuse a host whose class has no entrypoint for this play installed"`. The
+  host goes on to the history, the prune and the key cleanup, and the summary names it and fails the run; the other
+  hosts' captures go on. The refusal's own message names the host, the class and the roles path; an entry the run's user
+  cannot read fails the same task with the read's error. An empty `device_role`, a role with no `tasks/` directory, a
+  file of the role's name and an entry with no task in it (empty, comments only), which ansible-core loaded as a role
+  that runs nothing (the host's summary read "not run" and the run passed), are refused too.
+- **Not changed.** A class in collection form (`ns.collection.role`) is not checked (ansible-core looks for it among the
+  installed collections, then, for a three-part name in none, on the roles path), nor is a file or role the class's
+  backup itself includes or depends on: a missing include or dependency, and a collection that is not installed, still
+  fail at the include, the rescue's second task fails that host with no summary line, and where it is every host the
+  run's keys stay. The check reads the entry's text, not its YAML (`from_yaml` refuses Ansible's own `!unsafe` and
+  `!vault` tags, which a role may use), so an entry that does not parse or is not a list, like an installed collection
+  whose role has no backup entry, a three-part dotted name the roles path answers without one, and a role whose
+  defaults, vars or meta do not parse, still ends the whole run at the include (rc 4), every host's capture and keys
+  with it. On 2.19 a run with no roles_path configured anywhere has its built-in default templated, which the check's
+  config lookup does not render, so it is refused; the shipped ansible.cfg and Semaphore's environment both set one.
+  ping.yml's reach play had the same gap for its `check` entrypoint (I-83, above).
+- **Tests.** `tests/integration/test_refuse_missing_entrypoint_runs.py` runs the check beside a real include_role for
+  each place ansible-core searches, in its order (a roles_path entry ahead of the playbook directory and of the name as
+  a path among them), each entry file name, each way a class has no entry (shadowed roles, a relative
+  `ANSIBLE_ROLES_PATH` as Semaphore's Environment sets it, no, an empty or a non-string `device_role`, a dotted name
+  that is no collection name), each way an entry holds no task (empty, comments only) or cannot be read, an entry a YAML
+  or template read would trip on (a variable set later, `!unsafe`), and each path ansible-core resolves before it looks
+  (`~`, an environment variable, a `..` through a missing directory, a trailing slash, a dangling link, a link loop), a
+  directory of the bare name ahead of the entry and an entry indented throughout: the check passes where the include
+  runs the entry and refuses where it does not. Its last rows hold what the check leaves to the include: a class in
+  collection form, installed, not installed or with no entry; an entry that does not parse, is not a list or holds `[]`;
+  defaults that do not parse; a dependency that is not installed (a run the include ends is held to rc 4 on the cores
+  the project ships; the CI's pytest jobs run their runner's core, from 2.21, where an installed collection's role with
+  no entry fails the host instead, rc 2). `tests/unit/test_backup_capture_rescue.py` holds the check first in the block,
+  its entrypoint the include's `tasks_from`, and the file one quiet `assert`.
+  `tests/integration/test_backup_failed_run_cleans_up.py` runs backup-configs.yml with a host of each refused kind,
+  alone (a dry run and a real run fail at the summary, which names it; the real run removes the keys) and beside a good
+  host (captured and committed), and with a class whose backup includes a missing file (the rescue's second task, alone
+  and beside a good host). `tests/validate.sh`'s no-skip runtime step runs the agreement rows, so a core bump that moves
+  the role search fails the gate.
+- **Docs.** backup-configs.yml's comments, `_cleanup-ssh-keys.yml`'s header and SECURITY.md's C4 residual and key row
+  say which runs still leave keys (a class whose installed entrypoint cannot be loaded, where it is every host; an entry
+  or a role file that does not parse, on any host); `docs/troubleshooting.md` says what the backup refusal reads like
+  and where its message is. No log line is added: the summary's line, under the run's stamped `kontroll_run_id`, names
+  the refused host.
+
 ### fix(ansible): an install or a wiring that fails on every host, or a refused wiring request, still removes the run's SSH keys (I-64, 2026-11-11)
 
 install-node-exporter.yml and wire-logging.yml render each key-auth host's SSH key into the run's key dir in their

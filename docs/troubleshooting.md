@@ -135,6 +135,19 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
 - **A device's syslog never arrives** (`{source="capability"}` empty) → confirm `docker/services/vector.yaml`
   publishes the mgmt-bound `:5514`, the device is configured to ship there (the `logging_syslog_push` wiring
   role), and the device can reach the collector on the mgmt VLAN.
+- **`ping.yml` reports a host `REFUSED: its class has no check entrypoint installed`, and the run fails** → the
+  host's `device_role` is missing or empty, or the first role of that name where Ansible looks for roles holds no
+  `tasks/check.yml` (`.yaml`, `.json` or a bare `check` too) with a task in it (an empty or comment-only file counts
+  as none); the refusal's own message, earlier in the run's output, names the class and the roles path searched. A
+  role of that name earlier on the path shadows a later one that holds the file. The other hosts are probed and
+  checked as usual, and the run's SSH keys are still removed. Fix the host's `device_role` in its inventory drop-in,
+  or give its class's role a `tasks/check.yml`. If the run's output shows a read error at that task instead, the
+  run's user cannot read the file.
+- **`backup-configs.yml`'s summary reads `FAILED: the capture stopped at the task "Refuse a host whose class has no
+  entrypoint for this play installed"`** → the same check, for `tasks/backup.yml`: the host's class has no backup
+  entrypoint installed (as above, with `backup` for `check`). The summary's "(a no_log task prints only that it
+  failed)" is its general wording: this task is not no_log, and its own message, earlier in the run's output, names
+  the class and the roles path searched. The other hosts' captures go on, and the run's SSH keys are still removed.
 - **`ping.yml` reports a host `UNREACHABLE` that answers otherwise** → the probe is a TCP connect from the control
   node, and its port is the first set of `mgmt_port`, `ansible_port`, `kontroll_probe_port`, then 22
   (`ansible/playbooks/ping.yml`'s header). An SSH host on another port needs its port typed at onboard (it is

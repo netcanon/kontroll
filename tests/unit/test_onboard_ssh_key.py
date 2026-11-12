@@ -125,30 +125,30 @@ def test_render_and_cleanup_force_local_delegation():
     assert "delegate_to: localhost" in cleanup, "the cleanup rm must delegate_to: localhost (run_once host hijack)"
 
 
-# The playbooks whose summary plays follow the key cleanup (I-9, I-64); each such play connects to nothing.
-_SUMMARY_AFTER_CLEANUP = ("backup-configs.yml", "install-node-exporter.yml", "wire-logging.yml")
+# The playbooks whose summary plays follow the key cleanup (I-9, I-64, I-83); each such play connects to nothing.
+_SUMMARY_AFTER_CLEANUP = ("backup-configs.yml", "install-node-exporter.yml", "wire-logging.yml", "ping.yml")
 
 
 def test_every_playbook_that_renders_device_keys_removes_them_last():
     """Every playbook under ansible/playbooks/ that imports `_fleet-preamble.yml` (which renders each key-auth host's
     private key into the run's key dir) or `_render-ssh-keys.yml` itself, judged by the path the import runs (fold 7's
-    read B, N3: a playbook that imported the renderer directly, with no cleanup, passed; a templated or linked import
-    is refused tree-wide by the dispatch scan, `imports a playbook the scan does not read`: fold 8's read A, N1; the
-    pin reads YAML only, and a JSON-wrapped import is refused at playbook level by the gate (2.19's syntax-check,
-    ansible-lint): fold 8's read B, S2), imports the shipped `ansible/playbooks/_cleanup-ssh-keys.yml` once, as its
-    last entry; in `backup-configs.yml`, `install-node-exporter.yml` and `wire-logging.yml` alone, plays may follow
-    it, and no import: their summaries run after the cleanup so that a run whose every capture, install or wiring is
-    recorded as failed (or, in wire-logging.yml, whose request is refused) still removes its keys, and
-    `tests/unit/test_backup_summary_is_last.py` and `tests/unit/test_fleet_play_rescue.py` hold that each of those
-    plays connects to nothing (I-9, I-64). Guards a
-    fleet play whose cleanup import is dropped, or moved above a play that still connects: no shipped caller passes
-    `kontroll_run_id`, so every run shares `kontroll-ssh-keys.manual`, and its keys would then stay there after every
-    run, not only after one an earlier play stops (SECURITY.md's accepted-risk row assumes the cleanup runs last;
-    local-refusal fold 2's read B, N3: nothing pinned it outside backup-configs.yml). The import entry carries only
-    its name: a `when:`, a `tags: [never]` or a `vars:` that renames the key dir on it left the dir in place with
-    every other test green (fold 5's read A, N2; I-9 reads the cleanup's own entry, not the last), and it names the
-    shipped file itself, not one of its name elsewhere (fold 6's read A, N2, and read B, N5: a no-op namesake under
-    `files/` passed every test)."""
+    read B, N3: a playbook that imported the renderer directly, with no cleanup, passed; a templated or linked import is
+    refused tree-wide by the dispatch scan, `imports a playbook the scan does not read`: fold 8's read A, N1; the pin
+    reads YAML only, and a JSON-wrapped import is refused at playbook level by the gate (2.19's syntax-check,
+    ansible-lint): fold 8's read B, S2), imports the shipped `ansible/playbooks/_cleanup-ssh-keys.yml` once, as its last
+    entry; in `backup-configs.yml`, `install-node-exporter.yml`, `wire-logging.yml` and `ping.yml` alone, plays may
+    follow it, and no import: their summaries run after the cleanup so that a run whose every capture, install or wiring
+    is recorded as failed (or, in wire-logging.yml, whose request is refused) still removes its keys (I-9, I-64), and
+    ping.yml's last play, which fails a host whose class has no `check` entrypoint installed, so that a run whose every
+    host is refused does (I-83); `tests/unit/test_backup_summary_is_last.py` and `tests/unit/test_fleet_play_rescue.py`
+    hold that each of those plays connects to nothing. Guards a fleet play whose cleanup import is dropped, or moved
+    above a play that still connects: no shipped caller passes `kontroll_run_id`, so every run shares
+    `kontroll-ssh-keys.manual`, and its keys would then stay there after every run, not only after one an earlier play
+    stops (SECURITY.md's accepted-risk row assumes the cleanup runs last; local-refusal fold 2's read B, N3: nothing
+    pinned it outside backup-configs.yml). The import entry carries only its name: a `when:`, a `tags: [never]` or a
+    `vars:` that renames the key dir on it left the dir in place with every other test green (fold 5's read A, N2; I-9
+    reads the cleanup's own entry, not the last), and it names the shipped file itself, not one of its name elsewhere
+    (fold 6's read A, N2, and read B, N5: a no-op namesake under `files/` passed every test)."""
     def imported(entry):
         return next((str(v) for k, v in entry.items() if k == "import_playbook" or k.endswith(".import_playbook")),
                     None) if isinstance(entry, dict) else None

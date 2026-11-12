@@ -1,0 +1,73 @@
+---
+# Refuse a host whose class has no entrypoint for this play installed: its `device_role` is missing, or names a role
+# that holds no `tasks/<kontroll_entrypoint>` with a task in it where include_role would load it from (I-66). A play
+# imports this file in a block whose rescue records the refused host, before the include_role it guards, with
+# `kontroll_entrypoint` set to that include's `tasks_from`: backup-configs.yml's capture play, first in the capture
+# block (`backup`); ping.yml's reach play, in a block of its own before the probe's (`check`, I-83).
+#
+# An include_role that cannot load its entrypoint is no task failure. A `device_role` no search path holds moves the
+# host into the rescue with no failed task and drops it from every later play; a role that holds no such file, or an
+# entry the run's user cannot read, ends the whole run (rc 4), the other hosts with it; a host that names no
+# `device_role` ends it on 2.18 (rc 1). Where that was every host, or wherever the run ended, the run ended before the
+# key cleanup and left the run's SSH keys on disk. And a class that loads but runs nothing (an empty `device_role`, a
+# role with no `tasks/` directory, an entry with no task in it: empty or comments only) left backup's summary reading
+# "not run" with the run passing, and ping's reading "OK". This check fails each of those as a task, which the rescue
+# records, so the host goes on to the cleanup and the summary.
+#
+# It looks where ansible-core's RoleDefinition._load_role_path looks, in its order, and takes the first path that
+# exists: the playbook directory's `roles/`, each roles_path entry as the config lookup returns it
+# (ANSIBLE_ROLES_PATH, or `roles_path` in the ansible.cfg in use), the playbook directory itself, then the name as a
+# path from the run's working directory; each joined with the name and resolved as ansible-core's unfrackpath resolves
+# it (environment variables, then `~`, then the real path from the working directory). In that role it takes the
+# first file `tasks/<entrypoint>`, bare, `.yml`, `.yaml` or `.json` (Role._load_role_yaml's names for a `tasks_from`;
+# a directory of that name is passed over), and reads it: it must hold a line that is not blank, not a comment and
+# not a document marker. An entry the run's user cannot read fails this task with the read's error, which the rescue
+# records as it does a refusal. A role with no `tasks/` directory has no such file, so it is refused too.
+#
+# Not checked: the entry's YAML (a `from_yaml` would refuse Ansible's own tags, `!unsafe` and `!vault`, which a role
+# may use), so an entry that does not parse, is not a list or holds an empty one (`[]`) passes; a name in collection
+# form (`ns.collection.role`), which ansible-core looks for among the installed collections first, then, for a
+# three-part name it finds in none, on the roles path; a play or task that sets `collections:` (the dispatch scan,
+# tests/unit/test_group_dispatch_refuses_local.py, reports one); a templated roles_path entry, and so, on 2.19, the
+# built-in default when the run configures no roles_path (the shipped ansible.cfg and Semaphore's environment both set
+# one); the role's defaults, vars and meta; and a file or role the entrypoint includes. A missing include, a role
+# dependency that is not installed and a collection that is not installed still fail at the include, where the play's
+# rescue fails the host (where it is every host, the run ends before the key cleanup); an entry that does not parse or
+# is not a list, an installed collection whose role has no such entry, a three-part dotted name the roles path answers
+# without one, and defaults, vars or meta that do not parse still end the whole run there (rc 4), every host's keys
+# left.
+#
+# `assert` is an action that runs on the controller and touches no host; it reads only the control node's files.
+
+- name: Refuse a host whose class has no entrypoint for this play installed
+  ansible.builtin.assert:
+    that:
+      - device_role is defined
+      - device_role is string
+      - device_role | length > 0
+      - device_role is match(_kontroll_collection_form) or _kontroll_entrypoint_files | length > 0
+      # Read here, not through a var: on 2.18 a var's text that starts `[` or `{` comes back as a list or a dict
+      # (the `search` test turns it back into text, so it matches the same entries; read here, it stays the text).
+      - >-
+        device_role is match(_kontroll_collection_form)
+        or lookup('ansible.builtin.file', _kontroll_entrypoint_files | first) is search(_kontroll_entry_line)
+    fail_msg: >-
+      {{ inventory_hostname }}: the class {{ device_role | default('(none: the host names no device_role)') }} has no
+      `{{ kontroll_entrypoint }}` entrypoint installed (no tasks/{{ kontroll_entrypoint }}.yml, .yaml or .json with a
+      task in it, in the first role of that name on the roles path: {{ _kontroll_roles_path | join(':') }}). Refused for
+      this host; the other hosts go on.
+    quiet: true
+  vars:
+    _kontroll_collection_form: '^[A-Za-z0-9_]+([.][A-Za-z0-9_]+){2,}$'
+    # A line whose first character past its indent is not `#`, and which is not `---` or `...` alone.
+    _kontroll_entry_line: '(?m)^[ \t]*(?!(---|[.][.][.])[ \t]*(#.*)?$)[^\s#]'
+    _kontroll_roles_path: "{{ query('ansible.builtin.config', 'DEFAULT_ROLES_PATH') | flatten(levels=1) }}"
+    _kontroll_role_dir: >-
+      {{ (([playbook_dir ~ '/roles'] + _kontroll_roles_path + [playbook_dir]) | product([device_role])
+          | map('ansible.builtin.path_join') | list + [device_role])
+         | map('ansible.builtin.expandvars') | map('ansible.builtin.expanduser') | map('ansible.builtin.realpath')
+         | select('exists') | first | default('') }}
+    _kontroll_entrypoint_files: >-
+      {{ [] if _kontroll_role_dir == '' else
+         ([_kontroll_role_dir ~ '/tasks/'] | product([kontroll_entrypoint] | product(['', '.yml', '.yaml', '.json'])
+          | map('join') | list) | map('join') | select('file') | list) }}

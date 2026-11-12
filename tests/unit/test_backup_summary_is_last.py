@@ -7,15 +7,19 @@ one-host scheduled backup of a device that answers nothing) left the run's SSH k
 SECURITY.md accepts that residue for a run that ends before the cleanup on its own (a hard abort; a failing local
 play: I-48). A capture that fails as a task is recorded as failed by the capture play's rescue (I-12), so it is
 this case too. These rows hold the order, and what lets the summary follow the key cleanup: nothing after the
-cleanup connects to anything.
-tests/integration/test_backup_failed_run_cleans_up.py runs it for real.
+cleanup connects to anything. ping.yml's last play, which fails a host whose class has no `check` entrypoint
+installed, follows its cleanup for the same reason (I-83), so the row on what follows the cleanup reads it too.
+tests/integration/test_backup_failed_run_cleans_up.py and tests/integration/test_ping_refused_class_runs.py run them
+for real.
 """
 import os
 
+import pytest
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PLAYBOOK = os.path.join(ROOT, "ansible", "playbooks", "backup-configs.yml")
+FOLLOWED = ["backup-configs.yml", "ping.yml"]   # the playbooks in which plays follow the key cleanup
 FAILERS = {"ansible.builtin.assert", "assert", "ansible.builtin.fail", "fail"}
 # The actions that run on the controller and open no connection, on any connection (each declares it needs none).
 CONTROLLER_ONLY = FAILERS | {"ansible.builtin.debug", "debug", "ansible.builtin.set_fact", "set_fact",
@@ -25,8 +29,8 @@ TASK_KEYS = {"name", "when", "tags", "vars", "no_log", "changed_when", "failed_w
 BLOCK_KEYS = {"block", "rescue", "always"}
 
 
-def _plays():
-    with open(PLAYBOOK, encoding="utf-8") as fh:
+def _plays(playbook=PLAYBOOK):
+    with open(playbook, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
 
@@ -78,8 +82,9 @@ def test_the_history_the_prune_and_the_key_cleanup_come_before_the_summary():
     assert snapshot < prune < cleanup < summary, (snapshot, prune, cleanup, summary)
 
 
-def test_every_play_after_the_key_cleanup_connects_to_nothing():
-    """Every play after the `_cleanup-ssh-keys.yml` import gathers no facts (`gather_facts: false`, written: the
+@pytest.mark.parametrize("name", FOLLOWED)
+def test_every_play_after_the_key_cleanup_connects_to_nothing(name):
+    """In backup-configs.yml and in ping.yml, every play after the `_cleanup-ssh-keys.yml` import gathers no facts (`gather_facts: false`, written: the
     default gathers), runs no role, and holds only controller-side actions (`debug`, `assert`, `fail`, `set_fact`,
     `meta`), in blocks too, with no `delegate_to`. Guards what lets the summary follow the key cleanup: anything after
     it that reached a device would look for a key the cleanup has removed (MF-4: the cleanup comes after the last
@@ -87,10 +92,11 @@ def test_every_play_after_the_key_cleanup_connects_to_nothing():
     cleanup and the summary, a summary that gathers facts or runs a role, and a device task in a play split off the
     summary each reached a device after the cleanup and passed it (I-9 reader B's M1, M5-M8). The play's
     `connection: local` is not asserted: these actions open no connection on any connection, and a host's
-    `ansible_connection` outranks the keyword (reader B's N2 and N3)."""
-    plays = _plays()
+    `ansible_connection` outranks the keyword (reader B's N2 and N3). ping.yml's last play, which fails a host whose
+    class has no `check` entrypoint installed, is held to the same (I-83)."""
+    plays = _plays(os.path.join(ROOT, "ansible", "playbooks", name))
     after = plays[_index(plays, _is_cleanup) + 1:]
-    assert after, "no play follows the key cleanup: the summary must"
+    assert after, "no play follows the key cleanup in %s: its failing play must" % name
     for play in after:
         assert play.get("gather_facts") is False, play
         assert not play.get("roles"), play
