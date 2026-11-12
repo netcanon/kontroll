@@ -15,14 +15,15 @@ NetConfig project.
 
 tests/validate.sh's vector steps load `docker/.env.example` with `set -a; . docker/.env.example; set +a`, and
 `KONTROLL_API_UVICORN_EXTRA`'s value holds spaces unquoted: the shell set the variable to `--ssl-keyfile` for one
-command, `/tls/api.key`, which it tried to run, so every gate printed `line 93: /tls/api.key: No such file or
+command, `/tls/api.key`, which it tried to run, so every gate printed `…: /tls/api.key: No such file or
 directory` and anything else sourcing the template got an empty value. Vector's config reads no such variable, so no
 gate went red. The value is quoted now; compose drops the quotes, so the stack resolves as before, and the real
 `docker/.env`, which compose alone reads, is unchanged.
 
-- Tests: `unit/test_env_example_sources_cleanly.py` — every value with whitespace in the template is quoted; it
-  sources under `set -eu` with nothing on stderr and the shell reads each value whole; compose resolves the api's
-  command with the uvicorn arguments and no quote.
+- Tests: `unit/test_env_example_sources_cleanly.py` — every value with whitespace in the template is quoted, and
+  none holds a backslash inside double quotes (the shell keeps it, compose reads an escape); it sources under `set
+  -eu` with nothing on stderr and the shell reads each value whole; compose resolves the api's command with the
+  uvicorn arguments and no quote; the rule refuses each shape it names.
 
 ### fix(docker): the installer leaves no root-owned bytecode in the operator's checkout (I-54, 2026-11-10)
 
