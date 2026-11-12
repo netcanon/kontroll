@@ -32,10 +32,10 @@
       delegate_to: localhost
 
     # `cli_command` runs only a `show` command in a --check run (the module's own rule: the command starts with
-    # `show`), and fails the host on any other, so a drop-in class whose backup is `display current-configuration`
-    # failed every dry-run at its read. Such a read is not made in a dry-run: the capture is previewed empty and
-    # nothing is refused, as the raw-SSH backend's dry-run does with the read `raw` cannot make there (I-11). A
-    # real run always reads.
+    # `show`, so not `sh run`), and fails the host on any other, so a drop-in class whose backup is `display
+    # current-configuration` failed every dry-run at its read. Such a read is not made in a dry-run: the capture is
+    # previewed empty and nothing is refused, as the raw-SSH backend's dry-run does with the read `raw` cannot make
+    # there (I-11). A real run always reads.
     - name: Pull config via cli_command
       ansible.netcommon.cli_command:
         command: "{{ backend_backup_command | default('show running-config') }}"

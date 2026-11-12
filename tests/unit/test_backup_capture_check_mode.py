@@ -6,8 +6,9 @@ raw-SSH and RouterOS `Write capture` read `_cfg.stdout` and `ros_export.stdout[0
 `backup-configs.yml --check` failed every openwrt and RouterOS host there, on a real fleet as on the mock one
 (tests/fresh-node-check.sh's backup step, T27's first real run). The API write was not reached in a dry-run: its
 failure record read the skipped pull as a failed answer first (I-6; test_backend_api_check_mode.py holds when each
-task runs). Each write now reads an empty capture in a dry-run, and the device's output exactly as before in a real
-run.
+task runs). The CLI's read (`cli_command`) does run in check mode, for a `show` command; for any other the role's own
+`when` skips it in a dry-run (I-11), and its write previews from that skip. Each write now reads an empty capture in
+a dry-run, and the device's output exactly as before in a real run.
 
 The `content` expressions are read from the role files and rendered with core Jinja and StrictUndefined, as Ansible
 fails on an undefined attribute; the skipped results are the shape Ansible registers for a skipped task. And no

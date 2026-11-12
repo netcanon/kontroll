@@ -234,6 +234,7 @@ _CLI_GOOD, _CLI_EMPTY = ROLES[CLI][2], ROLES[CLI][3]
     ("display current-configuration", True, WHEN_SKIPPED, [NOTE, WRITE]),
     (" show running-config", True, WHEN_SKIPPED, [NOTE, WRITE]),         # the module's rule: it STARTS with show
     ("Show running-config", True, WHEN_SKIPPED, [NOTE, WRITE]),
+    ("sh run", True, WHEN_SKIPPED, [NOTE, WRITE]),                      # an abbreviation is not a show to it
     # ... and a real run reads, writes what it read and refuses what answered nothing, as for any command
     ("display current-configuration", False, _CLI_GOOD, [READ, WRITE]),
     ("display current-configuration", False, _CLI_EMPTY, [READ, NOTHING]),
@@ -243,18 +244,28 @@ _CLI_GOOD, _CLI_EMPTY = ROLES[CLI][2], ROLES[CLI][3]
     ("show running-config", True, _CLI_GOOD, [READ, WRITE]),
     ("show running-config", True, _CLI_EMPTY, [READ, NOTHING]),
     ("showrun", True, _CLI_GOOD, [READ, WRITE]),                           # starts with show: the module runs it
+    ("show running-config", False, _CLI_GOOD, [READ, WRITE]),
+    # a class that sets no command takes the default, `show running-config` (ios_xe_auto does): read either way
+    (None, True, _CLI_GOOD, [READ, WRITE]),
+    (None, False, _CLI_GOOD, [READ, WRITE]),
 ])
 def test_a_cli_read_that_is_not_a_show_command_is_not_made_in_a_dry_run(command, check_mode, result, runs):
     """Of the CLI backup's read, its note, its refusal and its write, exactly the ones named run, for a backup command
-    that is not a `show` and for one that is: in a dry-run, a command that does not start with `show` (case and a
-    leading space count, as in cli_command's own check) is not read; the note says so, the write previews an empty
-    capture, and nothing is refused. A real run reads every command and is judged by its answer. Guards I-11:
+    that is not a `show`, for one that is, and for a class that sets none (`None`: the variable left undefined, so
+    the default applies): in a dry-run, a command that does not start with `show` (case, a leading space and an
+    abbreviation such as `sh run` count, as in cli_command's own check) is not read; the note says so, the write
+    previews an empty capture, and nothing is refused. A real run reads every command and is judged by its answer.
+    Guards I-11:
     cli_command runs only a `show` command in check mode and fails the host on any other ("Only show commands are
     supported when using check_mode"), so the mandated `--check` of a fleet with such a class failed at its read;
     and a dry-run that would refuse the read it skipped (the run would fail at its summary instead), a skip that
     reached a real run, or a rule that differs from the module's (a `show` command left unread in a dry-run, or
-    another command sent to the module there)."""
-    ctx = {"_cfg": result, "ansible_check_mode": check_mode, "backend_backup_command": command}
+    another command sent to the module there); and, from the I-11 reads (F3, F4), a condition that drops the
+    `default` (every dry-run of a class relying on it would fail on an undefined variable, I-11's own failure
+    back for ios_xe_auto), a `show` left unread in a real run, and a rule matching `sh` rather than `show`."""
+    ctx = {"_cfg": result, "ansible_check_mode": check_mode}
+    if command is not None:
+        ctx["backend_backup_command"] = command
     assert [t for t in (READ, NOTE, NOTHING, WRITE) if _runs(CLI, t, ctx)] == runs
 
 

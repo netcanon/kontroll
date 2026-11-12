@@ -9,8 +9,11 @@ tests/unit/test_backup_empty_capture_refused.py's; only a run says that the play
 written, and that a real run still makes the read.
 
 A local connection stands in for the device: in the dry-run the read is skipped before any connection, so the run
-needs none; in the real run the read is made and fails on it (cli_command needs network_cli), which shows it was made.
-It needs ansible-playbook, git and ansible.netcommon: where one is missing every row is skipped (the gate's images and
+needs none; in the real run the read is made, and netcommon's action plugin refuses the local connection before the
+module runs (cli_command needs network_cli), which shows the read was made but not what the module would have said.
+So these rows hold that the play passes, writes nothing and still reads in a real run; the module's own check-mode
+rule, and the role's agreement with it, are the unit rows'. It needs ansible-playbook, git and ansible.netcommon
+(to resolve `ansible.netcommon.cli_command`): where one is missing every row is skipped (the gate's images and
 CI's validate job have all three; netcommon comes in as cisco.ios's dependency). Nothing of the developer's Ansible or
 git reaches the play, but for where the collections are: its configuration, home and temporary directory, the
 inventory and the captures are the row's own. The row's own home would move the default collection path under it,
@@ -39,8 +42,8 @@ COLLECTIONS = os.environ.get("ANSIBLE_COLLECTIONS_PATH") or os.pathsep.join(
     [os.path.expanduser("~/.ansible/collections"), "/usr/share/ansible/collections"])
 _NETCOMMON = any(os.path.isfile(os.path.join(d, "ansible_collections", "ansible", "netcommon", "plugins", "modules",
                                              "cli_command.py")) for d in COLLECTIONS.split(os.pathsep) if d)
-pytestmark.append(pytest.mark.skipif(not _NETCOMMON, reason="needs ansible.netcommon in %s (cli_command's own "
-                                                            "check-mode rule is the one I-11 is about)" % COLLECTIONS))
+pytestmark.append(pytest.mark.skipif(not _NETCOMMON, reason="needs ansible.netcommon in %s (to resolve "
+                                                            "ansible.netcommon.cli_command)" % COLLECTIONS))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PLAYBOOK = os.path.join(ROOT, "ansible", "playbooks", "backup-configs.yml")
@@ -114,14 +117,21 @@ def test_the_dry_run_passes_notes_the_read_and_writes_nothing(lab):
 
 def test_a_real_run_still_makes_the_read(lab):
     """A real run makes the read (here it fails on the local connection, as a CLI read needs network_cli), so the
-    host fails at the read and is neither refused nor recorded captured; the good capture is kept. Guards the skip
-    reaching a real run, where a backup would never read the device again (the refusal would then fail the run
-    each night, naming an answer the device was never asked for)."""
+    host fails at the read's own task (its output up to the next task says `fatal` for the host, not `skipping`),
+    and the summary's one line for it names that task as where the capture stopped (I-12's rescue); it is neither
+    refused nor recorded captured; the good capture is kept. Guards the skip reaching a real run, where a backup
+    would never read the device again (the refusal would then fail the run each night, naming an answer the device
+    was never asked for), and a read skipped there whose host fails at a later task instead (the I-11 reads'
+    F2/N3: the first form of this row matched a `fatal` under any later task; the summary would name that task)."""
     rc, out = _play(lab, check=False)
     assert rc != 0, out
-    assert re.search(r"TASK \[backend_netcommon_cli : Pull config via cli_command\][^\n]*\n(?:[^\n]*\n)*?"
-                     r"fatal: \[%s\]" % re.escape(HOST), out), out
+    read = re.search(r"TASK \[backend_netcommon_cli : Pull config via cli_command\][^\n]*\n"
+                     r"((?:(?!TASK \[)[^\n]*\n)*)", out)
+    assert read, out
+    assert "fatal: [%s]" % HOST in read.group(1) and "skipping: [%s]" % HOST not in read.group(1), out
     assert "NOT PREVIEWED" not in out, out
-    assert not any(line.startswith(("captured", "FAILED")) for line in _summary(out)), out
+    summary = _summary(out)
+    assert len(summary) == 1 and summary[0].startswith("FAILED: "), out
+    assert 'the task "Pull config via cli_command"' in summary[0], out
     with open(os.path.join(lab.backups, CAPTURE), encoding="utf-8") as fh:
         assert fh.read() == GOOD
