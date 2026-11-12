@@ -445,8 +445,12 @@ session — the runbook discipline, applied to automation.
 **Implements:** `ignore_unreachable: true` on fleet plays (`playbooks/*.yml`);
 a missing/invalid secret aborts the run.
 **Proves:** `backup-configs.yml`'s `ignore_unreachable` tolerates a down host and
-`ping.yml`'s TCP-probe block/rescue reports it honestly (no false "ok"); SOPS
-decryption failure raises, never silently continues with an empty secret.
+`ping.yml`'s TCP-probe block/rescue reports it honestly (no false "ok");
+`install-node-exporter.yml` runs nothing on a host whose fact gathering was
+unreachable, so a down host passes a real and a dry run, beside an up one and with
+the shipped role (`tests/integration/test_fleet_play_failure_cleans_up.py`'s I-89
+rows; `tests/unit/test_fleet_play_rescue.py` pins the `when`); SOPS decryption
+failure raises, never silently continues with an empty secret.
 
 Same availability/safety split NetConfig uses: one bad *definition* warns and
 skips; a bad *secret* stops the world.

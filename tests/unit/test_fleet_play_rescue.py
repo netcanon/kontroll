@@ -105,6 +105,16 @@ def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_bl
     assert [(_module(t), t[_module(t)]) for t in block["block"]] == work, block["block"]
 
 
+def test_the_install_runs_its_role_only_on_a_host_whose_gathering_answered():
+    """install-node-exporter.yml's fact gathering registers `_kontroll_gather`, and the role's include runs only
+    when that result is not unreachable. Guards I-89: the play's `ignore_unreachable` lets a down host go on, and the
+    role then read the facts the gathering did not bring and failed the host, so one down host failed the run.
+    tests/integration/test_fleet_play_failure_cleans_up.py runs it with the stub and with the real role."""
+    block = _play("install-node-exporter.yml", DISPATCH["install-node-exporter.yml"][0])["tasks"][1]["block"]
+    assert block[0].get("register") == "_kontroll_gather", block[0]
+    assert block[1].get("when") == "_kontroll_gather is not unreachable", block[1]
+
+
 @pytest.mark.parametrize("name", sorted(DISPATCH))
 def test_the_rescue_records_the_task_fails_a_host_with_no_failed_task_and_ends_the_host(name):
     """The rescue is three tasks, in order, each holding its name, its module and (the first two) its `when`, and
