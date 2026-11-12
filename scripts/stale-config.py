@@ -8,16 +8,22 @@ both on the old ones until something restarted them (found on both boxes' redepl
 runs this after `up`, restarts the services it names, then runs it again with `--write` to record what they loaded.
 
 A service's config is each read-only bind `docker compose config` resolves for it (every include, syntax and
-interpolation, as compose itself reads them) whose source is either in the repo tree, file or directory, or a
-FILE under the storage root (what the deploy puts there: the Caddyfile, Vector's key, CA bundle and known_hosts,
-the GUI's age key). A directory under the storage root is a store (audit logs, TLS), and a source elsewhere is the
-host's; neither is config. A source under both roots (one root inside the other) is the deeper root's. A bind
-whose target the service names in its `kontroll.config.live` label (space-separated) is one it reloads on its own
-(Grafana's dashboards, Loki's overrides, Prometheus's file_sd targets): a restart would only interrupt it. Its
-digest covers every entry under those sources, the path and the content, never the mtime — the generators
-rewrite their files on every run, so an mtime says nothing. A service named that the resolved stack does not hold
-(one behind a compose profile, say) fails the run: its config could not be checked, and saying nothing would
-read as "unchanged".
+interpolation, as compose itself reads them) whose source is either in the repo tree, file or directory, or a FILE
+under the storage root (the Caddyfile and Vector's key, CA bundle and known_hosts, which the deploy renders, and the
+GUI's age key, which the operator installs). A directory under the storage root is a store (audit logs, TLS), and a
+source elsewhere is the host's; neither is config. A source under both roots (one root inside the other) is the
+deeper root's. A bind whose target the service names in its `kontroll.config.live` label (space-separated) is one it
+reloads on its own (Grafana's dashboards, Loki's overrides, Prometheus's file_sd targets): a restart would only
+interrupt it. Its digest covers every entry under those sources, the path and the content, never the mtime — the
+generators rewrite their files on every run, so an mtime says nothing. A file under the storage root adds its mode,
+owner and group: a file bind keeps the file its container started with, so a key put back readable, as a new file
+with the same bytes, left the service on the one it could not read, and the deploy ended green (I-31). A mode or
+owner changed on the same file reaches the container at once, and the restart it causes is harmless. None changes
+from run to run unless someone changed it: the deploy sets the mode and owner of each file it renders whenever it
+renders it (the empty placeholder key it leaves as it is once there), and the age key is the operator's. The inode
+is not read (a freed number is reused, so it cannot tell a new file from the old): a new file with the same bytes,
+mode and owner as the recorded one is no change. A service named that the resolved stack does not hold (one behind a
+compose profile, say) fails the run: its config could not be checked, and saying nothing would read as "unchanged".
 
 The stamp (`--stamp`) holds the digest each running service last loaded; it is root's and 0600, because a digest
 of a file that holds a credential (the rendered snmp.yml) is a way to test guesses at it. For the same reason this
@@ -25,10 +31,20 @@ prints service names only, never a digest. `--write` merges: a service left out 
 A service whose container `up` started in this run (`--started`, container names) loaded the config as it is: it
 is recorded and never named.
 
+`--forget` drops the named services' records and reads nothing else (no compose, no stack): the next check names
+each one. deploy-stack.yml's G9 gate runs it for onboard-gui when it refuses the GUI's age key, a dry-run's refusal
+too. The refusal stops the play before the record, so the record is of a key the gate passed, and the install the
+refusal prints puts that key's mode and owner back: a GUI left holding a key it cannot read (the file its bind holds
+made unreadable in place, or a restart onto a bad path) matched the record once the key was put right, and the
+deploy ended green on it (I-31's two reads). Dropping a record can only add a restart, never hide one, so it may run
+in a dry-run.
+
 Usage:  stale-config.py --stamp <file> --stack-dir <docker dir> --storage-root <dir> [--started c1,c2] <svc>...
         stale-config.py --stamp <file> --stack-dir <docker dir> --storage-root <dir> --write <svc>...
-The first prints the stale services, one a line; the second prints `written` or `unchanged`. A service with no
-config is never stale and is not recorded; one missing from the stamp (none yet, or added since) is stale.
+        stale-config.py --stamp <file> --forget <svc>...
+The first prints the stale services, one a line; the second and third print `written` or `forgotten`, or
+`unchanged` (a forget with nothing to drop writes nothing). A service with no config is never stale and is not
+recorded; one missing from the stamp (none yet, added since, or forgotten) is stale.
 """
 import argparse
 import hashlib
@@ -116,6 +132,9 @@ def _digest(sources, roots):
         real = os.path.realpath(source)
         if os.path.isfile(real):
             _entry(h, real, "")
+            if kind == "store":                            # a file the deploy put there: who may read it, too
+                st = os.stat(real)
+                h.update(b"M%o:%d:%d\0" % (stat.S_IMODE(st.st_mode), st.st_uid, st.st_gid))
         elif os.path.isdir(real):
             for d, dirs, names in os.walk(real):
                 dirs.sort()
@@ -164,14 +183,28 @@ def _started_services(config, containers):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--stamp", required=True, help="the file holding what each running service last loaded")
-    ap.add_argument("--stack-dir", required=True, help="the docker/ dir the deploy runs compose from")
-    ap.add_argument("--storage-root", required=True, help="the stack's storage root (KONTROLL_STORAGE_ROOT)")
+    ap.add_argument("--stack-dir", help="the docker/ dir the deploy runs compose from (all but --forget)")
+    ap.add_argument("--storage-root", help="the stack's storage root (KONTROLL_STORAGE_ROOT; all but --forget)")
     ap.add_argument("--started", default="", help="comma-separated containers `up` started in this run")
     ap.add_argument("--write", action="store_true", help="record the services' digests instead of comparing")
+    ap.add_argument("--forget", action="store_true", help="drop the services' records, so the next check names each")
     ap.add_argument("--config-json", help=argparse.SUPPRESS)      # tests: a resolved config in place of compose
     ap.add_argument("--env-file", help=argparse.SUPPRESS)         # tests: the shipped .env.example
     ap.add_argument("service", nargs="*")
     args = ap.parse_args(argv)
+    if args.forget:                                        # the G9 gate's refusal: the stamp alone, nothing resolved
+        if args.write or not args.service:
+            ap.error("--forget takes one or more services, and not --write")
+        loaded = _read_stamp(args.stamp)
+        stamp = {s: d for s, d in loaded.items() if s not in args.service}
+        if stamp == loaded:
+            print("unchanged")
+        else:
+            _write_stamp(args.stamp, stamp)
+            print("forgotten")
+        return 0
+    if not (args.stack_dir and args.storage_root):
+        ap.error("--stack-dir and --storage-root are required")
     if args.config_json:
         with open(args.config_json, encoding="utf-8") as fh:
             config = json.load(fh)

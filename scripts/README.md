@@ -151,8 +151,13 @@ the Caddyfile, Vector's key, CA bundle and known_hosts, the GUI's age key); a so
 one's, so a storage root inside the checkout still holds stores. A bind whose target the service lists in its
 `kontroll.config.live` label is one it reloads by itself (Grafana's dashboards, Loki's overrides, Prometheus's
 file_sd targets) and is left out. The digest is of the paths, types and content, never the mtime (the generators
-rewrite their files every run); a link inside a source is recorded by its target, not followed. A service named
-that the resolved stack does not hold (one behind a compose profile) fails the run, by name.
+rewrite their files every run); a link inside a source is recorded by its target, not followed. A file under the
+storage root adds its mode, owner and group: a file bind keeps the file its container started with, so a key put
+back with the same bytes and another mode or owner is a change the service is restarted for (I-31). `--forget
+<svc>…` drops those services' records and reads nothing else, so the next check names each one: the deploy's G9 gate
+runs it for onboard-gui when it refuses the GUI's key (a dry-run's refusal too), since the record is of a key the
+gate passed and the install it prints puts that key's mode and owner back. A service named that the resolved stack
+does not hold (one behind a compose profile) fails the run, by name.
 
 It names each service whose digest differs from what it last loaded, except one whose container `up` printed
 `Started` for in this run (`--started`): that one loaded the config as it is. The deploy restarts those named, then

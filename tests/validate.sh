@@ -144,6 +144,8 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
                tests/integration/test_g9_age_key_gate_real_stat.py tests/integration/test_tls_owner_dry_run.py \
                tests/unit/test_storage_root_floor.py \
                --deselect tests/unit/test_storage_root_floor.py::test_install_prereqs_without_root_makes_nothing \
+               tests/unit/test_stale_config.py::test_a_store_files_mode_or_owner_changed_makes_its_service_stale \
+               tests/unit/test_stale_config.py::test_a_link_targets_owner_changed_makes_its_service_stale \
                -p no:cacheprovider -rs --color=no 2>&1)"; rc=$?
       printf "%s\n" "$out"
       [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY" "$as_root"

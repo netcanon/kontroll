@@ -11,6 +11,33 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(scripts): a deploy restarts a service whose key came back with another mode or owner (I-31, 2026-11-09)
+
+The deploy's config check (`scripts/stale-config.py`) digested a bound file's bytes only. A file bind keeps the file
+its container started with, so a key put back as a new file with the same bytes was no change: the re-run ended
+green on a running GUI that still held the key it could not read, and the refusal asked for a restart by hand
+(I-22). Now a file under the storage root (the Caddyfile and Vector's key, CA bundle and known_hosts, which the
+deploy renders, and the GUI's age key, which the operator installs) adds its mode, owner and group to its service's
+digest. That alone did not reach the GUI: the refusal stops the play before the record, so the record is always of a
+key the gate passed, and the install the refusal prints puts that key's mode and owner back (both reads, measured).
+So the G9 gate also drops the GUI's record when it refuses its key (`stale-config.py --forget onboard-gui`, in a
+dry-run too), and the first deploy past the gate restarts a running GUI, whatever key came back; the refusal and
+docs/SETUP.md say so in place of the by-hand restart. A file put back with the same bytes, mode and owner is still
+no change, and the tree's files are judged as before, by content: their modes are the checkout's.
+
+- The first deploy after this change restarts Caddy, Vector, onboard-gui and pve-exporter (where a device CA is
+  pinned) once, where they run and `up` did not just start them: their records were made without the modes. Later
+  deploys restart them only for a change.
+- Tests: `test_stale_config.py` — a storage-root file's mode, owner or group changed makes its service stale, once
+  (the owner's bits alone too; owner and group as root, now run by the gate's as-root step); the owner read is a
+  link's target's; a link to a key replaced by a file with the same bytes and another mode is stale, and the same file
+  re-installed is not; a forgotten service is stale whatever comes back, and the forget keeps the others' records and
+  writes nothing when there is nothing to drop; a tree file's mode is not read, under any umask; the find runs on
+  every deploy and spares only what `up` started. `test_g9_age_key_refusal.py` — the forget's condition is the gate's,
+  negated, on every hand-written shape, between the stat and the assert, in a dry-run too; the refusal says the re-run
+  restarts a running GUI and prints no by-hand restart in any spelling. `test_g9_age_key_gate_real_stat.py` — on each
+  real shape, a refused key drops the GUI's record and a passed one keeps it, in `--check` too.
+
 ### fix(ansible): a CLI backup whose command is not a `show` no longer fails every dry-run (I-11, 2026-11-09)
 
 The CLI backend (`backend_netcommon_cli`, the generic `network_cli` backup) reads with `ansible.netcommon.cli_command`,
