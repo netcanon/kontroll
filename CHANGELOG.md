@@ -30,7 +30,9 @@ written as root there, and by the installer, which is logged as its own issue.
 - Tests: `integration/test_installer_leaves_no_bytecode.py` — the value is a literal; neither launcher passes the
   variable to the run and the installer's entrypoint does not drop it; deploy-stack's lockfile task runs `python3
   -B`; bootstrap's own lockfile task and a filter task, run over a copy of the tree with the value, leave no cache,
-  and without it leave both.
+  and without it leave both. The installer's ansible-playbook is pip's, a plain `#!/usr/bin/python3`; a launcher that
+  runs Python with `-E` or `-I`, which ignore every PYTHON* variable (pipx's, the one CI's runner image puts on PATH),
+  runs there through its interpreter without the flag.
 
 ### fix(scripts): a deploy restarts a service whose key came back with another mode or owner (I-31, 2026-11-09)
 

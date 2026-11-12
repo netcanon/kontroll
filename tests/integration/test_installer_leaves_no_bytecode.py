@@ -16,6 +16,12 @@ one of the repo's filters, and run them with ansible-playbook against a copy of 
 no `__pycache__` or `.pyc` appears anywhere in the copy; without it (the control row) both writers leave one, so the
 rows can see what they guard. Nothing of the developer's Ansible reaches the play: its configuration and home are the
 row's own. Needs ansible-playbook.
+
+The installer's ansible-playbook is pip's, its first line a plain `#!/usr/bin/python3`. A pipx launcher (pipx 1.17,
+the one on GitHub's runner image, whose Ansible CI's pytest legs find on PATH) is `#!<venv>/bin/python -E`, and `-E`
+(or `-I`) makes Python ignore every PYTHON* variable, PYTHONDONTWRITEBYTECODE with them. The run rows start such a
+launcher through its interpreter without that flag: the same Ansible code, reading the environment as the installer's
+does.
 """
 import os
 import shutil
@@ -33,6 +39,27 @@ DEPLOY = os.path.join(ROOT, "ansible", "playbooks", "deploy-stack.yml")
 LAUNCHERS = [os.path.join(ROOT, *p) for p in (("scripts", "kontroll.sh"), ("scripts", "kontroll-installer.sh"),
                                               ("docker", "installer", "entrypoint.sh"))]
 _NEEDS = pytest.mark.skipif(not shutil.which("ansible-playbook"), reason="needs ansible-playbook (it runs the task)")
+
+
+def _playbook_command(path):
+    """The command that starts the ansible-playbook at `path` with its Python reading the environment: the launcher
+    itself, or, when its first line runs Python with `-E` or `-I`, that interpreter without the flag (the others kept)
+    and the launcher as its script. An `env` launcher passes no flag to Python and runs as it is."""
+    with open(path, "rb") as fh:
+        first = fh.readline().decode("utf-8", "replace").strip()
+    parts = first[2:].split() if first.startswith("#!") else []
+    if not parts or os.path.basename(parts[0]) == "env":
+        return [path]
+    kept = []
+    for flag in parts[1:]:
+        if flag.startswith("-") and not flag.startswith("--"):
+            flag = "-" + flag[1:].replace("E", "").replace("I", "")
+            if flag == "-":
+                continue
+        kept.append(flag)
+    if kept == parts[1:]:
+        return [path]
+    return [parts[0]] + kept + [path]
 
 
 def _installer_env():
@@ -116,9 +143,10 @@ def _run(tmp_path, bytecode_off):
                ANSIBLE_NOCOLOR="1", ANSIBLE_DEPRECATION_WARNINGS="0", ANSIBLE_LOCALHOST_WARNING="0")
     if bytecode_off:
         env["PYTHONDONTWRITEBYTECODE"] = _installer_env()["PYTHONDONTWRITEBYTECODE"]
-    p = subprocess.run(["ansible-playbook", "-i", str(tmp_path / "hosts.yml"), str(tmp_path / "play.yml")],
+    cmd = _playbook_command(shutil.which("ansible-playbook"))
+    p = subprocess.run(cmd + ["-i", str(tmp_path / "hosts.yml"), str(tmp_path / "play.yml")],
                        cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=300)
-    assert p.returncode == 0 and "msg\": \"x\"" in p.stdout, p.stdout + p.stderr
+    assert p.returncode == 0 and "msg\": \"x\"" in p.stdout, (cmd, p.stdout + p.stderr)
     assert (tree / "ansible" / "collections" / "requirements.generated.yml").is_file(), "the task did not generate"
     caches = []
     for dirpath, dirs, files in os.walk(str(tree)):
@@ -133,7 +161,7 @@ def test_a_run_with_the_installers_value_leaves_no_bytecode_in_the_tree(tmp_path
     """With PYTHONDONTWRITEBYTECODE as installer.yaml sets it, bootstrap's own generate task (a bare `python3
     scripts/gen-requirements.py`, which imports scripts/kontroll/) and a task applying the repo's
     kontroll_render_token filter leave no `__pycache__` and no `.pyc` anywhere in the tree they ran over (I-54)."""
-    assert _run(tmp_path, bytecode_off=True) == []
+    assert _run(tmp_path, bytecode_off=True) == [], _playbook_command(shutil.which("ansible-playbook"))
 
 
 @_NEEDS
@@ -145,3 +173,22 @@ def test_without_it_both_writers_leave_a_cache(tmp_path):
     caches = _run(tmp_path, bytecode_off=False)
     assert "scripts/kontroll/__pycache__" in caches, caches
     assert "ansible/filter_plugins/__pycache__" in caches, caches
+
+
+@pytest.mark.parametrize("first, expect", [
+    ("#!/usr/bin/python3", ["L"]),
+    ("#!/usr/bin/env python3", ["L"]),
+    ("#!/opt/pipx/venvs/ansible-core/bin/python -E", ["/opt/pipx/venvs/ansible-core/bin/python", "L"]),
+    ("#!/v/bin/python -sE", ["/v/bin/python", "-s", "L"]),
+    ("#!/v/bin/python -I", ["/v/bin/python", "L"]),
+    ("#!/v/bin/python -s", ["L"]),
+])
+def test_a_launcher_that_ignores_the_environment_runs_through_its_interpreter(tmp_path, first, expect):
+    """A launcher whose first line runs Python with `-E` or `-I` (pipx 1.17 writes `#!<venv>/bin/python -E`) is
+    started through that interpreter without the flag, its other flags kept; a plain, `env` or other-flag launcher runs
+    as it is. CI's pytest legs find the runner image's pipx ansible-playbook on PATH, and there the run row above failed
+    for a reason the installer never meets: `-E` drops PYTHONDONTWRITEBYTECODE, so Ansible compiled the filter plugins
+    into the copy. Without this row a rewrite that kept the flag, or dropped the launcher, would only show on CI."""
+    launcher = tmp_path / "ansible-playbook"
+    launcher.write_text(first + "\nimport sys\n", encoding="utf-8")
+    assert _playbook_command(str(launcher)) == [str(launcher) if x == "L" else x for x in expect]
