@@ -204,7 +204,11 @@ variable name or handed on, a monkeypatch object's `.setattr`, an assignment thr
 `eval`), and so does a conftest without its one restore loop or without a `return originals` in
 `_mock_service_seams`. Anything else is not read, so review holds it: for example a replacement outside
 `_mock_service_seams` through a name that is not an import, a fixture that patches (`mocker`), one made in another
-file, and whether the restore loop puts back what it was handed. The `_seams` docstring names more. A seam
+file, and whether the restore loop puts back what it was handed. The `_seams` docstring names more. Each function
+of `catalog.py` and `probe.py` that starts a process or opens a URL (`ansible-galaxy`, `ansible-doc`, Galaxy's API)
+is replaced by the e2e server, or each of its callers in the GUI's in-process code is
+(`test_every_process_or_url_read_the_e2e_routes_reach_is_behind_a_seam`): the unit list's route read the runner's
+real `ansible-galaxy collection list` through `service_units`, up to 30 s, until the server replaced it (I-105). A seam
 whose fake needs none (a record built by the real constructor, an empty list) is listed in `NO_ROW` with the
 reason. A seam hands out a copy of its canned dict, never the module object. Where a generator writes a file
 another part reads, a round-trip test feeds the real output to the real reader:
@@ -224,7 +228,7 @@ tests/unit/          # pure functions, no I/O
   test_fleet_edit.py         # enable_in_fleet idempotent, comment-preserving
   test_openapi.py            # derive_auth/derive_server/classify_endpoints heuristics
   test_service_layer.py      # service_* return structured data directly (no stdout-parsing)
-  test_mock_conformance.py   # S33: every canned shape in tests/_canned.py (bar `E2E_UNIT`, held by the registry's validator) has the key set + value types of the real function's answer; every e2e-replaced seam the parse reads has a row or a `NO_ROW` reason
+  test_mock_conformance.py   # S33: every canned shape in tests/_canned.py (bar `E2E_UNIT`, held by the registry's validator) has the key set + value types of the real function's answer; every e2e-replaced seam the parse reads has a row or a `NO_ROW` reason; every process or URL read of catalog/probe an e2e route reaches is behind a seam (I-105)
   test_units.py              # runnable-unit prober + service_units resolver + SEC-3 traversal guard + validate_unit_config (R3 configure gate)
   test_actuation_registry.py # actuation/ registry: resolve_pins (exact-wins/fail-closed) + gen-actuation validation (incl. R3 curated knobs) + overlay loader
   test_actuation_service.py  # R4 preview + R5 write verb: build_actuation_plan render/staging-metadata (read-only) + apply_actuation_plan (idempotent write) + stage_plan drift gate

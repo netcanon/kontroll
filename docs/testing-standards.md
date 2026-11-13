@@ -36,8 +36,10 @@ Never patch below the seam. A dict served in place of a real call — a canned r
 belongs once in `tests/_canned.py`, with a row in `tests/unit/test_mock_conformance.py` that compares its shape with
 the real function's answer on a fixture: a mock shaped by belief keeps a UI test green while the server emits
 something else (S33). The e2e server's seams are enforced in the replacement forms the conformance file's parse
-reads or refuses; the forms it does not read, and whether a body or a route test's fake comes from `_canned.py`, are
-held only by review. [../tests/README.md](../tests/README.md) lists the fakes still written by hand and points to
+reads or refuses, and a process or URL read of `catalog.py` or `probe.py` that an e2e route reaches unreplaced fails
+the same file (I-105: the unit dialog's route ran the runner's `ansible-galaxy`); the forms it does not read,
+and whether a body or a route test's fake comes from `_canned.py`, are held only by review.
+[../tests/README.md](../tests/README.md) lists the fakes still written by hand and points to
 the parse's docstring, which names some of the forms it does not read. The live lab and the Playwright flows are never in the blind
 hermetic gate (`pytest -m "not e2e and not slow"`) — see [qa-and-release-pipeline.md](qa-and-release-pipeline.md).
 
