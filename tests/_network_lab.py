@@ -1,5 +1,5 @@
-"""What the rows that run a network_cli play for real share: this machine's ports, and where its Ansible finds the
-network_cli connection.
+"""What the rows that run a network_cli play for real share: this machine's ports, where its Ansible finds the
+network_cli connection, and whether it finds a plugin a row's play needs from a collection.
 
 `serve_ports()` backs conftest.py's `ports` fixture: a port that takes no connection and one that takes each connection
 and closes it at once (no SSH answers there), at a second loopback address where this machine has one. The rows that
@@ -67,11 +67,19 @@ def collections_path():
     return os.pathsep.join(row["value"])
 
 
-def has_network_cli(env, network_os):
-    """Whether the Ansible of the environment `env` has the network_cli connection and `network_os`'s cliconf."""
-    for kind, name in (("connection", "ansible.netcommon.network_cli"), ("cliconf", network_os)):
+def has_plugins(env, *plugins):
+    """Whether the Ansible of the environment `env` has each (`kind`, `name`) plugin, as `ansible-doc` finds it. A row
+    whose play needs a collection's plugin skips, naming it, where the run's Ansible would not find it, rather than
+    failing at the plugin's load: an image that installs its collections under root's home has none for another uid
+    (I-76)."""
+    for kind, name in plugins:
         p = subprocess.run(["ansible-doc", "-t", kind, "-j", name], env=env, capture_output=True, text=True,
                            timeout=120)
         if p.returncode != 0 or name not in p.stdout:
             return False
     return True
+
+
+def has_network_cli(env, network_os):
+    """Whether the Ansible of the environment `env` has the network_cli connection and `network_os`'s cliconf."""
+    return has_plugins(env, ("connection", "ansible.netcommon.network_cli"), ("cliconf", network_os))

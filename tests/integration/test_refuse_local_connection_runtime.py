@@ -12,13 +12,17 @@ the role on the controller, and that ansible-core fills an unset connection with
 the controller; the refusal now freezes the connection, and these rows run that too. They run the shipped file under
 the installed ansible-core, so a refusal that passes a host it should stop fails here.
 
-Nothing contacts a host: the play gathers no facts, and its only tasks are the refusal (an `assert` and a
-`set_fact`) and `debug`s, in the play and in a stub role, all actions on the controller. Every address is TEST-NET-1.
-It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image, on the pinned cores. ansible-core
-2.21 removed the paramiko_ssh connection plugin (2.20 deprecated it), so on a core from 2.21 on (a developer's; CI's
-pytest legs run the shipped cores: I-94), the two hosts on it fail at the plugin load, before the refusal's condition,
-and the rows expect that
-(`_NO_PARAMIKO`).
+Nothing contacts a host: the play gathers no facts, and its only tasks are the refusal (an `assert` and a `set_fact`)
+and `debug`s, in the play and in a stub role, all actions on the controller. Every address is TEST-NET-1. It needs
+ansible-playbook on PATH; tests/validate.sh runs it in the validate image, on the pinned cores. ansible-core 2.21
+removed the paramiko_ssh connection plugin (2.20 deprecated it), so on a core from 2.21 on (a developer's; CI's pytest
+legs run the shipped cores: I-94), the two hosts on it fail at the plugin load, before the refusal's condition, and the
+rows expect that (`_NO_PARAMIKO`). Five hosts connect by a collection's plugin (network_cli bare and by its FQCN,
+httpapi and netconf from ansible.netcommon, with the cisco.ios cliconf and the fortinet.fortios httpapi plugin; chroot
+from community.general): where the run's Ansible lacks any of them (another uid, where an image keeps its collections
+under root's home), those hosts failed at loading it, at the refusal's own task: the failed load, not the refusal, held
+them out of every row, and the rows that name them failed. Every row then skips, naming them (I-76). tests/validate.sh
+runs it at a step that fails on a skipped row.
 """
 import os
 import re
@@ -26,6 +30,8 @@ import shutil
 import subprocess
 
 import pytest
+
+import _network_lab
 
 pytestmark = [
     pytest.mark.integration,
@@ -87,6 +93,15 @@ def _core():
 # two hosts, so a misread fails the rows rather than drops them.
 _NO_PARAMIKO = {"pk", "bpk"} if (_core() or (0, 0)) >= (2, 21) else set()
 _FAILS_AT_LOAD = {"drift", "dbl"} | _NO_PARAMIKO   # past the assert's condition or never at it: the load fails the host
+# The collection plugins the hosts above connect by (ncli, fncli, hapi, ncf, chr). Every row runs under the same
+# configuration (an empty `[defaults]`) and environment, so the first row's answer is every row's (I-76).
+_COLLECTION_PLUGINS = (("connection", "ansible.netcommon.network_cli"),
+                       ("cliconf", _HOSTS["ncli"]["ansible_network_os"]),
+                       ("connection", "ansible.netcommon.httpapi"),
+                       ("httpapi", _HOSTS["hapi"]["ansible_network_os"]),
+                       ("connection", "ansible.netcommon.netconf"),
+                       ("connection", _HOSTS["chr"]["ansible_connection"]))
+_HAS_COLLECTION_PLUGINS = []
 
 
 def _run(tmp_path, allow, *extra, before="", inv=None, files=None):
@@ -94,7 +109,8 @@ def _run(tmp_path, allow, *extra, before="", inv=None, files=None):
     passes no list), over the inventory above (each host's own vars, plus `inv`'s YAML values for it) plus the
     implicit localhost, after the plays `before` holds. After the refusal it prints each host's connection, then
     includes a stub role that prints it again. Beside the plays sit `widened.yml`, a vars file holding `_WIDE`,
-    `widened-template.yml`, one holding `_TMPL`, and each of `files` (a path under the plays' directory: its text)."""
+    `widened-template.yml`, one holding `_TMPL`, and each of `files` (a path under the plays' directory: its text).
+    Where the run's Ansible lacks a plugin the network and chroot hosts connect by, the row skips, naming it (I-76)."""
     play = tmp_path / "playbooks"
     (play / "tasks").mkdir(parents=True, exist_ok=True)
     (play / "roles" / "stub" / "tasks").mkdir(parents=True, exist_ok=True)
@@ -123,6 +139,11 @@ def _run(tmp_path, allow, *extra, before="", inv=None, files=None):
     (tmp_path / "ansible.cfg").write_text("[defaults]\n")   # not the repo's: its collections_path hides the image's
     env = dict(os.environ, ANSIBLE_CONFIG=str(tmp_path / "ansible.cfg"), ANSIBLE_NOCOLOR="1",
                ANSIBLE_LOCAL_TEMP=str(tmp_path / "tmp"), ANSIBLE_LOCALHOST_WARNING="0")
+    if not _HAS_COLLECTION_PLUGINS:
+        _HAS_COLLECTION_PLUGINS.append(_network_lab.has_plugins(env, *_COLLECTION_PLUGINS))
+    if not _HAS_COLLECTION_PLUGINS[0]:
+        pytest.skip("needs %s: without them the inventory's network and chroot hosts fail at loading their connection, "
+                    "not at the refusal (I-76)" % ", ".join(name for _kind, name in _COLLECTION_PLUGINS))
     p = subprocess.run(["ansible-playbook", "-i", str(tmp_path / "inv.yml"), str(play / "probe.yml"), "--check"]
                        + list(extra), cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=300)
     out = p.stdout + p.stderr
