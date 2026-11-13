@@ -23,18 +23,20 @@ import yaml
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PLAYBOOKS = os.path.join(ROOT, "ansible", "playbooks")
 ROLES = os.path.join(ROOT, "ansible", "roles")
-# The block's first task clears the marker; its last two set it (the role's tasks are done) and run the role's
-# handlers inside the block.
+# The block's first task clears the marker; the two after the role's include set it (the role's tasks are done) and
+# run the role's handlers inside the block.
 CLEAR_MARKER = [("ansible.builtin.set_fact", {"_kontroll_handlers_due": False})]
 HANDLERS_IN_BLOCK = [("ansible.builtin.set_fact", {"_kontroll_handlers_due": True}),
                      ("ansible.builtin.meta", "flush_handlers")]
+# The install's re-check, after the flush: a host that answered the gathering and no longer answers (I-92).
+RECHECK = [("ansible.builtin.ping", None)]
 # playbook: (the dispatching play's name, the record its rescue sets, the work its block holds, as (module, arg), the
 # record's text for a host stopped while the role's handlers ran)
 DISPATCH = {
     "install-node-exporter.yml": ("Install node_exporter on the metrics-eligible hosts", "kontroll_install_failed",
                                   CLEAR_MARKER + [("ansible.builtin.gather_facts", None),
                                                   ("ansible.builtin.include_role", {"name": "node_exporter"})]
-                                  + HANDLERS_IN_BLOCK,
+                                  + HANDLERS_IN_BLOCK + RECHECK,
                                   "the install stopped while the role's handlers ran (the failure is printed above)"),
     "wire-logging.yml": ("Wire the logging method onto the target device class", "kontroll_wire_failed",
                          CLEAR_MARKER + [("ansible.builtin.include_role", {"name": "{{ role }}"})]
@@ -106,21 +108,22 @@ def _module(task):
 def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_block(name):
     """The dispatching play holds two tasks: the connection refusal's import (first, outside the block, as
     tests/unit/test_group_dispatch_refuses_local.py requires, so a refused host fails there with nothing run on it) and
-    one block holding the work, with a rescue and no `always`; the work ends with a `set_fact` of
-    `_kontroll_handlers_due: true` and a `meta: flush_handlers`, after the role's include. Its keys are the ones it
-    had (and wire-logging.yml's one var, `kontroll_via_jump`: I-103), so no `any_errors_fatal`, `max_fail_percentage`
-    or `serial` changes which hosts a failure stops, and `ignore_unreachable` is true (a down host is tolerated, not
-    fatal: CLAUDE.md). Guards the block dropped (an install or wiring that fails on every host ends the run before the
-    key cleanup again: I-64), the work moved out of the block, the refusal moved into it (the rescue would record a refused host, and the scan's first-task rule would no
+    one block holding the work, with a rescue and no `always`; after the role's include come a `set_fact` of
+    `_kontroll_handlers_due: true` and a `meta: flush_handlers` (and in install-node-exporter.yml then the re-check's
+    `ping`, last: I-92). Its keys are the ones it had (and wire-logging.yml's one var, `kontroll_via_jump`: I-103), so
+    no `any_errors_fatal`, `max_fail_percentage` or `serial` changes which hosts a failure stops, and
+    `ignore_unreachable` is true (a down host is tolerated, not fatal: CLAUDE.md). Guards the block dropped (an install
+    or wiring that fails on every host ends the run before the key cleanup again: I-64), the work moved out of the
+    block, the refusal moved into it (the rescue would record a refused host, and the scan's first-task rule would no
     longer hold), an `always` that runs work on a failed host, `ignore_unreachable` turned off (a down host would fail
     the run, and with every host down end it before the cleanup), and the flush dropped (the role's handlers run at the
     play's end, outside the block, so one that fails on every host ends the run before the cleanup again: I-86), the
     marker dropped or moved before the include (before 2.19.2 the rescue reads it to tell a failed handler from a role
     that could not be loaded), or its clearing dropped (a marker kept from an earlier play of the run, or an inventory
     var of that name, then makes the rescue record a host whose role never loaded instead of failing it, and no later
-    play names it: both reads of I-86 measured it). Each of the three tasks holds its name and module alone: a `when`
-    or `tags` on one keeps the module and argument and stops it running (the second read's mutants `when: false` and
-    `tags: [never]` on the marker passed every row on 2.19.4, and kill only on 2.18.19)."""
+    play names it: both reads of I-86 measured it). Each of the three marker tasks holds its name and module alone: a
+    `when` or `tags` on one keeps the module and argument and stops it running (the second read's mutants `when: false`
+    and `tags: [never]` on the marker passed every row on 2.19.4, and kill only on 2.18.19)."""
     title, _record, work, _text = DISPATCH[name]
     play = _play(name, title)
     keys = {"name", "hosts", "gather_facts", "ignore_unreachable", "tasks"} | ({"vars"} if name in PLAY_VARS else set())
@@ -133,7 +136,9 @@ def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_bl
     block = tasks[1]
     assert set(block) == {"name", "block", "rescue"}, block
     assert [(_module(t), t[_module(t)]) for t in block["block"]] == work, block["block"]
-    for task in [block["block"][0]] + block["block"][-2:]:
+    markers = [t for t in block["block"] if (_module(t), t[_module(t)]) in CLEAR_MARKER + HANDLERS_IN_BLOCK]
+    assert len(markers) == 3, markers
+    for task in markers:
         assert set(task) == {"name", _module(task)}, task
 
 
@@ -141,10 +146,21 @@ def test_the_install_runs_its_role_only_on_a_host_whose_gathering_answered():
     """install-node-exporter.yml's fact gathering registers `_kontroll_gather`, and the role's include runs only
     when that result is not unreachable. Guards I-89: the play's `ignore_unreachable` lets a down host go on, and the
     role then read the facts the gathering did not bring and failed the host, so one down host failed the run.
-    tests/integration/test_fleet_play_failure_cleans_up.py runs it with the stub and with the real role."""
+    tests/integration/test_fleet_play_failure_cleans_up.py runs it with the stub and with the real role. And (I-92) the
+    block's last task, after the handlers' flush, is the re-check: a `ping` holding its name, its `register`
+    (`_kontroll_recheck`, which the report reads) and the same `when`, and nothing else (no `ignore_errors` or
+    `failed_when` that would hide a re-check that fails, which the rescue records, and no `tags` that keeps it from
+    running where the include runs). Guards the re-check dropped, moved before the flush (a
+    host that stops answering at its handlers is not seen), run on a host whose gathering was unreachable (its report
+    line would read both ways), or registered under another name (the report never names a host)."""
     block = _play("install-node-exporter.yml", DISPATCH["install-node-exporter.yml"][0])["tasks"][1]["block"]
     assert block[1].get("register") == "_kontroll_gather", block[1]
     assert block[2].get("when") == "_kontroll_gather is not unreachable", block[2]
+    recheck = block[-1]
+    assert set(recheck) == {"name", "ansible.builtin.ping", "register", "when"}, recheck
+    assert recheck["register"] == "_kontroll_recheck", recheck
+    assert recheck["when"] == "_kontroll_gather is not unreachable", recheck
+    assert _module(block[-2]) == "ansible.builtin.meta" and block[-2]["ansible.builtin.meta"] == "flush_handlers", block
 
 
 @pytest.mark.parametrize("name", sorted(DISPATCH))
@@ -223,6 +239,63 @@ def test_a_play_after_the_cleanup_fails_each_recorded_host_and_connects_to_nothi
     (task,) = summaries[0]["tasks"]
     assert set(task) == {"name", "ansible.builtin.fail", "when"}, task
     assert task["when"] == "%s is defined" % record and record in str(task["ansible.builtin.fail"]["msg"]), task
+
+
+GATHER_UNREACHED = "_kontroll_gather is defined and _kontroll_gather is unreachable"
+RECHECK_UNREACHED = "_kontroll_recheck is defined and _kontroll_recheck is unreachable"
+
+
+def test_the_install_rescue_names_a_host_whose_own_gathering_or_recheck_was_unreachable():
+    """install-node-exporter.yml's rescue `fail` chooses its message by one `{% if %}`: a host whose gathering was
+    unreachable first, then one whose re-check was, then (`else`) the causes the condition cannot tell apart, each
+    branch's text its own: the first says nothing was installed, the second that the install may not be done, and only
+    the last names a role that could not be loaded or another host's failure. Guards I-97: under a caller's
+    any_errors_fatal an ignored unreachable result moves every host into the rescue, and each got the last message,
+    false for the host that was itself unreachable (the I-89 read A's R7a and R11); a branch's test reading the other
+    result, or the two swapped, names the wrong cause (the real-run rows run each)."""
+    rescue = _play("install-node-exporter.yml", DISPATCH["install-node-exporter.yml"][0])["tasks"][1]["rescue"]
+    (fails,) = [t for t in rescue if _module(t) == "ansible.builtin.fail"]
+    msg = " ".join(str(fails["ansible.builtin.fail"]["msg"]).split())
+    parts = re.split(r"\{%-?\s*(if|elif|else|endif)\b\s*(.*?)\s*-?%\}", msg)
+    tags = [(parts[i], parts[i + 1]) for i in range(1, len(parts), 3)]
+    assert tags == [("if", GATHER_UNREACHED), ("elif", RECHECK_UNREACHED), ("else", ""), ("endif", "")], tags
+    first, second, last = parts[3], parts[6], parts[9]
+    assert parts[0] == "{{ inventory_hostname }}: " and parts[12] == "", parts
+    assert "fact gathering was unreachable" in first and "nothing was installed" in first, first
+    assert "re-check" in second and "may not be done" in second, second
+    assert "could not be loaded" in last and "another host's failure stopped it" in last, last
+    for text in (first, second):
+        assert "could not be loaded" not in text and "any_errors_fatal" in text, text
+
+
+def test_the_install_report_after_the_cleanup_names_each_host_it_could_not_reach():
+    """install-node-exporter.yml has one `Install run report` play, after the key cleanup and before the summary (which
+    stays the run's last play, as the header and the docs name it; a host the summary fails is never one the report
+    names, so this row alone holds the order: a mutant that moves the report after it passes the real-run rows), over
+    the install play's own `hosts:`, with
+    `connection: local`, holding two `debug` tasks and nothing else: one whose `when` is that the gathering was
+    unreachable ("not installed"), one whose `when` is that the re-check was ("may not be done"), each message naming
+    the host. Guards I-92: a host the install could not reach passed with nothing naming it but its UNREACHABLE lines;
+    the report put before the cleanup (it would be one more play the keys wait on), after the summary, over another
+    pattern (a host it does not reach is never named), or made to fail (a down host is tolerated, not fatal:
+    CLAUDE.md). tests/integration/test_fleet_play_failure_cleans_up.py runs it."""
+    plays = _plays("install-node-exporter.yml")
+    reports = [i for i, p in enumerate(plays) if p.get("name") == "Install run report"]
+    summaries = [i for i, p in enumerate(plays) if p.get("name") == "Install run summary"]
+    assert len(reports) == 1 and len(summaries) == 1, (reports, summaries)
+    assert _cleanup_at(plays) < reports[0] < summaries[0], (reports, summaries)
+    report = plays[reports[0]]
+    assert set(report) == {"name", "hosts", "gather_facts", "connection", "tasks"}, report
+    assert report["hosts"] == _play("install-node-exporter.yml", DISPATCH["install-node-exporter.yml"][0])["hosts"]
+    assert report["connection"] == "local" and report["gather_facts"] is False, report
+    tasks = report["tasks"]
+    assert [_module(t) for t in tasks] == ["ansible.builtin.debug"] * 2, tasks
+    for task, when, words in ((tasks[0], GATHER_UNREACHED, "not installed"),
+                              (tasks[1], RECHECK_UNREACHED, "may not be done")):
+        assert set(task) == {"name", "ansible.builtin.debug", "when"}, task
+        assert task["when"] == when, task
+        msg = " ".join(str(task["ansible.builtin.debug"]["msg"]).split())
+        assert msg.startswith("{{ inventory_hostname }}: ") and words in msg, msg
 
 
 def test_the_validation_play_records_a_refusal_which_the_device_play_reads_first():

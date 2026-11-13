@@ -19,12 +19,15 @@ fails on every host is recorded, the run reaches the cleanup and names each host
 ansible-core 2.19.2, by the rescue's fixed text before it); one that fails on one host of two leaves the other done; a
 host that carries the handlers' marker into the play is still failed by name when its role cannot be loaded; and under
 a caller's any_errors_fatal, from the environment or from ansible.cfg, the host a failed handler stopped is failed by
-name.
+name. And (I-92) that the install's report, after the cleanup, names a host whose gathering was unreachable and one
+that answered it and then not the re-check after its install, while the run passes for both; and (I-97) that under a
+caller's any_errors_fatal the rescue names a host whose own gathering or re-check was unreachable by that cause.
 tests/unit/test_fleet_play_rescue.py pins the shapes. The stubs run `debug`, `fail` and `include_tasks`, which open no
 connection. install-node-exporter.yml's fact gathering meets a stand-in `ssh` first on PATH (FAKE_SSH), whether or not
 the machine has an ssh client (the validate image has none): for a host whose address the row lists as up it runs the
 command on the row's own machine, which stands in for the device (pipelined, so the module comes on its stdin), and for
-any other it answers as a refused connection does (exit 255), so the host is unreachable. The refused host is
+any other it answers as a refused connection does (exit 255), so the host is unreachable; a host the row gives a count
+of connections answers that many and refuses the rest, as one that drops mid-run does. The refused host is
 `ansible_connection: local`, which the plays' refusal refuses as it does a network plugin's host, so no row needs a
 collection. It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image.
 """
@@ -74,7 +77,9 @@ CHAIN = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN 
 # ansible/ansible#85682); before it the rescue sees none.
 NAMED_HANDLER = (2, 19, 2)
 # The stand-in `ssh`: for a host in $FAKESSH_UP (a comma list of addresses) it runs the remote command here, under
-# /bin/sh, as an ssh login would on the device; for any other it answers as a refused connection does (exit 255).
+# /bin/sh, as an ssh login would on the device; for any other it answers as a refused connection does (exit 255). A
+# host in $FAKESSH_CALLS (`address=N`, comma separated) answers its first N connections and refuses the rest, each
+# connection counted in a file under $FAKESSH_SEEN.
 FAKE_SSH = """#!%s
 import os, sys
 argv, i, host, cmd = sys.argv[1:], 0, None, []
@@ -86,7 +91,13 @@ while i < len(argv):
         continue
     host, cmd = a, argv[i + 1:]
     break
-if host is None or host not in os.environ.get("FAKESSH_UP", "").split(","):
+calls, over = dict(x.split("=") for x in os.environ.get("FAKESSH_CALLS", "").split(",") if x), False
+if host in calls:
+    seen = os.path.join(os.environ["FAKESSH_SEEN"], host)
+    over = os.path.exists(seen) and os.path.getsize(seen) >= int(calls[host])
+    with open(seen, "a") as fh:
+        fh.write("x")
+if over or host is None or host not in os.environ.get("FAKESSH_UP", "").split(","):
     sys.stderr.write("ssh: connect to host %%s port 22: Connection refused\\n" %% host)
     sys.exit(255)
 os.execv("/bin/sh", ["/bin/sh", "-c", " ".join(cmd)])
@@ -96,13 +107,14 @@ INSTALL = "Install + start node_exporter (the via:host host metrics agent)"
 
 
 def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=None, args=(), up=(), real=False,
-         handlers=None, cfg=""):
+         handlers=None, cfg="", calls=None):
     """Run the shipped `playbook` from a copy of ansible/playbooks (with logging/, a probe module whose group is `g`
     and an instance.yml), the role `role` a stub (STUB, and `handlers` or HANDLERS) or, when `real`, the shipped role
     of that name, over `hosts` in group `g`, with `extra` as one JSON `-e` and `args` after it, each text in `append`
     added to the copy's file it names, `cfg` added to ansible.cfg's [defaults], a key dir under `tmp_path` holding one
-    stale key, and FAKE_SSH first on PATH, answering for the addresses in `up`. Return the exit code, the output, each
-    host's failed count from the recap, and whether the key dir is gone."""
+    stale key, and FAKE_SSH first on PATH, answering for the addresses in `up`, each address in `calls` for that many
+    connections only. Return the exit code, the output, each host's failed count from the recap, and whether the key
+    dir is gone."""
     tree = tmp_path / "t"
     shutil.copytree(os.path.join(ROOT, "ansible", "playbooks"), str(tree / "ansible" / "playbooks"))
     shutil.copytree(os.path.join(ROOT, "logging"), str(tree / "logging"))
@@ -131,6 +143,7 @@ def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=Non
     (keys / "h.key").write_text("not a key: a stale file the cleanup must remove\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    (tmp_path / "seen").mkdir()
     (bin_dir / "ssh").write_text(FAKE_SSH)
     os.chmod(str(bin_dir / "ssh"), 0o755)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
@@ -138,7 +151,8 @@ def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=Non
                ANSIBLE_LOCAL_TEMP=str(tmp_path / "tmp"), ANSIBLE_LOCALHOST_WARNING="0",
                ANSIBLE_HOST_KEY_CHECKING="False", KONTROLL_SSH_KEY_DIR=str(keys),
                PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), FAKESSH_UP=",".join(up),
-               **(env_extra or {}))
+               FAKESSH_CALLS=",".join("%s=%d" % kv for kv in (calls or {}).items()),
+               FAKESSH_SEEN=str(tmp_path / "seen"), **(env_extra or {}))
     cmd = ["ansible-playbook", "-i", str(tree / "inv.yml"), "playbooks/" + playbook]
     if extra is not None:
         cmd += ["-e", yaml.safe_dump(extra, default_flow_style=True).strip()]
@@ -309,11 +323,30 @@ def test_a_callers_any_errors_fatal_over_one_host_reaches_the_cleanup(tmp_path):
     assert _stopped("a", "Stub step that fails") in out and '"msg": "a: stopped with no failed task' not in out, out
 
 
-def _install(tmp_path, extra, up=("a", "b"), real=False, args=()):
-    """install-node-exporter.yml over hosts a and b, those in `up` answering through FAKE_SSH, `args` after the `-e`."""
-    hosts = {h: _ssh(address) for h, address in ADDRESS.items()}
+def _install(tmp_path, extra, up=("a", "b"), real=False, args=(), calls=None, env_extra=None, only=("a", "b")):
+    """install-node-exporter.yml over the hosts in `only` (a and b), those in `up` answering through FAKE_SSH, each
+    host in `calls` for that many connections only, `args` after the `-e`."""
+    hosts = {h: _ssh(ADDRESS[h]) for h in only}
     return _run(tmp_path, "install-node-exporter.yml", "node_exporter", hosts, dict(target="g", **extra),
-                up=[ADDRESS[h] for h in up], real=real, args=args)
+                up=[ADDRESS[h] for h in up], real=real, args=args, env_extra=env_extra,
+                calls={ADDRESS[h]: n for h, n in (calls or {}).items()})
+
+
+def _not_installed(host):
+    """The install report's line for a host whose fact gathering was unreachable (I-92)."""
+    return '"msg": "%s: not installed: its fact gathering was unreachable"' % host
+
+
+def _may_not_be_done(host):
+    """The install report's line for a host that answered the gathering, then not the re-check (I-92)."""
+    return ('"msg": "%s: its install may not be done: it answered the fact gathering, then not the re-check after its '
+            'install (each task it did not answer was ignored)"' % host)
+
+
+RECHECK = "Re-check the host after its install (the run's report names one that no longer answers, I-92)"
+# The rescue's words for a host whose own gathering, or re-check, was unreachable under any_errors_fatal (I-97).
+GATHER_STOPPED = "%s: its fact gathering was unreachable, so nothing was installed on it, and it was stopped with the"
+RECHECK_STOPPED = "%s: it did not answer the re-check after its install, which may not be done, and a caller's"
 
 
 def test_an_install_that_fails_on_every_host_removes_the_keys_and_names_each_host(tmp_path):
@@ -346,7 +379,9 @@ def test_an_unreachable_host_is_tolerated_and_not_recorded(tmp_path):
     """Both hosts are unreachable at the fact gathering: the install is skipped for both (the stub never runs), the run
     passes (rc 0), no host is named FAILED, and the key dir is gone. Guards the rescue taking an unreachable host for a
     failed install, which would turn the play's `ignore_unreachable` (a down host is tolerated, not fatal: CLAUDE.md)
-    into a failed run; and I-89: the install ran on a host whose gathering was unreachable, with no facts."""
+    into a failed run; and I-89: the install ran on a host whose gathering was unreachable, with no facts. And I-92:
+    the run's report, after the cleanup, names each as not installed (before it only the gathering's UNREACHABLE line
+    did), and the re-check is skipped for both (it runs only where the gathering answered)."""
     rc, out, recap, gone = _install(tmp_path, {}, up=())
     assert rc == 0 and gone, out
     assert recap == {"a": 0, "b": 0}, (recap, out)
@@ -354,13 +389,18 @@ def test_an_unreachable_host_is_tolerated_and_not_recorded(tmp_path):
     assert re.search(r"\[a\]: UNREACHABLE!", out) and re.search(r"\[b\]: UNREACHABLE!", out), out
     skipped = _task(out, INSTALL)
     assert "skipping: [a]" in skipped and "skipping: [b]" in skipped, skipped
+    rechecked = _task(out, RECHECK)
+    assert "skipping: [a]" in rechecked and "skipping: [b]" in rechecked, rechecked
+    for host in ("a", "b"):
+        assert _not_installed(host) in out and _may_not_be_done(host) not in out, out
 
 
 def test_a_down_host_beside_an_up_one_gets_nothing_run_and_the_up_one_installs(tmp_path):
     """Host a answers through the stand-in `ssh` and b does not: a's gathering and its stub install run (to its last
     step), b's install is skipped, the run passes (rc 0) with neither named FAILED, and the key dir is gone. Guards
     I-89's skip against reading another host's gathering (a skipped beside a down host, or b run beside an up one),
-    and the up host's gathering, through the stand-in, against a row that cannot reach the stub at all."""
+    and the up host's gathering, through the stand-in, against a row that cannot reach the stub at all. And I-92: the
+    report names b alone, as not installed; a, which answered its re-check, is not named."""
     rc, out, recap, gone = _install(tmp_path, {}, up=("a",))
     assert rc == 0 and gone, out
     assert recap == {"a": 0, "b": 0}, (recap, out)
@@ -368,6 +408,9 @@ def test_a_down_host_beside_an_up_one_gets_nothing_run_and_the_up_one_installs(t
     assert not re.search(r"\[a\]: UNREACHABLE!", out) and re.search(r"\[b\]: UNREACHABLE!", out), out
     included = _task(out, INSTALL)
     assert "skipping: [b]" in included and "skipping: [a]" not in included, included
+    assert "ok: [a]" in _task(out, RECHECK), out
+    assert _not_installed("b") in out and _not_installed("a") not in out, out
+    assert _may_not_be_done("a") not in out and _may_not_be_done("b") not in out, out
 
 
 def test_a_dry_run_over_a_down_host_beside_an_up_one_skips_the_down_one(tmp_path):
@@ -375,7 +418,8 @@ def test_a_dry_run_over_a_down_host_beside_an_up_one_skips_the_down_one(tmp_path
     not: a's stub install runs (to its last step), b's install is skipped, and the run passes (rc 0) with neither named
     FAILED. Guards I-89 in the dry run, which a down host failed too before the fix: a `when` that lets a dry run past
     the skip (`... or ansible_check_mode`) passes every real-run row. The key dir is not asserted here: what a dry
-    run's cleanup removes is tests/integration/test_ssh_key_render_runs.py's."""
+    run's cleanup removes is tests/integration/test_ssh_key_render_runs.py's. The dry run's report names b as not
+    installed, as the real run's does (I-92)."""
     rc, out, recap, _gone = _install(tmp_path, {}, up=("a",), args=("--check", "--diff"))
     assert rc == 0, out
     assert recap == {"a": 0, "b": 0}, (recap, out)
@@ -383,6 +427,7 @@ def test_a_dry_run_over_a_down_host_beside_an_up_one_skips_the_down_one(tmp_path
     assert re.search(r"\[b\]: UNREACHABLE!", out), out
     included = _task(out, INSTALL)
     assert "skipping: [b]" in included and "skipping: [a]" not in included, included
+    assert _not_installed("b") in out and _not_installed("a") not in out and _may_not_be_done("a") not in out, out
 
 
 def test_the_real_role_runs_nothing_on_a_down_host(tmp_path):
@@ -399,6 +444,81 @@ def test_the_real_role_runs_nothing_on_a_down_host(tmp_path):
     skipped = _task(out, INSTALL)
     assert "skipping: [a]" in skipped and "skipping: [b]" in skipped, skipped
     assert "TASK [node_exporter : " not in out, out
+    assert _not_installed("a") in out and _not_installed("b") in out, out
+
+
+@pytest.mark.parametrize("args", [(), ("--check", "--diff")], ids=["real", "check"])
+def test_a_host_that_stops_answering_after_its_gathering_is_named_and_the_run_passes(tmp_path, args):
+    """Host a answers its fact gathering through the stand-in `ssh` and refuses every later connection; b answers
+    every one. Real and `--check --diff`: a's stub install runs (its steps open no connection), its re-check is
+    unreachable and ignored, b's answers; the run passes (rc 0) with neither failed, the key dir is gone in the real
+    run, and the report, after the cleanup, names a alone, as a host whose install may not be done, not as one whose
+    gathering was unreachable. Guards I-92: such a host's install ended with each unanswered task ignored, rc 0, and
+    nothing in the run naming it but its UNREACHABLE lines (the I-89 read A's R8); the re-check dropped, kept from a
+    dry run, or the report reading the gathering's result instead of the re-check's, would fail this row."""
+    rc, out, recap, gone = _install(tmp_path, {}, up=("a", "b"), calls={"a": 1}, args=args)
+    assert rc == 0 and (gone or args), out
+    assert recap == {"a": 0, "b": 0}, (recap, out)
+    assert "AFTER a" in out and "AFTER b" in out and "FAILED: the install" not in out, out
+    rechecked = _task(out, RECHECK)
+    assert re.search(r"\[a\]: UNREACHABLE!", rechecked) and "ok: [b]" in rechecked, rechecked
+    assert _may_not_be_done("a") in out and _may_not_be_done("b") not in out, out
+    assert _not_installed("a") not in out and _not_installed("b") not in out, out
+
+
+@pytest.mark.skipif(not (os.path.exists("/etc/debian_version") or os.path.exists("/etc/alpine-release")),
+                    reason="the real role installs on Debian or Alpine; the stand-in runs the host's modules here")
+def test_the_real_role_over_a_host_that_stops_answering_after_its_gathering_passes_and_names_it(tmp_path):
+    """The shipped node_exporter role in `--check --diff` (the stand-in runs a host's modules on this machine: a dry
+    run installs nothing here even if the count misfired) over host a, which answers its fact gathering and refuses
+    every later connection, and b, down: a's OS family (this machine's, Debian or Alpine) picks the role's task file,
+    each of its tasks is unreachable and ignored, as is its re-check; the run passes (rc 0) with neither host failed,
+    and the report names a as a host whose install may not be done and b as not installed. Guards I-92 with the role a
+    run installs in place: a task of the role that failed on an ignored unreachable result (a registered value read
+    after it) would fail a instead, and the report would not be what names it."""
+    rc, out, recap, _gone = _install(tmp_path, {}, up=("a",), calls={"a": 1}, real=True, args=("--check", "--diff"))
+    assert rc == 0, out
+    assert recap == {"a": 0, "b": 0}, (recap, out)
+    assert "TASK [node_exporter : " in out and "FAILED!" not in out and "FAILED: the install" not in out, out
+    assert re.search(r"\[a\]: UNREACHABLE!", _task(out, RECHECK)), out
+    assert _may_not_be_done("a") in out and _not_installed("b") in out, out
+
+
+def test_a_callers_any_errors_fatal_over_a_host_whose_gathering_is_unreachable_names_that_cause(tmp_path):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True with host a alone, down: its ignored unreachable gathering trips the setting
+    as a failure does, ansible-core moves a into the rescue and holds it failed, and the run ends at the install play
+    (rc 2, the key dir kept: the residual the header names). The rescue's message names a's own unreachable gathering,
+    not the causes it cannot tell apart (a role that could not be loaded, another host's failure), which were false for
+    it. Guards I-97 (the I-89 read A's R11): the message blamed another host's failure for a host alone; and the rescue
+    letting such a host go on instead of failing it (the issue's first design): ansible-core still holds it failed, so
+    the run ends at the install play with rc 0, the keys kept and nothing failed (measured on 2.18.19 and 2.19.4)."""
+    rc, out, _recap, gone = _install(tmp_path, {}, up=(), env_extra=AEF, only=("a",))
+    assert rc == 2 and not gone, out
+    assert GATHER_STOPPED % "a" in out and "a: stopped with no failed task of its own" not in out, out
+    assert _not_installed("a") not in out, out
+
+
+def test_a_callers_any_errors_fatal_over_an_up_and_a_down_host_names_each_by_its_own_cause(tmp_path):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True over host a, up, and b, down: b's unreachable gathering stops both before the
+    install; the rescue fails b naming its own unreachable gathering and a with the causes it cannot tell apart
+    (another host's failure stopped it); rc 2, the key dir kept, no stub step run. Guards I-97 (the I-89 read A's R7a):
+    both hosts got the second message, b's false for it; and the first message given to a, which answered."""
+    rc, out, _recap, gone = _install(tmp_path, {}, up=("a",), env_extra=AEF)
+    assert rc == 2 and not gone, out
+    assert GATHER_STOPPED % "b" in out and "b: stopped with no failed task of its own" not in out, out
+    assert _no_task_of_its_own("a", "the node_exporter role") in out and GATHER_STOPPED % "a" not in out, out
+    assert "STUB a" not in out, out
+
+
+def test_a_callers_any_errors_fatal_over_a_host_that_stops_answering_names_its_recheck(tmp_path):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True with host a alone, answering its fact gathering and refusing every later
+    connection: its stub install runs, its unreachable re-check trips the setting, and the rescue names that cause (it
+    did not answer the re-check, its install may not be done), not the role or another host; rc 2, the key dir kept.
+    Guards I-97's second branch: a host that drops mid-install under any_errors_fatal named by causes false for it."""
+    rc, out, _recap, gone = _install(tmp_path, {}, up=("a",), calls={"a": 1}, env_extra=AEF, only=("a",))
+    assert rc == 2 and not gone, out
+    assert "AFTER a" in out and RECHECK_STOPPED % "a" in out, out
+    assert "a: stopped with no failed task of its own" not in out and _may_not_be_done("a") not in out, out
 
 
 NOT_VALIDATED = ("the wiring request was not validated, so no host was wired: the validation play runs on localhost, "

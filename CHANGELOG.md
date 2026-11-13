@@ -11,6 +11,25 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the node_exporter install names each host it could not reach (I-92, I-97, 2026-11-12)
+
+`install-node-exporter.yml` tolerates a down host, and since I-89 runs nothing on one whose fact gathering was
+unreachable, but nothing in the run named such a host except its `UNREACHABLE!` line, and a host that answered the
+gathering and stopped answering later had each later task's unreachable result ignored: its install ended with
+nothing failed and rc 0, node_exporter perhaps not installed, its scrape target left DOWN with nothing saying why.
+
+- The install's block ends with a re-check (`ping`, one more connection per host, where the gathering answered). An
+  `Install run report` play after the key cleanup names a host whose gathering was unreachable ("not installed") and
+  one that did not answer the re-check ("its install may not be done"); the run still passes for both (a down host is
+  tolerated, not fatal). A host that stops answering and answers again before the re-check is not named: its recap
+  counts each task it did not answer as `ignored`.
+- Under a caller's `any_errors_fatal` an ignored unreachable result stops every host, as a failure does, and
+  ansible-core then holds each host it moved into the rescue as failed: the run ends before the key cleanup, with one
+  host or more (as before). The rescue's message now names a host whose own gathering or re-check was unreachable by
+  that cause; it gave every host the message for a role that could not be loaded or another host's failure (I-97).
+- `test_fleet_play_failure_cleans_up.py`'s stand-in `ssh` can answer a host's first connections and refuse the rest;
+  its rows run each case, real and `--check --diff`, the shipped role in a dry run too.
+
 ### fix(ansible): a down network device no longer fails the logging wiring run (I-103, 2026-11-12)
 
 `wire-logging.yml` tolerates a down host (`ignore_unreachable`), but under network_cli a device that takes no

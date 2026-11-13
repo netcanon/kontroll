@@ -7,15 +7,19 @@
 # (`ignore_unreachable`): a host whose fact gathering is unreachable (down, refusing or timing out the connection,
 # refusing the run's key or its host key, and on 2.19+ a become that never prompts: ansible-core counts each as
 # unreachable) gets nothing more run on it, in a dry run too. The run passes for it (rc 0; its recap counts it
-# `ignored`, not `unreachable`), and only its gathering's `UNREACHABLE!` line, then the install's `skipping:`, name it.
+# `ignored`, not `unreachable`), and the `Install run report` play, after the key cleanup, names it: nothing installed.
 # Before I-89 the role ran on it anyway and failed it at its OS-family task, its facts missing, so one down host failed
 # the run. A host that answers the gathering and drops later is not skipped: each task it does not answer is ignored,
-# as before (I-92). Under a caller's any_errors_fatal an ignored unreachable result trips it as a failure does: every
-# host is failed in the rescue and the run ends before the cleanup with the keys kept, with one host or more (I-97).
+# and a re-check after its install (a `ping`, one more connection per host) names it in the report where it still
+# does not answer: its install may not be done (I-92). One that answers again by the re-check is not named (its recap
+# counts each task it did not answer as `ignored`). Under a caller's any_errors_fatal an ignored unreachable result
+# trips it as a failure does: every host is failed in the rescue and the run ends before the cleanup with the keys
+# kept, with one host or more; the rescue's message names a host whose own gathering or re-check was unreachable as
+# such (I-97), and any other with the causes it cannot tell apart.
 #
 # Backfill the fleet:   ansible-playbook playbooks/install-node-exporter.yml --check --diff   (then for real)
 # One host (onboard):   ansible-playbook playbooks/install-node-exporter.yml -e target=<host>
-#                       (an unreachable host passes with nothing installed: its gathering's line says so)
+#                       (an unreachable host passes with nothing installed: the run's report says so)
 #
 # The play runs node_exporter on every host of the target pattern, whatever the host's device_role, so a host whose
 # connection is not of the ssh family is refused before anything runs on it (tasks/refuse-local-connection.yml).
@@ -31,10 +35,10 @@
 # host's install stops at the first failure: with one host whose install fails the run reaches the cleanup and the
 # summary names it (before ansible-core 2.19.2, not where a handler fails: the rescue cannot tell that host from one
 # another's failure stopped, and fails it there); where one host's failure stops another (or, before 2.19.2, every
-# host's handler fails), or where an unreachable gathering trips it (above), the run ends at that play and the keys
-# stay. What else still ends the run before the cleanup: every host refused, every host's role failing to load (I-66),
-# and, before 2.19.2, a handler that fails on every host in a `meta: flush_handlers` of the role's own (no shipped
-# role has one); _cleanup-ssh-keys.yml's header lists them. A handler notified by one defined after it would run
+# host's handler fails), or where an unreachable gathering or re-check trips it (above), the run ends at that play and
+# the keys stay. What else still ends the run before the cleanup: every host refused, every host's role failing to load
+# (I-66), and, before 2.19.2, a handler that fails on every host in a `meta: flush_handlers` of the role's own (no
+# shipped role has one); _cleanup-ssh-keys.yml's header lists them. A handler notified by one defined after it would run
 # after the block, and a `run_once` handler that failed would drop the other hosts from every later play unnamed:
 # tests/unit/test_fleet_play_rescue.py refuses either in every role under roles/.
 #
@@ -102,6 +106,15 @@
 
         - name: Run the role's handlers inside the block, so a failed one is recorded (I-86)
           ansible.builtin.meta: flush_handlers
+
+        # A host that answered the gathering and stopped answering later has each later task's unreachable result
+        # ignored, so its install ends with nothing failed (I-92). One more connection asks whether it still answers;
+        # the run's report, after the cleanup, names one that does not. Inside the block, so a re-check that fails
+        # (not unreachable) is recorded as a failed task is.
+        - name: Re-check the host after its install (the run's report names one that no longer answers, I-92)
+          ansible.builtin.ping:
+          register: _kontroll_recheck
+          when: _kontroll_gather is not unreachable
       rescue:
         - name: Record the failed install for the run's last play (the task's name; its result is printed above)
           ansible.builtin.set_fact:
@@ -121,12 +134,22 @@
             kontroll_install_failed: the install stopped while the role's handlers ran (the failure is printed above)
           when: ansible_failed_task is not defined and (_kontroll_handlers_due | default(false) | bool)
 
+        # Under a caller's any_errors_fatal an ignored unreachable result moves every host here, the unreachable one
+        # too, and ansible-core then holds each as failed, so this cannot record it and let it go on: it names a host
+        # whose own gathering or re-check was unreachable by that cause (I-97), and any other by the causes the
+        # condition cannot tell apart.
         - name: Fail a host stopped with no failed task of its own (no later play would see it)
           ansible.builtin.fail:
             msg: >-
-              {{ inventory_hostname }}: stopped with no failed task of its own: the node_exporter role could not be
-              loaded, or another host's failure stopped it (a run_once task, a caller's any_errors_fatal, under which
-              before ansible-core 2.19.2 its own failed handler names no task either); the cause is printed above
+              {{ inventory_hostname }}: {% if _kontroll_gather is defined and _kontroll_gather is unreachable %}its
+              fact gathering was unreachable, so nothing was installed on it, and it was stopped with the play's other
+              hosts (a caller's any_errors_fatal stops every host at an unreachable one as at a failed one, or another
+              host's run_once task failed){% elif _kontroll_recheck is defined and _kontroll_recheck is unreachable %}it
+              did not answer the re-check after its install, which may not be done, and a caller's any_errors_fatal
+              stops every host at an unreachable one as at a failed one{% else %}stopped with no failed task of its
+              own: the node_exporter role could not be loaded, or another host's failure stopped it (a run_once task, a
+              caller's any_errors_fatal, under which before ansible-core 2.19.2 its own failed handler names no task
+              either); the cause is printed above{% endif %}
           when: >-
             ansible_failed_task is not defined
             and (not (_kontroll_handlers_due | default(false) | bool)
@@ -138,6 +161,26 @@
 # Post-run: remove the per-run ephemeral SSH key dir (imported LAST — after the fleet connections; MF-4).
 - name: Clean up the per-run ephemeral SSH key dir
   ansible.builtin.import_playbook: _cleanup-ssh-keys.yml
+
+# A host the install could not reach is not failed (a down host is tolerated, not fatal: CLAUDE.md); this names each,
+# with what was not done (I-92). It reads the results the install play registered and connects to nothing: its tasks
+# are `debug`s. Before the summary, which stays the run's last play.
+- name: Install run report
+  hosts: "{{ target | default('hypervisors:docker_hosts') }}"
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Name a host whose fact gathering was unreachable (nothing was installed; the run passes)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: not installed: its fact gathering was unreachable"
+      when: _kontroll_gather is defined and _kontroll_gather is unreachable
+
+    - name: Name a host that stopped answering after its fact gathering (its install may not be done; the run passes)
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: its install may not be done: it answered the fact gathering, then not the re-check
+          after its install (each task it did not answer was ignored)
+      when: _kontroll_recheck is defined and _kontroll_recheck is unreachable
 
 # After the cleanup, so a run whose every install failed still removes its keys (I-64). It connects to nothing: its one
 # task is a `fail`, which runs on the controller (`connection: local` guards nothing: a host's own
