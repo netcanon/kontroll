@@ -13,23 +13,27 @@
 #
 # delegate_to: localhost on EVERY task — load-bearing: a fleet host's `ansible_connection` (network_cli/ssh/httpapi,
 # set by its backend + group_vars) OVERRIDES a play's `connection: local` keyword (Ansible var-beats-keyword
-# precedence), which would route these LOCAL file ops over the DEVICE connection (a switch can't run `file`/`copy`).
+# precedence), which would route these LOCAL file ops over the DEVICE connection (a switch can't run `file`/`command`).
 # Delegating pins every task to the controller/runner regardless; `inventory_hostname` stays the real host, so the
 # per-host key path + SOPS domain templating are unaffected. (Caught by the scratch-VM dogfood — see test below.)
 #
-# Every run mode renders the keys. The dir and the copy carry `check_mode: false`, so a dry run (`--check`) writes them
-# as a real run does: skipped, no key was written, every key-auth host's connection named a key file that did not
+# Every run mode renders the keys. The dir and the key write carry `check_mode: false`, so a dry run (`--check`) writes
+# them as a real run does: skipped, no key was written, every key-auth host's connection named a key file that did not
 # exist and could not log in, and the fleet plays ignore an unreachable host, so the `--check --diff` dry-run CLAUDE.md
 # requires passed having reached no key-auth device (I-87). A dry run's dir is its own (group_vars/all.yml appends
 # `.check`), so it never touches a real run's keys. The play is tagged `always`, so a `--tags` run renders them too
 # (I-93); a `--skip-tags always` (or `tagged`) run renders none, as it prints no run-id stamp, and so does a
 # `--start-at-task` past this play (its key-auth hosts cannot log in and are ignored; the cleanup still runs where the
-# run meets the named task: I-99).
-# _cleanup-ssh-keys.yml removes them in every mode alike. Before any write, tasks/refuse-foreign-key-dir.yml refuses a
-# key dir that is not a directory or holds anything but `*.key` files, which the cleanup would remove with it (I-95);
-# the dir is made after the decrypt check, so a run whose every key-auth host fails that check makes none.
+# run meets the named task: I-99). _cleanup-ssh-keys.yml removes them in every mode alike. Before any write,
+# tasks/refuse-foreign-key-dir.yml refuses a key dir that is not a directory or holds anything but `*.key` files, which
+# the cleanup would remove with it (I-95); the dir is made after the decrypt check, so a run whose every key-auth host
+# fails that check makes none.
 #
-# Access chain used:   control node / Semaphore runner -> community.sops decrypt of the host's SOPS domain (local)
+# The key goes from `sops` to its key file through the one process the write starts (sops its child), and is never a
+# module's argument, so no file Ansible writes on the way, keeps or prints holds it (a `copy` staged it in temp files
+# under the controller's `~/.ansible/tmp`, outside the key dir, which a run killed mid-copy left: I-96).
+#
+# Access chain used:   control node / Semaphore runner -> sops decrypt of the host's SOPS domain (local)
 # May break:           nothing on the fleet — writes a LOCAL 0600 key file; a fleet connection only USES it after
 # Fallback required:   no — re-runnable; a hard-aborted run leaves a 0600 file the cleanup / next run clears
 # Blast radius:        the runner's own per-run ephemeral key dir (outside the repo; no_log; run-uid-owned)
@@ -86,22 +90,70 @@
       check_mode: false   # a dry run's connections need the key too (I-87)
       when: kontroll_ssh_key_domain is defined
 
+    # The key goes from `sops` to its file through the one Python process this task starts: `sops --decrypt
+    # --extract`, its child, prints the host's field into that process's pipe, and the process writes it to a new file
+    # in the key dir and renames that over the key path. The module's arguments are the paths and the field's name,
+    # never the key, so no file Ansible writes on the way and no line it prints holds it: not the module file an
+    # unpipelined run puts and keep_remote_files keeps (`ansible_pipelining` false, a `su` become), nor ANSIBLE_DEBUG's
+    # lines, which print a module's arguments and raw result whatever `no_log` says. A `copy` with `content` staged the
+    # key in temp files under the controller's ~/.ansible/tmp, outside the key dir, where a run killed mid-copy leaves
+    # them (I-96, seen in flight on 2.18.19 and 2.19.4); a `command` given it on `stdin` put it in its module's
+    # arguments. The write runs the `sops` on the controller's PATH with the run's `SOPS_*` environment (as Semaphore
+    # and the installer give it): a decrypt that works only through the community.sops lookup's own options
+    # (`ANSIBLE_SOPS_*`, `sops_*` vars, `[community.sops]`) passes the probe above and fails the write, named below.
+    # The field is named to sops as JSON with its non-ASCII characters as they are (sops reads the text between the
+    # quotes as it stands, so an escaped `\u00e9` names no field). The new file is mkstemp's (0600), its name a `.`,
+    # mkstemp's random characters and `.key` whatever the host's name (named after the host, a name of 243 characters
+    # or more overflowed the file system's 255), which no key file's name has; a run killed before the rename leaves a
+    # file the key-dir guard passes and the cleanup removes. The rename replaces an earlier regular file at the path
+    # (of any mode, or a hard link to another file) rather than writing through it; the guard refuses a link or a
+    # directory there before any write. The key is stripped of whitespace, Unicode's too (a pasted key wrapped in a
+    # no-break space, which OpenSSH refuses), and given one trailing newline: OpenSSH refuses a key with none ("error
+    # in libcrypto", Permission denied; the scratch-VM dogfood's `content: >-` wrote it 1 byte short), and a field may
+    # hold one with none or with more. A field that is not UTF-8 fails the write.
     - name: Materialize this host's SSH private key to a 0600 file (no_log — the key never reaches a log/diff)
-      ansible.builtin.copy:
-        # `content: |` (literal block) + `| trim` is load-bearing: the community.sops lookup strips the decrypted
-        # file's trailing newline, which (given yaml.safe_dump's encoding of a value ending in '\n') drops the KEY's
-        # own trailing newline on `from_yaml` reparse — and OpenSSH rejects a key with no final newline ("error in
-        # libcrypto", Permission denied). `| trim` normalizes any trailing whitespace, then the literal block re-adds
-        # exactly one '\n'. (Caught + byte-verified by the scratch-VM dogfood; with `>-` the materialized key was 1
-        # byte short and SSH key-auth failed.)
-        content: |
-          {{ (lookup('community.sops.sops',
-                     inventory_dir ~ '/../secrets/' ~ kontroll_ssh_key_domain ~ '.sops.yml', errors='ignore')
-              | from_yaml | default({}, true)).get(inventory_hostname | replace('-', '_') ~ '_ssh_private_key', '')
-             | trim }}
-        dest: "{{ kontroll_device_key_dir }}/{{ inventory_hostname | replace('-', '_') }}.key"
-        mode: "0600"
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - -c
+          - |
+            import json, os, subprocess, sys, tempfile
+            path, domain, field = sys.argv[1:]
+            key = subprocess.run(["sops", "--decrypt", "--extract", "[%s]" % json.dumps(field, ensure_ascii=False),
+                                  domain], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, check=True).stdout
+            fd, tmp = tempfile.mkstemp(prefix=".", suffix=".key", dir=os.path.dirname(path))
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(key.decode().strip().encode() + b"\n")
+                os.replace(tmp, path)
+            except BaseException:
+                os.unlink(tmp)
+                raise
+          - "{{ kontroll_device_key_dir }}/{{ inventory_hostname | replace('-', '_') }}.key"
+          - "{{ inventory_dir ~ '/../secrets/' ~ kontroll_ssh_key_domain ~ '.sops.yml' }}"
+          - "{{ inventory_hostname | replace('-', '_') ~ '_ssh_private_key' }}"
+      register: _ssh_key_write
+      changed_when: (_ssh_key_write.rc | default(1)) == 0
+      failed_when: false   # the next task fails it, naming what failed: this one's result is censored
       delegate_to: localhost
       check_mode: false   # a dry run's connections need the key too (I-87)
       no_log: true
       when: kontroll_ssh_key_domain is defined
+
+    # The write's own failure prints `censored` and nothing else (no_log), and its probe passed, so this says what
+    # failed: its exit code, the field and the domain, never its output (sops' error text names no key, but the result
+    # is the write's, and no_log keeps all of it).
+    - name: Fail naming the key write that failed (its exit code and field; never its output)
+      ansible.builtin.fail:
+        msg: |-
+          The key write for {{ inventory_hostname }} failed (rc {{ _ssh_key_write.rc | default('none') }}).
+          It runs the `sops` on this controller's PATH with this run's SOPS_* environment, not the community.sops
+          lookup's own options (ANSIBLE_SOPS_*, sops_* vars, [community.sops]) that the decrypt check above uses,
+          and writes the key into {{ kontroll_device_key_dir }}.
+          To see why, run this here as this run's user (its output, the key, goes to /dev/null):
+          sops --decrypt --extract {{ ('["%s"]' % _field) | quote }} {{ _domain | quote }} > /dev/null
+      vars:
+        _field: "{{ inventory_hostname | replace('-', '_') ~ '_ssh_private_key' }}"
+        _domain: "{{ inventory_dir ~ '/../secrets/' ~ kontroll_ssh_key_domain ~ '.sops.yml' }}"
+      delegate_to: localhost
+      when: kontroll_ssh_key_domain is defined and _ssh_key_write is defined and (_ssh_key_write.rc | default(1)) != 0

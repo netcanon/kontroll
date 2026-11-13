@@ -11,6 +11,44 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the SSH key render's key reaches no temp file, module argument or debug line (I-96, 2026-11-13)
+
+`_render-ssh-keys.yml` wrote each key-auth host's private key with `copy: content:`, which writes the text to a temp
+file under the controller's `~/.ansible/tmp` and puts it into a remote temp dir there before moving it into the key
+dir: in flight the key was on HOME's disk, outside the key dir (on a CLI host whose key dir is the `$XDG_RUNTIME_DIR`
+tmpfs, a disk write that dir was chosen to avoid), and a run killed mid-copy left it there (seen in flight on 2.18.19
+and 2.19.4).
+
+- The key goes from `sops` to its file through one Python process the write starts (`ansible.builtin.command`
+  running the playbook's Python): `sops --decrypt --extract`, its child, prints the host's field into the process's
+  pipe, and the process writes it, stripped of whitespace (a no-break space too) and with one final newline, to a new
+  0600 file in the key dir and renames that over the key path. The module's arguments are the paths and the field's
+  name, never the key, so nothing Ansible stages, keeps or prints holds it: not the module file an unpipelined run
+  puts (keep_remote_files, `ansible_pipelining` false, a `su` become), nor ANSIBLE_DEBUG's lines, which print a
+  module's arguments and raw result whatever `no_log` says. The rename replaces an earlier regular file at the path
+  (of any mode, or a hard link to another file) rather than writing through it; the key-dir guard refuses a link or
+  a directory there before any write. The new file's name is `.`, mkstemp's random characters and `.key`, whatever
+  the host's name (a host name of 243 characters or more renders), and the field is named to sops with its non-ASCII
+  characters as they are (sops does not unescape JSON's `\u00e9`); a run killed before the rename leaves that file in
+  the key dir, which the guard passes and the cleanup removes.
+- The write runs the `sops` on the controller's PATH with the run's `SOPS_*` environment, where the decrypt check's
+  community.sops lookup also honours its own options (`ANSIBLE_SOPS_*`, `sops_*` vars, `[community.sops]`), so a
+  write can fail where the check passed. Its own result is censored (`no_log`), so the task after it fails the host
+  by name: the write's exit code, why it can differ from the check, and the `sops --decrypt --extract` to run by
+  hand, its output to /dev/null; never the write's output.
+- Rows: `tests/unit/test_onboard_ssh_key.py` pins the write's argv (no key among its arguments; no `args`,
+  `module_defaults` or `environment` on the write or the play, no lookup in the play's vars) and runs its script with
+  a stand-in sops under an audit hook (one sops call and no link; one final newline whatever the field ends with,
+  ASCII or no-break-space padding stripped; a 251-character and a non-ASCII host name; an earlier file or link at the
+  path replaced; a failed sops, a rename onto a directory, a field that is not UTF-8 and a KeyboardInterrupt at the
+  rename each fail it and leave no new file), and its no-log, delegation and failure-naming rows read the parsed
+  play; `tests/integration/test_ssh_key_render_runs.py` runs the render at `-vvv`, under `--check --diff`,
+  keep_remote_files and ANSIBLE_DEBUG (no output line, and no file under the row's dir once the run has ended, holds
+  the key), with a field ending in no final newline, two, another field, or wrapped in a no-break space, for a
+  non-ASCII and a 251-character host name, over a 0644 key file hard-linked to an operator's file (replaced, the
+  operator's file untouched), over a cut-short write's `.<random>.key` (passed and removed), and with the key given to
+  the lookup alone (the check passes, the write fails, named).
+
 ### test(e2e): the unit dialog's row reads a seam, not the runner's ansible-galaxy (I-105, 2026-11-13)
 
 The e2e unit-dialog row (`test_unit_badge_opens_dialog_and_renders_unit_body`) failed twice, on PRs that touched no
