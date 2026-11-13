@@ -23,11 +23,15 @@ AUTH = {"Authorization": "Bearer " + TOKEN}
 
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
-    """A TestClient over a privileged app with the git seam + the sops seams mocked: sops_decrypt_domain
-    returns an empty domain, sops_write_domain captures the merged mapping (so the test can assert WHAT was
-    encrypted without real sops/age). The real secret-forms/ descriptors drive the fields."""
+    """A TestClient over a privileged app with the git seams + the sops seams mocked: `_run` and `land_main` record
+    what they were asked (the landing mocked too, else an apply lands this checkout's HEAD on the canonical its
+    `local` remote names: I-70), sops_decrypt_domain returns an empty domain, sops_write_domain captures the merged
+    mapping (so the test can assert WHAT was encrypted without real sops/age). The real secret-forms/ descriptors
+    drive the fields."""
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
+    monkeypatch.setattr(gitio, "land_main",
+                        lambda run_id=None, skip_gate=False: calls.append(["kontroll-land", "main"]) or 0)
     written = {}
     monkeypatch.setattr(gitio, "sops_decrypt_domain", lambda d: {})
     monkeypatch.setattr(gitio, "sops_write_domain",
@@ -74,13 +78,15 @@ def test_dryrun_view_excludes_values(cli):
 
 def test_apply_encrypts_commits_and_audits_without_values(cli):
     """apply encrypts the values into the domain via the sops seam (the captured map holds them — they ARE the
-    secret), commits, and audits the action + the field NAMES — but the audit + response never carry a value."""
+    secret), commits and lands it (the mocked `land_main`), and audits the action + the field NAMES — but the audit
+    + response never carry a value."""
     r = cli.client.post("/secrets/dashboards", headers=AUTH,
                         json={"values": {"grafana_admin_password": "SUPER-SECRET-PW", "gui_admin_password": "gui-pw"},
                               "apply": True})
     assert r.status_code == 200
     b = r.json()
     assert b["applied"] and b["changed"] and b["committed"]
+    assert ["kontroll-land", "main"] in cli.calls
     assert cli.written["domain"] == "dashboards"
     assert cli.written["map"]["grafana_admin_password"] == "SUPER-SECRET-PW"   # reached sops (in memory only)
     assert len(cli.written["map"]["kontroll_api_token"]) == 64                 # generated on the box

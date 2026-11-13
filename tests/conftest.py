@@ -43,6 +43,12 @@ import _network_lab  # noqa: E402
 # public clone, a CI runner and a tree that carries a private overlay. A tmp root is untouched. tests/_hermetic.py.
 _hermetic.install()
 
+# LANDING GUARD — also at import time: a row whose code reaches the landing from this checkout fails, naming the mock
+# it lacks, instead of landing this checkout's HEAD on the canonical its `local` remote names (I-70).
+# tests/_landing_guard.py.
+import _landing_guard  # noqa: E402
+_landing_guard.install()
+
 import galaxy  # noqa: E402  (after sys.path is set up)
 from kontroll import paths  # noqa: E402  (the repo-root ROOT seam moved here in the service refactor)
 

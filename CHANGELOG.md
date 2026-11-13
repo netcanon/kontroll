@@ -11,6 +11,24 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(tests): no row lands this checkout's HEAD on the canonical its `local` remote names (I-70, 2026-11-13)
+
+Seven rows (`test_api_secrets.py`'s five apply rows, `test_commit_trailer.py`'s commit row,
+`test_staging_isolation.py`'s staging-reset row) mocked `gitio._run` but not `gitio.land_main`, so a non-staging
+`commit_and_push` ran the real landing from the write root, this checkout. Where the checkout has no `local` remote
+(CI, a clone, an archive) the landing found no canonical and the rows passed. Where it has one (a control node's
+checkout: `local-canonical.yml` adds it, and bootstrap installs the tools `tests/validate` runs), running them landed
+the checkout's HEAD on that canonical's `main`, judged by the promote gate, and they passed too. Measured on 2.19.4: a
+scratch checkout one commit ahead of a scratch canonical, the three files run, the canonical's `main` moved to the
+checkout's unlanded commit.
+
+- The seven rows mock `land_main` beside `_run`, as their siblings in `test_api_auth.py` and `test_api_onboard.py`
+  do; the apply row and the staging-reset row now assert the landing was asked for (and, under staging, was not).
+- `tests/_landing_guard.py`, installed by `tests/conftest.py` at import time: `gitio._canonical_of` and
+  `gitio.land_commit`, asked about this checkout or a directory inside it, fail the row before any process starts,
+  naming the missing mock, on every checkout, so a row that forgets the mock fails on CI. Scratch worktrees pass
+  through. `tests/unit/test_landing_guard.py` pins it; `tests/README.md` § "No row lands from this checkout".
+
 ### docs(ansible): where `--start-at-task` works in each fleet playbook (I-99, 2026-11-13)
 
 A fleet run started with `--start-at-task` naming a task ansible-core never meets (one inside a role, reached only

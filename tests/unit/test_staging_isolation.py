@@ -36,9 +36,13 @@ def test_staging_resets_clone_to_canonical_after_push_but_cli_never_does(monkeyp
     """In staging mode (KONTROLL_STAGE_PUSHES set + a run_id) commit_and_push issues `git fetch local` then
     `git reset --hard local/main` AFTER the canonical push — so the clone returns to the source of truth. The
     operator CLI path (no env → target `main`) issues NEITHER (it advances `main` and owns its tree). Guards the
-    gating: the roll-back must be scoped to the staging content clone, never the CLI's working tree."""
+    gating: the roll-back must be scoped to the staging content clone, never the CLI's working tree. The CLI's
+    landing (`land_main`) is mocked beside `_run` and recorded: the staging call never lands `main`, the CLI call
+    does (unmocked, the row would land this checkout's HEAD on the canonical its `local` remote names: I-70)."""
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
+    monkeypatch.setattr(gitio, "land_main",
+                        lambda run_id=None, skip_gate=False: calls.append(["kontroll-land", "main"]) or 0)
 
     monkeypatch.setenv("KONTROLL_STAGE_PUSHES", "1")
     gitio.commit_and_push(["x.yml"], ["m"], run_id="deadbeef0001")
@@ -46,6 +50,7 @@ def test_staging_resets_clone_to_canonical_after_push_but_cli_never_does(monkeyp
     push_i = next(i for i, j in enumerate(joined) if "push local HEAD:refs/heads/proposed/" in j)
     assert any(j == "git fetch local" for j in joined[push_i:])             # reset comes AFTER the push
     assert any(j == "git reset --hard local/main" for j in joined[push_i:])
+    assert ["kontroll-land", "main"] not in calls                           # staging never lands `main`
 
     calls.clear()
     monkeypatch.delenv("KONTROLL_STAGE_PUSHES", raising=False)
@@ -53,6 +58,7 @@ def test_staging_resets_clone_to_canonical_after_push_but_cli_never_does(monkeyp
     joined = [" ".join(c) for c in calls]
     assert not any("reset --hard" in j for j in joined)                    # the CLI tree is NEVER reset
     assert not any(j == "git fetch local" for j in joined)
+    assert ["kontroll-land", "main"] in calls                               # the CLI lands `main`
 
 
 def test_failed_commit_in_staging_still_resets_the_dirty_tree(monkeypatch):

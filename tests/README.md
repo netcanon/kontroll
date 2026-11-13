@@ -90,6 +90,19 @@ A few guards read the overlay on purpose, by its own path and not through the re
 check it: the leak guard's instance-token list, the vendor-neutral `group_vars` lint, the topology-leak test, and
 validate's `sops-encrypted` step.
 
+## No row lands from this checkout
+
+A non-staging `commit_and_push` (and galaxy.py's commit sites, and the operator CLI) LANDS through `gitio.land_main`:
+the write root's HEAD onto the canonical its `local` remote names. A row that mocks `gitio._run` mocks
+`gitio.land_main` beside it (or moves the write root to a scratch tree). Without that mock, a checkout with no `local`
+remote finds no canonical and the row passes, while a control node's checkout (local-canonical.yml gives it the
+remote) has this checkout's HEAD landed on its canonical's `main`, and the row passes there too (I-70). So
+`tests/conftest.py` installs a guard at import time ([_landing_guard.py](_landing_guard.py)): `gitio._canonical_of`
+and `gitio.land_commit`, asked about this checkout or a directory inside it, fail the row, naming the missing mock, on
+every checkout. A scratch worktree (the landing tests' repositories) reaches the real functions. A script a row runs
+in its own interpreter is outside the guard; give it a scratch tree or `--repo`. `unit/test_landing_guard.py` pins
+it.
+
 ## A row that reads the tree through git (`requires_checkout`)
 
 A few rows read the repository through git, not through the files on disk: the index's modes, the tracked list,
@@ -261,6 +274,7 @@ tests/unit/          # pure functions, no I/O
   test_requires_checkout.py # I-51: tests/_checkout.py's answer (a plain tree, a checkout's top and one reached through a link, a copy inside another repository, a `GIT_DIR` handed down, a checkout git refuses, no git) and the `requires_checkout` marker — registered, every marked row and no unmarked one skipped by the hook with the reason exactly when this tree is not a checkout; in a copy that is not one, run from another checkout, the marked files skip, none failing, an unmarked row runs, and KONTROLL_REQUIRE_CHECKOUT=1 is an error; validate and CI set it
   test_no_log_censor.py # I-75: the runner Dockerfile COPYs docker/semaphore-runner/no_log_censor.py and runs it as root with the base's ansible venv Python, in a RUN whose failure fails the build, with no later step that runs pip or names ansible-core; the script drops 'exception' alone from the censor's `_PRESERVE` line (the other keys in order, a tuple kept a tuple, a notice line above it, nothing written on a core without it) and refuses every other shape, 'exception' alone among them, naming where each core keeps the censor; its check, against a stand-in core, reports the marker on stdout, on stderr or in the log only, a run that passes or prints no FAILED!, no hidden-output notice, and a control that prints nothing
   test_ci_ansible_cores.py # I-94: each pytest leg of ci.yml runs a core the project ships, held to the file that decides it — the installer's pin on its Debian base's python3 and the control image's core on its venv's Python (the Dockerfile's core line) as a leg's exact pair, the validate job's pin in some leg; no leg on a core nothing ships or a Python its core does not support; the ruleset's four check names kept; each leg installs its pin and every module's collections (the generator in an export of HEAD) before pytest and hands the pin to the run; each drift, built from the live pins, named
+  test_landing_guard.py # I-70: tests/_landing_guard.py — `_canonical_of` and `land_commit`, asked to land from this checkout or below it, fail the row (no process started), the guard is installed for the whole suite, the shape that landed (`_run` mocked, `land_main` not) fails on any checkout, a scratch worktree reaches the real lookup
 tests/integration/   # galaxy.py / gui as black boxes, shell-outs mocked; the AS ROOT rows and the backup, reload, run-log-dir and journal-dir runs call the real tools
   test_local_canonical_as_root.py # C10, AS ROOT: local-canonical.yml run by ansible-playbook on a scratch node (the installer's mode: root, KONTROLL_IN_CONTAINER=1) — a fresh node's dry-run does not fail (nor one whose canonical path is the empty directory a bind mount leaves, or holds a mounted filesystem's `lost+found` and no repository, whose entries the ownership pass names, or a repository whose HEAD is gone, which its note says the real run restores, or a link to an empty directory or to nothing, which the first apply lands in the directory it names; a link to a landed canonical is audited, judged and deploys 0 changed — I-40); a canonical with a top-level name that is not UTF-8 is audited, judged and deployed, the first apply lands HEAD as a first seed and leaves the canonical the operator's, the second and third applies and a closing dry-run report 0 changed (the ownership pass runs again after the landing), a hand push of main is refused; a fresh node's dry-run prints one run id, alone and under a deploy-stack-shaped playbook (I-41)
   test_canonical_normalise_as_root.py # C10 / F-CANON, AS ROOT: the ownership pass chowns a root-made canonical to `<operator>:1001` outside hooks/ — every regular file and directory, through its descriptor; a link's own owner, what a link points at outside the tree, and hooks/ stay root's; the second run has nothing to do
