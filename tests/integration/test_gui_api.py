@@ -1179,6 +1179,19 @@ def test_secret_apply_missing_required_422(client, secret_env):
     assert r.status_code == 422
 
 
+def test_secret_apply_refuses_a_url_its_shape_refuses_422(client, secret_env):
+    """GUI parity with the API: a notifier URL the field's `http_url` shape refuses is a 422 naming the field and
+    the rule, never the value, with nothing encrypted or committed (T32 read B, S1)."""
+    r = client.post("/api/secrets/dashboards", headers=_auth(),
+                    json={"values": {"grafana_admin_password": "pw", "gui_admin_password": "pw",
+                                     "alert_notifier_url": "https://h/a #tok-xq"},
+                          "apply": True})
+    assert r.status_code == 422
+    assert r.get_json()["error"].startswith("field alert_notifier_url must be one http(s) URL")
+    assert "tok-xq" not in r.get_data(as_text=True)
+    assert "map" not in secret_env.written and secret_env.calls == []
+
+
 def test_secret_apply_overwrite_gate_and_enact_parity(client, secret_env, tmp_path, monkeypatch):
     """GUI parity with the API (the two surfaces must stay isomorphic): overwriting an already-set field fails
     CLOSED with 409 + the NAMES (no write); the ack (overwrite:true) applies and returns the post-promote

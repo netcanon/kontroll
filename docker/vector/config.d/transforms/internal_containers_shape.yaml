@@ -13,6 +13,15 @@ source: |
   if name == "" { name = "unknown" }                       # an empty name is no label
   .service = replace(name, r'-run-[0-9a-f]{12}$', "")
   .host = string(.host) ?? get_env_var("HOSTNAME") ?? "control-vm"
+  # Grafana's alert delivery that fails logs Go's request error, which names the URL it posted to with only a
+  # userinfo password masked — and the operator's notifier URL is its credential (an ntfy topic, a webhook token:
+  # SECURITY.md R-ALERT-1). Keep the scheme and host, which say where it failed; drop the userinfo, path and query.
+  # The webhook sends POST or PUT; a URL Go cannot parse fails as `parse "<url>"`. A GET is Grafana's own (a
+  # datasource, a plugin, the update check) and keeps its path. The path runs through a JSON line's `\u0026`.
+  if .service == "grafana" {
+    url_re = r'(?P<p>(?:Post|Put|parse) \\?")(?P<s>https?://)(?:[^@/"\\\s]*@)?(?P<h>[^/?#"\\\s]+)(?:[^"\\\s]|\\u\w{4})*'
+    .message = replace(string(.message) ?? "", url_re, "$${p}$${s}$${h}/<redacted>")
+  }
   # A line's own level: a JSON line's `level` (or `severity`), or a logfmt/slog line's `level` key (Grafana,
   # Prometheus, Semaphore and blackbox all print one). parse_logfmt reads the line's own keys, so a `level=` inside
   # a quoted value, a URL's `?level=` or a `--log.level=` flag is not it. The value counts only if it names a known

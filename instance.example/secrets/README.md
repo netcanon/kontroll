@@ -6,7 +6,8 @@ and `kontroll-init --fresh` copies none into your overlay. They are created on Y
 node, encrypted to YOUR key (the recipient in `instance/.sops.yaml`), by either:
 
 - **`kontroll-init --fresh`** — mints the bootstrap `dashboards` secrets (the onboard-GUI
-  + Grafana login passwords and the API token). Homepage widget tokens go in the same
+  + Grafana login passwords and the API token). The optional `alert_notifier_url` — where
+  Grafana posts every alert — is set later in the Secrets dialog. Homepage widget tokens go in the same
   domain as `homepage_var_<name>` keys — deploy-stack renders ONLY those into Homepage's
   own env file (`docker/.env.homepage`); the portal never reads the stack `.env`; or
 - the **onboard-GUI "Secrets" dialog** — guided, no-leak entry per domain; or

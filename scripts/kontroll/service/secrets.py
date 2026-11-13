@@ -32,6 +32,21 @@ _ACTUATION_KINDS = frozenset({"recreate", "grafana-cli", "semaphore-admin", "non
 _SAFE_SERVICE = re.compile(r"\A[A-Za-z0-9._-]+\Z")     # a compose service name (no shell metachars; \Z = no trailing-\n slip)
 _SAFE_EXEC = re.compile(r"\A[A-Za-z0-9 ._/-]+\Z")      # a grafana-cli subcommand (spaces ok; no metachars; airtight end-anchor)
 
+# shape: <name> in a descriptor field -> the form a PROVIDED value must take, checked before anything is encrypted (a
+# closed set, validated over the descriptors by test_secrets_service.py; an unknown name refuses every value, and
+# every shape refuses a value that is not a string before its rule is asked).
+# http_url: one http(s) URL that docker/.env carries in single quotes and Vector can redact (T32: the notifier URL). A
+# `'` ends the quote (and a line compose cannot parse, it prints in the error of an un-no_logged task); a space, a `"`,
+# a `\` or a character Go's %q escapes stops the redaction's path in Grafana's failed-delivery line; a `$` or a `#`
+# would change the line were it unquoted. The rule is "printable, and none of these six", so deploy-stack.yml can state
+# it without a pattern (it must hold a value set with sops by hand, and a Jinja pattern's backslashes do not survive
+# both ansible cores alike).
+_HTTP_URL = re.compile(r"\Ahttps?://[^ \"'$#\\]+\Z")
+_SHAPES = {
+    "http_url": (lambda v: isinstance(v, str) and v.isprintable() and bool(_HTTP_URL.match(v)),
+                 "one http(s) URL with no whitespace or other non-printable character, quote, backslash, $ or #"),
+}
+
 
 def _existing_keys(domain):
     """Top-level NON-`sops` keys already present in instance/secrets/<domain>.sops.yml (NAMES only — the file
@@ -70,6 +85,8 @@ def build_secret_plan(domain, values, regenerate=None):
     no generator, and not already set is an error. Returns {"error": "no_form"|"missing:<key>"|None, "domain",
     "to_set": {key: VALUE}, "view": [{key,label,source}], "path"} — `to_set` holds the SECRET values (apply
     consumes it; NEVER returned to a client); `view` is the client-safe summary (NAMES + source, no values).
+    A provided value its field's `shape:` refuses is {"error": "bad_value:<key>", "hint": <the shape's words>}
+    (the key and the rule, never the value).
 
     `regenerate` is the set of keys the caller EXPLICITLY asked to re-mint (the GUI 'gen' button — #141). A
     `generate:` field is minted ONLY when it is provided-blank AND (explicitly in `regenerate` OR ABSENT, i.e. a
@@ -86,6 +103,10 @@ def build_secret_plan(domain, values, regenerate=None):
     for f in form.get("fields", []):
         key, gen, req = f["key"], f.get("generate"), bool(f.get("required"))
         provided = (values or {}).get(key)
+        if provided and f.get("shape") is not None:
+            takes, hint = _SHAPES.get(f["shape"], (lambda v: False, "a value of the unknown shape %r" % f["shape"]))
+            if not isinstance(provided, str) or not takes(provided):   # a shape takes a string only, whatever its rule
+                return {"error": "bad_value:%s" % key, "hint": hint}
         if provided:
             to_set[key] = provided
             source = "provided"

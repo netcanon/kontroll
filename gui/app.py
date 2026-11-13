@@ -1261,6 +1261,8 @@ def api_secret_apply(domain):
     plan = secrets_service.build_secret_plan(domain, d.get("values") or {}, d.get("regenerate") or [])
     if (plan.get("error") or "").startswith("missing:"):
         return jsonify({"error": "required field not provided: %s" % plan["error"].split(":", 1)[1]}), 422
+    if (plan.get("error") or "").startswith("bad_value:"):  # the key + the rule its value broke; never the value
+        return jsonify({"error": "field %s must be %s" % (plan["error"].split(":", 1)[1], plan["hint"])}), 422
     if plan["error"]:
         return jsonify({"error": plan["error"]}), 422
     run_id = uuid.uuid4().hex[:12]

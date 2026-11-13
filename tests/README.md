@@ -403,6 +403,90 @@ what it would ask of a clean repository. `seam_without()` gives the seam's envir
 named entries, for showing that one entry is the one that answers a planted thing. These
 tests run real git and take the suite's `isolated_git` fixture.
 
+### The crash-storm rule's line filters (`tests/unit/_crash_filter.py`)
+
+`test_alerting_logging.py` and `test_alerting_metrics.py` read the crash-storm rule's line filters
+through `stages()`, which returns each filter after the rule's `line_format`; a stage, an escape or
+a second query it cannot read fails its caller, never passes it, and a rule with a second query
+node fails the caller that takes its one query. `normal()` collapses LogQL's whitespace (a space,
+tab, CR or newline) outside a string only. `compile_re2()` refuses a pattern Python compiles only
+with a warning, or reads otherwise than RE2 (or that RE2 refuses) in the constructs `python_only()`
+lists: a `[:` in a set, `\b` and the other Perl classes, a lookaround, a possessive quantifier, `$`,
+any `{` outside a set (so every counted repeat), a `\` before a character that is not ASCII, a
+group name that is not ASCII, a flag but `i`, `m` or `s`, … Its refusal says what to write instead:
+`[0-9]` for `\d`, `[0-9A-Za-z_]` for `\w`, `\{` for a brace, a count spelled out (`xx?` for
+`x{1,2}`), a flag group only at the start; a `$`, a `\b` or a lookaround has no spelling both read
+alike. `(?i)` is let through, though Python folds three letters that are not ASCII where Loki's
+case-insensitive literal match does not: Python then keeps more lines, which only makes the
+crash-word hold stricter.
+
+### The deploy's walk (`tests/unit/_deploy_walk.py`)
+
+`Walk` reads the plays, tasks, handlers, vars files and templates `ansible-playbook
+deploy-stack.yml` loads from the places it lists. Where Ansible could find a file in more than one
+place, it reads the file in each of them — beside the role, the roles that include or depend on it,
+the task file, the playbook, the top playbook and, for a task file, the working directory
+(`ansible/`, which every command that runs the deploy starts from; `test_deploy_walk.py` holds them
+to it), under an include's parents' directories, a role handler's `handlers/`, the parent of each
+place named `tasks`, and, for a lookup below a role's `tasks/`, that `tasks/`, and for a template's
+include the top template's directory and the including one's — as Ansible's search orders differ by
+plugin and by role, and a file the walk skipped while Ansible loaded it passed a pin in silence; a
+file Ansible skips but the walk reads only makes a pin stricter. The places are the ones listed, not
+every place Ansible could search: each fold's reads found one more, which became a row and a place.
+It reads imported playbooks (`{{ playbook_dir }}` is the directory of the one a task is in), blocks,
+imported and included task files; roles (each playbook's `roles/` and directory, ansible.cfg's
+`roles_path`, beside the roles that run them) with their meta dependencies and `<x>_from` files;
+include_vars (a `dir:` in its `extensions:`) and vars_files (a first-found list too); each YAML or
+JSON inventory file at any depth that Ansible's directory loader does not skip, and the group_vars
+and host_vars at its top, as the tool ships it (`instance.example/inventory/`, which `kontroll-init
+--fresh` copies to the `instance/inventory` ansible.cfg names), and the group_vars and host_vars
+beside each playbook, in any extension Ansible takes; a module's arguments in each form Ansible
+takes (`args()`: the module key under any prefix, `action:` or `local_action:`, `args:`, a k=v
+string); and every template a `template` task, a `with_template` loop under any prefix or a template
+lookup renders, a lookup in a var or a condition too (`expand()` reads a var's with the var), with
+each file it includes, imports or extends. It reads Jinja with Jinja's own parser, not a pattern, so
+a quoted `'{#'` or `'}}'` is a string, not a comment or a close; it lexes a playbook's string as
+Ansible does, each backslash in a `{{ }}` literal kept (`_escaped`), and a template file as Jinja
+does; it reads an expression's own top node (a debug `var:` that is a lookup alone); and it reads a
+literal's or a raw block's text, and each string Jinja computes from literals alone, whole (`'{{
+lookup(' ~ …`), as Jinja again, as 2.18 renders a fact's value again where it is read. Text a play
+builds from a variable, an Ansible filter or a method call it does not compute (SECURITY.md
+R-ALERT-1). A file it cannot find fails it (`FileNotFoundError`), as does one it cannot name or a
+form it does not model (`Unfollowed`): a path templated by anything but `{{ playbook_dir }}`; an
+include, a lookup's plugin or a template lookup's term that is not one literal; a lookup's name read
+other than to call it (through a subscript or a conditional in an expression too: the names
+`lookup`, `query` and `q` are reserved); a condition that holds a delimiter or a `#jinja2:` header,
+quoted or not, as written or in a literal Jinja decodes, under `loop_control.break_when` and an
+include's `apply:` `when:` too (2.18 renders one and runs it again; 2.19 renders a literal of one
+that holds a delimiter, a lookup in it too); a literal that does not parse but names a lookup or a
+load; a condition that does not parse as one expression (2.18 splices it into a `{% set %}` and runs
+its head); a module an `action:` or `local_action:` names by a template (a string's first word, or a
+mapping's `module:`'s); an include, import or from in a task's or a var's own string; a `#jinja2:`
+header that sets anything but whitespace; a string that does not parse; an import_playbook entry
+with a key but its name, `tags:` and `when:`; an inventory file that is not YAML or JSON, or a vars
+file that is not a mapping; and a role's `meta/argument_specs`. It does not read a `copy` src or a
+`lookup('file', …)`, which Ansible hands on untemplated, nor the operator's own `instance/`. The
+alert URL's no_log pin (`test_alerting_metrics.py`) and the platform-core drift pin
+(`test_gen_secret_env.py`) read the deploy through it, so a form one of them skipped in the places
+it lists fails the walk or the pin, but for the residuals SECURITY.md R-ALERT-1 names; of the forms
+it names as unread, the URL's pin holds that no task names the stack's `.env` but its no_log writers
+and compose's `--env-file` before `up`, `restart` or `ps`, or in the words of a task's name or
+message outside their Jinja (a file lookup or a slurp of it fails the pin), that none reads the
+stack's env with no `.env` named (compose's `config`, `exec` or `run`; `docker inspect`, `exec` or
+`top`; a `cp` out of a container; a written `commit`, docker's or compose's; a `logs` or an `attach`
+of Grafana's, its `docker start` attached or a compose `up` neither detached nor waiting;
+`docker_container_info` or `docker_container`; a task whose words spell `unix_socket` or
+`unix-socket`; the command by its path, quoted, or by a Jinja block in a command's place, past an
+attached option value or a cluster of short options, a redirect, a line's continuation, a comment or
+sh's quoting of an option's value, nested too, in a quoted run, each read as a command of its own
+(as a shell's `-c`, `su -c` or `eval` runs one), in expect's command, or in a lookup with no space
+or joined across `~` or `+`), that no var, play key or role entry holds its path or a lookup of it,
+and that `docker/` holds no link nor the tree a tracked one (in a copy that is not the top of a git
+work tree, any link), and R-ALERT-1 names a read of it by a path the pin cannot see.
+`test_deploy_walk.py` holds it to each form on a tree of its own, and to ansible.cfg's `roles_path`
+and `inventory` and its lack of `jinja2_extensions`.
+
+
 ### Age recipients (`tests/unit/_age_recipient.py`)
 
 kontroll-init takes a break-glass recipient only as an X25519 one (bech32 checksum, 32 bytes,

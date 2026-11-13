@@ -11,6 +11,116 @@ NetConfig project.
 
 ## [Unreleased]
 
+### feat(dashboards): alerts reach someone — metrics rules, a heartbeat, the operator's notifier (T32, 2026-10-23)
+
+The logging rules fired into a placeholder contact point that no notification policy named, so Grafana's default
+policy routed every alert nowhere useful, and no rule watched a scrape target: a dead device read as a quiet
+dashboard (docs/logging-architecture.md G6).
+
+- `policies.yaml` routes every alert to one contact point, `kontroll-default`, grouped per folder and rule and
+  re-sent every 12h; the heartbeat has its own route, sent at once and re-sent daily.
+- `contactpoints.yaml`: a webhook whose URL is `$KONTROLL_ALERT_URL`. deploy-stack renders it into `docker/.env` from
+  the `dashboards` SOPS domain's new optional `alert_notifier_url` (the Secrets dialog: Dashboards → Alert notifier
+  URL), inside its no_log task; unset, empty or null, `docker/services/grafana.yaml` points it at a closed loopback port
+  and every deploy that brings Grafana up prints `alerting: no notifier URL …`. `KONTROLL_ALERT_URL` is reserved from
+  secret_env_map drop-ins, and `gen-secret-env.py` now refuses a drop-in whose `secret_domain` is a platform-core one
+  (`semaphore`, `dashboards`), which would render any of its fields into `docker/.env` under a name of its own, or is
+  not a name the Secrets dialog takes (1-64 characters of `[a-z0-9_-]`, starting with a letter or digit:
+  `./dashboards` reached the same file); the decrypt filter reads no file for such a name, nor for a platform-core
+  one. The URL
+  is one http(s) URL with no whitespace or other non-printable character, quote, backslash, `$` or `#` (a `'` ends the
+  single-quoted line, which compose then prints; the others would stop Vector's redaction mid-path in Grafana's error
+  line, or change an unquoted line): the field's new `shape: http_url` makes the Secrets dialog refuse any other (422,
+  naming the field, never the value; a shaped field refuses a value that is not a string, whatever its shape), and
+  deploy-stack stops on one set with `sops` by hand before it renders the URL, single-quoted. A failed delivery's error
+  line names the URL it posted to; Vector's containers shape now ships such a Grafana line (`Post`, `Put`, or `parse`
+  for a URL Go cannot parse, logfmt or JSON) with the URL's scheme and host only; Grafana's own `Get` lines keep their
+  path (`docker/vector/tests/internal_redaction.yaml`).
+- `metrics-rules.yaml`: a scrape target, and a blackbox-probed device (`probe_success`, since its `up` reads the
+  exporter), that answered in the last 7 days and has stopped for 10 minutes. A target that never answered — the example
+  inventory's TEST-NET addresses, a class enabled before its device — never fires, nor does one down since a rebuild
+  gave Prometheus a new volume. One dead for longer than the window stops: Grafana sends it as RESOLVED although it is
+  still down, and each rule's `description` says what such a RESOLVED means. A target whose `up` (a probed device's
+  `probe_success`) reads 1 at any of the rule's 1-minute evaluations within 10 minutes never fires, a flapping one
+  included; a lone answer that the next failed scrape or probe hides before an evaluation does not count.
+- `heartbeat-rule.yaml`: an alert that always fires and is delivered once a day, so a delivery a day proves the
+  chain; a monitor that expects it is what sees the whole box go quiet (docs/troubleshooting.md §14). With the one
+  URL, that monitor sits behind a relay of your own: a healthcheck ping URL as the notifier URL reads every alert as
+  a success.
+- The crash rule is retitled `Container crash storm` (its uid is unchanged). A failed delivery's line names the alert's
+  title, and the old title's `restart` kept the rule firing for as long as deliveries failed, the default with no URL.
+  No key or string in the alerting files but the crash rule's own uid and query says a word it counts now (read from
+  every one of the rule's line filters, in every file under `provisioning/alerting/`, a hidden one included; a
+  string's whitespace and its `\\` and `\"` escapes read as LogQL reads them, and any other escape, a second query or
+  a stage the test's reader cannot read fails it). A filter is written in what Python and Loki's RE2 read alike
+  (`[0-9]` for `\d`, `\{` for a brace; no `$`, `\b`, counted repeat or lookaround), and the test refuses one built from
+  the constructs it lists.
+- `tests/unit/test_alerting_metrics.py` pins the routing, the URL's path from the secret to the container, the warning
+  against the render (each shape of an unset URL, rendered with Jinja), the rules' shape, and runs the two down
+  expressions through `promtool test rules`; it pins the timings the docs promise, the deploy's shape check against the
+  dialog's on each URL, and that the alerting files' one environment reference is the URL. The retired placeholder test
+  (`test_contact_point_present_so_provisioning_wont_fail`) is replaced by the routing pin; the crash rule's test holds
+  its own failed-delivery and retry lines out of the crash count, and `test_alerting_metrics` holds every other key and
+  string in the alerting files free of the counted words. The URL's pin reads the plays, tasks, vars files and templates
+  the deploy loads from the places its walk lists (`tests/unit/_deploy_walk.py`: each inventory file as shipped, at any
+  depth, and its group_vars included), and fails a reader that is not no_log, a failure message (2.19 prints a failing
+  no_log task's message), a lookup or a `with_<lookup>` loop handed the URL (2.19 prints a failing lookup's term), a
+  `delegate_to`, a `notify`, or a `raw` or `script` argument that carries the URL, and a task that is not no_log and
+  prints `vars`, `hostvars`, `ansible_facts` or a `vars` lookup in a templated string, a debug's `var:` or a template it
+  renders. The walk reads Jinja with Jinja's own parser and the pin finds its blocks with Jinja's lexer, so a quoted
+  `'{#'` or `'}}'` hides nothing from them, and the walk lexes a playbook's string as Ansible does, each backslash in a
+  `{{ }}` literal kept (Jinja alone decoded an escaped brace, and a name to a decoy's); a lookup's terms the pin reads
+  from the task's text. The walk reads an expression's own top node (a debug `var:` that is a lookup alone), and reads a
+  literal's or a raw block's text, and each string Jinja computes from literals alone, whole (`'{{ lookup(' ~ …`), as
+  Jinja again, as 2.18 renders a fact's value again where it is read; text a play builds from a variable, an Ansible
+  filter or a method call it does not compute (SECURITY.md R-ALERT-1). A form the walk does not model (an include in a
+  task's own string, a `#jinja2:` header that sets anything but whitespace, an import_playbook entry's `vars:`, an INI
+  inventory file, a string Jinja cannot parse, a role's `meta/argument_specs`, a lookup called through a subscript, a
+  dict or a conditional, a condition that holds a delimiter or a `#jinja2:` header, quoted or not, as written or in a
+  literal Jinja decodes, under `loop_control.break_when` and an include's `apply:` `when:` too, which 2.18 renders and
+  runs again and whose literal 2.19 renders, a lookup in it too, a literal that does not parse but names a lookup, a
+  condition that does not parse as one expression, whose head 2.18 runs, a module an `action:` or `local_action:` names
+  by a template) fails it, but for the residuals R-ALERT-1 names; it reads a condition that is a tuple, and a lookup
+  that is a whole condition, and reserves the names `lookup`, `query` and `q`. A fact a task that prints every var sets
+  is tainted, as one set from the URL is. The pin finds a `.env` writer under each content-writing module, by its key or
+  by `action:` or `local_action:`, and each name for its file, by the one spelling of its path the tree uses (`{{
+  stack_dir }}/.env`), and fails on a writer that names a `.env` another way, whose file or src may name a `.env` or the
+  directory past its last written `/` (a copy into the stack's directory, `{{ stack_dir }}/{{ item }}`, a name a
+  statement or a comment is in, or whose last block only a suffix of `.env` follows; `{{ item }}.conf` is placed), whose
+  src names a `.env`, that has no file or whose `args:` is no mapping; it holds that no other task names the `.env` but
+  as compose's `--env-file` before `up`, `restart` or `ps`, or in the words of a task's name or message outside their
+  Jinja, that none reads the stack's env with no `.env` named (compose's `config`, `exec` or `run`, `docker inspect`
+  (of a container or an image), `exec` or `top`, a `cp` out of a container, a written `commit`, docker's or compose's, a
+  `logs` or an `attach` of Grafana's, its `docker start` attached (`-a`, `-i`, `-ai`, `-a=true`), a compose `up` neither
+  detached nor waiting, `docker_container_info` or `docker_container`, a task whose words spell `unix_socket` or
+  `unix-socket`, the command by its path, quoted, or by a Jinja block in a command's place (past `sudo`, `env`,
+  `timeout` and its duration, `eval`, each by its path too, an assignment, a redirect or a shell keyword too), past an
+  attached option value or a cluster of short options, a redirect, a line's continuation (read both removed and as a
+  space), a comment, or sh's quoting of an option's value (nested too), in a quoted run, each read as a command of its
+  own (as a shell's `-c`, `su -c` or `eval` runs one), in expect's command, or in a lookup with no space or joined
+  across `~` or `+`), that no var, play key or role entry holds the file's path or a lookup of it, that `docker/` holds
+  no link nor the tree a tracked one (in a copy that is not the top of a git work tree, without its `.git` or inside
+  another one, any link), that no file the deploy loads sets `module_defaults`, and that no task sets stats and
+  ansible.cfg shows none. A name, a message, a lookup's term or a var a task hands on is read with the template its
+  lookup renders, and a pause's prompt is a message.
+
+
+**Upgrading.** Provisioning `policies.yaml` replaces the whole notification policy tree at each Grafana start: a
+policy made in the Grafana UI is gone after the deploy. The old placeholder contact point is deleted by uid.
+Before setting the URL, look at Grafana → Alerting → Alert rules: a rule already firing (a logging rule that has
+fired into nowhere until now, a target down for days) is delivered on the first evaluation after the URL lands.
+The crash rule's new title is a new alertname: a silence made on the old one no longer matches. To stop alerts
+(after a leaked topic, say), delete `alert_notifier_url` with `sops` and re-deploy grafana; the dialog keeps a blank
+value as the URL already set (secret-forms/README.md). The first live render on a scratch box is still owed (G6): a
+delivery, the heartbeat, `up` through the SNMP and Proxmox exporters, Grafana's failed-delivery log line against the
+crash rule and the redaction, and the three facts SECURITY.md R-ALERT-1 defers to it: the payload's URL fields,
+whether Grafana's own delivery error already redacts the URL, and which roles can read the contact point's URL.
+
+Found, not fixed here (it predates T32): `POST /secrets/<domain>` with a `values` that is not an object gets
+FastAPI's request-validation 422, whose body echoes the value as `input`, and the GUI's `/api/secrets/<domain>`
+answers it with a 500. A follow-up: an `exception_handler(RequestValidationError)` in `api/main.py` that drops
+`input` and `ctx`, and an object check in `gui/app.py`'s `api_secret_apply`, each with a test row.
+
 ### fix(scripts): `kontroll-init.py --fresh` refuses an operator with uid 1001 before it makes anything (I-59, 2026-11-12)
 
 install-prereqs.sh and both launchers refuse an operator whose uid is 1001, the network service's, before they make

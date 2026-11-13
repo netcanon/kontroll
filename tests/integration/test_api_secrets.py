@@ -97,6 +97,19 @@ def test_apply_missing_required_422(cli):
     assert r.status_code == 422
 
 
+def test_apply_refuses_a_url_its_shape_refuses_422(cli):
+    """A notifier URL the field's `http_url` shape refuses is a 422 that names the field and the rule, never the
+    value, and nothing is encrypted or committed. Why: a `$` would change the line were it unquoted (T32 read B,
+    S1; fold 2 read A, N1); the refusal comes before the domain is touched."""
+    r = cli.client.post("/secrets/dashboards", headers=AUTH,
+                        json={"values": {"grafana_admin_password": "pw", "gui_admin_password": "pw",
+                                         "alert_notifier_url": "https://h/a$tok-xq"},
+                              "apply": True})
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("field alert_notifier_url must be one http(s) URL")
+    assert "tok-xq" not in r.text and cli.written == {} and cli.calls == []
+
+
 def test_apply_no_age_key_is_clean_500(cli, monkeypatch):
     """If the box can't decrypt the domain (no/invalid age key), apply is a clean 500 — never a clobbered
     domain (the no-key API surfaces this; onboard-gui, which mounts a key, does not hit it)."""

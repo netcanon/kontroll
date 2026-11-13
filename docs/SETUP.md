@@ -158,6 +158,14 @@ The manual equivalents:
    sops instance/secrets/network.sops.yml     # device creds / API tokens
    sops instance/secrets/proxmox.sops.yml      # PVE API token
    ```
+4. Say where alerts go (optional, but until you do, nothing is notified): the Secrets dialog's
+   **Dashboards → Alert notifier URL** takes a URL Grafana POSTs every alert to as JSON (an ntfy topic, a
+   Gotify URL, a relay of your own): one http(s) URL with no whitespace or other non-printable character,
+   quote, backslash, `$` or `#`.
+   Re-deploy grafana after. A heartbeat alert, delivered daily, proves the path; a monitor that expects it
+   is the only check that sees the whole box go quiet, and with the one URL it sits behind a relay of your
+   own: a healthcheck ping URL as the notifier URL reads every alert as a success
+   ([troubleshooting.md](troubleshooting.md) §14).
 
 ## 6. Deploy the stack and open the GUI
 

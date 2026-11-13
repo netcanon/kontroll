@@ -1,0 +1,47 @@
+# The daily heartbeat: a rule that always fires and is delivered once a day, so the chain rule evaluation → policy →
+# notifier → the operator's device is proven daily. policies.yaml routes the `kontroll: heartbeat` label to its own
+# route, sent at once and re-sent every 24h. Its query goes to Prometheus, so it also proves the metrics path;
+# Prometheus down shows as an Error alert on the same route.
+#
+# It is a dead-man's switch only as far as someone notices its absence: the tool cannot observe its own silence. A
+# monitor that expects it about every 24h, with a grace of about 26h, can. With the one notifier URL, that is a
+# relay of your own: it forwards alerts to you and pings the monitor on `kontroll: heartbeat`; a healthcheck ping
+# URL set as the notifier URL reads every alert as a success. A second URL for the heartbeat alone is a follow-up.
+# docs/troubleshooting.md §14 has the checklist for a heartbeat that stopped.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: kontroll-heartbeat
+    folder: Homelab
+    interval: 1m
+    rules:
+      - uid: kontroll-heartbeat
+        title: kontroll heartbeat
+        condition: C
+        noDataState: Alerting
+        execErrState: Error
+        for: 1m
+        labels: {severity: info, kontroll: heartbeat}
+        annotations: {summary: "kontroll heartbeat: alert rules evaluate and notifications are delivered."}
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              instant: true
+              range: false
+              expr: vector(1)
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+              refId: C

@@ -40,7 +40,8 @@ Covered by `tests/validate`'s `promtool` check (runs where promtool is installed
 
 ## See also
 - [../PLAN.md](../PLAN.md) §8b (metrics stack)
-- [../dashboards/README.md](../dashboards/README.md) — Grafana reads this Prometheus
+- [../dashboards/README.md](../dashboards/README.md) — Grafana reads this Prometheus, and alerts on its targets
+  (`dashboards/grafana/provisioning/alerting/metrics-rules.yaml` — Grafana-managed; no `rule_files` here)
 - [../modules/README.md](../modules/README.md) — the `metrics:` block that generates these targets
 - [../scripts/gen-observability.py](../scripts/gen-observability.py) — the generator/dispatcher (run by `deploy-stack`)
 - [../telemetry/README.md](../telemetry/README.md) — the telemetry-method registry the generator dispatches over

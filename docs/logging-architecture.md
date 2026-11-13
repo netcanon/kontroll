@@ -73,9 +73,20 @@ the `-vvvv`-on-schedules prohibition (CLAUDE.md). The foundation is sound; it's 
   nowhere persistent. No host-side "what ran, when, succeeded?" trail.
 - **G5 — Host observability undocumented.** Docker-daemon/systemd logs exist in journald
   but aren't part of any documented troubleshooting path or surfaced anywhere.
-- **G6 — No alerting.** ✅ CLOSED — Grafana-managed unified alert rules
-  (`dashboards/grafana/provisioning/alerting/logging-rules.yaml`) watch container restarts,
-  backup failures, onboard errors, and `auth-denied` spikes (Layer 3 below).
+- **G6 — No alerting.** ◐ PARTLY CLOSED (T32) — Grafana-managed unified alert rules watch the log stream
+  (`dashboards/grafana/provisioning/alerting/logging-rules.yaml`: container crash storms, backup failures,
+  onboard errors, `auth-denied` spikes) and the metrics (`metrics-rules.yaml`: a scrape target, or a probed
+  device, that answered in the last 7 days and has stopped), and a heartbeat that always fires is delivered
+  daily (`heartbeat-rule.yaml`). Every alert routes (`policies.yaml`) to one webhook contact point whose URL
+  is the operator's: `alert_notifier_url` in the `dashboards` secrets domain, set in the Secrets dialog.
+  Before T32 the rules fired into a placeholder no policy named, so nothing was sent. Still open: the first
+  live render (an operator scratch VM) — a delivery and the heartbeat arriving, `up` through the SNMP and
+  Proxmox exporters reading the device's answer, and Grafana's failed-delivery log line, pinned in the crash
+  rule's test and the Vector redaction tests by its expected shape, and the three facts SECURITY.md R-ALERT-1
+  defers to it (the payload's URL fields, whether Grafana's own delivery error already redacts the URL, and
+  which roles can read the contact point's URL); a box with no URL alerts on Grafana's Alerting page only, and
+  says so at every deploy that brings Grafana up; a notifier that is not URL-shaped (e-mail) and a heartbeat
+  URL of its own are follow-ups.
 
 ---
 
@@ -196,8 +207,12 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   missing field fails the label
   template on every event — a WARN per event and the label dropped — so `tests/unit/test_compose_logging.py`
   holds every input of the sink to it. A journald entry's `level` is its `PRIORITY`'s syslog name (`err`,
-  `warning`, …) and one without a `PRIORITY` is `info` (`docker/vector/tests/internal_levels.yaml`). Promtail
-  avoided (deprecated). Container logs come through the read-only `docker-socket-proxy`. It passes only the
+  `warning`, …) and one without a `PRIORITY` is `info` (`docker/vector/tests/internal_levels.yaml`). A Grafana
+  line that names the URL of a failed request (`Post "<url>": …`, an alert delivery's error) ships with that
+  URL's scheme and host only: the operator's notifier URL is its credential (SECURITY.md R-ALERT-1;
+  `docker/vector/tests/internal_redaction.yaml`). Docker's own log file on the host keeps the raw line, as
+  `docker inspect` keeps the URL in the container's environment. Promtail avoided (deprecated). Container logs
+  come through the read-only `docker-socket-proxy`. It passes only the
   container list, an inspect and the logs under `/containers/` (and does not start if it cannot add that limit),
   and routes the `/logs` streams to its no-timeout backend, so a quiet container's stream is not cut every ten
   minutes. A deploy's short-lived helper container, where an edition runs one, is named `kontroll-throwaway-…`,
@@ -244,9 +259,11 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
 ### Layer 3 — Surface + alert: Grafana  🟡 (dashboard + alerts BUILT; runbook pending)
 - **Grafana Explore** over Loki (ad-hoc LogQL) + a hand-authored **logs dashboard**
   (`dashboards/grafana/dashboards/logs.json`, auto-loaded by the file provider) and **alert
-  rules** as a provisioning drop-in (`provisioning/alerting/logging-rules.yaml` + a default
-  contact point): container restart, backup-config failure, onboard error, `auth-denied`
-  spike (**G6 CLOSED**). NO separate Loki ruler — Grafana-managed unified alerting. Grafana is
+  rules** as provisioning drop-ins (`provisioning/alerting/logging-rules.yaml`: container crash storm,
+  backup-config failure, onboard error, `auth-denied` spike; `metrics-rules.yaml`: a target or probe that
+  stopped answering; `heartbeat-rule.yaml`), routed by `policies.yaml` to the one webhook contact point
+  (`contactpoints.yaml`; **G6 partly closed**, T32). NO separate Loki ruler — Grafana-managed unified
+  alerting. Grafana is
   already the Phase-5 metrics UI → metrics + logs in **one pane**, correlated by time +
   `run_id`. Hermetic shape tests run in CI; live rendering is verified post-deploy. Levels arrive in more
   than one spelling (syslog `err`/`warning` from journald, `error`/`warn` from a container line, and older lines'
@@ -394,7 +411,8 @@ the store are hubs that *read* drop-ins; you never edit the hub to add a source.
    injection shape); because the stock Vector image has no ssh client (bench-verified), deploy-stack builds + uses
    a thin `kontroll/vector` image (stock + openssh-client) ONLY when a class declares the method.
 4. ✅ **Layer 3** dashboards + alerts — `dashboards/grafana/dashboards/logs.json` + the Grafana-managed alert
-   drop-in (`provisioning/alerting/logging-rules.yaml`; **G6 closed**). Live rendering verified post-deploy.
+   drop-in (`provisioning/alerting/logging-rules.yaml`; G6's log half — the metrics rules, the heartbeat and
+   the notifier came with T32, **G6 partly closed**). Live rendering verified post-deploy.
 5. ✅ SECURITY.md **C12** (logs are a secret surface) + the **[`docs/troubleshooting.md`](troubleshooting.md)
    runbook** — the signal map (which `source`/`service` each surface lands under), the common LogQL queries, and
    the **degrade path** (debugging when Loki/Vector is down: `docker logs`/journalctl/the flat audit files).

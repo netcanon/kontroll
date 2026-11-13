@@ -41,7 +41,7 @@ entries × the inventory hosts in each module's `inventory_group`, and writes
 | `metrics_path` *(proxy-exporter)* | the exporter's scrape path (e.g. `/pve`) — used by the generated job |
 | `exporter_address` *(proxy-exporter)* | `host:port` the job's relabel rewrites `__address__` to (the control-node exporter, e.g. `pve-exporter:9221`) |
 | `target_param` *(proxy-exporter)* | the `?<param>=<device>` query param the multi-target exporter expects (default `target`) |
-| `secret_domain` *(proxy-exporter, opt)* | the `instance/secrets/<domain>.sops.yml` whose token the exporter consumes (`null` = no secret, e.g. blackbox) |
+| `secret_domain` *(proxy-exporter, opt)* | the `instance/secrets/<domain>.sops.yml` whose token the exporter consumes (`null` = no secret, e.g. blackbox). With a `secret_env_map` it is a name the Secrets dialog takes (1-64 characters of `[a-z0-9_-]`, starting with a letter or digit) and not a platform-core domain (`semaphore`, `dashboards`): `gen-secret-env.py` refuses any other, and the deploy's decrypt filter reads no file for one |
 | `cap_add` *(proxy-exporter, opt)* | Linux capabilities granted to the exporter container — e.g. `[NET_RAW]` for blackbox's ICMP raw socket; rendered into the compose fragment by `gen-exporters.py` |
 
 `scripts/gen-prometheus-jobs.py` derives each proxy method's Prometheus job (metrics_path + multi-target

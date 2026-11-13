@@ -1,0 +1,20 @@
+# The notification policy tree: every alert goes to the one contact point (contactpoints.yaml). Grouped per folder
+# and rule, so a host that goes down is one message per rule, not one per evaluation; re-sent every 12h while it
+# fires. The heartbeat (heartbeat-rule.yaml) has its own route: sent at once, re-sent every 24h, so its absence is
+# the signal.
+#
+# Provisioning this file REPLACES the whole policy tree at each Grafana start: a policy made in the Grafana UI is
+# overwritten. Add a route here (a matcher on the `kontroll` or `severity` label every rule sets), not in the UI.
+apiVersion: 1
+policies:
+  - orgId: 1
+    receiver: kontroll-default
+    group_by: [grafana_folder, alertname]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 12h
+    routes:
+      - receiver: kontroll-default
+        object_matchers: [[kontroll, "=", heartbeat]]
+        group_wait: 0s
+        repeat_interval: 24h

@@ -52,13 +52,16 @@ def secret_apply(domain: str, body: SecretIn, request: Request,
     """Dry-run (default) resolves the plan and returns the VIEW (field names + source: provided/generated/
     already_set/skipped — never a value); apply:true encrypts the values into instance/secrets/<domain>.sops.yml
     (whole-file, via stdin — no argv/temp-file leak), commits, and STAGES proposed/<run_id> (C10). 404 unknown
-    domain; 422 a missing required field; 500 if the box can't encrypt (no age key). The action + field NAMES
-    are audited; the values NEVER are."""
+    domain; 422 a missing required field or a value its field's `shape:` refuses; 500 if the box can't encrypt
+    (no age key). The action + field NAMES are audited; the values NEVER are."""
     if catalog.secret_form(domain) is None:
         raise HTTPException(status_code=404, detail="no secret form for domain: %s" % domain)
     plan = secrets_service.build_secret_plan(domain, body.values, body.regenerate)
     if (plan.get("error") or "").startswith("missing:"):
         raise HTTPException(status_code=422, detail="required field not provided: %s" % plan["error"].split(":", 1)[1])
+    if (plan.get("error") or "").startswith("bad_value:"):  # the key + the rule its value broke; never the value
+        raise HTTPException(status_code=422,
+                            detail="field %s must be %s" % (plan["error"].split(":", 1)[1], plan["hint"]))
     if plan["error"]:
         raise HTTPException(status_code=422, detail=plan["error"])
     overwrite = secrets_service.overwrite_set(domain, plan)   # NAMES of already-set fields this would clobber (C9)

@@ -1,0 +1,170 @@
+# Vector unit tests for the internal containers shape's REDACTION — `vector test`, run by tests/validate.sh's
+# vector-test step. Not loaded at runtime: the compose command loads only vector.yaml, config.d/ and generated/.
+#
+# What they verify: a Grafana line that names the URL of a failed request (`Post "<url>": …` or `Put`, Go's request
+# error, or `parse "<url>"` for a URL it cannot parse, in logfmt's escaped quotes or a JSON line's) ships with that
+# URL's scheme and host only; a userinfo, a path and every query parameter are gone. Any other Grafana line (its own
+# `Get`, a `url=` value) and any other service's line is unchanged: at `GF_LOG_LEVEL=debug` the notifier's `url=`
+# lines would keep the URL, a residual SECURITY.md R-ALERT-1 states.
+# Why: an alert delivery that fails logs that error, and the operator's notifier URL is its credential (an ntfy
+# topic, a webhook token in the path or query; SECURITY.md R-ALERT-1, T32). Without this, every failed delivery
+# would put it in Loki, readable to anyone who can query the logs. The line's wording is the notifier's error shape,
+# to be confirmed on the first live render (docs/logging-architecture.md G6). One event per test.
+# A message below is a single-quoted scalar broken at spaces: YAML folds each break into one space.
+tests:
+  - name: "grafana: a failed delivery's URL keeps its scheme and host, not its path or query"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'logger=ngalert.notifier.alertmanager level=error receiver=kontroll-default
+            msg="Notify for alerts failed" err="Post \"https://192.0.2.10/kontroll-topic-x7q?auth=tok123\":
+            dial tcp 192.0.2.10:443: connect: connection refused"'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              m = string!(.message)
+              assert!(!contains(m, "kontroll-topic-x7q"))
+              assert!(!contains(m, "tok123"))
+              assert!(contains(m, "err=\"Post \\\"https://192.0.2.10/<redacted>\\\": dial tcp 192.0.2.10:443"))
+              assert_eq!(.level, "error")
+
+  - name: "grafana: a userinfo is dropped with the path"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'level=error msg="Notify for alerts failed" err="Post \"https://alice:***@192.0.2.10/hook\": EOF"'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              m = string!(.message)
+              assert!(!contains(m, "alice"))
+              assert!(contains(m, "Post \\\"https://192.0.2.10/<redacted>\\\": EOF"))
+
+  - name: "grafana: a PUT's URL is redacted too (the webhook's httpMethod may be PUT)"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'level=error err="Put \"https://192.0.2.10/hook/tok456\": EOF"'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(string!(.message), "level=error err=\"Put \\\"https://192.0.2.10/<redacted>\\\": EOF\"")
+
+  - name: "grafana: a query's second parameter goes with the first"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'level=error err="Post \"https://192.0.2.10/hook?a=1&tok=tok789\": EOF"'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(string!(.message), "level=error err=\"Post \\\"https://192.0.2.10/<redacted>\\\": EOF\"")
+
+  - name: "grafana: a URL Go cannot parse (a mistyped port) is redacted in its parse error"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'level=error err="parse \"https://192.0.2.10:44x/tok-parse\": invalid port \":44x\" after host"'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              want = "level=error err=\"parse \\\"https://192.0.2.10:44x/<redacted>\\\": " +
+                     "invalid port \\\":44x\\\" after host\""
+              assert_eq!(string!(.message), want)
+
+  - name: "grafana: a JSON-format line's query is redacted through its escaped ampersand"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: '{"level":"error","msg":"Notify for alerts failed",
+            "err":"Post \"https://192.0.2.10/hook?a=1\u0026tok=tokjson\": EOF"}'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              m = string!(.message)
+              assert!(!contains(m, "tokjson"))
+              assert!(!contains(m, "u0026"))
+              assert!(contains(m, "\"err\":\"Post \\\"https://192.0.2.10/<redacted>\\\": EOF\"}"))
+              assert_eq!(.level, "error")
+
+  - name: "grafana: its own GET (a datasource query) keeps its path"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'level=error err="Get \"http://192.0.2.10:9090/api/v1/query?query=up\": EOF"'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              want = "level=error err=\"Get \\\"http://192.0.2.10:9090/api/v1/query?query=up\\\": EOF\""
+              assert_eq!(string!(.message), want)
+
+  - name: "grafana: the not-configured default still reads as the closed loopback port"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'level=error err="Post \"http://127.0.0.1:9/kontroll-alerting-not-configured\":
+            dial tcp 127.0.0.1:9: connect: connection refused"'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              want = "level=error err=\"Post \\\"http://127.0.0.1:9/<redacted>\\\": " +
+                     "dial tcp 127.0.0.1:9: connect: connection refused\""
+              assert_eq!(string!(.message), want)
+
+  - name: "grafana: a line that names a URL outside a request error is unchanged"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields:
+          container_name: grafana
+          message: 'logger=plugins msg="Plugin registered" url=http://192.0.2.10/p'
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(string!(.message), "logger=plugins msg=\"Plugin registered\" url=http://192.0.2.10/p")
+
+  - name: "another service's request error is unchanged"
+    inputs:
+      - insert_at: internal_containers_shape
+        type: log
+        log_fields: {container_name: "prometheus", message: 'level=warn err="Get \"http://192.0.2.10/metrics\": EOF"'}
+    outputs:
+      - extract_from: internal_containers_shape
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(string!(.message), "level=warn err=\"Get \\\"http://192.0.2.10/metrics\\\": EOF\"")

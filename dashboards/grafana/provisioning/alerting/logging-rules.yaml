@@ -4,7 +4,8 @@
 # rule queries the Loki datasource by its FIXED uid `loki` and has a numeric threshold + a BOUNDED window
 # (fail-closed: no "alert forever / unbounded lookback"). Thresholds are conservative homelab defaults, tunable
 # here. Live rendering is verified post-deploy (dashboards/README §Testing); CI runs the hermetic shape test
-# tests/unit/test_alerting_logging.py. Closes logging-architecture.md §2 G6 (no alerting on the log stream).
+# tests/unit/test_alerting_logging.py. The log half of logging-architecture.md §2 G6; metrics-rules.yaml and
+# heartbeat-rule.yaml are the rest, and policies.yaml routes every rule to the one contact point.
 #
 # Every rule counts matching lines, and a count of none comes back as no series at all, so each rule sets
 # `noDataState: OK`. Grafana's default, NoData, held all four in NoData and sent a DatasourceNoData alert to the
@@ -26,13 +27,13 @@ groups:
     interval: 1m
     rules:
       - uid: kontroll-log-container-restart
-        title: Container restart / crash storm
+        title: Container crash storm
         condition: C
         noDataState: OK
         execErrState: Error
         for: 5m
         labels: {severity: warning, kontroll: logging}
-        annotations: {summary: "A stack container is restarting/panicking/exiting repeatedly (crash-loop)."}
+        annotations: {summary: "A stack container keeps crashing (a crash loop); its lines are in Loki."}
         data:
           - refId: A
             relativeTimeRange: {from: 300, to: 0}
@@ -41,13 +42,16 @@ groups:
               datasource: {type: loki, uid: loki}
               editorMode: code
               queryType: instant
-              # A container stream's `service` is the container's own name, so no one label picks them all:
-              # the body's `container_name` (docker_logs sets it, nothing else does) does; `container_name != ""`
-              # keeps journald's "Main process exited" and the ansible log's handler lines out. Each line is JSON.
-              # Two kinds of container line say the words without a crash, measured over 7 days on two boxes
-              # (2026-10-21): Grafana logs this rule's uid at every evaluation (every minute: it would fire for
-              # good), and each deploy's ansible prints `TASK [Restart …]` banners. Both are dropped. A change here
-              # is re-measured that way first (docs/troubleshooting.md); tests/unit/test_alerting_logging.py pins it.
+              # A container stream's `service` is the container's own name, so no one label picks them all: the body's
+              # `container_name` (docker_logs sets it, nothing else does) does; `container_name != ""` keeps journald's
+              # "Main process exited" and the ansible log's handler lines out. Each line is JSON. Two kinds of container
+              # line say the words without a crash, measured over 7 days on two boxes (2026-10-21): Grafana logs this
+              # rule's uid at every evaluation (every minute: it would fire for good), and each deploy's ansible prints
+              # `TASK [Restart …]` banners. Both are dropped. A failed delivery's line names the alert's title and
+              # folder (the group key) and the contact point, so no string in the alerting files but this rule's uid and
+              # query says a counted word (test_alerting_metrics.py): this rule's own title would latch it firing on a
+              # box whose deliveries fail.
+              # A change here is re-measured first (docs/troubleshooting.md); test_alerting_logging.py pins it.
               expr: >-
                 sum(count_over_time({source="internal"} | json container_name, message | __error__=""
                 | container_name != "" | line_format "{{.message}}" |~ "(?i)restart|panic|exited"
