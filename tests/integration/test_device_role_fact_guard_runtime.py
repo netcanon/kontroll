@@ -13,8 +13,10 @@ with `cacheable: true`. Each row first runs without the guard, to show that its 
 the fixed role. The unit test holds that each play that dispatches by `{{ device_role }}` imports the guard first.
 
 Nothing contacts a host: both hosts are `local`, the plays gather no facts, and their tasks are the setter, the guard
-and a `debug`, all on the controller, in a directory under `tmp_path`. It needs ansible-playbook on PATH and the
-ansible.utils collection; tests/validate.sh runs it in the validate image.
+and a `debug`, all on the controller, in a directory under `tmp_path`. It needs ansible-playbook on PATH, and the
+update_fact row ansible.utils: where the run's Ansible does not find it, that row skips, naming it, rather than the
+run stopping at "couldn't resolve module/action" (I-76). tests/validate.sh runs it in the validate image, at a step
+that fails on a skipped row.
 """
 import os
 import re
@@ -22,6 +24,8 @@ import shutil
 import subprocess
 
 import pytest
+
+import _network_lab
 
 pytestmark = [
     pytest.mark.integration,
@@ -48,7 +52,8 @@ def _run(tmp_path, setter, guard=True):
     """{host: the role it would dispatch by} for each host that reached the probe play's last task, and the run's
     output. An earlier play runs `setter`'s task (none: no earlier play) on `touched`; the probe play then imports the
     guard (unless `guard` is false) on `touched` and `plain`, both `local` with `device_role: own` in the inventory,
-    and prints each host's `device_role`."""
+    and prints each host's `device_role`. The update_fact setter skips the row where the run's Ansible has no
+    ansible.utils (I-76)."""
     play = tmp_path / "playbooks"
     (play / "tasks").mkdir(parents=True)
     (play / "library").mkdir()
@@ -70,6 +75,8 @@ def _run(tmp_path, setter, guard=True):
     (tmp_path / "ansible.cfg").write_text("[defaults]\n")   # not the repo's: its collections_path hides the image's
     env = dict(os.environ, ANSIBLE_CONFIG=str(tmp_path / "ansible.cfg"), ANSIBLE_NOCOLOR="1",
                ANSIBLE_LOCAL_TEMP=str(tmp_path / "tmp"), ANSIBLE_LOCALHOST_WARNING="0")
+    if setter == "update-fact" and not _network_lab.has_plugins(env, ("module", "ansible.utils.update_fact")):
+        pytest.skip("needs ansible.utils' update_fact, which this run's Ansible does not find (I-76)")
     p = subprocess.run(["ansible-playbook", "-i", str(tmp_path / "inv.yml"), str(play / "probe.yml")],
                        cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=300)
     out = p.stdout + p.stderr

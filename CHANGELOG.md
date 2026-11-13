@@ -52,6 +52,21 @@ the CLI backend's own probe (I-103).
 - The stand-in `ssh` the fleet-play rows use is now `tests/_stand_in_ssh.py`, shared with
   `test_wire_logging_allowlist_runtime.py`, whose ssh hosts answer the probe through it.
 
+### test: a row that needs a collection skips, naming it, where the run's Ansible lacks it (I-76, 2026-11-13)
+
+Run as a user whose Ansible finds no collection (the validate image keeps them under root's home), the connection
+refusal's rows that name its refused network and chroot hosts, the logging allowlist's syslog_push row and the
+device_role fact guard's update_fact row failed, and the other rows of those two files held the network hosts out by
+a connection plugin that would not load, not by the refusal they name.
+
+- `tests/_network_lab.py`: `has_plugins(env, (kind, name), ...)`, which `has_network_cli` now uses: one check, by
+  `ansible-doc`, for a row that needs a collection's plugin.
+- `test_wire_logging_allowlist_runtime.py`: every row skips, naming the plugins, without network_cli, httpapi, the
+  cisco.ios cliconf or the fortinet.fortios httpapi plugin; `test_refuse_local_connection_runtime.py` the same, and
+  netconf and community.general's chroot; `test_device_role_fact_guard_runtime.py`: the update_fact row skips without
+  ansible.utils. tests/validate.sh runs both at a step that fails on a skipped row, so the validate
+  image and CI still run every row.
+
 ### fix(ansible): the node_exporter install names each host it could not reach (I-92, I-97, 2026-11-12)
 
 `install-node-exporter.yml` tolerates a down host, and since I-89 runs nothing on one whose fact gathering was
