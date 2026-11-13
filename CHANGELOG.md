@@ -89,6 +89,16 @@ backup's read did before I-65.
   takes no connection, one that takes it and speaks no SSH, and one behind a jump host, real and `--check --diff`.
   The rows that run a probe share conftest.py's `ports` and `tests/_network_lab.py`.
 
+### test: a misspelt marker is a collection error on every pytest the suite runs on (I-71, 2026-11-13)
+
+pytest 9.0.0-9.0.3 ignore `--strict-markers` given through addopts (pytest #14442, fixed in 9.1.0), so on a host with
+one of them the suite's own strict markers were off: a misspelt mark was a warning, and a row it selects or skips went
+quiet. CI and the validate image run 9.1, where the flag works.
+
+- `pyproject.toml`: `strict_markers = true` beside the addopts flag (the key from pytest 9.0, the flag before).
+- `tests/unit/test_pytest_strict_markers.py`: a misspelt marker is a collection error under the suite's config as it
+  is, and under the key alone on pytest 9; with neither, the same file collects.
+
 ### fix(dashboards): the onboard-error and auth-denied alerts fire on a one-off (I-102, 2026-11-12)
 
 Both rules waited as long as their window (`for: 10m` over ten minutes, `for: 5m` over five), so the line that met

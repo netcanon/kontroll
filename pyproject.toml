@@ -6,6 +6,10 @@
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
+# pytest 9.0.0-9.0.3 ignore `--strict-markers` given through addopts (pytest #14442, fixed in 9.1.0), so a misspelt
+# marker was a warning there: the ini key holds from 9.0, the addopts flag before (I-71;
+# tests/unit/test_pytest_strict_markers.py)
+strict_markers = true
 testpaths = ["tests"]
 markers = [
   "unit: pure-function tests, no I/O (predicate engine, classify, record, openapi)",
