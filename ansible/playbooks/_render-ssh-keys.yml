@@ -33,6 +33,15 @@
 # module's argument, so no file Ansible writes on the way, keeps or prints holds it (a `copy` staged it in temp files
 # under the controller's `~/.ansible/tmp`, outside the key dir, which a run killed mid-copy left: I-96).
 #
+# The play sets `become: false`, so its tasks run as the run's own user whatever become the run turns on: under
+# `-b`, ANSIBLE_BECOME or an ansible.cfg's `become = True` they became root, the key dir and the key were root's,
+# and the run's ssh, which a become does not touch (it acts on the device), could not read the key: every key-auth
+# host was an ignored unreachable host, and the run passed (I-107). The keyword outranks those three, and a host's
+# inventory `ansible_become` (a device's `enable`) does not reach these delegated tasks (measured); a task's `become`
+# or a play's `ansible_become` var would outrank the keyword, and none is set here or in the key-dir guard. An extra
+# var, `-e ansible_become=true`, does outrank it, as it outranks every play's (measured): that run renders the keys
+# as its become user.
+#
 # Access chain used:   control node / Semaphore runner -> sops decrypt of the host's SOPS domain (local)
 # May break:           nothing on the fleet — writes a LOCAL 0600 key file; a fleet connection only USES it after
 # Fallback required:   no — re-runnable; a hard-aborted run leaves a 0600 file the cleanup / next run clears
@@ -41,6 +50,7 @@
   hosts: all
   gather_facts: false
   connection: local
+  become: false   # the run's own user writes the key its ssh reads, whatever become the run turns on (I-107)
   tags: [always]
   tasks:
     - name: The key dir MUST be an absolute path OUTSIDE the repo clone (a key in the working copy = a C1 leak)
@@ -94,7 +104,7 @@
     # --extract`, its child, prints the host's field into that process's pipe, and the process writes it to a new file
     # in the key dir and renames that over the key path. The module's arguments are the paths and the field's name,
     # never the key, so no file Ansible writes on the way and no line it prints holds it: not the module file an
-    # unpipelined run puts and keep_remote_files keeps (`ansible_pipelining` false, a `su` become), nor ANSIBLE_DEBUG's
+    # unpipelined run puts and keep_remote_files keeps (`ansible_pipelining` false), nor ANSIBLE_DEBUG's
     # lines, which print a module's arguments and raw result whatever `no_log` says. A `copy` with `content` staged the
     # key in temp files under the controller's ~/.ansible/tmp, outside the key dir, where a run killed mid-copy leaves
     # them (I-96, seen in flight on 2.18.19 and 2.19.4); a `command` given it on `stdin` put it in its module's
