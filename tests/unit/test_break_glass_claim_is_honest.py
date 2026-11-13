@@ -34,7 +34,8 @@ from kontroll.service import secrets as secrets_service
 
 from _age_recipient import x25519_recipient
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit,
+              pytest.mark.usefixtures("not_the_service_uid_env")]   # --fresh refuses uid 1001, a hosted runner's (I-59)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEMPLATE = os.path.join(_ROOT, "instance.example", ".sops.yaml")

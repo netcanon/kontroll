@@ -146,6 +146,20 @@ def not_the_service_uid(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
+def not_the_service_uid_env(monkeypatch):
+    """KONTROLL_OPERATOR_UID set to the uid running the suite, or 1000 where that is 1001, as a launcher sets it.
+    `kontroll-init.py --fresh` refuses an operator with uid 1001, the network service's (I-59), and reads the operator
+    from that variable before the account running it; a GitHub-hosted runner's own account has uid 1001, so a test that
+    runs `--fresh` for something else would be refused there and nowhere else. Set as the suite's own uid elsewhere, it
+    also keeps a SUDO_UID in the suite's environment from deciding (as root, kontroll-init reads that). For tests that
+    run `--fresh` past that check; its own rows (tests/unit/test_operator_uid_1001_refused.py) set the variable
+    themselves. No uid where the platform has none, where the refusal reads nothing either."""
+    if not hasattr(os, "getuid"):
+        return
+    monkeypatch.setenv("KONTROLL_OPERATOR_UID", str(1000 if os.getuid() == 1001 else os.getuid()))
+
+
+@pytest.fixture
 def tmp_repo(tmp_path, monkeypatch):
     """A throwaway repo root for the file-mutating paths (enable_in_fleet, onboard
     --apply). Copies the shipped EXAMPLE fleet (the suite never reads a private overlay —

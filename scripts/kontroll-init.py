@@ -30,7 +30,8 @@ skeleton, writes a `.sops.yaml` naming only this instance's own keys — the con
 file's path) and, unless `--no-break-glass`, the break-glass recipient (never inheriting another instance's recipients —
 the default path is additive, which a fresh Joe must NOT do) — and fills `instance.yml`'s mgmt_ip/domain from flags. See
 docs/install-from-scratch.md (the genericization overlay), and docs/break-glass.md for the recovery key on an instance
-created without one.
+created without one. Before anything else it refuses an operator whose uid is 1001, the network service's, which the
+deploy refuses (docs/troubleshooting.md section 10).
 
 Usage:  python3 scripts/kontroll-init.py                                   # existing overlay: add your key (additive)
         python3 scripts/kontroll-init.py --break-glass-recipient <age1…>   # existing overlay: docs/break-glass.md
@@ -542,6 +543,33 @@ def _personalize_homepage(mgmt_ip, domain):
     return done
 
 
+UID_1001 = ("kontroll-init: the operator (%s) has uid 1001, the uid the network service runs as. The canonical's "
+            "grant and hook are keyed on that uid and cannot tell this account from the service, so the deploy "
+            "refuses it (docs/troubleshooting.md section 10). Use an account with another uid. Nothing was made.")
+
+
+def _operator():
+    """The operator, as (uid, name) strings, for the uid-1001 refusal (I-59). A launcher passes it in
+    (KONTROLL_OPERATOR_UID and KONTROLL_OPERATOR_USER, the account that ran it: the installer container runs this as
+    root). Otherwise as install-prereqs.sh reads it: run as root, the account that ran sudo (sudo sets SUDO_UID and
+    SUDO_USER from its invoker), else root; not root, the account running this, whatever SUDO_UID its shell inherited.
+    (None, None) where the platform has no uids."""
+    uid = os.environ.get("KONTROLL_OPERATOR_UID", "").strip()
+    if uid:
+        return uid, os.environ.get("KONTROLL_OPERATOR_USER") or uid
+    if not hasattr(os, "getuid"):
+        return None, None
+    own = os.getuid()
+    if own == 0:
+        return os.environ.get("SUDO_UID", "").strip() or "0", os.environ.get("SUDO_USER") or "root"
+    try:
+        import pwd
+        name = pwd.getpwuid(own).pw_name
+    except (ImportError, KeyError):
+        name = str(own)
+    return str(own), name
+
+
 def _fresh_guard():
     """Refuse `--fresh` on an ALREADY-CONFIGURED node — instance/.sops.yaml exists, names a real recipient, and
     carries no placeholder. Protects an existing overlay (the source instance, or a re-run after setup) from
@@ -586,7 +614,16 @@ def main(argv):
                          "auto-promote; this edition has no auto-promoter, so it behaves like 'separated'). NEVER "
                          "defaulted — choose. See docs/trust-mode.md.")
     args = ap.parse_args(argv)
-    # first: in the installer container, a control key file other than the mounted keys.txt
+    # I-59: the deploy's first task refuses an operator with uid 1001, the network service's: the canonical's grant
+    # and hook tell the service from everyone else by that one number. The launchers and install-prereqs.sh say so
+    # before anything is made (I-18); a hand-run --fresh (the legacy host path) scaffolded instance/ and minted the
+    # control key first. So it is the first check here, before any other refusal can send the operator elsewhere.
+    if args.fresh:
+        uid, name = _operator()
+        if uid == "1001":
+            print(UID_1001 % name, file=sys.stderr)
+            return 1
+    # then: in the installer container, a control key file other than the mounted keys.txt
     away = _key_made_away(args.key_file, reads_only=bool(args.break_glass_recipient and not args.fresh))
     if away:
         print(away, file=sys.stderr)
