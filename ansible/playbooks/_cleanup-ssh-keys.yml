@@ -16,7 +16,8 @@
 # whose failing local play ends it (in backup-configs.yml: I-48), whose caller's any_errors_fatal stops more than one
 # host at a failure (a capture's play and ping's reach play override it; an install or a wiring honours it, and reaches
 # this play where the failing host is its only one, unless before ansible-core 2.19.2 its handler is what fails: I-86;
-# an install's ignored unreachable host trips it too, and ends the run before this play with one host or more: I-97),
+# an install's or a wiring's ignored unreachable host trips it too, and ends the run before this play with one host or
+# more: I-97),
 # whose handler fails on every host in a `meta: flush_handlers` of the role's own before ansible-core 2.19.2
 # (install-node-exporter.yml and wire-logging.yml, whose rescue then cannot tell it from a role that could not be
 # loaded: I-86; no shipped role has one), whose class's backup or `check` entrypoint notifies a handler that fails on

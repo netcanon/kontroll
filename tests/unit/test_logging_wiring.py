@@ -8,8 +8,9 @@ contract real: every wiring_role a method names is a built role (with a backup e
 dispatcher exists, and the backend `configure` entrypoint the syslog push path needs is present. And (I-103) that
 the push tells a network device that took no connection (not run, which passes the run, and a report after the key
 cleanup names it) from one that took the connection and failed, past the one jump-host test both probing plays
-hold.
+hold; and (I-92) that every method's wiring connections are ones on which the run names a host it could not reach.
 """
+import ast
 import os
 import re
 
@@ -121,10 +122,11 @@ def test_both_probing_plays_hold_one_jump_host_test_and_nothing_reads_another():
 
 def test_the_wiring_report_names_each_device_not_run_after_the_cleanup():
     """After wire-logging.yml's key cleanup a play over the device play's own `hosts:` pattern, on the controller,
-    gathering nothing, runs one `debug` naming the host and its `kontroll_configure_result` where
-    `kontroll_configure_unreached` is true. Guards I-103's report: a device that took no connection passes the run,
-    and with the report dropped (or run over another pattern, or reading another record) nothing but a probe's line
-    would say the device was never wired."""
+    gathering nothing, runs first a `debug` naming the host and its `kontroll_configure_result` where
+    `kontroll_configure_unreached` is true (its two lines after it, an ssh host's, are
+    tests/unit/test_fleet_play_rescue.py's: I-92). Guards I-103's report: a device that took no connection passes the
+    run, and with the report dropped (or run over another pattern, or reading another record) nothing but a probe's
+    line would say the device was never wired."""
     plays = _yaml("ansible", "playbooks", "wire-logging.yml")
     cleanup = [i for i, p in enumerate(plays) if "_cleanup-ssh-keys" in str(p.get("ansible.builtin.import_playbook"))]
     (device,) = [p for p in plays if p.get("name") == "Wire the logging method onto the target device class"]
@@ -132,6 +134,37 @@ def test_the_wiring_report_names_each_device_not_run_after_the_cleanup():
     assert plays.index(report) > cleanup[0], "the report runs before the key cleanup"
     assert report["hosts"] == device["hosts"] and report["connection"] == "local", report
     assert report["gather_facts"] is False, report
-    (task,) = report["tasks"]
+    task = report["tasks"][0]
     assert task["ansible.builtin.debug"] == {"msg": "{{ inventory_hostname }}: {{ kontroll_configure_result }}"}, task
     assert task["when"] == "kontroll_configure_unreached | default(false) | bool", task
+
+
+# The network_cli spellings: the CLI backend's push (backend_netcommon_cli's `configure`) probes a device it could not
+# reach, and the run's report names it (I-103).
+NETWORK_CLI = {"network_cli", "ansible.netcommon.network_cli"}
+
+
+def test_every_methods_wiring_connections_are_ones_the_run_names_an_unreached_host_on():
+    """Each logging method that names a wiring role lists `wiring_connections` all of the ssh family wire-logging.yml's
+    device play probes (the literal list its probe's `when` names: a host there is probed before its role and re-checked
+    after it, and the report names one that answers neither), or all network_cli, where its role pushes through
+    backend_netcommon_cli's `configure`, whose probe names a device that took no connection (I-103). Guards a method
+    added on another connection (an API, a container), whose host the play neither probes nor re-checks: down or
+    dropping, its wiring would pass the run with nothing naming it but its UNREACHABLE lines, as every ssh host's did
+    before I-92."""
+    (device,) = [p for p in _yaml("ansible", "playbooks", "wire-logging.yml")
+                 if p.get("name") == "Wire the logging method onto the target device class"]
+    (probe,) = [t for b in device["tasks"] for t in b.get("block") or [] if t.get("register") == "_kontroll_wire_probe"]
+    family = set(ast.literal_eval(probe["when"].split(" in ", 1)[1]))
+    methods = [m for m in catalog.load_logging() if m.get("wiring_role")]
+    assert methods, "no logging method names a wiring role"
+    for method in methods:
+        conns = set(method.get("wiring_connections") or [])
+        assert conns, method
+        if conns <= family:
+            continue
+        assert conns <= NETWORK_CLI, (method["wiring_role"], conns)
+        tasks = _yaml("ansible", "roles", method["wiring_role"], "tasks", "main.yml")
+        pushes = [t for t in tasks
+                  if (t.get("ansible.builtin.include_role") or {}).get("name") == "backend_netcommon_cli"]
+        assert pushes and all(t["ansible.builtin.include_role"].get("tasks_from") == "configure" for t in pushes), tasks

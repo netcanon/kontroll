@@ -56,6 +56,8 @@ _LOCAL_FAMILY = ("local", "ansible.builtin.local", "ansible.legacy.local", "redi
 # The connections that execute a role's tasks on the host itself: the bound a play's list stays within.
 _SSH_FAMILY = ("ssh", "ansible.builtin.ssh", "ansible.legacy.ssh", "paramiko_ssh", "ansible.builtin.paramiko_ssh",
                "ansible.legacy.paramiko_ssh")
+# A task's own `when` condition that holds it to the ssh family: a literal list, so no var can widen it (I-92).
+_SSH_GATE = re.compile(r"ansible_connection in (\[[^\]]*\])")
 # NetworkConnectionBase plugins: a network module talks to the device; any other module runs on the controller.
 _NETWORK_FAMILY = tuple(p + n for n in ("network_cli", "httpapi", "netconf", "grpc")
                         for p in ("", "ansible.netcommon."))
@@ -1114,10 +1116,31 @@ def _network_unsafe(role, tasks_from="main", roles=ROLES, seen=(), playbooks=PLA
     return out
 
 
+def _ssh_only(task):
+    """Whether one of `task`'s own `when` conditions (the string, or an item of the list, which ansible-core ANDs) is
+    exactly `ansible_connection in [...]` with a literal, non-empty list of names all within `_SSH_FAMILY`. Read after
+    the refusal's freeze, which `test_every_group_dispatched_play_refuses_first` holds, such a task runs over the ssh
+    family only, never over a network plugin. A list named by a variable is not read (a block's, a task's or a fact's
+    value outranks a play's), nor a gate on an enclosing block, nor a condition in any other form."""
+    when = task.get("when")
+    for item in when if isinstance(when, list) else [when]:
+        match = _SSH_GATE.fullmatch(item) if isinstance(item, str) else None
+        if match is None:
+            continue
+        try:
+            names = ast.literal_eval(match.group(1))
+        except (ValueError, SyntaxError):
+            continue
+        if names and all(isinstance(n, str) for n in names) and set(names) <= set(_SSH_FAMILY):
+            return True
+    return False
+
+
 def _play_network_unsafe(play, directory, roles=ROLES):
     """[task] for every task a dispatching play runs on its hosts besides the role it dispatches (`{{ role }}`, which
     each method's check covers), through its includes and handlers, that a network plugin would run on the controller,
-    judged as `_network_unsafe` judges a role's task; a fixed role it includes is walked by `_network_unsafe`, with the
+    judged as `_network_unsafe` judges a role's task, save one whose own `when` holds it to the ssh family (`_ssh_only`:
+    wire-logging.yml's probe and re-check, I-92); a fixed role it includes is walked by `_network_unsafe`, with the
     play's own directory as `<playbooks>` (its `roles/` shadows: fold 4's read B, N5). A play, a block or a task that
     sets `collections:` is reported: a role named without a collection is looked up there before the roles path, so the
     role walked would not be the role run (fold 3's read B, S3; fold 4's read B, S2). So is an include_role that carries
@@ -1139,7 +1162,7 @@ def _play_network_unsafe(play, directory, roles=ROLES):
                                            playbooks=directory))
         elif "block" in t or _key(t, _TASKS_KEYS):
             continue
-        elif not _network_safe(t) and t.get("delegate_to") not in _LOCAL_HOSTS:
+        elif not _network_safe(t) and t.get("delegate_to") not in _LOCAL_HOSTS and not _ssh_only(t):
             out.append(t.get("name") or sorted(set(t) - _TASK_KEYWORDS))
     for r in play.get("roles") or []:
         out.extend(_network_unsafe(r if isinstance(r, str) else r.get("role") or r.get("name"), roles=roles,
@@ -2092,21 +2115,22 @@ def test_the_refusal_is_an_assert_on_an_allowlist_then_a_freeze():
 
 
 def test_every_allowlist_names_only_connections_that_run_the_role_where_it_is_written_to_run():
-    """Each group-dispatching play passes an allowlist. install-node-exporter.yml passes the ssh family as it names
-    it (`ssh` and `paramiko_ssh`, bare and `ansible.builtin.`; the `paramiko` alias and the `ansible.legacy.`
-    spellings are refused on purpose, which fails closed), within `_SSH_FAMILY`, the bound every play's list stays
-    within. wire-logging.yml passes the dispatched method's `wiring_connections` (logging/<method>.yml), each method
-    with a wiring role naming a non-empty list. No list names the local plugin. A network plugin (whose non-network
-    modules run on the controller) is named only for a wiring role whose every task, through its includes, is
-    network-safe (`_network_unsafe`); every other name is of the ssh family. A play whose list is not of the ssh
-    family alone runs no task or handler of its own (through its includes, and the fixed roles it includes) that is
-    not network-safe, beside the role it dispatches (`_play_network_unsafe`). Guards an allowlist widened to a
-    connection that runs the role on the control node (its read, B1), and a controller-side task added to a role
-    that a network plugin reaches (fold 1's read B, S4: the old check only asked whether the role included the CLI
-    backend) or to the dispatching play itself (fold 2's read B, S5: a `command` or a handler beside the include ran
-    on the controller for a network_cli host). The walk fails closed on a network role with handlers or a meta
-    dependency, and on a vendor network module (`cisco.ios.ios_config`) that `_NETWORK_SAFE` does not name: the next
-    network method may need it widened, never this test weakened (its N4)."""
+    """Each group-dispatching play passes an allowlist. install-node-exporter.yml passes the ssh family as it names it
+    (`ssh` and `paramiko_ssh`, bare and `ansible.builtin.`; the `paramiko` alias and the `ansible.legacy.` spellings are
+    refused on purpose, which fails closed), within `_SSH_FAMILY`, the bound every play's list stays within.
+    wire-logging.yml passes the dispatched method's `wiring_connections` (logging/<method>.yml), each method with a
+    wiring role naming a non-empty list. No list names the local plugin. A network plugin (whose non-network modules run
+    on the controller) is named only for a wiring role whose every task, through its includes, is network-safe
+    (`_network_unsafe`); every other name is of the ssh family. A play whose list is not of the ssh family alone runs no
+    task or handler of its own (through its includes, and the fixed roles it includes) that is not network-safe, beside
+    the role it dispatches (`_play_network_unsafe`), unless the task's own `when` holds it to a literal list within the
+    ssh family (`_ssh_only`: the wiring's probe and re-check, I-92). Guards an allowlist widened to a connection that
+    runs the role on the control node (its read, B1), and a controller-side task added to a role that a network plugin
+    reaches (fold 1's read B, S4: the old check only asked whether the role included the CLI backend) or to the
+    dispatching play itself (fold 2's read B, S5: a `command` or a handler beside the include ran on the controller for
+    a network_cli host). The walk fails closed on a network role with handlers or a meta dependency, and on a vendor
+    network module (`cisco.ios.ios_config`) that `_NETWORK_SAFE` does not name: the next network method may need it
+    widened, never this test weakened (its N4)."""
     allow = _allowlists()
     by_play = {k.split(":")[0]: v for k, v in allow.items()}
     assert by_play["install-node-exporter.yml"] == ["ssh", "ansible.builtin.ssh", "paramiko_ssh",
@@ -2307,6 +2331,40 @@ def test_the_play_walk_flags_a_controller_side_task_beside_the_dispatched_role(t
                _play_network_unsafe(sub, str(base / "sub"), str(roles))), "sub shadow"
     assert any(u.startswith("safe/main: shadowed") for u in _play_network_unsafe(
         dict(hosts="g", roles=["safe"], tasks=[role]), str(base / "sub"), str(roles))), "sub roles: shadow"
+
+
+@pytest.mark.parametrize("when, flagged", [
+    ("ansible_connection in ['ssh', 'ansible.builtin.ssh', 'paramiko_ssh', 'ansible.builtin.paramiko_ssh']", False),
+    (["ansible_connection in ['ssh']", "_probe is not unreachable"], False),
+    ("ansible_connection in ['ssh', 'network_cli']", True),
+    ("ansible_connection in []", True),
+    ("ansible_connection in ssh_family", True),
+    ("ansible_connection in ['ssh'] or true", True),
+    ("ansible_connection not in ['network_cli']", True),
+    (None, True),
+])
+def test_the_play_walk_passes_only_a_task_its_own_when_holds_to_a_literal_ssh_family(tmp_path, when, flagged):
+    """In a planted play whose allowlist is a network plugin's, a `ping` beside the dispatched role passes the play walk
+    when its own `when` holds, as the string or one ANDed item of a list, `ansible_connection in [...]` with a literal
+    list within the ssh family; it is flagged when the list names a network plugin, is empty or is a variable (a
+    block's, a task's or a fact's value outranks a play's), when the condition is or-ed or negated, when there is no
+    `when`, and when the gate sits on its block rather than on the task. Guards I-92's gate: wire-logging.yml's probe
+    and re-check run a `ping`, which over network_cli runs on the controller and answers for a device that is down, so
+    the walk lets one through only where the host's frozen connection is of the ssh family; a gate widened to
+    network_cli, or moved into a var, fails here and in the shipped play's row."""
+    base, roles = tmp_path / "playbooks", tmp_path / "roles"
+    (base / "tasks").mkdir(parents=True)
+    roles.mkdir()
+    shutil.copy(os.path.join(PLAYBOOKS, REFUSAL), str(base / REFUSAL))
+    refuse = {"ansible.builtin.import_tasks": REFUSAL, "vars": {"refusal_connections": ["ssh", "network_cli"]}}
+    role = {"ansible.builtin.include_role": {"name": "{{ role }}"}}
+    ping = {"name": "probe", "ansible.builtin.ping": None}
+    task = dict(ping, when=when) if when is not None else ping
+    play = dict(hosts="g", tasks=[refuse, {"block": [task, role]}])
+    assert _play_network_unsafe(play, str(base), str(roles)) == (["probe"] if flagged else []), when
+    if when is not None and not flagged:
+        gated_block = dict(hosts="g", tasks=[refuse, {"block": [ping, role], "when": when}])
+        assert _play_network_unsafe(gated_block, str(base), str(roles)) == ["probe"], when
 
 
 def test_the_scan_finds_a_planted_play_and_passes_a_refusing_one(tmp_path):

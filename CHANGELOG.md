@@ -11,6 +11,33 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the logging wiring names each ssh host it could not reach (I-92, I-97, 2026-11-13)
+
+`wire-logging.yml` tolerates a down host, but over the ssh family (`logging_journald_remote`,
+`logging_file_tail_ssh`) a host that took no connection, or answered and then stopped answering, had each role task's
+unreachable result ignored: the run passed with rc 0 and nothing naming the host but its `UNREACHABLE!` lines, and a
+down host's every role task waited on its connection in turn. A network device (`network_cli`) was named already, by
+the CLI backend's own probe (I-103).
+
+- The device play probes an ssh-family host (`ping`) before its role and re-checks it after its handlers, two more
+  connections per host. A host that does not answer the probe is not wired (its role is not run, in a dry run too);
+  the `Wiring run report` after the key cleanup names it ("not wired") and one that answered the probe and not the
+  re-check ("its wiring may not be done"). The run still passes for both (a down host is tolerated, not fatal). The
+  connections probed are the ssh family, a literal list in each `when` (install-node-exporter.yml's refusal list):
+  over `network_cli` ansible-core runs a plain module on the controller, so a `ping` would answer for a device that is
+  down, and the CLI backend's probe covers those (I-103). A unit row holds every logging method's `wiring_connections`
+  to that family or to `network_cli`, so a method on another connection fails until it is named.
+- `tests/unit/test_group_dispatch_refuses_local.py`'s network-safety walk, which flags a module that is not
+  network-safe in a play whose allowlist may reach a network plugin, passes a task whose own `when` holds, as one of
+  its ANDed conditions, `ansible_connection in [...]` with a literal list within the ssh family (the probe and the
+  re-check); a list named by a variable, or one naming any other connection, is still flagged.
+- Under a caller's `any_errors_fatal` an ignored unreachable probe or re-check stops every host, as a failure does,
+  and the run ends before the key cleanup with one host or more; the rescue's message names a host whose own probe or
+  re-check was unreachable by that cause, where it gave every host the message for a role that could not be loaded or
+  another host's failure (I-97, as for the install).
+- The stand-in `ssh` the fleet-play rows use is now `tests/_stand_in_ssh.py`, shared with
+  `test_wire_logging_allowlist_runtime.py`, whose ssh hosts answer the probe through it.
+
 ### fix(ansible): the node_exporter install names each host it could not reach (I-92, I-97, 2026-11-12)
 
 `install-node-exporter.yml` tolerates a down host, and since I-89 runs nothing on one whose fact gathering was

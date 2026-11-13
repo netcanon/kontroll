@@ -22,8 +22,12 @@ a caller's any_errors_fatal, from the environment or from ansible.cfg, the host 
 name. And (I-92) that the install's report, after the cleanup, names a host whose gathering was unreachable and one
 that answered it and then not the re-check after its install, while the run passes for both; and (I-97) that under a
 caller's any_errors_fatal the rescue names a host whose own gathering or re-check was unreachable by that cause.
-tests/unit/test_fleet_play_rescue.py pins the shapes. The stubs run `debug`, `fail` and `include_tasks`, which open no
-connection. install-node-exporter.yml's fact gathering meets a stand-in `ssh` first on PATH (FAKE_SSH), whether or not
+And (I-92, I-97) the same of the wiring: its report names an ssh host that did not answer the probe before its role
+(nothing run on it, the real wiring role included) and one that answered it and then not the re-check after it, the
+run passing for both, and under a caller's any_errors_fatal the rescue names a host whose own probe or re-check was
+unreachable by that cause. tests/unit/test_fleet_play_rescue.py pins the shapes. The stubs run `debug`, `fail` and
+`include_tasks`, which open no connection. install-node-exporter.yml's fact gathering and re-check, and
+wire-logging.yml's probe and re-check, meet a stand-in `ssh` first on PATH (tests/_stand_in_ssh.py), whether or not
 the machine has an ssh client (the validate image has none): for a host whose address the row lists as up it runs the
 command on the row's own machine, which stands in for the device (pipelined, so the module comes on its stdin), and for
 any other it answers as a refused connection does (exit 255), so the host is unreachable; a host the row gives a count
@@ -35,10 +39,11 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 
 import pytest
 import yaml
+
+import _stand_in_ssh
 
 pytestmark = [
     pytest.mark.integration,
@@ -76,32 +81,6 @@ CHAIN = [{"name": "Stub handler", "ansible.builtin.debug": {"msg": "HANDLER RAN 
 # The first ansible-core whose rescue sees a failed handler as `ansible_failed_task` (its 2.19.2 changelog,
 # ansible/ansible#85682); before it the rescue sees none.
 NAMED_HANDLER = (2, 19, 2)
-# The stand-in `ssh`: for a host in $FAKESSH_UP (a comma list of addresses) it runs the remote command here, under
-# /bin/sh, as an ssh login would on the device; for any other it answers as a refused connection does (exit 255). A
-# host in $FAKESSH_CALLS (`address=N`, comma separated) answers its first N connections and refuses the rest, each
-# connection counted in a file under $FAKESSH_SEEN.
-FAKE_SSH = """#!%s
-import os, sys
-argv, i, host, cmd = sys.argv[1:], 0, None, []
-WITH_ARG = set("BbcDEeFIiJLlmOoPpQRSWw")
-while i < len(argv):
-    a = argv[i]
-    if a.startswith("-") and len(a) > 1:
-        i += 2 if a[1] in WITH_ARG and len(a) == 2 else 1
-        continue
-    host, cmd = a, argv[i + 1:]
-    break
-calls, over = dict(x.split("=") for x in os.environ.get("FAKESSH_CALLS", "").split(",") if x), False
-if host in calls:
-    seen = os.path.join(os.environ["FAKESSH_SEEN"], host)
-    over = os.path.exists(seen) and os.path.getsize(seen) >= int(calls[host])
-    with open(seen, "a") as fh:
-        fh.write("x")
-if over or host is None or host not in os.environ.get("FAKESSH_UP", "").split(","):
-    sys.stderr.write("ssh: connect to host %%s port 22: Connection refused\\n" %% host)
-    sys.exit(255)
-os.execv("/bin/sh", ["/bin/sh", "-c", " ".join(cmd)])
-""" % sys.executable
 ADDRESS = {"a": "192.0.2.36", "b": "192.0.2.37"}
 INSTALL = "Install + start node_exporter (the via:host host metrics agent)"
 
@@ -112,9 +91,9 @@ def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=Non
     and an instance.yml), the role `role` a stub (STUB, and `handlers` or HANDLERS) or, when `real`, the shipped role
     of that name, over `hosts` in group `g`, with `extra` as one JSON `-e` and `args` after it, each text in `append`
     added to the copy's file it names, `cfg` added to ansible.cfg's [defaults], a key dir under `tmp_path` holding one
-    stale key, and FAKE_SSH first on PATH, answering for the addresses in `up`, each address in `calls` for that many
-    connections only. Return the exit code, the output, each host's failed count from the recap, and whether the key
-    dir is gone."""
+    stale key, and the stand-in `ssh` (tests/_stand_in_ssh.py) first on PATH, answering for the addresses in `up`,
+    each address in `calls` for that many connections only. Return the exit code, the output, each host's failed
+    count from the recap, and whether the key dir is gone."""
     tree = tmp_path / "t"
     shutil.copytree(os.path.join(ROOT, "ansible", "playbooks"), str(tree / "ansible" / "playbooks"))
     shutil.copytree(os.path.join(ROOT, "logging"), str(tree / "logging"))
@@ -144,8 +123,7 @@ def _run(tmp_path, playbook, role, hosts, extra=None, env_extra=None, append=Non
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (tmp_path / "seen").mkdir()
-    (bin_dir / "ssh").write_text(FAKE_SSH)
-    os.chmod(str(bin_dir / "ssh"), 0o755)
+    _stand_in_ssh.install(bin_dir)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
     env.update(ANSIBLE_CONFIG=str(tree / "ansible" / "ansible.cfg"), ANSIBLE_NOCOLOR="1",
                ANSIBLE_LOCAL_TEMP=str(tmp_path / "tmp"), ANSIBLE_LOCALHOST_WARNING="0",
@@ -183,7 +161,11 @@ def _task(out, name):
 
 
 def _wire(tmp_path, extra, role=WIRE_ROLE, env_extra=None, refused=True, only=None, append=None, args=(),
-          handlers=None, host_vars=None, cfg=""):
+          handlers=None, host_vars=None, cfg="", up=("a", "b"), calls=None, real=False):
+    """wire-logging.yml with `-e role=<role> -e target=probe` over the ssh hosts a and b (those in `only`), those in
+    `up` answering the play's probe and re-check through the stand-in `ssh`, each in `calls` for that many
+    connections only, and (with `refused`) the local host n, which the refusal refuses; `real` runs the shipped
+    WIRE_ROLE in place of the stub."""
     hosts = {"a": _ssh("192.0.2.36"), "b": _ssh("192.0.2.37")}
     if only:
         hosts = {h: hosts[h] for h in only}
@@ -192,7 +174,8 @@ def _wire(tmp_path, extra, role=WIRE_ROLE, env_extra=None, refused=True, only=No
     for host, more in (host_vars or {}).items():
         hosts[host].update(more)
     return _run(tmp_path, "wire-logging.yml", WIRE_ROLE, hosts, dict(role=role, target="probe", **extra), env_extra,
-                append, args, handlers=handlers, cfg=cfg)
+                append, args, up=[ADDRESS[h] for h in up], real=real, handlers=handlers, cfg=cfg,
+                calls={ADDRESS[h]: n for h, n in (calls or {}).items()})
 
 
 def _stopped(host, task, what="wiring"):
@@ -323,8 +306,125 @@ def test_a_callers_any_errors_fatal_over_one_host_reaches_the_cleanup(tmp_path):
     assert _stopped("a", "Stub step that fails") in out and '"msg": "a: stopped with no failed task' not in out, out
 
 
+WIRE_PROBE = "Probe the host before its wiring (the run's report names one that does not answer, I-92)"
+WIRE_INCLUDE = "Apply the dispatched logging wiring role (collector resolved control-side)"
+WIRE_RECHECK = "Re-check the host after its wiring (the run's report names one that no longer answers, I-92)"
+# The rescue's words for a host whose own probe, or re-check, was unreachable under any_errors_fatal (I-97).
+PROBE_STOPPED = "%s: it did not answer the probe before its wiring, so nothing was wired on it, and it was stopped"
+WIRE_RECHECK_STOPPED = "%s: it did not answer the re-check after its wiring, which may not be done, and a caller's"
+
+
+def _not_wired(host):
+    """The wiring report's line for an ssh host that did not answer the probe before its wiring (I-92)."""
+    return '"msg": "%s: not wired: it did not answer the probe before its wiring"' % host
+
+
+def _wiring_may_not_be_done(host):
+    """The wiring report's line for an ssh host that answered the probe, then not the re-check (I-92)."""
+    return ('"msg": "%s: its wiring may not be done: it answered the probe before it, then not the re-check after it '
+            '(each task it did not answer was ignored)"' % host)
+
+
+@pytest.mark.parametrize("args", [(), ("--check", "--diff")], ids=["real", "check"])
+def test_a_down_ssh_host_is_not_wired_and_is_named_and_the_run_passes(tmp_path, args):
+    """Host a answers through the stand-in `ssh` and b does not. Real and `--check --diff` (the dry run CLAUDE.md asks
+    for first): a's probe answers and its stub wiring runs to its last step, its handler and its re-check too; b's
+    probe is unreachable and ignored, and its role's include and its re-check are skipped, so no step of the stub runs
+    on it; the run passes (rc 0) with neither host failed, the key dir is gone in the real run, and the report, after
+    the cleanup, names b alone, as not wired. Guards I-92 for the wiring: an ssh host that took no connection passed
+    with nothing in the run naming it but its UNREACHABLE lines, each of its role's tasks waiting on the connection in
+    turn (measured with a stub that connects, on 2.18.19 and 2.19.4); the probe dropped or skipped, the include run
+    on a host the probe did not reach, or the report reading another result, fails this row."""
+    rc, out, recap, gone = _wire(tmp_path, {}, up=("a",), refused=False, args=args)
+    assert rc == 0 and (gone or args), out
+    assert recap == {"a": 0, "b": 0, "localhost": 0}, (recap, out)
+    assert "AFTER a" in out and "HANDLER RAN a" in out, out
+    assert "STUB b" not in out and "FAILED: the wiring" not in out, out
+    probed = _task(out, WIRE_PROBE)
+    assert "ok: [a]" in probed and re.search(r"\[b\]: UNREACHABLE!", probed), probed
+    included = _task(out, WIRE_INCLUDE)
+    assert "skipping: [b]" in included and "skipping: [a]" not in included, included
+    rechecked = _task(out, WIRE_RECHECK)
+    assert "ok: [a]" in rechecked and "skipping: [b]" in rechecked, rechecked
+    assert _not_wired("b") in out and _not_wired("a") not in out, out
+    assert _wiring_may_not_be_done("a") not in out and _wiring_may_not_be_done("b") not in out, out
+
+
+@pytest.mark.parametrize("args", [(), ("--check", "--diff")], ids=["real", "check"])
+def test_an_ssh_host_that_stops_answering_after_its_probe_is_named_and_the_run_passes(tmp_path, args):
+    """Host a answers its probe through the stand-in `ssh` and refuses every later connection; b answers every one.
+    Real and `--check --diff`: a's stub wiring runs (its steps open no connection), its re-check is unreachable and
+    ignored, b's answers; the run passes (rc 0) with neither failed, the key dir is gone in the real run, and the
+    report names a alone, as a host whose wiring may not be done, not as one not wired. Guards I-92 for the wiring:
+    such a host's wiring ended with each unanswered task ignored, rc 0, and nothing naming it but its UNREACHABLE lines
+    (measured with a stub that connects and with the shipped logging_journald_remote, on 2.18.19 and 2.19.4); the
+    re-check dropped or kept from a dry run, or the report reading the probe's result for the re-check's, fails this
+    row."""
+    rc, out, recap, gone = _wire(tmp_path, {}, calls={"a": 1}, refused=False, args=args)
+    assert rc == 0 and (gone or args), out
+    assert recap == {"a": 0, "b": 0, "localhost": 0}, (recap, out)
+    assert "AFTER a" in out and "AFTER b" in out and "FAILED: the wiring" not in out, out
+    rechecked = _task(out, WIRE_RECHECK)
+    assert re.search(r"\[a\]: UNREACHABLE!", rechecked) and "ok: [b]" in rechecked, rechecked
+    assert _wiring_may_not_be_done("a") in out and _wiring_may_not_be_done("b") not in out, out
+    assert _not_wired("a") not in out and _not_wired("b") not in out, out
+
+
+def test_the_real_wiring_role_runs_nothing_on_a_down_ssh_host(tmp_path):
+    """The shipped logging_journald_remote over host a, down: its probe is unreachable and ignored, the role's include
+    is skipped and none of the role's tasks runs, the run passes (rc 0) with a not failed, the key dir is gone, and
+    the report names a as not wired. Guards the probe's `when` on the include with the role a run wires in place:
+    without it each of the role's tasks connects in turn, each unreachable and ignored (measured on 2.18.19 and
+    2.19.4). A skipped include never loads the role, so the row passes with an empty role too; nothing runs on the
+    host, so the real run touches nothing."""
+    rc, out, recap, gone = _wire(tmp_path, {}, up=(), only=("a",), refused=False, real=True)
+    assert rc == 0 and gone, out
+    assert recap == {"a": 0, "localhost": 0}, (recap, out)
+    assert "FAILED!" not in out and "FAILED: the wiring" not in out, out
+    assert "skipping: [a]" in _task(out, WIRE_INCLUDE), out
+    assert "TASK [%s : " % WIRE_ROLE not in out, out
+    assert _not_wired("a") in out, out
+
+
+def test_a_callers_any_errors_fatal_over_a_down_ssh_host_names_its_probe(tmp_path):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True with host a alone, down: its ignored unreachable probe trips the setting as
+    a failure does, ansible-core moves a into the rescue and holds it failed, and the run ends at the device play (rc
+    2, the key dir kept: the residual the header names). The rescue's message names a's own unreachable probe, not the
+    causes it cannot tell apart (a role that could not be loaded, another host's failure), which were false for it.
+    Guards I-97 for the wiring: a down host alone was named by those causes (measured with a stub that connects, on
+    2.18.19 and 2.19.4)."""
+    rc, out, _recap, gone = _wire(tmp_path, {}, up=(), env_extra=AEF, refused=False, only=("a",))
+    assert rc == 2 and not gone, out
+    assert PROBE_STOPPED % "a" in out and "a: stopped with no failed task of its own" not in out, out
+    assert "STUB a" not in out and _not_wired("a") not in out, out
+
+
+def test_a_callers_any_errors_fatal_over_an_up_and_a_down_ssh_host_names_each_by_its_own_cause(tmp_path):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True over host a, up, and b, down: b's unreachable probe stops both before the
+    role; the rescue fails b naming its own unreachable probe and a with the causes it cannot tell apart (another
+    host's failure stopped it); rc 2, the key dir kept, no stub step run. Guards I-97 for the wiring: both hosts got
+    the second message, b's false for it; and the first message given to a, which answered."""
+    rc, out, _recap, gone = _wire(tmp_path, {}, up=("a",), env_extra=AEF, refused=False)
+    assert rc == 2 and not gone, out
+    assert PROBE_STOPPED % "b" in out and "b: stopped with no failed task of its own" not in out, out
+    assert _no_task_of_its_own("a") in out and PROBE_STOPPED % "a" not in out, out
+    assert "STUB a" not in out and "STUB b" not in out, out
+
+
+def test_a_callers_any_errors_fatal_over_an_ssh_host_that_stops_answering_names_its_recheck(tmp_path):
+    """Under ANSIBLE_ANY_ERRORS_FATAL=True with host a alone, answering its probe and refusing every later connection:
+    its stub wiring runs, its unreachable re-check trips the setting, and the rescue names that cause (it did not
+    answer the re-check, its wiring may not be done), not the role or another host; rc 2, the key dir kept. Guards
+    I-97's second branch for the wiring: a host that drops mid-wiring under any_errors_fatal named by causes false for
+    it."""
+    rc, out, _recap, gone = _wire(tmp_path, {}, calls={"a": 1}, env_extra=AEF, refused=False, only=("a",))
+    assert rc == 2 and not gone, out
+    assert "AFTER a" in out and WIRE_RECHECK_STOPPED % "a" in out, out
+    assert "a: stopped with no failed task of its own" not in out and _wiring_may_not_be_done("a") not in out, out
+
+
 def _install(tmp_path, extra, up=("a", "b"), real=False, args=(), calls=None, env_extra=None, only=("a", "b")):
-    """install-node-exporter.yml over the hosts in `only` (a and b), those in `up` answering through FAKE_SSH, each
+    """install-node-exporter.yml over the hosts in `only` (a and b), those in `up` answering through the stand-in, each
     host in `calls` for that many connections only, `args` after the `-e`."""
     hosts = {h: _ssh(ADDRESS[h]) for h in only}
     return _run(tmp_path, "install-node-exporter.yml", "node_exporter", hosts, dict(target="g", **extra),

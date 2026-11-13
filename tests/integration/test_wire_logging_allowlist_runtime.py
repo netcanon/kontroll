@@ -8,7 +8,9 @@ WHY. The unit test (tests/unit/test_group_dispatch_refuses_local.py) pins the st
 resolves `_wire_connections` from logging/<method>.yml. With its `selectattr('wiring_role', 'equalto', role)` dropped,
 every method's list is unioned, and a network_cli host reached logging_journald_remote, whose lineinfile then ran on
 the control node (fold 1's read B, S3: W8, W9). Each wiring role is a stub (`debug`), so nothing touches a host; every
-address is TEST-NET-1. It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image.
+address is TEST-NET-1. The device play probes an ssh-family host before its role and re-checks it after (I-92): both
+ssh hosts answer through the stand-in `ssh` (tests/_stand_in_ssh.py), which runs the `ping` on this machine, so they
+reach the role as before. It needs ansible-playbook on PATH; tests/validate.sh runs it in the validate image.
 """
 import os
 import re
@@ -18,15 +20,19 @@ import subprocess
 import pytest
 import yaml
 
+import _stand_in_ssh
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(shutil.which("ansible-playbook") is None, reason="needs ansible-playbook on PATH"),
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The two ssh hosts answer the device play's probe through the stand-in `ssh` (its module run by this machine's python).
+_UP = {"ansible_python_interpreter": "{{ ansible_playbook_python }}"}
 _HOSTS = {
-    "ssh": {"ansible_connection": "ssh", "ansible_host": "192.0.2.36"},
-    "unset": {"ansible_host": "192.0.2.35"},
+    "ssh": dict({"ansible_connection": "ssh", "ansible_host": "192.0.2.36"}, **_UP),
+    "unset": dict({"ansible_host": "192.0.2.35"}, **_UP),
     "ncli": {"ansible_connection": "network_cli", "ansible_network_os": "cisco.ios.ios", "ansible_host": "192.0.2.30"},
     "fncli": {"ansible_connection": "ansible.netcommon.network_cli", "ansible_network_os": "cisco.ios.ios",
               "ansible_host": "192.0.2.31"},
@@ -66,7 +72,8 @@ def _wire(tmp_path, role, as_yaml=()):
     run's dir as it was (I-87). Beside the copied playbooks, `host_vars/localhost.yml` seeds `_wire_methods` with every
     wiring role on every connection family the group holds but `local` (which the refusal refuses in any list): the
     validation play appends to that list, and a seed it read widened each role's allowlist (local-refusal fold 12's
-    read A, S2), so every run here also holds that the method list starts empty."""
+    read A, S2), so every run here also holds that the method list starts empty. The stand-in `ssh` first on PATH
+    answers for the two ssh hosts' addresses (the probe and the re-check, I-92), over a pipelined connection."""
     tree = tmp_path / "t"
     shutil.copytree(os.path.join(ROOT, "ansible", "playbooks"), str(tree / "ansible" / "playbooks"))
     (tree / "ansible" / "playbooks" / "host_vars").mkdir(exist_ok=True)
@@ -90,10 +97,14 @@ def _wire(tmp_path, role, as_yaml=()):
     lines = ["all:", "  children:", "    g:", "      hosts:"]
     lines += ["        %s: {%s}" % (h, ", ".join('%s: "%s"' % kv for kv in v.items())) for h, v in _HOSTS.items()]
     (tree / "inv.yml").write_text("\n".join(lines) + "\n")
-    (tree / "ansible" / "ansible.cfg").write_text("[defaults]\nroles_path = roles\n")
+    (tree / "ansible" / "ansible.cfg").write_text("[defaults]\nroles_path = roles\n"
+                                                  "[ssh_connection]\npipelining = True\n")
+    (tmp_path / "bin").mkdir()
     env = dict(os.environ, ANSIBLE_CONFIG=str(tree / "ansible" / "ansible.cfg"), ANSIBLE_NOCOLOR="1",
                ANSIBLE_LOCAL_TEMP=str(tmp_path / "tmp"), ANSIBLE_LOCALHOST_WARNING="0",
-               KONTROLL_SSH_KEY_DIR=str(tmp_path / "keys"))
+               KONTROLL_SSH_KEY_DIR=str(tmp_path / "keys"), ANSIBLE_HOST_KEY_CHECKING="False",
+               PATH=_stand_in_ssh.install(tmp_path / "bin") + os.pathsep + os.environ.get("PATH", ""),
+               FAKESSH_UP=",".join(_HOSTS[h]["ansible_host"] for h in ("ssh", "unset")))
     for held in ("keys", "keys.check"):   # the real run's key dir, and the dry run's own (`.check`: I-87)
         (tmp_path / held).mkdir()
         (tmp_path / held / "h.key").write_text("not a key\n")
