@@ -95,9 +95,11 @@ def test_trailer_is_read_dynamically_and_never_duplicated(monkeypatch):
 def test_commit_and_push_commits_through_the_seam(monkeypatch):
     """commit_and_push (the API/GUI write seam) must build its `git commit` from commit_message_args — so the one
     trailer reaches every network-service commit, with the caller's lines untouched and in order. Captures the
-    narrated `_run` calls (the repo's standard git seam) instead of running git."""
+    narrated `_run` calls (the repo's standard git seam) instead of running git, and mocks the landing beside it
+    (`land_main`: else the row lands this checkout's HEAD on the canonical its `local` remote names, I-70)."""
     calls = []
     monkeypatch.setattr(gitio, "_run", lambda cmd, cwd=None, quiet_args=0: calls.append(list(cmd)) or 0)
+    monkeypatch.setattr(gitio, "land_main", lambda run_id=None, skip_gate=False: 0)
     monkeypatch.setattr(gitio, "_push_target", lambda run_id=None: "main")
     monkeypatch.setenv(gitio.COMMIT_TRAILER_ENV, "Co-Authored-By: ops-bot <ops@example.com>")
     out = gitio.commit_and_push(["instance/fleet.yml"], ["feat(onboard): x", "body line"])
