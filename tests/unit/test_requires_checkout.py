@@ -178,10 +178,10 @@ def test_no_git_on_the_path_is_a_reason(tmp_path, monkeypatch):
 
 
 def test_the_marker_is_registered(request):
-    """`requires_checkout` is a registered marker (pyproject.toml), so where `--strict-markers` is in force (CI,
-    pytest 9.1 and later, or before 9; on 9.0.0-9.0.3 the option is ignored when it comes from addopts, pytest #14442)
-    a misspelt one is an error; this row holds the registration on any version. Guards the registration being
-    dropped: under strict markers every marked file is then a collection error, and without them the mark is a
+    """`requires_checkout` is a registered marker (pyproject.toml), so under the suite's strict markers (the
+    `strict_markers` ini key from pytest 9.0, the addopts flag before; 9.0.0-9.0.3 ignore the flag from addopts, pytest
+    #14442, I-71) a misspelt one is an error; this row holds the registration on any version. Guards the registration
+    being dropped: under strict markers every marked file is then a collection error, and without them the mark is a
     warning nobody reads."""
     assert any(line.split(":", 1)[0].strip() == "requires_checkout" for line in request.config.getini("markers"))
 

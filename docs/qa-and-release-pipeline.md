@@ -70,7 +70,8 @@ tests/
   tests patch them in their home modules to inject canned facts (mirrors netcanon patching the single
   `get_collector` entry point) instead of needing ansible installed. ✅ done — they live in the
   `scripts/kontroll/` service package (workstream 1 of docs/api-architecture.md).
-- `pytest` markers (`unit`, `integration`, `e2e`, `slow`) + `addopts = -q --strict-markers`.
+- `pytest` markers (`unit`, `integration`, `e2e`, `slow`) + `addopts = -q --strict-markers` and `strict_markers =
+  true` (pytest 9.0.0-9.0.3 ignore the flag from addopts, pytest #14442; `tests/unit/test_pytest_strict_markers.py`).
 - Coverage on `scripts/` + `gui/` with `--cov-report=term-missing`.
 - Per-layer `conftest.py`; `tmp_path` for isolation; fixtures build a throwaway repo so
   `--apply`/`enable_in_fleet`/`sops_set` never touch the real tree.
