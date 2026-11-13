@@ -11,6 +11,39 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a backup names each device it missed, and its alert fires per device (I-65, I-82, 2026-11-12)
+
+A device the nightly backup missed was named only in its job's output. No alert read it: of the server's own
+environment Semaphore hands a job only `PATH` and the variables `SEMAPHORE_FORWARDED_ENV_VARS` names, so no scheduled
+job wrote the run log Vector tails (I-82), and the
+one backup rule could only count a run's failed lines. And a network_cli or API device that took no connection
+failed the whole run, as one device down must not (CLAUDE.md).
+
+- Every backup records a device it did not reach as not run, unreachable (`kontroll_backup_unreachable`), which
+  passes the run: a device whose port takes no TCP connection, found by one probe. A network_cli device (the CLI
+  backend, RouterOS) is probed in its read's rescue, an API device after a pull that gave no answer (a status below
+  0), and an SSH host the play could not reach by the capture play.
+  A device that took the connection and whose read failed, or whose SSH session did not open (a refused key or
+  password, which Ansible calls unreachable too: before, such a host passed the run as down), is `FAILED` and fails
+  the run. A device reached through a jump host is never probed (the controller cannot reach its address): `FAILED`.
+  The role template's backup contract says so.
+- `backup-configs.yml` prints one `KONTROLL-BACKUP-MISSED` line for each device it did not back up (one it skipped,
+  as not backup-capable or with its class's backup config missing, has its summary line and none): the device, its
+  class, the reason (`failed`, `unreachable`, `not-run`), the run's id and the Semaphore task (`none` outside
+  Semaphore). A dry run prints none. A host whose backup recorded nothing reads `not run — no result: its backup
+  recorded none`; one that failed in an earlier play is named by the summary's first host, `FAILED`.
+  `_log-run-id.yml` keeps the id it prints as `_kontroll_run_id`, so the line names the run the log's stamp does.
+- `logging-rules.yaml`: `kontroll-log-backup-failure` fires one alert per device, naming its class, reason, run and
+  task, for an hour after the run; the new `kontroll-log-job-failed` fires one per Semaphore task that failed
+  (Semaphore's `Failed to run task` line), which covers every scheduled job whose run failed: a run that ended
+  before its summary, and a job whose `--limit` names no host (not a job stopped by hand, nor one Semaphore could not
+  start, which log no such line).
+- `docker/services/semaphore.yaml` forwards `ANSIBLE_LOG_PATH` to every job, and nothing else (SECURITY.md C2). A box
+  deployed earlier needs semaphore re-deployed (docs/troubleshooting.md §15).
+- Tests: `test_backup_missed_alert.py` reads each rule's LogQL over lines measured from a real Semaphore run;
+  `test_backup_missed_runs.py` runs the backup for real against raw-SSH, API and network_cli hosts and reads its log
+  as the alert does. `fresh-node-check.sh` now expects its mock switches not run, unreachable.
+
 ### feat(dashboards): alerts reach someone — metrics rules, a heartbeat, the operator's notifier (T32, 2026-10-23)
 
 The logging rules fired into a placeholder contact point that no notification policy named, so Grafana's default

@@ -27,4 +27,8 @@ written, with no `storage.cfg` or guest `.conf` in it, and the one before it sta
 in the capture history (an answer with any config in it is kept). A `--check` run
 never runs the script (`shell` skips it), the capture write previews an empty
 capture, and nothing it did not read is refused. An unreachable host is not
-refused either: the summary says it was not run.
+refused either: it is recorded not run, unreachable, and the summary and the
+per-device alert name it. Ansible calls a refused key or password unreachable too,
+so the capture play probes the host's port: where it took the connection, the host
+is recorded `FAILED` (its session did not open), which fails the run; a host
+behind a jump host is recorded `FAILED` unprobed (I-65).

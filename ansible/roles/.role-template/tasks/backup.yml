@@ -11,7 +11,22 @@
 #      capture is kept (roles/backend_raw_ssh/tasks/backup.yml); but never refuse
 #      a read a --check run skipped (a read with no check mode: its skip has no
 #      `skip_reason`), nor an unreachable host's,
-#   5. carry an access-chain header; set no_log:true on any secret-bearing task.
+#   5. record a device the read did not reach as not run, never FAILED: set
+#      kontroll_backup_unreachable: true and a result that starts
+#      `not run — unreachable: ` where the read `is unreachable`; where a read
+#      that takes no connection fails as a task (network_cli), probe the
+#      device's port in the read's rescue (roles/backend_netcommon_cli), or
+#      after a read that gave no answer (an API pull's status below 0:
+#      roles/backend_api), and record it so only where the port took no TCP
+#      connection, with kontroll_backup_probed: true. The run passes and its
+#      summary names the device for the per-device alert. A host recorded
+#      unreachable and not so probed is probed by the capture play
+#      (backup-configs.yml): where its port takes the connection, its session
+#      did not open (a refused key is unreachable to Ansible too), and it is
+#      recorded FAILED. Skip the probe where kontroll_backup_via_jump is true.
+#      A probe reads ansible_port (else 22) or the class's own port: a port
+#      set only in an SSH config is not the one probed (I-65),
+#   6. carry an access-chain header; set no_log:true on any secret-bearing task.
 # See roles/cisco_ios/tasks/backup.yml for a worked example and
 # docs/engineering-standards.md §2b for the header contract.
 #

@@ -9,12 +9,12 @@ skipped apart, and nothing else: a real run reads the status as before, a read a
 refused, a dry-run read a `when` skipped is refused as a real run's is, and a dry-run read that did answer (were `uri`
 to gain check mode) is held to its status.
 
-The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must
-be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, and `skipped`
-the test Ansible registers (a result holding `skipped: true`). The results are the shapes both cores register: a
-check-mode skip (`changed`, `msg`, `skipped`), a `when` skip (which adds `skip_reason` and `false_condition`), a
-success with content, a success whose body is empty or only blank lines (a failed capture since I-5, still a live
-check), a 401, and a refused connection, which `failed_when: false` keeps with a status of -1.
+The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must be
+a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, and `skipped` and
+`failed` the tests Ansible registers (a result holding `skipped: true`, `failed: true`). The results are the shapes both
+cores register: a check-mode skip (`changed`, `msg`, `skipped`), a `when` skip (which adds `skip_reason` and
+`false_condition`), a success with content, a success whose body is empty or only blank lines (a failed capture since
+I-5, still a live check), a 401, and a refused connection, which `failed_when: false` keeps with a status of -1.
 """
 import os
 import re
@@ -36,6 +36,11 @@ EMPTY = {"changed": False, "status": 200, "content": ""}
 BLANK = {"changed": False, "status": 200, "content": "\n \n"}
 DENIED = {"changed": False, "status": 401, "content": ""}
 REFUSED = {"changed": False, "status": -1, "msg": "Status code was -1 and not [200]: Request failed"}
+# The API port's probe (I-65), as wait_for registers it on 2.18.19 (2.19.4 adds `failed: false` to the first and an
+# `exception` to the second): where the port took the connection, and where it took none in the probe's timeout.
+TOOK = {"changed": False, "elapsed": 0, "port": 443, "state": "started", "search_regex": None, "match_groups": [],
+        "match_groupdict": {}, "path": None}
+NO_CONNECTION = {"changed": False, "elapsed": 5, "failed": True, "msg": "Timeout when waiting for 192.0.2.4:443"}
 WRITTEN = {"changed": True, "dest": "/backups/FortiGate_192-0-2-4_full-configuration.conf"}
 
 REFUSE = "Refuse unless the API actually answered successfully"
@@ -43,11 +48,14 @@ REPORT = "Report the check endpoint as not read in a dry-run"
 FAILED = "Record capture failure (reported in summary, not a hard abort)"
 NOTHING = "Record an empty capture as failed (any earlier capture is kept)"
 BREPORT = "Report the backup endpoint as not read in a dry-run"
+PROBE = "Probe the API port of a device that gave the pull no answer"
+UNREACH = "Record a device that took no connection as not run (the run passes; the summary names it)"
 WRITE, RECORD = "Write capture", "Record successful capture"
 # Every task of the two entrypoints that reads a registered read, and the reads themselves.
 READERS = {("check.yml", "GET the check endpoint"), ("check.yml", REPORT), ("check.yml", REFUSE),
            ("backup.yml", "Pull config via the recipe's backup endpoint"), ("backup.yml", BREPORT),
-           ("backup.yml", FAILED), ("backup.yml", NOTHING), ("backup.yml", WRITE), ("backup.yml", RECORD)}
+           ("backup.yml", PROBE), ("backup.yml", FAILED), ("backup.yml", NOTHING), ("backup.yml", WRITE),
+           ("backup.yml", RECORD)}
 GRID = [  # (check mode, the read's result)
     (True, SKIPPED), (False, OK), (False, DENIED), (False, REFUSED), (False, SKIPPED), (False, WHEN_SKIPPED),
     (False, EMPTY), (False, BLANK), (True, OK), (True, DENIED), (True, REFUSED), (True, WHEN_SKIPPED), (True, EMPTY)]
@@ -85,10 +93,17 @@ def _items(entrypoint, name):
     return when if isinstance(when, list) else [when]
 
 
+def _failed(result):
+    if not isinstance(result, dict):
+        raise TypeError("the 'failed' test expects a dictionary")
+    return result.get("failed", False)
+
+
 def _runs(entrypoint, name, ctx):
     """Whether the task runs: every item of its `when:` a boolean and true, as Ansible evaluates them."""
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     env.tests["skipped"] = _skipped
+    env.tests["failed"] = _failed
     for c in _items(entrypoint, name):
         value = env.compile_expression(c)(**ctx)
         assert isinstance(value, bool), (name, c, value)  # ansible-core 2.19 refuses a non-boolean conditional
@@ -101,6 +116,7 @@ def _names(entrypoint, name):
     """The variables the task's `when:` reads."""
     env = jinja2.Environment()
     env.tests["skipped"] = _skipped
+    env.tests["failed"] = _failed
     return set().union(*(jinja2.meta.find_undeclared_variables(env.parse("{{ %s }}" % c))
                          for c in _items(entrypoint, name)))
 
@@ -131,11 +147,14 @@ def test_the_backup_fails_every_answer_but_a_200_and_writes_and_reports_a_check_
     answered. Exactly one of the three runs. Guards I-6 (a dry-run failed an API host with a good credential, and
     the run with it), a real run's failed pull being written or passed as a capture, a dry-run's skipped pull going
     unsaid (I-6's runtime read, N4) or a `when` skip passing as check mode's (N3), and an empty 200 written over the
-    last good capture (I-5; test_backup_empty_capture_refused.py holds the other backends)."""
+    last good capture (I-5; test_backup_empty_capture_refused.py holds the other backends). The port is probed for
+    every read but check mode's skip that holds no status, or one below 0 (I-65); here the probe found the port open,
+    so the record is the answer's (test_a_pull_with_no_answer_is_recorded_by_its_probe holds the port that is not)."""
     made = check_mode and result is SKIPPED
     answered = result.get("status") == 200
     config = bool(str(result.get("content", "")).strip())
-    ctx = {"_api_resp": result, "ansible_check_mode": check_mode}
+    ctx = {"_api_resp": result, "ansible_check_mode": check_mode, "_api_probe": TOOK}
+    assert _runs("backup.yml", PROBE, ctx) is (not made and result.get("status", -1) < 0)
     runs = {name: _runs("backup.yml", name, ctx) for name in (FAILED, NOTHING, WRITE)}
     assert runs[FAILED] is (not made and not answered)
     assert runs[NOTHING] is (answered and not config)
@@ -166,6 +185,20 @@ def test_each_dry_run_report_prints_the_host_and_the_recipe_and_nothing_of_the_r
     assert "ansible.builtin.debug" in task and task.get("no_log") is not True, task
     names = jinja2.meta.find_undeclared_variables(jinja2.Environment().parse(task["ansible.builtin.debug"]["msg"]))
     assert names == {"inventory_hostname", "backend_api_recipe"}, names
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("probe, unreachable", [(NO_CONNECTION, True), (TOOK, False),
+                                                (WHEN_SKIPPED, False)])
+def test_a_pull_with_no_answer_is_recorded_by_its_probe(check_mode, probe, unreachable):
+    """A pull that got no answer (status -1) whose port probe took no TCP connection is recorded not run,
+    unreachable, and not as a failed capture, so the run passes (I-65: one device down never fails the fleet's run);
+    one whose probe found the port open, or did not run, is the failed capture, which fails the run. Guards the probe
+    read the wrong way round (every API device that answered badly passed), and both records running (the failure's
+    would win, and a device not reached would fail the run again)."""
+    ctx = {"_api_resp": REFUSED, "_api_probe": probe, "ansible_check_mode": check_mode}
+    assert _runs("backup.yml", UNREACH, ctx) is unreachable
+    assert _runs("backup.yml", FAILED, ctx) is (not unreachable)
 
 
 def test_every_task_that_reads_a_registered_read_is_one_these_tests_evaluate():

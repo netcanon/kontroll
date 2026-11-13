@@ -15,12 +15,15 @@ Device-class role for the **MikroTik RouterOS** switch (module `routeros` —
 RouterOS API / SSH. Creds in `secrets/network.sops.yml`. See
 `group_vars/core_switch.yml`.
 
-> **Backup: written, STAGED/unverified** (`backup_capable: true`) —
-> `/export show-sensitive` via `community.routeros` (`no_log`); not yet verified
-> against a live device (none in the active fleet). Activated by enabling
-> `routeros` in `instance/fleet.yml` at cutover (dropping `cisco_ios`). **No serial
-> console** — recovery is MAC-Winbox / reset+import. `community.routeros.command`
-> has no check mode (from the collection's 3.0.0): a `--check` run skips the export
-> and the capture write previews an empty capture. A real run's export with nothing
-> in it (no output, or only blank lines) is recorded `FAILED`, which fails the run at
-> its summary, and is not written: any earlier capture is kept.
+> **Backup: written, STAGED/unverified** (`backup_capable: true`) — `/export
+> show-sensitive` via `community.routeros` (`no_log`); not yet verified against a live
+> device (none in the active fleet). Activated by enabling `routeros` in
+> `instance/fleet.yml` at cutover (dropping `cisco_ios`). **No serial console** — recovery
+> is MAC-Winbox / reset+import. `community.routeros.command` has no check mode (from the
+> collection's 3.0.0): a `--check` run skips the export and the capture write previews an
+> empty capture. A real run's export with nothing in it (no output, or only blank lines)
+> is recorded `FAILED`, which fails the run at its summary, and is not written: any
+> earlier capture is kept. An export that fails is rescued as the CLI backend's read is
+> (`roles/backend_netcommon_cli`): a device that took no TCP connection is not run,
+> unreachable, and the run passes; one that took it is `FAILED`; one behind a jump host is
+> `FAILED` unprobed (I-65).

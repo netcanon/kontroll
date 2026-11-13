@@ -190,11 +190,41 @@
         - _api_resp is skipped
         - _api_resp.skip_reason is not defined
 
+    # A pull with no HTTP answer (a status below 0) is a device that took no connection, or one that took it and then
+    # failed (TLS, a port that does not speak HTTPS, no answer in time). The API port is probed once to tell them
+    # apart. A port that takes no TCP connection is a device not reached: it is recorded as not run, as an unreachable
+    # SSH host is, so the run passes and its summary names the device with the reason (the per-device alert reads that
+    # line). A port that takes the connection is a pull that failed, recorded FAILED below, which fails the run (I-65).
+    # The probe reads only the address and port the pull used, never the credential.
+    - name: Probe the API port of a device that gave the pull no answer
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ _api_recipe.port | default(443) }}"
+        timeout: 5
+        connect_timeout: 2
+      delegate_to: localhost
+      check_mode: false
+      register: _api_probe
+      ignore_errors: true                # a port that takes no connection is recorded below, not a task failure
+      when:
+        - not (ansible_check_mode and _api_resp is skipped and _api_resp.skip_reason is not defined)
+        - (_api_resp.status | default(-1) | int) < 0
+
+    - name: Record a device that took no connection as not run (the run passes; the summary names it)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          not run — unreachable: the device took no TCP connection on the {{ backend_api_recipe }} API port {{
+          _api_recipe.port | default(443) }}, so nothing was read and any earlier capture is kept.
+        kontroll_backup_unreachable: true
+        kontroll_backup_probed: true       # the capture play does not probe it again
+      when: _api_probe is failed
+
     # The failure names its cause as the check's refusal does (tasks/check.yml): a 401 or 403 prints the hint for the
     # recipe's auth, the check's word for word, which names the variables it reads and never their values; no status,
-    # or one below 0, is a device that did not answer; any other status is an API that answered, but not with 200. The
-    # summary prints this result, so it reads only the status, the recipe's backup path and the names its auth reads,
-    # and the task's only var is the hint: a task var outranks a host var, so another could rebind a printed name.
+    # or one below 0, is a device that took the connection (the probe above) and gave no HTTP answer; any other status
+    # is an API that answered, but not with 200. The summary prints this result, so it reads only the status, the
+    # recipe's backup path and the names its auth reads, and the task's only var is the hint: a task var outranks a
+    # host var, so another could rebind a printed name.
     - name: Record capture failure (reported in summary, not a hard abort)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
@@ -202,8 +232,8 @@
           backup endpoint {{ _api_recipe.backup.path }}.
           {{ _api_auth_hint
              if (_api_resp.status | default(0)) in [401, 403]
-             else (('The device did not answer the API port, or its TLS failed — wrong address, port, certificate,'
-                    ~ ' or the service is down.')
+             else (('The device took a TCP connection on the API port, but gave no HTTP answer: its TLS failed (a'
+                    ~ ' certificate, or a port that does not speak HTTPS), or the service did not answer in time.')
                    if (_api_resp.status | default(-1) | int) < 0
                    else ('The API answered, but not with 200: check the recipe backup path and method, and the'
                          ~ ' device API.')) }}
@@ -230,6 +260,7 @@
       when:
         - not (ansible_check_mode and _api_resp is skipped and _api_resp.skip_reason is not defined)
         - (_api_resp.status | default(0)) != 200
+        - _api_probe is not failed
 
     # A 200 with nothing in its body (empty, or only blank lines) is no config, and a capture of it would overwrite
     # the last good one. So it is recorded as a failed capture too, and the write does not run: any earlier capture

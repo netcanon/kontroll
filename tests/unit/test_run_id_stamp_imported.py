@@ -116,18 +116,25 @@ def test_deploy_stack_imports_local_canonical_after_its_own_stamp():
 
 def test_the_stamp_prints_once_on_the_controller_and_leaves_the_id_alone():
     """The stamp is one play on `all:localhost`: its debug of `kontroll_run_id=` runs once, and only while
-    `_kontroll_run_stamped` is unset; the task after it sets that fact, once, and sets nothing else. Both run on the
+    `_kontroll_run_stamped` is unset, and registers what it printed; the task after it sets that fact, once, and
+    `_kontroll_run_id`, the printed id (kept where an earlier import set it), and nothing else. Both run on the
     controller (`delegate_to: localhost`) and carry `tags: [always]`. Guards each part: `all` alone misses a run with
     no inventory hosts and `localhost` alone misses `--limit <host>`; a debug without the guard prints again under
     deploy-stack.yml; a stamp that set `kontroll_run_id` as a fact would move the key directory group_vars/all.yml
     names by it (`default('manual', true)`) for the rest of the run; without the delegation a first host whose
     connection plugin is not installed fails the stamp and ends the run, bootstrap's included (I-52); without the tag
-    a `--tags` run prints no id."""
+    a `--tags` run prints no id. `_kontroll_run_id` is the id the log carries, for the backup summary's per-device
+    line (I-65): an unset id is `now()`, so any later read of `kontroll_run_id` would mint another, and a second
+    import that took its skipped debug's (empty) answer would lose the first's."""
     plays = _entries(STAMP)
     assert len(plays) == 1 and plays[0]["hosts"] == "all:localhost" and plays[0]["connection"] == "local"
     debug, note = plays[0]["tasks"]
     assert debug["ansible.builtin.debug"]["msg"].startswith("kontroll_run_id={{ kontroll_run_id")
     assert debug["run_once"] is True and debug["when"] == "not (_kontroll_run_stamped | default(false))"
-    assert note["ansible.builtin.set_fact"] == {"_kontroll_run_stamped": True} and note["run_once"] is True
+    assert debug["register"] == "_kontroll_run_stamp"
+    assert note["ansible.builtin.set_fact"] == {"_kontroll_run_stamped": True, "_kontroll_run_id": (
+        "{{ _kontroll_run_id if _kontroll_run_id is defined\n"
+        "   else (_kontroll_run_stamp.msg | default('') | regex_replace('^kontroll_run_id=', '')) }}")}
+    assert note["run_once"] is True
     for task in (debug, note):
         assert task["delegate_to"] == "localhost" and task["tags"] == ["always"], task

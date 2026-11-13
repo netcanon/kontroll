@@ -84,6 +84,16 @@
   # later play, its capture never written and no summary line for it (the I-12 reads' O1). The play's own keyword
   # wins over that setting.
   any_errors_fatal: false
+  vars:
+    # A host reached through a jump host: a ProxyCommand or ProxyJump in its SSH arguments, or a proxy command for
+    # paramiko or libssh. The controller cannot reach its address, so no port probe below or in a class says anything
+    # of it: a connection or a read that failed there is recorded FAILED, never not reached (I-65).
+    kontroll_backup_via_jump: >-
+      {{ ((ansible_paramiko_proxy_command | default('') | string | length) > 0)
+         or ((ansible_libssh_proxy_command | default('') | string | length) > 0)
+         or ([ansible_ssh_common_args | default(''), ansible_ssh_extra_args | default(''),
+              ansible_ssh_args | default('')] | join(' '))
+            is search('proxycommand|proxyjump|(^| )-J', ignorecase=true) }}
   tasks:
     - name: Refuse a host whose device_role is a fact (only the inventory names the role it dispatches by)
       ansible.builtin.import_tasks: tasks/refuse-device-role-fact.yml
@@ -137,6 +147,50 @@
               be loaded (a file or role it includes is missing, or the collection it names is not installed), so the
               run fails here (I-12).
           when: ansible_failed_task is not defined
+
+    # Ansible calls a host unreachable when its SSH session did not open, whatever the cause: no route or a closed
+    # port, but also a refused key or password, or a server that took the connection and closed it (ssh exits 255 for
+    # each). So a host its class recorded as not reached, where the class did not probe the port itself (the CLI and
+    # RouterOS backends probe theirs after a failed read, the API backend its API port), is probed here once: no TCP
+    # connection is a device not reached, which stays not run (the run passes; the summary names it); a connection
+    # taken is a device that answered and opened no session, recorded FAILED, which fails the run, so a refused or
+    # rotated key never reads as a device that is down. A host reached through a jump host is not probed, and is
+    # recorded FAILED (I-65). The probe is a TCP connect and changes nothing, so a dry-run makes it too.
+    - name: Probe the port of a host its class recorded as not reached
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host | default(inventory_hostname) }}"
+        port: "{{ ansible_port | default(22, true) }}"
+        timeout: 5
+        connect_timeout: 2
+      delegate_to: localhost
+      check_mode: false
+      register: _kontroll_unreached_probe
+      ignore_errors: true                # a port that takes no connection is recorded below, not a task failure
+      when:
+        - kontroll_backup_unreachable | default(false) | bool
+        - not (kontroll_backup_probed | default(false) | bool)
+        - not (kontroll_backup_via_jump | bool)
+
+    - name: Record a host that took no connection as not run (the run passes; the summary names it)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          not run — unreachable: the device took no TCP connection on port {{ ansible_port | default(22, true) }}, so
+          nothing was read and any earlier capture is kept.
+      when: _kontroll_unreached_probe is failed
+
+    - name: Record a host that answered and opened no session as failed (any earlier capture is kept)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          FAILED: {{ 'the device is reached through a jump host, which no probe reaches,'
+          if (kontroll_backup_via_jump | bool) else 'the device took a TCP connection on port '
+          ~ (ansible_port | default(22, true)) ~ ',' }} and its session did not open (its key or credential refused, or
+          its SSH server), so nothing was read and any earlier capture is kept.
+        kontroll_backup_failed: true
+        kontroll_backup_unreachable: false
+      when:
+        - kontroll_backup_unreachable | default(false) | bool
+        - not (kontroll_backup_probed | default(false) | bool)
+        - _kontroll_unreached_probe is not failed
 
 # Keep a per-run, diffable HISTORY of every device's config instead of overwriting
 # (docs/logging-architecture.md Layer 0, G3 — answers "what changed on this device?").
@@ -436,7 +490,8 @@
 # whatever the host's connection (`connection: local` says so, it guards nothing), so it can follow the key cleanup.
 # A capture that fails as a task is recorded as failed by the capture play's rescue, and its host reaches here
 # (I-12), and so does a host whose class has no backup entrypoint installed, refused as a task first (I-66); a host
-# whose class's installed backup entrypoint could not be loaded is failed in that rescue, and does not.
+# whose class's installed backup entrypoint could not be loaded is failed in that rescue, and does not: this play's
+# first host names it, as it names every host that failed in an earlier play (I-65).
 # A failing local play above (the backup dir's check, the history commit, the prune's retention check) still ends
 # the run there, before the cleanup and this summary (I-48's second half); since I-90 a limited run, as every schedule
 # is, reaches those plays, so this holds for it too.
@@ -449,13 +504,62 @@
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }} ({{ device_role | default('?') }}):
-          {{ kontroll_backup_result | default('not run — unreachable or skipped') }}
+          {{ kontroll_backup_result | default('not run — no result: its backup recorded none') }}
 
-    # A logged skip or an unreachable host is tolerated; a capture recorded as
-    # FAILED — a read that answered nothing, an API answer that is not 200, a Docker
-    # read that exited non-zero (I-62), or a capture that failed as a task, named by
-    # the capture play's rescue (I-12) — must not pass silently: fail the run so a
-    # scheduled job surfaces it. This runs after every host's summary line above.
+    # A device this run did not back up gets one line more, for the per-device alert (kontroll-log-backup-failure in
+    # dashboards/grafana/provisioning/alerting/logging-rules.yaml): a capture recorded as FAILED, a device not
+    # reached (recorded as not run, which passes the run), or one with no result at all. The line names the device,
+    # its class, the reason, the run's id and the Semaphore task that ran it (`none` outside Semaphore), so the alert
+    # says which device of which job, and where to read it. A logged skip (a class that is not backup-capable) is no
+    # miss. A dry-run prints none, so a --check run names no device (it still fails where a capture failed, as any
+    # run does, which Semaphore's job alert reads). Each field is one word (a host name, a role name),
+    # so the yaml callback's fold, which breaks a long line only at a space, never splits one; the rule reads the
+    # fields across a fold (I-65).
+    - name: Name a device this run did not back up, for the alert
+      ansible.builtin.debug:
+        msg: >-
+          KONTROLL-BACKUP-MISSED device={{ inventory_hostname }} class={{ device_role | default('?') }}
+          reason={{ _kontroll_missed_reason }} kontroll_run_id={{ _kontroll_run_id | default('none', true) }}
+          semaphore_task={{ semaphore_vars.task_details.id | default('none', true) }}
+      vars:
+        _kontroll_missed_reason: >-
+          {{ 'failed' if (kontroll_backup_failed | default(false) | bool)
+             else ('unreachable' if (kontroll_backup_unreachable | default(false) | bool) else 'not-run') }}
+      when:
+        - not ansible_check_mode
+        - >-
+          (kontroll_backup_failed | default(false) | bool) or (kontroll_backup_unreachable | default(false) | bool)
+          or kontroll_backup_result is not defined
+
+    # A host that failed in an earlier play (refused at its device_role check, a class whose backup could not be
+    # loaded, a host the run's keys could not be given) is in no later play, so the tasks above never name it. This
+    # play's first host names each such host once: a later play lists it in ansible_play_hosts_all and not in
+    # ansible_play_hosts, under any --limit (measured on ansible-core 2.18, 2.19 and 2.20). Where every host failed
+    # so, Ansible ends the run before this play, and only the job's own alert (kontroll-log-job-failed) says the run
+    # failed (I-65).
+    - name: Name each device that left the run before its summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ item }} ({{ hostvars[item].device_role | default('?') }}): FAILED: it left the run before its summary
+          (its failed task is above), and any earlier capture is kept.
+      loop: "{{ ansible_play_hosts_all | difference(ansible_play_hosts) | sort }}"
+      run_once: true
+
+    - name: Name a device that left the run before its summary, for the alert
+      ansible.builtin.debug:
+        msg: >-
+          KONTROLL-BACKUP-MISSED device={{ item }} class={{ hostvars[item].device_role | default('?') }}
+          reason=failed kontroll_run_id={{ _kontroll_run_id | default('none', true) }}
+          semaphore_task={{ semaphore_vars.task_details.id | default('none', true) }}
+      loop: "{{ ansible_play_hosts_all | difference(ansible_play_hosts) | sort }}"
+      run_once: true
+      when: not ansible_check_mode
+
+    # A logged skip or an unreachable host is tolerated (the lines above name an unreachable one for the alert); a
+    # capture recorded as FAILED — a read that answered nothing, an API answer that is not 200, a Docker read that
+    # exited non-zero (I-62), a read that failed or a session that did not open on a device that took the connection
+    # (I-65), or a capture that failed as a task, named by the capture play's rescue (I-12) — must not pass silently:
+    # fail the run so a scheduled job surfaces it. This runs after every host's summary lines above.
     - name: Fail the run if any capture failed
       ansible.builtin.assert:
         that: not (kontroll_backup_failed | default(false) | bool)

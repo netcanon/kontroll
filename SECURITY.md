@@ -150,7 +150,11 @@ and the runner image's base ships such a core. The image's build drops `exceptio
 the censor and fails unless a failing no_log task's error message then prints nothing it
 was given, on stdout, on stderr or in the ansible log
 (`docker/semaphore-runner/no_log_censor.py`, I-75); what still prints a value given to a
-no_log task is in the accepted risks.
+no_log task is in the accepted risks. Every scheduled job writes that log: of the server's own
+environment Semaphore hands a job only `PATH` and the variables `SEMAPHORE_FORWARDED_ENV_VARS`
+names (a job also gets its template Environment's), and `docker/services/semaphore.yaml`
+names `ANSIBLE_LOG_PATH` alone, so the rest of the server's environment (its database password, the key
+that encrypts its stored credentials) reaches no job (I-82; `test_backup_missed_alert.py`).
 **Proves (built):** every capture under `config_backup_dir` is written, and read,
 `no_log`, since `--check --diff` prints a write whole:
 `tests/unit/test_capture_no_log.py` (I-13; its exemptions name the file and why
@@ -1528,6 +1532,10 @@ stack; the **capability** half — device-side wiring `no_log` + a per-method `s
   value, so its bind is the choice, not an empty line's default or a shell's export; a hand `up` binds it too from a
   shell that exports neither variable (`docs/troubleshooting.md`; a shell's export outranks the file there) (I-60;
   `test_compose_logging.py`, `test_journal_dir_choice.py`, `test_installer_journal_dir.py`).
+- **The scheduled jobs' run log ships (I-82).** What reaches Loki of a scheduled run is what `no_log` leaves of
+  its ansible log (C2). The backup's per-device miss line, which the alert reads, names only the host, its class, a
+  reason word, the run's id and the Semaphore task's (I-65; `test_backup_missed_runs.py` holds that a run's
+  credentials are in neither its output nor its log).
 - **mgmt-VLAN-only, never WAN (C3 parity).** Loki publishes its HTTP API on the **mgmt IP only**
   (`${KONTROLL_MGMT_IP}:3100`, fail-closed `:?`, never `0.0.0.0`); **Vector publishes only the mgmt-bound syslog
   ingress** (`${KONTROLL_MGMT_IP}:5514/tcp`, fail-closed `:?`, never `0.0.0.0`) for the `syslog_push` method —

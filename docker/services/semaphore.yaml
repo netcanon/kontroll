@@ -46,6 +46,12 @@ services:
       # lost every job) so it survives AND Vector can tail it (logging Layer 1; the docs/logging-architecture.md
       # §3 Layer-0 "remaining durability enhancement"). Host dir created uid-1001/0750 by deploy-stack.
       ANSIBLE_LOG_PATH: /ansible-log/ansible.log
+      # Semaphore hands a job only the variables this list names (a JSON array), so ANSIBLE_LOG_PATH above reached no
+      # job: every scheduled run logged nowhere, Vector tailed an empty file, and no log alert could fire (I-82,
+      # measured on Semaphore v2.19.17: unset, a job writes no log; with this list, it writes this one). The name is
+      # Ansible's own; nothing secret is forwarded. A template's own Environment comes after it, so a template that
+      # sets ANSIBLE_LOG_PATH writes its jobs' log there, which Vector does not read (configure-semaphore.py sets none).
+      SEMAPHORE_FORWARDED_ENV_VARS: '["ANSIBLE_LOG_PATH"]'
     # No repo mount: Semaphore CLONES the repo per its own model (git URL + the
     # read-only deploy key in its Key Store). Collections are baked into the image;
     # the SOPS age key + device SSH key are supplied via Semaphore's environment /

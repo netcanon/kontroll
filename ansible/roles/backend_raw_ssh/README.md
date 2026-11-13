@@ -26,8 +26,12 @@ given no config. The host's backup is then recorded `FAILED`, naming the command
 which fails the run at its summary, and nothing is written: any earlier capture is
 kept. `raw` has no check mode: a `--check` run never reads the device, the capture
 write previews an empty capture, and nothing it did not read is refused. An
-unreachable host is not refused either: the summary says it was not run. A real
-run writes the command's output as before.
+unreachable host is not refused either: it is recorded not run, unreachable, which
+passes the run, and the summary and the per-device alert name it. Ansible calls a
+refused key or password unreachable too, so the capture play probes the host's
+port: where it took the connection, the host is recorded `FAILED` (its session did
+not open), which fails the run; a host behind a jump host is recorded `FAILED`
+unprobed (I-65). A real run writes the command's output as before.
 
 ## See also
 - [../../backends/raw_ssh/backend.yml](../../backends/raw_ssh/backend.yml) — classifier metadata

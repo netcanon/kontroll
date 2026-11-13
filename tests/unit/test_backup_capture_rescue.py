@@ -40,35 +40,44 @@ def _parse(text):
 
 def test_the_capture_play_sets_any_errors_fatal_false_and_no_other_play_keyword():
     """The capture play's keys are exactly its name, `hosts: all`, `gather_facts: false`, `ignore_unreachable: true`,
-    `any_errors_fatal: false` and its tasks. Guards I-12's rescue where a pin of the tasks cannot see: a caller's
-    `any_errors_fatal` (ANSIBLE_ANY_ERRORS_FATAL, an ansible.cfg) failed every other host once one host's capture
-    failed, rescue or not, so a host whose read had answered was dropped from every later play, uncaptured and with no
-    summary line (the I-12 reads' O1); the play's `false` overrides it, and `true` there would do that harm itself.
-    `max_fail_percentage` (beside a refused host, which fails outside the rescue, it would fail every host before the
-    key cleanup) and `serial` are refused with it (the I-12 read B's N4)."""
+    `any_errors_fatal: false`, its vars (only `kontroll_backup_via_jump`, which tells its probes a host behind a jump
+    host: I-65; a play var outranks a host's own, so any other would rebind it for every class) and its tasks. Guards
+    I-12's rescue where a pin of the tasks cannot see: a caller's `any_errors_fatal` (ANSIBLE_ANY_ERRORS_FATAL, an
+    ansible.cfg) failed every other host once one host's capture failed, rescue or not, so a host whose read had
+    answered was dropped from every later play, uncaptured and with no summary line (the I-12 reads' O1); the play's
+    `false` overrides it, and `true` there would do that harm itself. `max_fail_percentage` (beside a refused host,
+    which fails outside the rescue, it would fail every host before the key cleanup) and `serial` are refused with it
+    (the I-12 read B's N4)."""
     play = _capture_play()
-    keys = {"name", "hosts", "gather_facts", "ignore_unreachable", "any_errors_fatal", "tasks"}
+    keys = {"name", "hosts", "gather_facts", "ignore_unreachable", "any_errors_fatal", "vars", "tasks"}
     assert set(play) == keys, sorted(play)
+    assert set(play["vars"]) == {"kontroll_backup_via_jump"}, play["vars"]
     assert play["hosts"] == "all" and play["gather_facts"] is False and play["ignore_unreachable"] is True, play
     assert play["any_errors_fatal"] is False, play
 
 
 def test_the_capture_dispatch_is_rescued_and_the_rescue_records_a_failed_capture():
-    """The capture play's tasks are the `device_role` refusal's import, then one block and nothing else: the block
-    holds the entrypoint check's import (test_the_entrypoint_check_comes_first_and_checks_the_included_entry) then the
-    include_role of `{{ device_role }}` with `tasks_from: backup`, and carries no other keyword (no
-    `always`, `when`, `ignore_errors`); its rescue's first task is a `set_fact` of `kontroll_backup_failed: true` and
-    a `kontroll_backup_result` that starts "FAILED:" and reads nothing but `ansible_failed_task.name`, whose default
-    "(unnamed)" applies to an empty name too (`default(..., true)`: an unnamed task's name is "", which a plain default
-    leaves; the I-12 reads' N2/N6). Guards I-12: the
-    dispatch outside a block failed its host at the capture play, so the summary had no line for it, and when every
-    host failed so the run ended before the key cleanup; a rescue that sets no `kontroll_backup_failed` would let the
-    run pass on a capture that failed; and a message that read `ansible_failed_result` (or anything of the failed
-    task but its name) would print the read's answer, which its `no_log` hides, in the summary's line, which is not
-    `no_log`. The refusal stays outside the block, so a refused host fails as before
-    (test_group_dispatch_refuses_local.py holds it first)."""
+    """The capture play's tasks are the `device_role` refusal's import, then one block, then the port probe of a host
+    its class recorded unreachable and its two records, each outside the block (I-65; test_backup_missed_runs.py runs
+    them), and nothing else: the block holds the entrypoint check's import
+    (test_the_entrypoint_check_comes_first_and_checks_the_included_entry) then the include_role of `{{ device_role }}`
+    with `tasks_from: backup`, and carries no other keyword (no `always`, `when`, `ignore_errors`); its rescue's first
+    task is a `set_fact` of `kontroll_backup_failed: true` and a `kontroll_backup_result` that starts "FAILED:" and
+    reads nothing but `ansible_failed_task.name`, whose default "(unnamed)" applies to an empty name too (`default(...,
+    true)`: an unnamed task's name is "", which a plain default leaves; the I-12 reads' N2/N6). Guards I-12: the
+    dispatch outside a block failed its host at the capture play, so the summary had no line for it, and when every host
+    failed so the run ended before the key cleanup; a rescue that sets no `kontroll_backup_failed` would let the run
+    pass on a capture that failed; and a message that read `ansible_failed_result` (or anything of the failed task but
+    its name) would print the read's answer, which its `no_log` hides, in the summary's line, which is not `no_log`. The
+    refusal stays outside the block, so a refused host fails as before (test_group_dispatch_refuses_local.py holds it
+    first)."""
     tasks = _capture_play()["tasks"]
-    assert len(tasks) == 2, tasks
+    assert len(tasks) == 5, tasks
+    assert [t["name"] for t in tasks[2:]] == [
+        "Probe the port of a host its class recorded as not reached",
+        "Record a host that took no connection as not run (the run passes; the summary names it)",
+        "Record a host that answered and opened no session as failed (any earlier capture is kept)"], tasks[2:]
+    assert not any(set(t) & {"block", "rescue", "always"} for t in tasks[2:]), tasks[2:]
     assert tasks[0].get("ansible.builtin.import_tasks") == "tasks/refuse-device-role-fact.yml", tasks[0]
     block = tasks[1]
     assert set(block) == {"name", "block", "rescue"}, block

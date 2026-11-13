@@ -88,6 +88,11 @@ class Connection(ConnectionBase):
         self._connected = False
 '''
 GOOD = "config wifi-iface 'default_radio0'\n"   # each host's capture before the run
+# An unreachable host's summary line: its backup records it as not run, unreachable (I-65).
+# An SSH host not reached, as the capture play records it once its probe found no TCP connection at the host's port
+# (a TEST-NET address takes none): I-65.
+UNREACHABLE = ("not run — unreachable: the device took no TCP connection on port 22, so nothing was read and any"
+               " earlier capture is kept.")
 
 
 def _capture(host):
@@ -206,15 +211,15 @@ def test_a_real_run_refuses_the_empty_answers_keeps_their_captures_and_fails(lab
     """A real run writes and commits ap-good's new capture, and nothing else: ap-empty's and ap-blank's summary lines
     say FAILED, naming the command that answered nothing, their good captures are kept byte for byte, the run fails
     at its summary for those two hosts only, and the history play still runs; ap-down, unreachable, is tolerated,
-    not refused, and its summary says it was not run; and the run id is stamped. Guards I-5: before it, both empty
-    answers were written over the good captures, recorded captured, and committed as a change, and the run passed;
-    and an unreachable host reported as a read that answered nothing (I-5's runtime read, S-1)."""
+    not refused, and its summary says it was not run, unreachable (I-65); and the run id is stamped. Guards I-5:
+    before it, both empty answers were written over the good captures, recorded captured, and committed as a change,
+    and the run passed; and an unreachable host reported as a read that answered nothing (I-5's runtime read, S-1)."""
     rc, out, recap = _play(lab)
     assert rc != 0, out
     assert recap == {"ap-good": 0, "ap-empty": 1, "ap-blank": 1, "ap-down": 0, "localhost": 0}, (recap, out)
     assert _stamped(out), out
     assert _summary(out, "ap-good") == "captured -> %s" % _capture("ap-good")
-    assert _summary(out, DOWN) == "not run — unreachable or skipped"
+    assert _summary(out, DOWN) == UNREACHABLE
     assert _summary(out, "ap-empty").startswith("FAILED: `true` answered nothing, so no capture was written")
     assert _summary(out, "ap-blank").startswith("FAILED: `printf '\\n \\n'` answered nothing")
     for host in ("ap-empty", "ap-blank", DOWN):
@@ -368,16 +373,16 @@ def down_lab(tmp_path, isolated_git):
 def test_an_unreachable_docker_host_and_proxmox_node_are_tolerated_and_keep_their_captures(down_lab):
     """A dry run and then a real run against an opted-in Docker host and a Proxmox node that cannot be reached,
     beside the good raw-SSH host, both pass: neither host is failed, each one's summary line says it was not run,
-    and its good capture is kept byte for byte; the real run captures the good host, and the history's new commit
-    holds that capture and nothing of theirs. Guards CLAUDE.md's hard rule for these two classes (I-62, P-1): their
-    writes once templated the unreachable read's output, which it has none of, and failed the run (rc 2), while the
-    raw-SSH host beside them was tolerated; I-5's rows held the raw-SSH host only."""
+    unreachable (I-65), and its good capture is kept byte for byte; the real run captures the good host, and the
+    history's new commit holds that capture and nothing of theirs. Guards CLAUDE.md's hard rule for these two classes
+    (I-62, P-1): their writes once templated the unreachable read's output, which it has none of, and failed the run
+    (rc 2), while the raw-SSH host beside them was tolerated; I-5's rows held the raw-SSH host only."""
     for check in (True, False):
         rc, out, recap = _play(down_lab, check=check)
         assert rc == 0 and set(recap.values()) == {0}, (check, rc, recap, out)
         assert _stamped(out), out
-        assert _summary(out, "dk-down", "docker_host") == "not run — unreachable or skipped"
-        assert _summary(out, "pve-down", "proxmox") == "not run — unreachable or skipped"
+        assert _summary(out, "dk-down", "docker_host") == UNREACHABLE
+        assert _summary(out, "pve-down", "proxmox") == UNREACHABLE
         for name in ("Docker_dk-down_manifest.txt", "Proxmox_pve-down_node-and-guests.txt"):
             with open(os.path.join(down_lab.backups, name), encoding="utf-8") as fh:
                 assert fh.read() == GOOD, (check, name)
