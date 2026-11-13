@@ -178,19 +178,131 @@ def test_every_playbook_that_renders_device_keys_removes_them_last():
 
 
 def test_the_key_cleanup_removes_the_run_key_dir_on_the_runner():
-    """`_cleanup-ssh-keys.yml` is one play of one task, `ansible.builtin.file` on `{{ kontroll_device_key_dir }}` with
-    `state: absent`, delegated to localhost, and neither carries any other keyword. Guards a `check_mode: true`, a
-    `when:` or an `ignore_errors` on the task or the play, which would leave every run's keys on disk: the
-    wire-logging runtime test runs in `--check`, so it cannot tell a cleanup that removes the dir from one that never
-    does (local-refusal fold 4's read A, N4: fold 3's mutant X6 survived every test)."""
+    """`_cleanup-ssh-keys.yml` is one play of two tasks: the import of tasks/refuse-foreign-key-dir.yml (with no
+    other keyword), then `ansible.builtin.file` on `{{ kontroll_device_key_dir }}` with `state: absent`, delegated to
+    localhost, run in a dry run too (`check_mode: false`), in a play tagged `always`, and neither carries any other
+    keyword. Guards a `check_mode: true`, a `when:` or an `ignore_errors` on the task or the play, which would leave
+    every run's keys on disk (local-refusal fold 4's read A, N4: fold 3's mutant X6 survived every test); the
+    `check_mode: false` dropped, under which a dry run removes nothing, a stale key an earlier run left included
+    (I-87); the tag dropped, under which a `--tags` run skips the cleanup (I-93); and the key-dir guard dropped, moved
+    after the delete or given a `when:`, under which the delete removes a dir that holds anything else, with all it
+    holds (I-95). tests/integration/test_ssh_key_render_runs.py runs it in each mode, and over each refused dir."""
     with open(os.path.join(ROOT, "ansible", "playbooks", "_cleanup-ssh-keys.yml"), encoding="utf-8") as fh:
         plays = yaml.safe_load(fh)
-    assert len(plays) == 1 and len(plays[0]["tasks"]) == 1, plays
-    play, task = plays[0], plays[0]["tasks"][0]
-    assert set(play) == {"name", "hosts", "gather_facts", "connection", "run_once", "tasks"}, play
-    assert set(task) == {"name", "ansible.builtin.file", "delegate_to"}, task
+    assert len(plays) == 1 and len(plays[0]["tasks"]) == 2, plays
+    play, (guard, task) = plays[0], plays[0]["tasks"]
+    assert guard == {"name": guard["name"], "ansible.builtin.import_tasks": "tasks/refuse-foreign-key-dir.yml"}, guard
+    assert set(play) == {"name", "hosts", "gather_facts", "connection", "run_once", "tags", "tasks"}, play
+    assert play["tags"] == ["always"], play
+    assert set(task) == {"name", "ansible.builtin.file", "delegate_to", "check_mode"}, task
     assert task["ansible.builtin.file"] == {"path": "{{ kontroll_device_key_dir }}", "state": "absent"}, task
-    assert task["delegate_to"] == "localhost", task
+    assert task["delegate_to"] == "localhost" and task["check_mode"] is False, task
+
+
+def test_the_key_render_writes_the_keys_in_every_run_mode():
+    """`_render-ssh-keys.yml` is one play tagged `always`, whose two writes (the key dir, the key file) carry
+    `check_mode: false`, and no task carries a `check_mode` or `tags` of its own otherwise; the import of
+    tasks/refuse-foreign-key-dir.yml comes before the decrypt probe and either write, for each key-auth host alone (its
+    `when` the writes' own), and the dir is made after the decrypt assert. Guards I-87: skipped in a dry run, the dir
+    and the copy wrote no key, so every key-auth host's connection named a key file that did not exist, could not log
+    in, and counted as an ignored unreachable host: the `--check --diff` dry-run CLAUDE.md requires passed having
+    reached no key-auth device (measured on ansible-core 2.20.10 against a key-only SSH server). I-93: untagged, a
+    `--tags` run rendered no key for a tagged device task. I-95: a key dir that holds anything else, chmodded and
+    written into before the guard could refuse it. And a dry run whose every key-auth host fails the decrypt assert
+    leaving an empty dir the cleanup never reaches (the I-87 reads, N2). The decrypt probe (`set_fact`) and the asserts
+    run in a dry run as they are. tests/integration/test_ssh_key_render_runs.py runs it in each mode."""
+    with open(os.path.join(ROOT, "ansible", "playbooks", "_render-ssh-keys.yml"), encoding="utf-8") as fh:
+        plays = yaml.safe_load(fh)
+    (play,) = plays
+    assert play["tags"] == ["always"], play
+    tasks = play["tasks"]
+    writes = {t["name"]: t for t in tasks if "ansible.builtin.file" in t or "ansible.builtin.copy" in t}
+    assert len(writes) == 2 and all(t["check_mode"] is False for t in writes.values()), writes
+    assert writes["Ensure the per-run ephemeral key dir exists (0700, run-uid-owned)"]["ansible.builtin.file"] == {
+        "path": "{{ kontroll_device_key_dir }}", "state": "directory", "mode": "0700"}, writes
+    others = [t for t in tasks if t["name"] not in writes]
+    assert others and not any({"check_mode", "tags"} & set(t) for t in others), others
+    at = {kind: next(i for i, t in enumerate(tasks) if kind in t) for kind in (
+        "ansible.builtin.import_tasks", "ansible.builtin.set_fact", "ansible.builtin.file", "ansible.builtin.copy")}
+    guard = tasks[at["ansible.builtin.import_tasks"]]
+    assert guard == {"name": guard["name"], "ansible.builtin.import_tasks": "tasks/refuse-foreign-key-dir.yml",
+                     "when": "kontroll_ssh_key_domain is defined"}, guard
+    assert at["ansible.builtin.import_tasks"] < at["ansible.builtin.set_fact"] < at["ansible.builtin.file"], at
+    last_assert = max(i for i, t in enumerate(tasks) if "ansible.builtin.assert" in t)
+    assert last_assert < at["ansible.builtin.file"] < at["ansible.builtin.copy"], (last_assert, at)
+    assert all(t.get("when") == "kontroll_ssh_key_domain is defined" for t in tasks), tasks
+
+
+def test_the_key_dir_guard_refuses_anything_but_regular_key_files():
+    """tasks/refuse-foreign-key-dir.yml reads the key dir path with `stat` (a link not followed), lists everything the
+    dir holds with `find` (any kind of entry, hidden ones too, only when the path is a directory), and asserts that the
+    path does not exist, or is a directory whose every entry is a regular file named `*.key`; the message names the
+    path and the foreign entries; every task is delegated to localhost, none skips in a dry run or ignores an error.
+    Guards I-95: the cleanup removes the key dir whole, so a `KONTROLL_SSH_KEY_DIR` naming an operator's dir was
+    removed with all it held (and chmodded 0700 by the render); and each half of the test, where one dropped lets a
+    shape through (`hidden: false` a dotfile; `follow: true` a link to a dir, whose target the delete leaves holding
+    keys; the regular-file test a dir or a link named `*.key`; the name test a file of another name).
+    tests/integration/test_ssh_key_render_runs.py runs each shape, in the render and in the cleanup."""
+    guard_file = os.path.join(ROOT, "ansible", "playbooks", "tasks", "refuse-foreign-key-dir.yml")
+    with open(guard_file, encoding="utf-8") as fh:
+        stat_task, find_task, check = yaml.safe_load(fh)
+    assert stat_task["ansible.builtin.stat"] == {"path": "{{ kontroll_device_key_dir }}", "follow": False,
+                                                 "get_checksum": False}, stat_task
+    assert stat_task["register"] == "_kontroll_key_dir", stat_task
+    assert find_task["ansible.builtin.find"] == {"paths": "{{ kontroll_device_key_dir }}", "file_type": "any",
+                                                 "hidden": True}, find_task
+    assert find_task["register"] == "_kontroll_key_dir_held", find_task
+    assert find_task["when"] == "_kontroll_key_dir.stat.isdir | default(false)", find_task
+    assert check["ansible.builtin.assert"]["that"] == [
+        "not _kontroll_key_dir.stat.exists or (_kontroll_key_dir.stat.isdir and _kontroll_key_foreign | length == 0)"]
+    foreign = " ".join(check["vars"]["_kontroll_key_foreign"].split())
+    assert foreign == ("{{ (_kontroll_key_dir_held.files | default([]) | rejectattr('isreg') | map(attribute='path') "
+                       "| list) + (_kontroll_key_dir_held.files | default([]) | map(attribute='path') "
+                       "| reject('search', '[.]key$') | list) }}"), foreign
+    said = check["ansible.builtin.assert"]["fail_msg"]
+    assert said.startswith(
+        "kontroll_device_key_dir ({{ kontroll_device_key_dir }}) {{ _kontroll_key_dir_said }}."), said
+    assert "_kontroll_key_foreign | map('basename')" in check["vars"]["_kontroll_key_dir_said"], check
+    for task in (stat_task, find_task, check):
+        assert task["delegate_to"] == "localhost", task
+        assert not {"check_mode", "ignore_errors", "failed_when", "tags", "run_once"} & set(task), task
+    assert "when" not in stat_task and "when" not in check, (stat_task, check)
+
+
+@pytest.mark.parametrize("env,run_id,check,want", [
+    ({}, None, False, "/tmp/kontroll-ssh-keys.manual"),
+    ({}, None, True, "/tmp/kontroll-ssh-keys.manual.check"),
+    ({}, None, None, "/tmp/kontroll-ssh-keys.manual"),
+    ({"XDG_RUNTIME_DIR": "/run/user/1000"}, "r1", False, "/run/user/1000/kontroll-ssh-keys.r1"),
+    ({"XDG_RUNTIME_DIR": "/run/user/1000"}, "r1", True, "/run/user/1000/kontroll-ssh-keys.r1.check"),
+    ({"KONTROLL_SSH_KEY_DIR": "/srv/keys"}, "r1", False, "/srv/keys"),
+    ({"KONTROLL_SSH_KEY_DIR": "/srv/keys//"}, None, False, "/srv/keys"),
+    ({"KONTROLL_SSH_KEY_DIR": "/srv/keys/"}, None, True, "/srv/keys.check"),
+    ({"KONTROLL_SSH_KEY_DIR": "/"}, None, False, "/"),
+], ids=["default", "default-check", "no-check-var", "xdg-run-id", "xdg-run-id-check", "override", "override-slashes",
+        "override-slash-check", "root-kept"])
+def test_the_key_dir_is_a_dry_runs_own_and_drops_a_trailing_slash(env, run_id, check, want):
+    """group_vars/all.yml's `kontroll_device_key_dir`, rendered by Jinja with Ansible's `lookup('env', …)` (an unset
+    variable reads empty), `regex_replace` and `bool` stood in for: `$KONTROLL_SSH_KEY_DIR`, else `$XDG_RUNTIME_DIR` or
+    `/tmp` with `kontroll-ssh-keys.<run id or manual>`, its trailing `/` dropped (a lone `/` kept, which the key-dir
+    guard refuses), and `.check` appended in a dry run (`ansible_check_mode`; none where it is not set). Guards I-87's
+    reads: one dir for both modes, so a dry run's cleanup removed the keys of a real run it overlapped, which ended
+    green with its key-auth host not run; and a trailing `/` that made a dry run's dir a hidden `.check` inside the
+    real run's. tests/integration/test_ssh_key_render_runs.py runs it in Ansible."""
+    import re
+
+    import jinja2
+    with open(os.path.join(ROOT, "ansible", "playbooks", "group_vars", "all.yml"), encoding="utf-8") as fh:
+        expr = yaml.safe_load(fh)["kontroll_device_key_dir"]
+    jenv = jinja2.Environment(undefined=jinja2.Undefined)
+    jenv.filters["regex_replace"] = lambda value, pattern, repl: re.sub(pattern, repl, value)
+    jenv.filters["bool"] = lambda value: value if isinstance(value, bool) else str(value).lower() in ("1", "true")
+    given = {"lookup": lambda kind, name: env.get(name, "") if kind == "env" else pytest.fail(kind)}
+    if run_id is not None:
+        given["kontroll_run_id"] = run_id
+    if check is not None:
+        given["ansible_check_mode"] = check
+    assert jenv.from_string(expr).render(**given) == want
 
 
 def _api_plan(monkeypatch, **kw):

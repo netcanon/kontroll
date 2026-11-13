@@ -11,6 +11,70 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a dry run and a `--tags` run render and remove the per-run SSH keys, so the dry run reaches a key-auth host; a dry run's key dir is its own, and a key dir that holds anything else is refused (I-87, I-93, I-95, 2026-11-12)
+
+`_render-ssh-keys.yml` writes each key-auth host's private key from its SOPS domain to a 0600 file in the run's key
+dir, and `_cleanup-ssh-keys.yml` removes the dir. In a dry run the dir and the copy were skipped, as a change is, so
+no key was written: every key-auth host's connection named a key file that did not exist, could not log in, and was
+an unreachable host, which the fleet plays ignore. Measured on ansible-core 2.20.10 (the runner build) against a
+key-only SSH server: the real run logged in; `--check` and `--check --diff` offered no key, got `Permission denied
+(publickey)`, and passed (rc 0). So the `--check --diff` dry-run CLAUDE.md requires before a state-changing play reached
+no key-auth device, green (I-87). The cleanup's delete was skipped too, so a dry run removed nothing, a stale key an
+earlier run left included. And neither play was tagged, so a `--tags` run skipped both, leaving the dir an earlier run
+left (I-93); in the shipped playbooks a `--tags` run selects no device task (each device play reaches its class by an
+untagged include), so the key it rendered none of reached only an operator's own playbook that imports the preamble
+and tags a device task. Two reviews of the first fix found that a dry run that removes the dir removes the keys of a
+real run it overlaps (every run shares `kontroll-ssh-keys.manual`), which then ended green with its key-auth host not
+run; and that the delete removes whatever the key dir names, whole: a `KONTROLL_SSH_KEY_DIR` naming a home dir,
+`~/.ssh`, `/tmp` or a typo for a real dir was chmodded 0700 by the render and removed, with all it held, by the
+cleanup, in a real run since the key seam and in a dry run after the first fix (I-95).
+
+- **Fixed.** The render's dir and copy and the cleanup's delete carry `check_mode: false`: a dry run renders the keys
+  and removes them as a real run does. The decrypt probe and the asserts already ran in a dry run.
+- **Fixed.** A dry run's key dir is its own: `group_vars/all.yml` appends `.check` to `kontroll_device_key_dir` in a
+  dry run (`kontroll-ssh-keys.manual.check`, or `$KONTROLL_SSH_KEY_DIR` with `.check`), so a dry run neither removes
+  a real run's keys nor logs in with them. A trailing `/` on `$KONTROLL_SSH_KEY_DIR` is dropped, so that dir is
+  beside the real one, not a hidden one in it.
+- **Fixed.** `tasks/refuse-foreign-key-dir.yml`, imported by the render before its first write (for each key-auth
+  host) and by the cleanup before its delete, refuses a key dir that is not a directory (a file, or a link, even to a
+  directory) or that holds anything but regular files named `*.key`, by name, naming the path and the foreign
+  entries, and keeps it as it is (I-95). The render's refusal fails that host; the cleanup's fails every host, and the
+  run ends there.
+- **Fixed.** Both plays are tagged `always`, so a `--tags` run renders and removes the keys, as it prints the run-id
+  stamp (I-93).
+- **Changed.** A `--skip-tags always` (or `tagged`) run, which drops the stamp, now drops the render and the cleanup
+  too: a key-auth host cannot log in, and an earlier run's dir stays. Untagged, both ran under it.
+- **Changed.** A `--tags` run now decrypts every key-auth host's key, and fails a host whose SOPS domain it cannot
+  decrypt, as a real or a dry run does; untagged, it passed without reading them.
+- **Changed.** The render makes the key dir after its decrypt check, so a run whose every key-auth host fails that
+  check makes no dir (a dry run left an empty 0700 one, which no cleanup could reach).
+- **Changed.** Two dry runs that overlap share their dir, as two real runs share theirs: one's cleanup removes the
+  other's keys mid-run, as before for real runs (SECURITY.md's C12 row).
+- **Not changed.** The key never reaches a log or a diff: the copy is `no_log`, in a dry run too (a `--check --diff`
+  row reads the output).
+- **Tests.** `tests/integration/test_ssh_key_render_runs.py` runs the shipped render and cleanup around a probe play
+  in a real run, `--check`, `--check --diff`, `--tags` and `--check --diff --tags`: a key-auth host's key, encrypted
+  by the installed sops to an age recipient the row makes, reaches its connection rendered, 0600 in a 0700 dir, named
+  by the host's cred key (the host is named with a hyphen, as an onboard writes one), and a stand-in key-only `ssh`
+  logs in with it alone; the run's dir and a stale key in it are gone after, and the other mode's dir is as it was; a
+  first real or dry run, with no key dir yet, makes it; a dir named with a trailing `/` is the same dir; no line of
+  the key is printed; a `--skip-tags always` run renders none; and a key dir of each refused kind (a file of another
+  name, a hidden file, a dir or a link named `*.key`, a file or a link at the path) is refused by the render, in a
+  real and a dry run, and by the cleanup run alone, and is kept as it was. The rows' Ansible remote temp and ssh
+  control-path dirs are their own, not the developer's home. `tests/validate.sh` runs it as the step
+  `key-render-runtime`, which no skip passes. `tests/unit/test_onboard_ssh_key.py` holds both plays' `check_mode:
+  false` and `always` tag, the guard's import before the render's first write and the cleanup's delete, the guard's
+  tasks, and `kontroll_device_key_dir` rendered for each source, mode and trailing `/`;
+  `tests/integration/test_wire_logging_allowlist_runtime.py`'s dry run now finds its own key dir gone and the real
+  run's as it was.
+- **Docs.** Both plays' headers (a dry run's own dir; the guard; `--skip-tags tagged`; a `--start-at-task` past the
+  render renders none and the cleanup still runs; the cleanup's `May break:` line names an overlapping run of the same
+  mode) and `group_vars/all.yml`'s; SECURITY.md's key residue, its C4 pin sentence and its C12 key row;
+  tests/README.md's layer table and tree; docs/troubleshooting.md's wiring-guard row (a `--tags` or a `--check` run
+  removes the keys too) and a row for the guard's refusal; the 2026-10-23 entry below (the next run that completes in
+  the same mode). No log line is added: each run prints its stamped `kontroll_run_id`, the refusal names the path,
+  and the key is `no_log`.
+
 ### fix(scripts): each launcher makes a missing storage root root's 0711 before its first compose run binds it, or says how (I-35, 2026-11-12)
 
 The installer's first `docker compose run` binds the storage root, and a bind makes a missing one `root:root 0755`,
@@ -254,9 +318,8 @@ the mandated dry-run alike wired nothing and passed (I-88).
   play, and lets a play after the cleanup run once and a task there carry only the `always` tag.
 - **Docs.** The controller plays' comment and wire-logging.yml's header; scripts/README.md's schedules line;
   docs/logging-architecture.md's capture history (its live verification predates the per-class schedules);
-  docs/troubleshooting.md for the guard's message (its `--tags` remedy; a `--tags` or a `--check` run removes no keys:
-  I-93, I-87). No log line is added: each run already prints its stamped `kontroll_run_id`, and the guard's failure
-  names the cause.
+  docs/troubleshooting.md for the guard's message (its `--tags` remedy). No log line is added: each run already prints
+  its stamped `kontroll_run_id`, and the guard's failure names the cause.
 
 ### fix(ansible): a ping host whose class has no check entrypoint installed is named REFUSED, and its run still removes its SSH keys (I-83, 2026-11-12)
 
@@ -1480,13 +1543,14 @@ homelab tine's `local` rule).
   hold an installed collection), a play that writes a task file, a role or the inventory at run time and then
   runs it, `ansible_facts_modules`, and a run that an earlier play stops (every target
   refused, failed or, in ping.yml, unreachable, or a failed validation play), which skips the key cleanup. No shipped
-  caller passes `kontroll_run_id`, so every run shares the `kontroll-ssh-keys.manual` key dir (unless
-  `$KONTROLL_SSH_KEY_DIR` names one) and the next run that completes outside `--check` removes what such a run left (the
-  dir removed is the first remaining host's `kontroll_device_key_dir`, since the task runs once: when a host var or a
-  `set_fact` gives hosts different dirs, every other dir stays, with its keys); on the Semaphore runner a host reboot or
+  caller passes `kontroll_run_id`, so every real run shares the `kontroll-ssh-keys.manual` key dir (unless
+  `$KONTROLL_SSH_KEY_DIR` names one; a dry run's is its own, with `.check` appended: I-87) and the next run that
+  completes in the same mode removes what such a run left (the dir removed is the first remaining host's
+  `kontroll_device_key_dir`, since the task runs once: when a host var or a `set_fact` gives hosts different dirs, every
+  other dir stays, with its keys); on the Semaphore runner a host reboot or
   a container restart keeps it until then (SECURITY.md's accepted-risk row, `_cleanup-ssh-keys.yml`). Two overlapping
-  jobs share the dir: one's cleanup leaves the other unable to open a new connection, which it counts as an ignored
-  unreachable host.
+  jobs in the same mode share the dir: one's cleanup leaves the other unable to open a new connection, which it counts
+  as an ignored unreachable host.
 
 ### fix(ansible): a dry-run before a service's self-signed cert is made no longer fails on owning it, on any node (I-27, 2026-11-08)
 

@@ -151,8 +151,17 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
 - **`wire-logging.yml` fails with `the wiring request was not validated, so no host was wired`** → the run's
   `--limit` leaves out localhost, where the validation play runs (or its `--tags` left out the validation's tasks), so
   no host was wired. Run it again with `--limit <host>:localhost`, or with no limit to wire every host of the class;
-  where `--tags` left the validation out, run it without `--tags`. The run's SSH keys are removed as usual (not in a
-  `--tags` or a `--check` run, which remove none: I-93, I-87).
+  where `--tags` left the validation out, run it without `--tags`. The run's SSH keys are removed as usual, in a
+  `--tags` or a `--check` run too (I-93, I-87).
+- **A fleet run fails at `Refuse a key dir that holds anything but SSH keys` with `kontroll_device_key_dir (…) holds
+  more than SSH keys: …` or `… is not a directory`** → the dir the run renders its SSH keys into, and removes whole
+  after, holds something else (the names listed), or the path is a file or a link. Most often
+  `$KONTROLL_SSH_KEY_DIR` names a dir of the operator's (a home dir, `~/.ssh`, `/tmp`): point it at a directory of
+  its own, or unset it to use `kontroll-ssh-keys.<run id>` under `$XDG_RUNTIME_DIR` or `/tmp`. The path is kept as
+  it was; nothing in it is changed or removed. The render refuses each key-auth host there before it writes a key;
+  where a host is left (a password-auth one), the cleanup refuses the path again and fails every host, and the run
+  ends there. A dry run (`--check`) uses the path with `.check` appended, so a dry run and a real run name different
+  dirs (I-95, I-87).
 - **`ping.yml` reports a host `UNREACHABLE` that answers otherwise** → the probe is a TCP connect from the control
   node, and its port is the first set of `mgmt_port`, `ansible_port`, `kontroll_probe_port`, then 22
   (`ansible/playbooks/ping.yml`'s header). An SSH host on another port needs its port typed at onboard (it is

@@ -61,11 +61,12 @@ def _wire(tmp_path, role, as_yaml=()):
     `local_action:` import, runs it on the controller while `ansible_connection` still reads `ssh` (fold 4's read A,
     S2; read B, N2). The run must reach the key cleanup (`_cleanup-ssh-keys.yml`, imported last), which runs on a
     key dir under `tmp_path` (never the developer's) holding one file, and must report `changed`, not skip, and not
-    fail: the fold's docs lean on it running whenever a target passes (fold 2's read B, N3). Beside the copied
-    playbooks, `host_vars/localhost.yml` seeds `_wire_methods` with every wiring role on every connection family the
-    group holds but `local` (which the refusal refuses in any list): the validation play appends to that list, and a
-    seed it read widened each role's allowlist (local-refusal fold 12's read A, S2), so every run here also holds that
-    the method list starts empty."""
+    fail, and the dir must be gone: the fold's docs lean on it running whenever a target passes (fold 2's read B, N3),
+    and a dry run removes its own (the real run's path with `.check` appended), as a real run does, leaving a real
+    run's dir as it was (I-87). Beside the copied playbooks, `host_vars/localhost.yml` seeds `_wire_methods` with every
+    wiring role on every connection family the group holds but `local` (which the refusal refuses in any list): the
+    validation play appends to that list, and a seed it read widened each role's allowlist (local-refusal fold 12's
+    read A, S2), so every run here also holds that the method list starts empty."""
     tree = tmp_path / "t"
     shutil.copytree(os.path.join(ROOT, "ansible", "playbooks"), str(tree / "ansible" / "playbooks"))
     (tree / "ansible" / "playbooks" / "host_vars").mkdir(exist_ok=True)
@@ -93,8 +94,9 @@ def _wire(tmp_path, role, as_yaml=()):
     env = dict(os.environ, ANSIBLE_CONFIG=str(tree / "ansible" / "ansible.cfg"), ANSIBLE_NOCOLOR="1",
                ANSIBLE_LOCAL_TEMP=str(tmp_path / "tmp"), ANSIBLE_LOCALHOST_WARNING="0",
                KONTROLL_SSH_KEY_DIR=str(tmp_path / "keys"))
-    (tmp_path / "keys").mkdir()
-    (tmp_path / "keys" / "h.key").write_text("not a key\n")
+    for held in ("keys", "keys.check"):   # the real run's key dir, and the dry run's own (`.check`: I-87)
+        (tmp_path / held).mkdir()
+        (tmp_path / held / "h.key").write_text("not a key\n")
     p = subprocess.run(["ansible-playbook", "-i", str(tree / "inv.yml"), "playbooks/wire-logging.yml", "--check",
                         "-e", "role=%s" % role, "-e", "target=probe"],
                        cwd=str(tree / "ansible"), env=env, capture_output=True, text=True, timeout=300)
@@ -102,7 +104,9 @@ def _wire(tmp_path, role, as_yaml=()):
     assert "PLAY RECAP" in out, out
     cleanup = out.split("TASK [Delete the materialized per-host SSH keys (ephemeral)]", 1)
     assert len(cleanup) == 2 and "fatal:" not in cleanup[1].split("PLAY RECAP")[0], out
-    assert "changed: [" in cleanup[1].split("PLAY RECAP")[0], out   # it ran on the key dir (--check keeps it)
+    assert "changed: [" in cleanup[1].split("PLAY RECAP")[0], out   # it ran on the key dir
+    assert not (tmp_path / "keys.check").exists(), out                  # and removed it, in --check too (I-87)
+    assert os.listdir(str(tmp_path / "keys")) == ["h.key"], out          # a real run's dir is not a dry run's
     ran = re.findall(r'"msg": "PASSED (\S+) (\S+) (\S+)"', out)
     assert all(conn == _FILLED[host] for host, conn, _to in ran), ran   # still the value the refusal passed
     assert all(to == "-" for _host, _conn, to in ran), ran                # on the host, not a delegate

@@ -17,6 +17,17 @@
 # Delegating pins every task to the controller/runner regardless; `inventory_hostname` stays the real host, so the
 # per-host key path + SOPS domain templating are unaffected. (Caught by the scratch-VM dogfood — see test below.)
 #
+# Every run mode renders the keys. The dir and the copy carry `check_mode: false`, so a dry run (`--check`) writes them
+# as a real run does: skipped, no key was written, every key-auth host's connection named a key file that did not
+# exist and could not log in, and the fleet plays ignore an unreachable host, so the `--check --diff` dry-run CLAUDE.md
+# requires passed having reached no key-auth device (I-87). A dry run's dir is its own (group_vars/all.yml appends
+# `.check`), so it never touches a real run's keys. The play is tagged `always`, so a `--tags` run renders them too
+# (I-93); a `--skip-tags always` (or `tagged`) run renders none, as it prints no run-id stamp, and so does a
+# `--start-at-task` past this play (its key-auth hosts cannot log in and are ignored; the cleanup still runs).
+# _cleanup-ssh-keys.yml removes them in every mode alike. Before any write, tasks/refuse-foreign-key-dir.yml refuses a
+# key dir that is not a directory or holds anything but `*.key` files, which the cleanup would remove with it (I-95);
+# the dir is made after the decrypt check, so a run whose every key-auth host fails that check makes none.
+#
 # Access chain used:   control node / Semaphore runner -> community.sops decrypt of the host's SOPS domain (local)
 # May break:           nothing on the fleet — writes a LOCAL 0600 key file; a fleet connection only USES it after
 # Fallback required:   no — re-runnable; a hard-aborted run leaves a 0600 file the cleanup / next run clears
@@ -25,6 +36,7 @@
   hosts: all
   gather_facts: false
   connection: local
+  tags: [always]
   tasks:
     - name: The key dir MUST be an absolute path OUTSIDE the repo clone (a key in the working copy = a C1 leak)
       ansible.builtin.assert:
@@ -36,12 +48,8 @@
       delegate_to: localhost
       when: kontroll_ssh_key_domain is defined
 
-    - name: Ensure the per-run ephemeral key dir exists (0700, run-uid-owned)
-      ansible.builtin.file:
-        path: "{{ kontroll_device_key_dir }}"
-        state: directory
-        mode: "0700"
-      delegate_to: localhost
+    - name: Refuse a key dir that holds anything but SSH keys (before any write; the cleanup removes it whole)
+      ansible.builtin.import_tasks: tasks/refuse-foreign-key-dir.yml
       when: kontroll_ssh_key_domain is defined
 
     - name: Probe whether this key-auth host's key is decryptable in THIS runner context (no_log — handles the secret)
@@ -67,6 +75,16 @@
       delegate_to: localhost
       when: kontroll_ssh_key_domain is defined
 
+    # After the decrypt check: a run whose every key-auth host fails it makes no dir (the cleanup cannot run then).
+    - name: Ensure the per-run ephemeral key dir exists (0700, run-uid-owned)
+      ansible.builtin.file:
+        path: "{{ kontroll_device_key_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      check_mode: false   # a dry run's connections need the key too (I-87)
+      when: kontroll_ssh_key_domain is defined
+
     - name: Materialize this host's SSH private key to a 0600 file (no_log — the key never reaches a log/diff)
       ansible.builtin.copy:
         # `content: |` (literal block) + `| trim` is load-bearing: the community.sops lookup strips the decrypted
@@ -83,5 +101,6 @@
         dest: "{{ kontroll_device_key_dir }}/{{ inventory_hostname | replace('-', '_') }}.key"
         mode: "0600"
       delegate_to: localhost
+      check_mode: false   # a dry run's connections need the key too (I-87)
       no_log: true
       when: kontroll_ssh_key_domain is defined

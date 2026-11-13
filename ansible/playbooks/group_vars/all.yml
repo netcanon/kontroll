@@ -6,9 +6,14 @@
 # no_log, run-uid-owned) for `ansible_ssh_private_key_file` (the unified password-OR-key seam). STABLE within a run
 # (so the render and the connection agree on the path): keyed on kontroll_run_id when the caller passes one, else
 # a fixed 'manual' suffix (no shipped caller passes one, so every run shares it). Lands OUTSIDE the repo clone — the
-# C10-promotable working copy must never hold a private key (C1): $KONTROLL_SSH_KEY_DIR override, else
-# $XDG_RUNTIME_DIR (tmpfs), else /tmp. _cleanup-ssh-keys.yml removes it last.
+# C10-promotable working copy must never hold a private key (C1): $KONTROLL_SSH_KEY_DIR override (its trailing `/`
+# dropped), else $XDG_RUNTIME_DIR (tmpfs), else /tmp. A dry run (`--check`) appends `.check`: it renders and removes a
+# dir of its own, so it never removes the keys of a real run it overlaps, nor logs in with them (I-87). The dir must
+# hold nothing but `*.key` files: tasks/refuse-foreign-key-dir.yml refuses any other (I-95). _cleanup-ssh-keys.yml
+# removes it last.
 kontroll_device_key_dir: >-
-  {{ lookup('env', 'KONTROLL_SSH_KEY_DIR')
-     | default((lookup('env', 'XDG_RUNTIME_DIR') | default('/tmp', true))
-               ~ '/kontroll-ssh-keys.' ~ (kontroll_run_id | default('manual', true)), true) }}
+  {{ (lookup('env', 'KONTROLL_SSH_KEY_DIR')
+      | default((lookup('env', 'XDG_RUNTIME_DIR') | default('/tmp', true))
+                ~ '/kontroll-ssh-keys.' ~ (kontroll_run_id | default('manual', true)), true)
+      | regex_replace('(?<=.)/+$', ''))
+     ~ ('.check' if ansible_check_mode | default(false) | bool else '') }}
