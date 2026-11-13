@@ -159,6 +159,7 @@ def test_an_empty_injected_id_falls_back_to_a_utc_stamp(tmp_path):
 
 ID = re.compile(r"kontroll_run_id=([^\s\"]+)")
 SEEN = re.compile(r"seen=([^\s\"]+)")
+KEPT = re.compile(r"kept=([^\s\"]+)")
 # each: the inventory, the extra arguments, and how many times a localhost play runs (once, unless the limit leaves
 # the implicit localhost out)
 SHAPED = {
@@ -172,10 +173,12 @@ SHAPED = {
 
 def _shaped_playbooks(d):
     """entry.yml: the stamp, then a localhost play that prints what `kontroll_run_id` it sees (the ssh key directory
-    in group_vars/all.yml keys on it, `default('manual', true)`); outer.yml: the stamp, a play, then entry.yml."""
+    in group_vars/all.yml keys on it, `default('manual', true)`) and the id the stamp kept (`_kontroll_run_id`);
+    outer.yml: the stamp, a play, then entry.yml."""
     work = ("- name: {name}\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n"
             "    - name: Report\n      ansible.builtin.debug:\n"
-            "        msg: \"seen={{{{ kontroll_run_id | default('manual', true) }}}}\"\n")
+            "        msg: \"seen={{{{ kontroll_run_id | default('manual', true) }}}}"
+            " kept={{{{ _kontroll_run_id | default('none') }}}}\"\n")
     stamp = "- name: Stamp the run correlation id\n  ansible.builtin.import_playbook: %s\n" % STAMP
     (d / "entry.yml").write_text(stamp + work.format(name="The entry playbook's own play"), encoding="utf-8")
     (d / "outer.yml").write_text(stamp + work.format(name="The outer playbook's play")
@@ -248,3 +251,23 @@ def test_a_run_given_tags_is_stamped_once(tmp_path, playbook):
     ids, seen, out = _run_shaped(tmp_path, playbook, "two hosts", "--tags", "kontroll_no_such_tag")
     assert len(ids) == 1, out
     assert seen == [], out
+
+
+@pytest.mark.parametrize("playbook", ["entry.yml", "outer.yml"])
+@pytest.mark.parametrize("inventory", sorted(SHAPED))
+def test_each_later_play_keeps_the_id_the_stamp_printed(tmp_path, inventory, playbook):
+    """Every play after the stamp, where it runs, holds `_kontroll_run_id` equal to the one id the stamp printed,
+    alone and under a second import of the stamp (which prints nothing), for each inventory shape. Guards the
+    backup summary's per-device line (I-65), which names the run by it for the alert: an id read again from
+    `kontroll_run_id` would be another `now()`, a second import that took its skipped debug's answer would keep an
+    empty id, and an id kept on the first host alone would miss the summary's other hosts."""
+    ids, seen, out = _run_shaped(tmp_path, playbook, inventory)
+    assert len(ids) == 1, out
+    assert KEPT.findall(out) == ids * len(seen), out
+
+
+def test_a_given_id_is_the_one_kept(tmp_path):
+    """With `-e kontroll_run_id=run-abc`, each later play keeps `run-abc`, the id printed. Guards the kept id being
+    the log's: the per-device backup line must name the run the log's stamp names (I-65)."""
+    ids, seen, out = _run_shaped(tmp_path, "outer.yml", "two hosts", "-e", "kontroll_run_id=run-abc")
+    assert ids == ["run-abc"] and KEPT.findall(out) == ["run-abc", "run-abc"], out

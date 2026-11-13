@@ -36,13 +36,65 @@
     # current-configuration` failed every dry-run at its read. Such a read is not made in a dry-run: the capture is
     # previewed empty and nothing is refused, as the raw-SSH backend's dry-run does with the read `raw` cannot make
     # there (I-11). A real run always reads.
-    - name: Pull config via cli_command
-      ansible.netcommon.cli_command:
-        command: "{{ backend_backup_command | default('show running-config') }}"
-      register: _cfg
-      changed_when: false
-      no_log: true
-      when: not ansible_check_mode or (backend_backup_command | default('show running-config')) is match('show')
+    #
+    # Under network_cli a device that takes no connection (a refused port, no route) fails the read as a task; it is
+    # not unreachable (measured on ansible-core 2.20). The rescue probes the port once to tell a device not reached
+    # from a read that failed: no TCP connection is recorded as not run, as an unreachable SSH host is, so the run
+    # passes and its summary names the device with the reason (the per-device alert reads that line); a connection
+    # taken is a read that failed, recorded FAILED, which fails the run. The probe is a TCP connect and changes
+    # nothing, so a dry-run makes it too. The rescue reads nothing of the failed read (it is no_log, its result the
+    # censored one). A device reached through a jump host (backup-configs.yml's kontroll_backup_via_jump) is not
+    # probed: the controller cannot reach its address, so a probe would say nothing of it, and its read that failed is
+    # recorded FAILED (I-65).
+    - name: Read the config, telling a device not reached from a read that failed
+      block:
+        - name: Pull config via cli_command
+          ansible.netcommon.cli_command:
+            command: "{{ backend_backup_command | default('show running-config') }}"
+          register: _cfg
+          changed_when: false
+          no_log: true
+          when: not ansible_check_mode or (backend_backup_command | default('show running-config')) is match('show')
+      rescue:
+        - name: Probe the device's port after a failed read
+          ansible.builtin.wait_for:
+            host: "{{ ansible_host }}"
+            port: "{{ ansible_port | default(22, true) }}"
+            timeout: 5
+            connect_timeout: 2
+          delegate_to: localhost
+          check_mode: false
+          register: _cli_probe
+          ignore_errors: true            # a port that takes no connection is recorded below, not a task failure
+          when: not (kontroll_backup_via_jump | default(false) | bool)   # no probe reaches it past a jump host
+
+        - name: Record a device that took no connection as not run (the run passes; the summary names it)
+          ansible.builtin.set_fact:
+            kontroll_backup_result: >-
+              not run — unreachable: the device took no TCP connection on port {{ ansible_port | default(22, true)
+              }}, so nothing was read and any earlier capture is kept.
+            kontroll_backup_unreachable: true
+            kontroll_backup_probed: true   # the capture play does not probe it again
+          when: _cli_probe is failed
+
+        - name: Record a read that failed on a device that took the connection (any earlier capture is kept)
+          ansible.builtin.set_fact:
+            kontroll_backup_result: >-
+              FAILED: {{ 'the device is reached through a jump host, which no probe reaches,'
+              if (kontroll_backup_via_jump | default(false) | bool) else 'the device took a TCP connection on port '
+              ~ (ansible_port | default(22, true)) ~ ',' }} and `{{ backend_backup_command | default('show
+              running-config') }}` failed (the session, its credential, or the command), so no capture was written and
+              any earlier one is kept.
+            kontroll_backup_failed: true
+          when: _cli_probe is not failed
+
+    - name: Record an unreachable host as not run (the run passes; the summary names it)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          not run — unreachable: the device did not answer its connection, so nothing was read and any earlier capture
+          is kept.
+        kontroll_backup_unreachable: true
+      when: _cfg is unreachable
 
     - name: Note a read a dry-run does not make
       ansible.builtin.debug:
@@ -57,6 +109,7 @@
     # --check run too, so a dry-run that read the device is held to the same answer; a dry-run that did not read it
     # (a command that is not a `show`, above) refuses nothing.
     # An unreachable host (the play tolerates one) gave no answer either: it is not refused, and the summary says so.
+    # Nor is a read that failed, recorded by the rescue above.
     - name: Record an empty capture as failed (any earlier capture is kept)
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
@@ -65,6 +118,7 @@
         kontroll_backup_failed: true
       when:
         - _cfg is not unreachable
+        - _cfg is not failed
         - not (ansible_check_mode and not ((backend_backup_command | default('show running-config')) is match('show')))
         - _cfg.stdout | default('') | trim | length == 0
 

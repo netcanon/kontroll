@@ -50,6 +50,18 @@
       failed_when: false                 # recorded below; the summary fails the run on it
       no_log: true                       # a container's command line can carry a credential
 
+    # A host the play could not reach (its connection did not open; the play tolerates one) read nothing. It is
+    # recorded as not run: the run passes, and its summary names the host with the reason, which the per-device alert
+    # reads. Ansible calls a refused key or password unreachable too, so the capture play then probes the host's port
+    # and records it FAILED where the port took the connection (backup-configs.yml) (I-65).
+    - name: Record an unreachable host as not run (the run passes; the summary names it)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          not run — unreachable: the host did not answer its connection, so nothing was read and any earlier capture
+          is kept.
+        kontroll_backup_unreachable: true
+      when: dkr is unreachable
+
     # The message names the exit code alone: the answer is no_log, and the summary prints this line. 127 is also
     # what a read that could not start at all registers (no python for the module); 1 is also a daemon that is up
     # and refused one read (`ps`, `images`, `compose ls`). A result with no exit code is taken as failed here, and

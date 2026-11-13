@@ -521,6 +521,43 @@ To stop alerts (a leaked ntfy topic, say), delete `alert_notifier_url` in the ed
 already set. Grafana's database (`grafana-data`) keeps the old URL in its configuration history (SECURITY.md
 R-ALERT-1).
 
+## 15. A backup missed a device, or a scheduled job failed
+
+`Config backup missed a device` names the device, its class and the reason, with the run's id and the Semaphore task
+that ran it; `Scheduled job failed` names a Semaphore task. A backup run that fails sends both: one alert for each
+device it missed, and one for its task. Each resolves about an hour after its run.
+
+- **failed** — the capture failed: the device took the connection and its read was refused or failed (an answer with
+  nothing in it, an API answer that is not 200, a session, credential or command the device refused; an SSH key or
+  password it refused is one: Ansible calls that host unreachable, so its port is probed, and it took the
+  connection), or the class's backup failed before its read. A device reached through a jump host is failed too, as
+  no probe reaches it, and so is a device that left the run before its summary (`FAILED: it left the run before its
+  summary`; its failed task is in the run's output above). The run failed. Its summary line (`<device> (<class>):
+  FAILED: …`) says which; the last good capture is kept.
+- **unreachable** — the device took no TCP connection at its port (the SSH one, or the API one): probed once after the
+  connection or the read failed. The run passed, as one device down never fails the fleet's run. Check the device is
+  up, and its address and port. The probe reads the host's `ansible_port` (else 22) or the API recipe's port: where
+  the port is set only in an SSH config, the probe is of another port, and a refused key can read as unreachable.
+- **not-run** — the run recorded nothing for the device (`not run — no result: its backup recorded none`): its class's
+  backup records no result, which is the class's fault, not the device's.
+
+A device the run skipped (`skipped — …`: not backup-capable, or its class's backup config missing) has its summary
+line and no miss, so no alert names it.
+
+A run outside Semaphore names its task `none`, and a dry run names no device. The run's stamp and its misses:
+`{source="internal", service="ansible", run_id="<run>"}` (only those lines name the run); the run's own lines are
+`{source="internal", service="ansible"}` from its stamp's time; its misses alone:
+`{source="internal", service="ansible"} |= "KONTROLL-BACKUP-MISSED"`. A failed task's output is in Semaphore (Task
+History, the task the alert names); Semaphore's own line is
+`{source="internal"} |= "Failed to run task" | json container_name | container_name = "semaphore"`. A job that
+selects no host (a `--limit` naming a class with no host in the inventory) fails so too.
+
+No alert for a run you know failed: the run log reaches Loki only where the job writes it. A box deployed before I-82
+needs semaphore re-deployed (`docker exec semaphore printenv SEMAPHORE_FORWARDED_ENV_VARS` names `ANSIBLE_LOG_PATH`);
+a template whose Environment sets `ANSIBLE_LOG_PATH` writes its job's log there instead, which Vector does not read;
+then §14. A job stopped by hand, or one Semaphore could not start (before it ran the playbook), logs no `Failed to run
+task`, so the job alert says nothing of it.
+
 ## See also
 - [../SECURITY.md](../SECURITY.md) **C23** — an error body carries no exception text; the id that finds the details
 - [break-glass.md](break-glass.md) — the break-glass key: the choice at install and the runbook for an instance without one

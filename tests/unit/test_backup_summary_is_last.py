@@ -25,7 +25,7 @@ FAILERS = {"ansible.builtin.assert", "assert", "ansible.builtin.fail", "fail"}
 CONTROLLER_ONLY = FAILERS | {"ansible.builtin.debug", "debug", "ansible.builtin.set_fact", "set_fact",
                              "ansible.builtin.meta", "meta"}
 TASK_KEYS = {"name", "when", "tags", "vars", "no_log", "changed_when", "failed_when", "register", "loop",
-             "loop_control"}
+             "loop_control", "run_once"}
 BLOCK_KEYS = {"block", "rescue", "always"}
 
 
@@ -93,7 +93,8 @@ def test_every_play_after_the_key_cleanup_connects_to_nothing(name):
     summary each reached a device after the cleanup and passed it (I-9 reader B's M1, M5-M8). The play's
     `connection: local` is not asserted: these actions open no connection on any connection, and a host's
     `ansible_connection` outranks the keyword (reader B's N2 and N3). ping.yml's last play, which fails a host whose
-    class has no `check` entrypoint installed, is held to the same (I-83)."""
+    class has no `check` entrypoint installed, is held to the same (I-83). `run_once` is a task keyword, not an
+    action: the summary's first host names the hosts that left the run before it (I-65)."""
     plays = _plays(os.path.join(ROOT, "ansible", "playbooks", name))
     after = plays[_index(plays, _is_cleanup) + 1:]
     assert after, "no play follows the key cleanup in %s: its failing play must" % name

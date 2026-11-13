@@ -117,21 +117,24 @@ def test_the_dry_run_passes_notes_the_read_and_writes_nothing(lab):
 
 def test_a_real_run_still_makes_the_read(lab):
     """A real run makes the read (here it fails on the local connection, as a CLI read needs network_cli), so the
-    host fails at the read's own task (its output up to the next task says `fatal` for the host, not `skipping`),
-    and the summary's one line for it names that task as where the capture stopped (I-12's rescue); it is neither
-    refused nor recorded captured; the good capture is kept. Guards the skip reaching a real run, where a backup
-    would never read the device again (the refusal would then fail the run each night, naming an answer the device
-    was never asked for), and a read skipped there whose host fails at a later task instead (the I-11 reads'
-    F2/N3: the first form of this row matched a `fatal` under any later task; the summary would name that task)."""
+    host fails at the read's own task (its output up to the next task says `fatal` for the host, not `skipping`); the
+    backend's rescue then probes the device's port, which at a TEST-NET address takes no TCP connection, so the
+    summary's one line says the device was not run, unreachable, and the run passes (I-65); it is neither refused nor
+    recorded captured; the good capture is kept. Guards the skip reaching a real run, where a backup would never read
+    the device again (the refusal would then fail the run each night, naming an answer the device was never asked
+    for), and a read skipped there whose host fails at a later task instead (the I-11 reads' F2/N3: the first form of
+    this row matched a `fatal` under any later task): only the read's rescue probes, and only its probe says this."""
     rc, out = _play(lab, check=False)
-    assert rc != 0, out
+    assert rc == 0, out
     read = re.search(r"TASK \[backend_netcommon_cli : Pull config via cli_command\][^\n]*\n"
                      r"((?:(?!TASK \[)[^\n]*\n)*)", out)
     assert read, out
     assert "fatal: [%s]" % HOST in read.group(1) and "skipping: [%s]" % HOST not in read.group(1), out
     assert "NOT PREVIEWED" not in out, out
     summary = _summary(out)
-    assert len(summary) == 1 and summary[0].startswith("FAILED: "), out
-    assert 'the task "Pull config via cli_command"' in summary[0], out
+    assert len(summary) == 1, out
+    assert summary[0].startswith("not run — unreachable: the device took no TCP connection on port 22,"), out
+    assert re.search(r"TASK \[backend_netcommon_cli : Probe the device's port after a failed read\][^\n]*\n"
+                     r"(?:(?!TASK \[)[^\n]*\n)*?fatal: \[%s\b" % HOST, out), out
     with open(os.path.join(lab.backups, CAPTURE), encoding="utf-8") as fh:
         assert fh.read() == GOOD

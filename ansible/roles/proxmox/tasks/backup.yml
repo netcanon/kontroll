@@ -44,6 +44,18 @@
       changed_when: false
       no_log: true                       # storage creds / cloud-init passwords
 
+    # A host the play could not reach (its connection did not open; the play tolerates one) read nothing. It is
+    # recorded as not run: the run passes, and its summary names the host with the reason, which the per-device alert
+    # reads. Ansible calls a refused key or password unreachable too, so the capture play then probes the host's port
+    # and records it FAILED where the port took the connection (backup-configs.yml) (I-65).
+    - name: Record an unreachable host as not run (the run passes; the summary names it)
+      ansible.builtin.set_fact:
+        kontroll_backup_result: >-
+          not run — unreachable: the host did not answer its connection, so nothing was read and any earlier capture
+          is kept.
+        kontroll_backup_unreachable: true
+      when: pve_cfg is unreachable
+
     # The script prints a `### ` header before each read, so a node that answers none of them (no pveversion, no
     # /etc/network/interfaces, no /etc/pve: not a Proxmox node) still exits 0 with the headers alone. That is no
     # config, and a capture of it would overwrite the last good one (I-10). So an answer with no line but its

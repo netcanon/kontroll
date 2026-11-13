@@ -68,30 +68,94 @@ groups:
               conditions:
                 - evaluator: {type: gt, params: [0]}
               refId: C
+      # One alert per device a backup run did not back up, read from the line the run's summary prints for it
+      # (ansible/playbooks/backup-configs.yml, "Name a device this run did not back up, for the alert"): the device,
+      # its class, the reason (failed, unreachable, not-run), the run's id (the stream's `run_id`) and the Semaphore
+      # task. Each device is its own alert, named by those labels, so a run that misses two sends two, and the run
+      # need not fail for one to fire: a device not reached passes the run (I-65). A line is in the window for an hour,
+      # so the rule waits a minute and fires; a `for` as long as the window, as before, never did, as the line left the
+      # window as the wait ended. It resolves an hour after its run. A dry-run prints no such line. The ansible log
+      # reaches Loki only where the scheduled jobs write it: docker/services/semaphore.yaml forwards ANSIBLE_LOG_PATH
+      # to them (I-82). Each field is read on its own, as the yaml callback may fold the line between any two.
       - uid: kontroll-log-backup-failure
-        title: Backup-config failure
+        title: Config backup missed a device
         condition: C
         noDataState: OK
         execErrState: Error
-        for: 15m
+        for: 1m
         labels: {severity: warning, kontroll: logging}
-        annotations: {summary: "A scheduled config backup failed or captured nothing."}
+        annotations:
+          summary: >-
+            The config backup did not back up {{ $$labels.device }} ({{ $$labels.class }}): {{ $$labels.reason }}.
+          description: >-
+            Run {{ $$labels.run_id }}, Semaphore task {{ $$labels.semaphore_task }}. failed: the capture failed
+            (the device took the connection and its read was refused or failed, or its session did not open: a
+            refused key; or the class's backup failed before its read), or the device is behind a jump host, or it
+            left the run early (the run failed too). unreachable: the device took no TCP
+            connection at its port (the run passed). not-run: the run recorded nothing for it. Any earlier capture
+            is kept; the run's summary line for the device says why (docs/troubleshooting.md §15).
         data:
           - refId: A
-            relativeTimeRange: {from: 900, to: 0}
+            relativeTimeRange: {from: 3600, to: 0}
             datasourceUid: loki
             model:
               datasource: {type: loki, uid: loki}
               editorMode: code
               queryType: instant
               expr: >-
-                sum(count_over_time({source="internal", service="ansible"}
-                |~ "(?i)backup.*fail|captured nothing" [15m]))
+                sum by (device, class, reason, run_id, semaphore_task) (count_over_time({source="internal",
+                service="ansible"} |= "KONTROLL-BACKUP-MISSED" | json message | __error__=""
+                | line_format "{{.message}}"
+                | regexp `KONTROLL-BACKUP-MISSED\s+device=(?P<device>\S+)`
+                | regexp `\sclass=(?P<class>\S+)` | regexp `\sreason=(?P<reason>[a-z-]+)`
+                | regexp `\ssemaphore_task=(?P<semaphore_task>[0-9a-z]+)` [1h]))
               intervalMs: 1000
               maxDataPoints: 43200
               refId: A
           - refId: C
-            relativeTimeRange: {from: 900, to: 0}
+            relativeTimeRange: {from: 3600, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+              refId: C
+      # One alert per Semaphore task that failed: a job that exits non-zero (a playbook whose run failed, or one that
+      # could not start, as a `--limit` that matches no host) is logged by Semaphore's task runner as `Failed to run
+      # task` with its `task_id`, read here from Semaphore's container log (its `container_name`, as the crash rule
+      # reads it: a container's `service` is its name, which no rule can name in advance). It covers what the backup
+      # line cannot: a run that ended before its summary, and every other scheduled job that ran and exited non-zero
+      # (not one stopped by hand, nor one Semaphore could not start: neither logs that line). A backup run that failed
+      # sends both, its devices' alerts and its task's (I-65).
+      - uid: kontroll-log-job-failed
+        title: Scheduled job failed
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        labels: {severity: warning, kontroll: logging}
+        annotations:
+          summary: >-
+            Semaphore task {{ $$labels.task_id }} failed; its output is in Semaphore (Task History, that task).
+        data:
+          - refId: A
+            relativeTimeRange: {from: 3600, to: 0}
+            datasourceUid: loki
+            model:
+              datasource: {type: loki, uid: loki}
+              editorMode: code
+              queryType: instant
+              expr: >-
+                sum by (task_id) (count_over_time({source="internal"} |= "Failed to run task"
+                | json container_name, message | __error__="" | container_name = "semaphore"
+                | line_format "{{.message}}"
+                | regexp `task_id=(?P<task_id>[0-9]+)` [1h]))
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: {from: 3600, to: 0}
             datasourceUid: __expr__
             model:
               type: threshold

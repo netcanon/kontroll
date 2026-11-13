@@ -37,6 +37,11 @@
 # string, so none prints, and a JSON `false` makes every import print. A run started with
 # `--start-at-task` past the stamp prints none unless a later import runs, and one with
 # `--skip-tags always` prints none.
+#
+# The id printed is kept as `_kontroll_run_id`, for a play later in the run that names it in a line of its own (the
+# backup summary's per-device line, I-65): an unset id is `now()`, so a later read of `kontroll_run_id` would mint
+# another. It is taken from the printed line, so it is the id the log carries; a later import keeps it, and a run
+# that printed none has none. `kontroll_run_id` itself is left alone (group_vars/all.yml names the key dir by it).
 - name: Stamp the run correlation id
   hosts: all:localhost
   gather_facts: false
@@ -45,6 +50,7 @@
     - name: Log kontroll_run_id
       ansible.builtin.debug:
         msg: "kontroll_run_id={{ kontroll_run_id | default(now(utc=true, fmt='%Y%m%dT%H%M%SZ'), true) }}"
+      register: _kontroll_run_stamp
       run_once: true
       delegate_to: localhost
       when: not (_kontroll_run_stamped | default(false))
@@ -53,6 +59,9 @@
     - name: Note that this run's id is printed (a later import of this stamp says nothing)
       ansible.builtin.set_fact:
         _kontroll_run_stamped: true
+        _kontroll_run_id: >-
+          {{ _kontroll_run_id if _kontroll_run_id is defined
+             else (_kontroll_run_stamp.msg | default('') | regex_replace('^kontroll_run_id=', '')) }}
       run_once: true
       delegate_to: localhost
       tags: [always]

@@ -5,7 +5,8 @@ I-17 (the I-7 read's N8): `backend_api`'s backup recorded "FAILED: HTTP <status>
 a wrong backup path, a 500, and a device that never answered (status -1) alike. That is the misdiagnosis I-7 fixed in
 the check (test_backend_api_check_teeth.py). The record now names the cause as the check's refusal does: a 401 or 403
 prints the check's auth hint, word for word, which names the variables the recipe's auth reads and never their values;
-no status, or one below 0, is a device that did not answer; any other status is an API that answered, but not with
+no status, or one below 0, is a device that took the connection and gave no HTTP answer (one that took none is not
+run, and passes the run: I-65, the probe before this record); any other status is an API that answered, but not with
 200. The summary prints this record, so what the message may read is held here as the check's is held there.
 """
 import os
@@ -73,8 +74,9 @@ NO_PASS_HINT = BASIC_HINT.replace("`probe_pass` (or, if that is unset or empty, 
 TYPE_ONLY_HINT = NO_PASS_HINT.replace("`probe_user` (or, if that is unset or empty, `fw_1_api_username`)",
                                       "`fw_1_api_username`")
 NONE_HINT = "The API refused the request, and the recipe sends no credential: name one in its auth."
-DOWN = ("The device did not answer the API port, or its TLS failed — wrong address, port, certificate, or the service"
-        " is down.")
+# A pull with no HTTP answer, from a device whose port took the connection (the probe before the record, I-65)
+NO_HTTP = ("The device took a TCP connection on the API port, but gave no HTTP answer: its TLS failed (a certificate,"
+           " or a port that does not speak HTTPS), or the service did not answer in time.")
 ANSWERED = "The API answered, but not with 200: check the recipe backup path and method, and the device API."
 BEARER = {"type": "bearer", "token_var": "fortios_api_token"}
 APIKEY = {"type": "apikey_header", "header_name": "X-Api-Key", "token_var": "fortios_api_token"}
@@ -102,9 +104,9 @@ DIGEST = {"type": "digest", "username_var": "probe_user", "password_var": "probe
     (BASIC, 404, "404", ANSWERED),       # a wrong backup path
     (BEARER, 201, "201", ANSWERED),      # the check takes a 201; the backup takes only a 200
     (BEARER, 302, "302", ANSWERED),
-    (BEARER, -1, "-1", DOWN),            # uri's status for a refused connection, a timeout, a TLS failure
-    (BASIC, -1, "-1", DOWN),
-    (BEARER, None, "?", DOWN),
+    (BEARER, -1, "-1", NO_HTTP),         # uri's status for a timeout or a TLS failure, the port taken (I-65)
+    (BASIC, -1, "-1", NO_HTTP),
+    (BEARER, None, "?", NO_HTTP),
 ], ids=["bearer-401", "bearer-403", "apikey-401", "apikey-403", "basic-401", "basic-403", "none-401", "none-403",
         "basic-no-password-var-401", "basic-type-only-401", "digest-named-vars-401", "bearer-500", "basic-404",
         "bearer-201", "bearer-302", "bearer-refused", "basic-refused", "bearer-no-status"])
@@ -113,8 +115,9 @@ def test_the_backup_failure_names_the_cause_for_each_auth_type_and_answer(auth, 
     kind of failed pull: a 401 or a 403 names the variables that auth reads (a basic recipe's username and password
     vars, by its type alone too, and any recipe's that names them, each else its onboarded per-host name, which
     alone is named for a var the recipe does not name (I-16); a token recipe's `token_var`, else the onboarded
-    per-host name), never their values; a status below 0 or none says the
-    device did not answer or its TLS failed; any other status, a 201 too, says the API answered, but not with 200.
+    per-host name), never their values; a status below 0 or none says the device took the connection and gave no
+    HTTP answer (a refused port is not recorded here: I-65); any other status, a 201 too, says the API answered, but
+    not with 200.
     Guards I-17: every one of these said "check the API token's permissions", which sends the operator of a basic
     recipe, a wrong path or a down device to a token that is not the cause."""
     expected = "FAILED: HTTP %s from the probe backup endpoint /api/backup. %s" % (http, remedy)
@@ -125,10 +128,34 @@ def test_the_record_is_made_for_every_answer_but_a_200():
     """The record's `when` fails the pull for every status but 200, the 201 and the 204 the check takes included. The
     capture is written only for a 200, so a record keyed to the check's success set instead would leave a 201 or a 204
     with no result at all, neither a failure nor a capture: backup-configs.yml's summary would print it as "not run —
-    unreachable or skipped" and the run would not fail. The rows above render what a 201 prints, but `_render` never
+    no result" and the run would not fail. The rows above render what a 201 prints, but `_render` never
     evaluates the `when` (the I-17 read's N3: no suite held it). Guards the condition drifting to the check's set."""
     task = _task("backup.yml", FAILED)
     assert "(_api_resp.status | default(0)) != 200" in task["when"], task["when"]
+
+
+def test_a_port_that_takes_no_connection_is_recorded_not_run_and_one_that_does_is_failed():
+    """A pull with no HTTP answer is followed by one TCP probe of the port the pull used, and the two records split on
+    it: a probe that failed records the device as not run, unreachable (no `kontroll_backup_failed`), and the failure
+    record is made only where the probe did not fail. Why (I-65): every device that was down failed the nightly run as
+    a FAILED capture, so a down device and a broken capture read alike and a run with one down device was red every
+    night; CLAUDE.md's rule is that an unreachable host never fails a fleet run. The probe's port is the pull URL's
+    own, so a recipe on another port is probed where it was pulled; and it runs in a dry-run too (a TCP connect
+    changes nothing)."""
+    probe = _task("backup.yml", "Probe the API port of a device that gave the pull no answer")
+    pull = _task("backup.yml", "Pull config via the recipe's backup endpoint")
+    where = probe["ansible.builtin.wait_for"]
+    assert pull["ansible.builtin.uri"]["url"] == "https://%s:%s{{ _api_recipe.backup.path }}" % (
+        where["host"], where["port"]), (where, pull)
+    assert probe["delegate_to"] == "localhost" and probe["check_mode"] is False and probe["register"] == "_api_probe"
+    assert "(_api_resp.status | default(-1) | int) < 0" in probe["when"], probe["when"]
+    unreached = _task("backup.yml", "Record a device that took no connection as not run (the run passes; the summary "
+                      "names it)")
+    assert unreached["when"] == "_api_probe is failed"
+    facts = unreached["ansible.builtin.set_fact"]
+    assert facts["kontroll_backup_unreachable"] is True and "kontroll_backup_failed" not in facts, facts
+    assert facts["kontroll_backup_result"].startswith("not run — unreachable: "), facts
+    assert "_api_probe is not failed" in _task("backup.yml", FAILED)["when"]
 
 
 def test_the_backup_hint_is_the_checks_word_for_word():

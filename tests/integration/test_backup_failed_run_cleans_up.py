@@ -313,8 +313,9 @@ def test_a_class_that_cannot_be_loaded_beside_a_good_host_leaves_the_good_one_ca
     """A real run against ap-broken (its class's backup includes a missing file) and ap-good fails with rc 2: ap-good
     is captured and committed (ap-broken's file is not in the run's commit) and its summary line printed, the key
     directory is gone, and ap-broken gets the rescue's failure (its recap counts the load and that `fail`) and no
-    summary line. Guards the load failure's `fail` against stopping the other hosts: it fails its own host only, and
-    the good host's capture, the history, the prune and the key cleanup still run."""
+    summary line of its own: the summary's first host names it as having left the run before its summary (I-65).
+    Guards the load failure's `fail` against stopping the other hosts: it fails its own host only, and the good
+    host's capture, the history, the prune and the key cleanup still run."""
     lab = _lab(tmp_path, ["ap-broken", "ap-good"])
     rc, out, recap = _play(lab)
     assert rc == 2, (rc, out)
@@ -322,7 +323,8 @@ def test_a_class_that_cannot_be_loaded_beside_a_good_host_leaves_the_good_one_ca
     assert BROKEN in out, out
     good = r'"msg": "ap-good \(backend_raw_ssh\): captured -> %s"' % re.escape(_capture("ap-good"))
     assert re.search(good, out), out
-    assert not re.search(r'"msg": "ap-broken \(', out), out
+    assert '"msg": "ap-broken (zz_broken_include): FAILED: it left the run before its summary' in out, out
+    assert '=> (item=ap-broken) => {' in out and not re.search(r'ok: \[ap-broken\] =>', out), out
     with open(os.path.join(lab.backups, _capture("ap-good")), encoding="utf-8") as fh:
         assert fh.read() == "config system\n"
     changed = _git(lab.backups, "diff", "--name-only", "HEAD~1", "HEAD").split()

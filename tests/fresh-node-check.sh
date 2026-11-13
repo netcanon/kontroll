@@ -265,23 +265,23 @@ needs ping-check-gate '"msg": "mock-fortigate: CHECK FAILED: its check stopped a
 # the run must reach its summary. A host failing anywhere else, or a listed one passing or named at another task,
 # fails the check: a class added to the mock inventory whose backup reaches a device is listed here, at that task. A
 # listed host is held to its task, not its reason (its read is `no_log`, and ansible-core 2.18 prints no reason for
-# it). mock-fortigate must say its pull was not made, and record its capture, which backend_api records only where
-# its write ran.
+# it). A network_cli class's read that fails is rescued in its backend, which probes the device's port: a mock
+# address takes no connection (RFC-5737), so mock-switch and mock-xe are recorded as not run, unreachable, and pass,
+# as a device not reached does (I-65). mock-fortigate must say its pull was not made, and record its capture, which
+# backend_api records only where its write ran.
 step backup-check fail ansible-playbook -i ../tests/mock-inventory.yml playbooks/backup-configs.yml --check \
   -e "$api_token" -e "config_backup_dir=$tmp/backups"
 needs backup-check '^PLAY \[Backup run summary\]' "the run reached its summary"
 stops backup-check \
-  "mock-edge=Fail the run if any capture failed" \
-  "mock-switch=Fail the run if any capture failed" \
-  "mock-xe=Fail the run if any capture failed"
+  "mock-edge=Fail the run if any capture failed"
 needs backup-check 'mock-edge \(opnsense\): FAILED: the capture stopped at the task \\"Read /conf/config\.xml\\"' \
   "mock-edge's capture stopped at its read"
 needs backup-check \
-  'mock-switch \(cisco_ios\): FAILED: the capture stopped at the task \\"Pull config via cli_command\\"' \
-  "mock-switch's capture stopped at its read"
+  'mock-switch \(cisco_ios\): not run .{1,6} unreachable: the device took no TCP connection on port 22,' \
+  "mock-switch's failed read was probed, and its device taken as not reached"
 needs backup-check \
-  'mock-xe \(backend_netcommon_cli\): FAILED: the capture stopped at the task \\"Pull config via cli_command\\"' \
-  "mock-xe's capture stopped at its read"
+  'mock-xe \(backend_netcommon_cli\): not run .{1,6} unreachable: the device took no TCP connection on port 22,' \
+  "mock-xe's failed read was probed, and its device taken as not reached"
 needs backup-check '"msg": "mock-fortigate: the fortios backup endpoint is not read in a dry-run' \
   "mock-fortigate's capture went past its credential gate to the pull a dry-run skips"
 needs backup-check '"msg": "mock-fortigate \(fortigate\): captured -> FortiGate_192-0-2-4_full-configuration\.conf"' \

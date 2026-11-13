@@ -14,12 +14,12 @@ one) gave no answer either: it is not refused, and the summary says the host was
 exits non-zero (docker or the module's python missing, its daemon down or refusing a read, no access to its socket)
 records its exit code as a failed capture instead, and nothing is written (I-62).
 
-The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must
-be a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, `skipped`,
-`unreachable` and `match` the tests Ansible has, and `b64decode` its filter. The results are the shapes ansible-core
-2.18.19 and 2.19.4 register (measured for I-5, and `shell`'s for I-10): raw's check-mode skip holds `skipped`,
-`changed` and `failed` alone, the RouterOS command's adds a `msg`, `shell`'s an empty output, an `rc` of 0 and a
-`msg`, a `when` skip adds `skip_reason` and `false_condition`, and an unreachable host's read (the play's
+The `when:` conditions are read from the role files and evaluated as Ansible evaluates a conditional: every item must be
+a boolean (ansible-core 2.19 refuses any other result) and true; core Jinja with StrictUndefined, `skipped`,
+`unreachable`, `failed` and `match` the tests Ansible has, and `b64decode` its filter. The results are the shapes
+ansible-core 2.18.19 and 2.19.4 register (measured for I-5, and `shell`'s for I-10): raw's check-mode skip holds
+`skipped`, `changed` and `failed` alone, the RouterOS command's adds a `msg`, `shell`'s an empty output, an `rc` of 0
+and a `msg`, a `when` skip adds `skip_reason` and `false_condition`, and an unreachable host's read (the play's
 `ignore_unreachable`) registers `unreachable` with no output.
 """
 import base64
@@ -120,6 +120,13 @@ WHEN_SKIPPED = {"changed": False, "skipped": True, "skip_reason": "Conditional r
 WRITTEN = {"changed": True, "dest": "/backups/capture.cfg"}
 UNCHANGED = {"changed": False, "dest": "/backups/capture.cfg"}   # the nightly case: the config did not change
 UNREACHABLE = {"changed": False, "unreachable": True, "msg": "Failed to connect to the host via ssh"}
+# A CLI or RouterOS read that failed as a task (under network_cli a device that takes no connection does): its
+# backend's rescue records it, not run or FAILED (I-65). And the API port's probe where the port took the connection
+# (`wait_for`'s result on 2.18.19; 2.19.4 adds `failed: false`), or skipped: either leaves the API's non-200 record
+# to the read's answer. Of the failed read the rows read only `failed`.
+READ_FAILED = {"changed": False, "failed": True, "msg": "ssh connection failed: Failed to connect"}
+PROBE_TOOK = {"changed": False, "elapsed": 0, "port": 443, "state": "started", "search_regex": None,
+              "match_groups": [], "match_groupdict": {}, "path": None}
 # Each role's one read: the module whose answer the refusal and the write judge.
 READ_MODULE = {"backend_raw_ssh": "ansible.builtin.raw", "backend_netcommon_cli": "ansible.netcommon.cli_command",
                "routeros": "community.routeros.command", "backend_api": "ansible.builtin.uri",
@@ -149,6 +156,9 @@ def _grid():
             # API's pull runs on the control node, which is never unreachable.
             if role != "backend_api":
                 yield role, check_mode, UNREACHABLE, None
+            # A read that failed, rescued in its backend: nothing here runs, the rescue having recorded it (I-65).
+            if role in ("backend_netcommon_cli", "routeros"):
+                yield role, check_mode, READ_FAILED, None
             # A Docker read that failed (the script stops at the read that fails, `set -e`) is recorded by its exit
             # code, whatever it printed before: the client's half of `docker version` without a daemon, or a header.
             if role == "docker_host":
@@ -182,6 +192,7 @@ def _env():
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     env.tests["skipped"] = lambda r: bool(_result(r, "skipped").get("skipped", False))
     env.tests["unreachable"] = lambda r: bool(_result(r, "unreachable").get("unreachable", False))
+    env.tests["failed"] = lambda r: bool(_result(r, "failed").get("failed", False))
     env.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None   # Ansible's `match`
     env.filters["b64decode"] = lambda s: base64.b64decode(s).decode()
     env.tests["match"] = lambda value, pattern="": re.match(pattern, value) is not None   # Ansible's own
@@ -215,12 +226,14 @@ def test_an_answer_with_nothing_in_it_is_refused_and_never_written(role, check_m
     capture and recorded captured), the refusal reaching a dry-run's skipped read (the mandated `--check` would fail
     every raw-SSH and RouterOS host, as before T27), and a dry-run that read the device passing what a real run
     refuses. Neither runs for an unreachable host's read: it gave no answer, and the summary says the host was not
-    run (I-5's runtime read, S-1: the refusal reported it as a read that answered nothing). For Docker, a read that
+    run (I-5's runtime read, S-1: the refusal reported it as a read that answered nothing); nor for a CLI or RouterOS
+    read that failed, which its backend's rescue records (I-65; the API's port probe is taken as having found the port
+    open, which leaves its record to the answer). For Docker, a read that
     exits non-zero runs the failure record alone, by its exit code, whatever it printed first: a daemon that is down
     leaves the client's half of `docker version`, which a write would have put over the last good manifest (I-62)."""
     read = ROLES[role][0]
     tasks = [NOTHING, WRITE] + ([FAILED] if role in RECORDS_FAILURE else [])
-    ctx = {read: result, "ansible_check_mode": check_mode}
+    ctx = {read: result, "ansible_check_mode": check_mode, "_api_probe": PROBE_TOOK}
     assert [t for t in tasks if _runs(role, t, ctx)] == ([runs] if runs else [])
 
 

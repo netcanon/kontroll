@@ -11,7 +11,8 @@ Grafana is **deployed** (Phase 5, `${KONTROLL_MGMT_IP}:3002`).
   initializes/loginto it); its generated runtime files are gitignored.
 - `grafana/provisioning/` — datasources + dashboard *providers* + **alerting** (auto-loaded).
 - `grafana/provisioning/alerting/` — Grafana-managed **alert rules** (`logging-rules.yaml`:
-  container crash storm, backup failure, onboard error, `auth-denied` spike; `metrics-rules.yaml`: a
+  container crash storm, a device a backup run missed (one alert per device) and a scheduled job that failed (one
+  per Semaphore task: docs/troubleshooting.md §15), onboard error, `auth-denied` spike; `metrics-rules.yaml`: a
   scrape target or probed device that answered in the last 7 days and stopped; `heartbeat-rule.yaml`:
   an alert that always fires, delivered daily, that proves delivery), the **policy tree**
   (`policies.yaml`, which replaces any policy made in the UI at each Grafana start) and the one

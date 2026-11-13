@@ -38,4 +38,8 @@ down or refuses a read, no access to its socket) stops the script there, and the
 read's exit code is recorded `FAILED` (the summary prints it and fails the run;
 nothing is written, so any earlier manifest is kept). An unreachable host is
 tolerated, as an unreachable raw-SSH, OPNsense or Proxmox host is: its summary
-line says it was not run (I-62).
+line says it was not run, unreachable, and the per-device alert names it.
+Ansible calls a refused key or password unreachable too, so the capture play
+probes the host's port: where it took the connection, the host is recorded
+`FAILED` (its session did not open), which fails the run; a host behind a jump
+host is recorded `FAILED` unprobed (I-62, I-65).
