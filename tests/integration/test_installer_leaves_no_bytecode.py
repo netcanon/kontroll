@@ -18,7 +18,8 @@ rows can see what they guard. Nothing of the developer's Ansible reaches the pla
 row's own. Needs ansible-playbook.
 
 The installer's ansible-playbook is pip's, its first line a plain `#!/usr/bin/python3`. A pipx launcher (pipx 1.17,
-the one on GitHub's runner image, whose Ansible CI's pytest legs find on PATH) is `#!<venv>/bin/python -E`, and `-E`
+the one on GitHub's runner image, whose Ansible CI's pytest legs found on PATH until each pinned its own: I-94) is
+`#!<venv>/bin/python -E`, and `-E`
 (or `-I`) makes Python ignore every PYTHON* variable, PYTHONDONTWRITEBYTECODE with them. The run rows start such a
 launcher through its interpreter without that flag: the same Ansible code, reading the environment as the installer's
 does.
@@ -186,9 +187,10 @@ def test_without_it_both_writers_leave_a_cache(tmp_path):
 def test_a_launcher_that_ignores_the_environment_runs_through_its_interpreter(tmp_path, first, expect):
     """A launcher whose first line runs Python with `-E` or `-I` (pipx 1.17 writes `#!<venv>/bin/python -E`) is
     started through that interpreter without the flag, its other flags kept; a plain, `env` or other-flag launcher runs
-    as it is. CI's pytest legs find the runner image's pipx ansible-playbook on PATH, and there the run row above failed
-    for a reason the installer never meets: `-E` drops PYTHONDONTWRITEBYTECODE, so Ansible compiled the filter plugins
-    into the copy. Without this row a rewrite that kept the flag, or dropped the launcher, would only show on CI."""
+    as it is. CI's pytest legs found the runner image's pipx ansible-playbook on PATH (until I-94), and there the run
+    row above failed for a reason the installer never meets: `-E` drops PYTHONDONTWRITEBYTECODE, so Ansible compiled
+    the filter plugins into the copy. Without this row a rewrite that kept the flag, or dropped the launcher, would
+    only show where such a launcher comes first on PATH."""
     launcher = tmp_path / "ansible-playbook"
     launcher.write_text(first + "\nimport sys\n", encoding="utf-8")
     assert _playbook_command(str(launcher)) == [str(launcher) if x == "L" else x for x in expect]

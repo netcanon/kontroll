@@ -17,7 +17,8 @@ rewritten is what runs), and, as root, a copy another user owns (the rewrite and
 It needs ansible-core importable by this Python's subprocesses, found as they find it (`python -I`, so neither the
 working directory nor PYTHONPATH counts): with the repo root on sys.path, the repo's own `ansible/` (playbooks, no
 `__init__.py`) would pass for the package, and the rows would copy it, fail, or patch the installed core. Where it is
-not importable (CI's pytest legs, a host without it), every row is skipped; CI runs them in its validate job. Each run
+not importable (a host without it), every row is skipped; CI runs them in its validate job and in each pytest leg, on
+the core the leg pins (I-94). Each run
 on a copy checks that the module it imported is the copy's. The marker is only in a `-e @` vars file, never in a
 playbook's text, so a hit is the value printed, not 2.19's quote of a task's source lines. Every task runs on
 localhost with `connection: local`.

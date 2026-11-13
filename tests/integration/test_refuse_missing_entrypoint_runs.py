@@ -181,11 +181,11 @@ def _core():
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-# The rc a role the include cannot load gives, by core. The pinned cores (2.18 and 2.19, the validate legs) and the
-# runner's 2.20 end the whole run at the include (rc 4). The CI's pytest jobs run the core their runner ships, from 2.21
-# (test_refuse_local_connection_runtime.py's paramiko note): there an installed collection whose role has no backup
-# entry failed the host instead (rc 2, measured on the CI's core, 2026-11-12), so a core from 2.21 may give either. A
-# version line that does not parse is held to rc 4, so a misread fails the row rather than widens it.
+# The rc a role the include cannot load gives, by core. The shipped cores (the installer's 2.18, the validate job's
+# 2.19, the runner's 2.20; CI's pytest legs run them: I-94) end the whole run at the include (rc 4). On a core from
+# 2.21 (the one CI's pytest jobs found on the runner image until I-94) an installed collection whose role has no backup
+# entry failed the host instead (rc 2, measured 2026-11-12), so a core from 2.21 may give either. A version line that
+# does not parse is held to rc 4, so a misread fails the row rather than widens it.
 _ABORT_RC = {4} if (_core() or (0, 0)) < (2, 21) else {2, 4}
 
 

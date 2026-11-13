@@ -19,6 +19,10 @@
 # against. Never pin a Semaphore older than the one a live box already runs — Semaphore migrates its database
 # forward on start, so an older pin is a downgrade over a migrated schema. A bump follows docker/README.md
 # § Refreshing a pin, which re-derives the apk constraints and requirements.txt below from the new base.
+#
+# The base's ansible venv ships ansible-core 2.20.10 on Python 3.12: the core of every Semaphore job and of the API's
+# and the onboard GUI's runs. CI's pytest legs run that core (the `tests` matrix in .github/workflows/ci.yml, held to
+# this line by tests/unit/test_ci_ansible_cores.py), so a base that moves it moves both (docker/README.md, step 4).
 FROM semaphoreui/semaphore:v2.19.17@sha256:008dacd9f1adbd92e8a048f1786ae1dd9bed2a352aca2eb30b9837de5706e7f7
 
 USER root
@@ -71,8 +75,8 @@ RUN VENV="$(dirname "$(ls /opt/semaphore/apps/ansible/*/venv/bin/pip)")" \
 
 # A failing `no_log: true` task's error message must print nothing it was given (I-75). ansible-core 2.19 and later
 # keep a censored result's `exception`, and the default callback prints its message: a `fail` message, a command line,
-# a path (CVE-2026-123036, ansible/ansible#85696, no fixed release; the base at this pin ships 2.20.10, which no test
-# leg runs: I-80). The script drops `exception` from the censor's preserved keys in the venv's ansible-core, under a
+# a path (CVE-2026-123036, ansible/ansible#85696, no fixed release; the base at this pin ships the core named above,
+# which CI's pytest legs run unpatched: I-80). The script drops `exception` from the censor's preserved keys in the venv's ansible-core, under a
 # notice that the file was modified, and refuses any other shape of that file, so a base bump that moves it fails the
 # build here. Then it runs, with this core, a no_log task that fails with a marker: the build fails if the marker
 # prints, on stdout, stderr or in the ansible log, or if the same failure without no_log stops printing it. Warnings,

@@ -11,6 +11,34 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ci): each pytest leg runs an ansible-core the project ships, with every module's collections (I-94, I-80, I-81, 2026-11-12)
+
+CI's pytest legs installed no Ansible, so every row that runs `ansible-playbook` ran on the runner image's own,
+unpinned ansible-core: 2.21.5 from pipx on the GitHub image today, a core no part of the project ships, and one that
+moves whenever the image does. PR #157's first run failed a row on all four legs for a 2.21 behaviour no shipped core
+has (I-94), and #152's failed one for that install's launcher, not the product (I-81). And no test ran the core
+production runs: the Semaphore runner's base ships ansible-core 2.20.10, the core of every Semaphore job and of the
+API's and the onboard GUI's runs, while the suite ran 2.18.19 and 2.19.4 (I-80).
+
+- **Fixed.** The `tests` job's matrix gives each leg a shipped core on a Python that core supports: 3.11 the
+  installer's 2.18.19 (on the Python of the installer's Debian base), 3.12 the control image's 2.20.10 (on its venv's
+  Python), 3.13 the validate job's 2.19.4, and 3.14 the control image's 2.20.10 on the newest Python it supports. The
+  job's names, which the main ruleset requires, are unchanged. A new step installs the leg's core and every module's
+  collections (listed by `gen-requirements.py --all-modules`, run in an export of HEAD, since it writes its trust
+  sidecar into its own tree) into `~/.ansible/collections`, where the rows look, and prints the core; the pytest step
+  names the pin in `KONTROLL_ANSIBLE_CORE`.
+- **Changed.** docker/semaphore-runner/Dockerfile names its base's core and Python in a comment line, which the new
+  unit row reads: a base that moves either moves CI's legs with it (docker/README.md, step 4).
+- **Tests.** `tests/unit/test_ci_ansible_cores.py` (new): each shipped core (the installer's pin on its Debian base's
+  Python, the control image's line, the validate job's pin) has a leg, the installer's and the control image's on
+  their own Pythons; no leg runs a core nothing ships, or on a Python its core does not support; the job's name and
+  Pythons stay the ruleset's; the install and pytest steps are there once each, in order, and nothing softens them;
+  drift cases built from the live pins are each named. `tests/integration/test_ci_leg_core.py` (new): in a leg, the
+  first `ansible-playbook` on PATH and the suite's own Python both run the pinned core. The rows whose words said CI
+  runs the runner image's core say what it runs now.
+- **Docs.** tests/README.md, docs/qa-and-release-pipeline.md, docker/README.md and SECURITY.md C2 name the legs'
+  cores.
+
 ### fix(ansible): the node_exporter install runs nothing on a host whose fact gathering was unreachable, so a down host no longer fails the run (I-89, 2026-11-12)
 
 install-node-exporter.yml's play sets `ignore_unreachable` (CLAUDE.md: never let one unreachable host fail a fleet-wide
