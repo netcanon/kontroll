@@ -11,6 +11,25 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): the SSH key render and cleanup never become, so the run's ssh can read the key (I-107, 2026-11-13)
+
+`_render-ssh-keys.yml` and `_cleanup-ssh-keys.yml` set no `become`, so a fleet run given `-b`, `ANSIBLE_BECOME=1` or
+an ansible.cfg's `[privilege_escalation] become = True` ran their localhost tasks with become. The key dir and the key
+were then root's (by default), and the run's ssh, which a become does not touch (it acts on the device), could not
+read the key: every key-auth host was an ignored unreachable host, and the run passed. Measured as a non-root operator
+whose `su` to root needs no password, on ansible-core 2.19.4 and 2.18.19: the key written as root, the operator's ssh
+unable to open it. No shipped caller turns become on for a fleet playbook.
+
+- Both plays set `become: false`, which outranks those three; nothing under them, the key-dir guard's tasks included,
+  sets a become keyword or an `ansible_become` var, which would outrank it. A host's inventory `ansible_become` (a
+  device's `enable`) does not reach the delegated tasks; an extra var, `-e ansible_become=true`, still outranks the
+  keyword, as it does every play's (measured): such a run renders the keys as its become user.
+- Rows: `tests/unit/test_onboard_ssh_key.py` pins both plays' `become: false` and no become keyword or
+  `ansible_become*` var under them or in the key-dir guard; `tests/integration/test_ssh_key_render_runs.py` runs the
+  render and the cleanup under `-b`, ANSIBLE_BECOME and an ansible.cfg's `become = True` (becoming root, or `nobody`
+  where the row runs as root: Ansible runs no become to the user it already runs as), with a stand-in `su` that logs
+  its calls: a control task's alone, and the host logs in with its 0600 key.
+
 ### fix(ansible): the SSH key render's key reaches no temp file, module argument or debug line (I-96, 2026-11-13)
 
 `_render-ssh-keys.yml` wrote each key-auth host's private key with `copy: content:`, which writes the text to a temp

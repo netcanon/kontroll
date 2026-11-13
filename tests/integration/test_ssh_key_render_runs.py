@@ -20,7 +20,9 @@ the render and by the cleanup, and kept (I-95). And the render's key write stage
 wrote it to a temp file under the controller's `~/.ansible/tmp` and put it into a remote temp dir there on its way,
 outside the key dir, where a run killed mid-copy leaves it; the key now goes from `sops` to its file inside one
 process the write starts, never a module's argument, so no file the run writes or keeps and no line it prints holds
-it, however the run stages or prints a module's arguments (I-96).
+it, however the run stages or prints a module's arguments (I-96). And neither play set `become`, so a run that
+turns become on (`-b`, ANSIBLE_BECOME, an ansible.cfg's `become = True`) rendered the key as root, which the run's
+own ssh could not read: every key-auth host was an ignored unreachable host, and the run passed (I-107).
 
 The rows run a probe playbook beside the shipped ones, in a copy of ansible/playbooks: the shipped preamble, a play over
 the key-auth host whose one task (a `ping`, tagged `probe`) opens its connection, and the shipped cleanup. The
@@ -328,6 +330,69 @@ def test_a_run_that_skips_the_always_tag_renders_and_removes_no_key(lab):
     assert "Permission denied (publickey)" in out, out
     assert seen and not any(s["exists"] for s in seen), seen
     assert os.listdir(lab.keys) == ["stale.key"] and os.listdir(lab.check_keys) == ["stale.key"], out
+
+
+# A stand-in `su` first on PATH: it adds what it was given to FAKESU_LOG, one line per call (its arguments before `-c`,
+# and whether the command is the control task's), and runs the command as the same user, so the row runs as root or
+# not, and counts the becomes.
+FAKE_SU = """#!%s
+import json, os, sys
+argv = sys.argv[1:]
+i = argv.index("-c")
+with open(os.environ["FAKESU_LOG"], "a") as fh:
+    fh.write(json.dumps({"argv": argv[:i], "control": "kontroll-i107-control" in argv[i + 1]}) + "\\n")
+os.execv("/bin/sh", ["/bin/sh", "-c", argv[i + 1]])
+""" % sys.executable
+# The probe with its reach play's own become off (a device play's becomes are not the render's), and a control play
+# whose one task becomes, so a row that counts no call cannot pass where the run turned no become on.
+BECOME_PROBE = [PROBE[0], dict(PROBE[1], become=False), PROBE[2],
+                {"name": "Control", "hosts": "localhost", "gather_facts": False,
+                 "tasks": [{"name": "Run one command that becomes", "ansible.builtin.raw": "echo kontroll-i107-control",
+                            "changed_when": False}]}]
+# Ansible runs no become to the user it already runs as (measured: as root, `-b` to root called no `su`), so a row run
+# as root becomes `nobody`, and a row run as any other user becomes root, as I-107's runs did.
+BECOME_USER = "nobody" if os.geteuid() == 0 else "root"
+BECOMES = {"cli": (["-b", "--become-method", "su", "--become-user", BECOME_USER], {}, ""),
+           "env": ([], {"ANSIBLE_BECOME": "1", "ANSIBLE_BECOME_METHOD": "su", "ANSIBLE_BECOME_USER": BECOME_USER}, ""),
+           "cfg": ([], {}, "[privilege_escalation]\nbecome = True\nbecome_method = su\nbecome_user = %s\n"
+                   % BECOME_USER)}
+
+
+@pytest.mark.parametrize("how", sorted(BECOMES))
+def test_a_run_that_turns_become_on_renders_and_removes_the_key_as_its_own_user(lab, how):
+    """A run that turns become on, by `-b --become-method su`, by ANSIBLE_BECOME and ANSIBLE_BECOME_METHOD, or by an
+    ansible.cfg's `[privilege_escalation]`, becomes for none of the render's and the cleanup's tasks: the stand-in `su`
+    is called once, by the control play's one task (which shows the run did turn become on, and that the stand-in is
+    what it calls), the host's connection logs in with its rendered 0600 key, the run passes, and the key dir is gone
+    after. Guards I-107: neither play set `become`, so their tasks became, the key dir and the key were root's, and the
+    run's own ssh (a become acts on the device, not on the controller's ssh) could not read the key: every key-auth host
+    was an ignored unreachable host, and the run passed (measured as a non-root operator whose `su` to root needs no
+    password, on 2.19.4 and 2.18.19: the key written as root, and the operator's ssh unable to open it). The stand-in
+    runs the command as the same user, so the row counts the becomes as root and as any other user; the run becomes
+    root, or `nobody` where the row runs as root, as Ansible runs no become to the user it already runs as."""
+    args, env, cfg = BECOMES[how]
+    with open(os.path.join(lab.tree, "playbooks", "zz-probe-become.yml"), "w", encoding="utf-8") as fh:
+        yaml.safe_dump(BECOME_PROBE, fh, sort_keys=False)
+    su = os.path.join(lab.base, "bin", "su")
+    with open(su, "w", encoding="utf-8") as fh:
+        fh.write(FAKE_SU)
+    os.chmod(su, 0o755)
+    if cfg:
+        with open(lab.env["ANSIBLE_CONFIG"], "a", encoding="utf-8") as fh:
+            fh.write(cfg)
+    log = os.path.join(lab.base, "su-seen.jsonl")
+    rc, out, recap, seen = _run(lab, *args, playbook="zz-probe-become.yml", env_add=dict(env, FAKESU_LOG=log))
+    assert rc == 0, out
+    assert recap == {"unreachable": 0, "failed": 0, "ignored": 0}, (recap, out)
+    calls = []
+    if os.path.exists(log):
+        with open(log, encoding="utf-8") as fh:
+            calls = [json.loads(line) for line in fh if line.strip()]
+    assert [c["control"] for c in calls] == [True], (calls, out)
+    key_file = os.path.join(lab.keys, "%s.key" % CRED)
+    logins = [s for s in seen if s["identity"] == key_file]
+    assert logins and all(s["exists"] and s["mode"] == 0o600 for s in logins), seen
+    assert not os.path.exists(lab.keys), os.listdir(lab.keys)
 
 
 # How a run is made to put a module's arguments in a file, keep it, or print them: the environment and arguments. An

@@ -136,6 +136,39 @@ def test_render_and_cleanup_force_local_delegation():
     assert "delegate_to: localhost" in cleanup, "the cleanup rm must delegate_to: localhost (run_once host hijack)"
 
 
+def _keys(node):
+    """Every mapping key anywhere in a parsed play or tasks file, its tasks', blocks' and vars' included."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield str(k)
+            yield from _keys(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _keys(v)
+
+
+def test_the_key_render_and_cleanup_never_become():
+    """`_render-ssh-keys.yml`'s play and `_cleanup-ssh-keys.yml`'s each set `become: false`, and nothing under them (a
+    task, a block, a var), nor tasks/refuse-foreign-key-dir.yml, which both import, names a become keyword or an
+    `ansible_become*` var. A run that turns become on (`-b`, ANSIBLE_BECOME, an ansible.cfg's `become = True`) made the
+    render's tasks become root: the key dir and the key were root's, the run's own ssh could not read the key, and every
+    key-auth host was an ignored unreachable host in a run that passed (I-107, measured as a non-root operator whose
+    `su` to root needs no password, on 2.19.4 and 2.18.19). The play keyword outranks those three; a task's `become`, or
+    an `ansible_become` var under the play, would outrank the keyword (an extra var does, and no keyword outranks it).
+    tests/integration/test_ssh_key_render_runs.py runs the two plays under each of the three."""
+    become = ("become", "ansible_become")
+    for name in ("_render-ssh-keys.yml", "_cleanup-ssh-keys.yml"):
+        with open(os.path.join(ROOT, "ansible", "playbooks", name), encoding="utf-8") as fh:
+            (play,) = yaml.safe_load(fh)
+        assert play.get("become") is False, (name, play.get("become"))
+        under = [k for k in _keys({k: v for k, v in play.items() if k != "become"}) if k.startswith(become)]
+        assert not under, (name, under)
+    with open(os.path.join(ROOT, "ansible", "playbooks", "tasks", "refuse-foreign-key-dir.yml"),
+              encoding="utf-8") as fh:
+        guard = yaml.safe_load(fh)
+    assert guard and not [k for k in _keys(guard) if k.startswith(become)], guard
+
+
 # The playbooks whose summary plays follow the key cleanup (I-9, I-64, I-83); each such play connects to nothing.
 _SUMMARY_AFTER_CLEANUP = ("backup-configs.yml", "install-node-exporter.yml", "wire-logging.yml", "ping.yml")
 
@@ -189,22 +222,23 @@ def test_every_playbook_that_renders_device_keys_removes_them_last():
 
 
 def test_the_key_cleanup_removes_the_run_key_dir_on_the_runner():
-    """`_cleanup-ssh-keys.yml` is one play of two tasks: the import of tasks/refuse-foreign-key-dir.yml (with no
-    other keyword), then `ansible.builtin.file` on `{{ kontroll_device_key_dir }}` with `state: absent`, delegated to
-    localhost, run in a dry run too (`check_mode: false`), in a play tagged `always`, and neither carries any other
-    keyword. Guards a `check_mode: true`, a `when:` or an `ignore_errors` on the task or the play, which would leave
-    every run's keys on disk (local-refusal fold 4's read A, N4: fold 3's mutant X6 survived every test); the
-    `check_mode: false` dropped, under which a dry run removes nothing, a stale key an earlier run left included
-    (I-87); the tag dropped, under which a `--tags` run skips the cleanup (I-93); and the key-dir guard dropped, moved
-    after the delete or given a `when:`, under which the delete removes a dir that holds anything else, with all it
-    holds (I-95). tests/integration/test_ssh_key_render_runs.py runs it in each mode, and over each refused dir."""
+    """`_cleanup-ssh-keys.yml` is one play of two tasks: the import of tasks/refuse-foreign-key-dir.yml (with no other
+    keyword), then `ansible.builtin.file` on `{{ kontroll_device_key_dir }}` with `state: absent`, delegated to
+    localhost, run in a dry run too (`check_mode: false`), in a play tagged `always` that sets `become: false` (I-107),
+    and neither carries any other keyword. Guards a `check_mode: true`, a `when:` or an `ignore_errors` on the task or
+    the play, which would leave every run's keys on disk (local-refusal fold 4's read A, N4: fold 3's mutant X6 survived
+    every test); the `check_mode: false` dropped, under which a dry run removes nothing, a stale key an earlier run left
+    included (I-87); the tag dropped, under which a `--tags` run skips the cleanup (I-93); and the key-dir guard
+    dropped, moved after the delete or given a `when:`, under which the delete removes a dir that holds anything else,
+    with all it holds (I-95). tests/integration/test_ssh_key_render_runs.py runs it in each mode, and over each refused
+    dir."""
     with open(os.path.join(ROOT, "ansible", "playbooks", "_cleanup-ssh-keys.yml"), encoding="utf-8") as fh:
         plays = yaml.safe_load(fh)
     assert len(plays) == 1 and len(plays[0]["tasks"]) == 2, plays
     play, (guard, task) = plays[0], plays[0]["tasks"]
     assert guard == {"name": guard["name"], "ansible.builtin.import_tasks": "tasks/refuse-foreign-key-dir.yml"}, guard
-    assert set(play) == {"name", "hosts", "gather_facts", "connection", "run_once", "tags", "tasks"}, play
-    assert play["tags"] == ["always"], play
+    assert set(play) == {"name", "hosts", "gather_facts", "connection", "become", "run_once", "tags", "tasks"}, play
+    assert play["tags"] == ["always"] and play["become"] is False, play
     assert set(task) == {"name", "ansible.builtin.file", "delegate_to", "check_mode"}, task
     assert task["ansible.builtin.file"] == {"path": "{{ kontroll_device_key_dir }}", "state": "absent"}, task
     assert task["delegate_to"] == "localhost" and task["check_mode"] is False, task
