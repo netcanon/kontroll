@@ -11,6 +11,21 @@ NetConfig project.
 
 ## [Unreleased]
 
+### test(e2e): the unit dialog's row reads a seam, not the runner's ansible-galaxy (I-105, 2026-11-13)
+
+The e2e unit-dialog row (`test_unit_badge_opens_dialog_and_renders_unit_body`) failed twice, on PRs that touched no
+GUI code: its route, `GET /api/units/<collection>`, read the runner's real `ansible-galaxy collection list --format
+json` through `service_units` (a 30 s timeout), the one read of the e2e server's routes left in place, and on a busy
+runner it outlasted the row's 15 s. The server's log had no line for the request because werkzeug writes one only
+once a response is sent.
+
+- The e2e server replaces `kontroll.service.units.service_units` (its canned answer, `_canned.service_units`, already
+  has a shape row): cisco.ios lists one role, a collection the server does not report installed is a 404. The row
+  asserts that list, where it accepted the list, the empty pane or the error pane.
+- `tests/unit/test_mock_conformance.py` holds each function of `catalog.py` and `probe.py` that starts a process or
+  opens a URL to being replaced by the e2e server, or each of its callers in the GUI's in-process code being; a
+  planted tree is the rule's positive control.
+
 ### fix(tests): no row lands this checkout's HEAD on the canonical its `local` remote names (I-70, 2026-11-13)
 
 Seven rows (`test_api_secrets.py`'s five apply rows, `test_commit_trailer.py`'s commit row,

@@ -484,6 +484,103 @@ def test_the_shape_helper_catches_a_planted_missing_key():
     assert shape({"a": 1, "b": [{"c": "x"}]}, frozenset({"d"})) != shape(real, frozenset({"d"}))
 
 
+# The modules the e2e server's search, classify, Index and unit routes are served from: each process or URL read in
+# them is a seam of the e2e server, or is reached only through seams.
+_OUTSIDE_READS = ("scripts/kontroll/catalog.py", "scripts/kontroll/probe.py")
+
+
+def _module(rel):
+    """The import name of a module of the GUI's in-process code, as the e2e conftest's seams name it: gui/app.py is
+    `app` (the conftest imports it so), scripts/kontroll/catalog.py is `kontroll.catalog`."""
+    rel = rel[:-len(".py")]
+    rel = rel[len("gui/"):] if rel.startswith("gui/") else rel[len("scripts/"):]
+    return rel.replace("/", ".").replace(".__init__", "")
+
+
+def _reads_outside(fn):
+    """Whether a function starts a process (`subprocess.<call>`) or opens a URL (`urllib.request.urlopen`)."""
+    return any(isinstance(n, ast.Call) and (ast.unparse(n.func).startswith("subprocess.")
+                                            or ast.unparse(n.func) == "urllib.request.urlopen")
+               for n in ast.walk(fn))
+
+
+def _unseamed_outside_reads(seamed, root=ROOT):
+    """Each function of `_OUTSIDE_READS` under `root` that starts a process or opens a URL, the e2e server does not
+    replace, and has a caller in the GUI's in-process code (gui/, scripts/) the server does not replace either, as
+    `<read>: <caller>` (a call at a module's top level is `<module>: import`); and the reads found, as a set. A
+    caller is any top-level function whose body calls the read's name, bare or as an attribute; a caller's own
+    callers are not followed, so a read is replaced or each of its callers is."""
+    reads, callers = set(), {}
+    for rel in _OUTSIDE_READS:
+        tree = ast.parse(open(os.path.join(root, rel), encoding="utf-8").read())
+        reads |= {"%s.%s" % (_module(rel), n.name) for n in tree.body
+                  if isinstance(n, ast.FunctionDef) and _reads_outside(n)}
+    short = {r.rsplit(".", 1)[1]: r for r in reads}
+    for top in ("gui", "scripts"):
+        for dirpath, _dirs, files in os.walk(os.path.join(root, top)):
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                path = os.path.join(dirpath, f)
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                tree = ast.parse(open(path, encoding="utf-8").read())
+                for node in tree.body:
+                    where = "%s.%s" % (_module(rel), node.name) if isinstance(
+                        node, (ast.FunctionDef, ast.AsyncFunctionDef)) else "%s: import" % _module(rel)
+                    for n in ast.walk(node):
+                        if isinstance(n, ast.Call):
+                            name = getattr(n.func, "attr", getattr(n.func, "id", None))
+                            if name in short and where != short[name]:
+                                callers.setdefault(short[name], set()).add(where)
+    return sorted("%s: %s" % (r, c) for r in reads - set(seamed) for c in callers.get(r, ())
+                  if c not in seamed), reads
+
+
+def test_every_process_or_url_read_the_e2e_routes_reach_is_behind_a_seam():
+    """Each function of catalog.py and probe.py that starts a process or opens a URL (`ansible-galaxy collection
+    list`, `ansible-doc`, Galaxy's API) is replaced by the e2e server's `_mock_service_seams`, or each function of
+    the GUI's in-process code that calls it is. Guards I-105: the unit list's route read the runner's real
+    `ansible-galaxy collection list` through `service_units`, the one caller of `_installed_json` the server left
+    in place, and on a busy runner it outlasted the unit dialog row's 15 s (two red e2e legs on PRs that touched no
+    GUI code). The scan's scope is those two modules; git's reads elsewhere (gitio) are served by `page.route` fakes
+    or not driven, and review holds them."""
+    unseamed, reads = _unseamed_outside_reads(_restored_seams())
+    assert {"kontroll.catalog._installed_json", "kontroll.catalog.galaxy_search", "kontroll.probe._ad"} <= reads, reads
+    assert unseamed == [], unseamed
+
+
+def test_the_outside_read_rule_names_a_planted_caller_left_in_place(tmp_path):
+    """A planted tree: catalog.py with a read that starts a process and one that opens a URL, probe.py with a
+    function that starts none; callers in a service module, in gui/app.py and at a module's top level. With the
+    process read's callers all replaced, the rule names nothing; with one left, it names that caller alone, by
+    module; with the URL read and the import-time call left too, it names those; a read the server replaces names
+    none of its callers. The rule's positive control: a scan that finds no read, or no caller, passes the real tree
+    as a sound one does (the first assert of the row above holds the reads; this holds the callers)."""
+    files = {
+        "scripts/kontroll/catalog.py": "import subprocess\nimport urllib.request\n\n\ndef _spawn():\n"
+                                       "    return subprocess.run(['x'])\n\n\ndef fetch(u):\n"
+                                       "    return urllib.request.urlopen(u)\n\n\ndef seamed():\n"
+                                       "    return _spawn()\n",
+        "scripts/kontroll/probe.py": "def facts():\n    return {}\n",
+        "scripts/kontroll/service/units.py": "from kontroll import catalog\n\n\ndef list_units():\n"
+                                             "    return catalog._spawn()\n",
+        "gui/app.py": "from kontroll import catalog\n\nBOOT = catalog.fetch('x')\n\n\ndef route():\n"
+                      "    return catalog.fetch('y')\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    every = {"kontroll.catalog.seamed", "kontroll.service.units.list_units", "kontroll.catalog.fetch"}
+    assert _unseamed_outside_reads(every, str(tmp_path)) == ([], {"kontroll.catalog._spawn",
+                                                                  "kontroll.catalog.fetch"})
+    assert _unseamed_outside_reads(every - {"kontroll.service.units.list_units"}, str(tmp_path))[0] == [
+        "kontroll.catalog._spawn: kontroll.service.units.list_units"]
+    assert _unseamed_outside_reads({"kontroll.catalog.seamed"}, str(tmp_path))[0] == [
+        "kontroll.catalog._spawn: kontroll.service.units.list_units", "kontroll.catalog.fetch: app.route",
+        "kontroll.catalog.fetch: app: import"]
+    assert _unseamed_outside_reads({"kontroll.catalog._spawn", "kontroll.catalog.fetch"}, str(tmp_path))[0] == []
+
+
 def test_the_e2e_unit_is_a_valid_unit():
     """The actuation unit the browser suite registers passes the registry's own validator, its target class held to
     the example fleet's enabled modules as the registry holds a unit to the fleet's. Guards the configure dialog

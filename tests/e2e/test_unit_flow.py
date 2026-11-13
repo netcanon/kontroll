@@ -19,10 +19,13 @@ pytestmark = pytest.mark.e2e
 
 
 def test_unit_badge_opens_dialog_and_renders_unit_body(page):
-    """Searching → clicking the ⚙ Automations badge opens the unit dialog for the collection and renders the
-    unit-body (the runnable-unit list, or the honest empty/degraded pane for a modules-only / uninstalled
-    collection) — the Search→Pick wiring proven in a real browser. Guards the openUnitDialog → GET /api/units →
-    render path actually wiring up (the create-dialog acceptance: the badge opens the modal)."""
+    """Searching → clicking the ⚙ Automations badge opens the unit dialog for the collection and renders its
+    runnable-unit list: one row, the role `swarm` the e2e server's unit seam lists for cisco.ios — the Search→Pick
+    wiring proven in a real browser. Guards the openUnitDialog → GET /api/units → render path actually wiring up
+    (the create-dialog acceptance: the badge opens the modal), and the list it renders being the server's answer.
+    The row accepted the list, the empty pane or the error pane while the route read the runner's real
+    `ansible-galaxy collection list` (up to 30 s; a slow runner failed it at 15 s, twice: I-105); served from the
+    seam, the answer is known and the list is the one pane that is right."""
     page.goto("/")
     page.get_by_test_id("search-input").fill("cisco ios")
     page.get_by_test_id("search-btn").click()
@@ -33,11 +36,11 @@ def test_unit_badge_opens_dialog_and_renders_unit_body(page):
     expect(dlg).to_be_visible()
     expect(dlg).to_have_attribute("data-collection", "cisco.ios")
     expect(dlg.get_by_test_id("unit-body")).to_be_visible()
-    # After the async GET /api/units fetch resolves, the body settles to ONE of: the unit list, the honest-empty
-    # pane, or the degraded error pane (all valid honest states). expect() AUTO-WAITS for the fetch to land — a
-    # plain .count() snapshot would race the spinner. A generous timeout tolerates a slow `ansible-galaxy list`.
-    panes = dlg.locator('[data-testid="unit-list"], [data-testid="unit-list-empty"], [data-testid="unit-list-error"]')
-    expect(panes.first).to_be_visible(timeout=15000)
+    # expect() AUTO-WAITS for the GET /api/units fetch to land — a plain .count() snapshot would race the spinner.
+    rows = dlg.get_by_test_id("unit-list").get_by_test_id("unit-row")
+    expect(rows).to_have_count(1)
+    expect(rows.first).to_have_attribute("data-unit", "swarm")
+    expect(rows.first).to_have_attribute("data-kind", "role")
 
 
 def test_unit_dialog_closes(page):

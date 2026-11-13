@@ -67,15 +67,24 @@ def _fake_local_shallow(keywords, limit):
     return [f]
 
 
+def _fake_service_units(collection, installed=None):
+    """The unit list of an installed collection: the canned one for each collection `_canned.LOCAL_INSTALLED` names,
+    else None (not installed: the route's 404), as `units.service_units` answers."""
+    return _canned.service_units(collection) if collection in _canned.LOCAL_INSTALLED else None
+
+
 def _mock_service_seams():
     """Point search/classify's service I/O at offline facts (cisco.ios as a cliconf device, no Galaxy) + register
     one canned actuation unit (the Automations/configure-dialog e2e). Covers the default shallow seam
-    (local_shallow), the deep seam (deep_probe), and the actuation registry read (load_actuation_units). Plain
+    (local_shallow), the deep seam (deep_probe), the actuation registry read (load_actuation_units) and the app-store
+    unit list (service_units, which read the runner's real `ansible-galaxy collection list`, up to 30 s, past the
+    unit dialog row's wait: I-105). Plain
     assignment — the e2e server is a session-scoped thread that can't use function-scoped monkeypatch — so this
     RETURNS the originals and live_server restores them on teardown (and the root conftest orders e2e last),
     keeping a combined `py -m pytest` run from leaking these globals into non-e2e tests."""
     from kontroll.service import provenance as _prov  # local import — the MF-5 read surface seam
     from kontroll.service import discovery as _disc   # local import — the Rung-1b discovery-inbox read seam
+    from kontroll.service import units as _units      # local import — the app-store unit list read seam
     originals = {
         (_catalog, "local_installed"): _catalog.local_installed,
         (_catalog, "local_shallow"): _catalog.local_shallow,
@@ -85,11 +94,15 @@ def _mock_service_seams():
         (_prov, "fleet_provenance"): _prov.fleet_provenance,
         (_prov, "image_provenance"): _prov.image_provenance,
         (_disc, "read_inbox"): _disc.read_inbox,
+        (_units, "service_units"): _units.service_units,
     }
     _catalog.local_installed = lambda: dict(_canned.LOCAL_INSTALLED)
     _catalog.local_shallow = _fake_local_shallow
     _probe.deep_probe = _fake_deep_probe
     _catalog.galaxy_search = lambda kw, limit: []
+    # The app-store unit list (GET /api/units/<collection>): the route imports `service_units` at each call, so the
+    # module attribute is the seam. cisco.ios ships one role, as `_canned.service_units` says.
+    _units.service_units = _fake_service_units
     # One REGISTERED actuation unit, so the Index Automations section and the configure dialog render in a
     # real browser. Mocking the ONE underlying read flows through registered_units_view, configurable_view
     # and build_actuation_plan without overriding those higher seams. The Stage write is not driven (it commits).
