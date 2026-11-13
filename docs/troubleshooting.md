@@ -159,6 +159,14 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
   no host was wired. Run it again with `--limit <host>:localhost`, or with no limit to wire every host of the class;
   where `--tags` left the validation out, run it without `--tags`. The run's SSH keys are removed as usual, in a
   `--tags` or a `--check` run too (I-93, I-87).
+- **`wire-logging.yml` passes and its `Wiring run report` reads `<host>: syslog-push: not run — unreachable: the
+  device took no TCP connection on port <n>`** → the device did not answer on its SSH port (down, no route, a
+  firewall, or a wrong `ansible_port`: a port set only in an SSH config is not the one probed), so nothing was
+  pushed to it; the other devices were wired. Fix its reachability and wire it again (`--limit <host>:localhost`).
+  Where its summary reads `FAILED` at `Fail a push to a device that took the connection or sits behind a jump host`
+  instead, the device answered and the push failed: that task's message, earlier in the output, says whether its
+  port took the connection (its credential, or a line it refused) or it sits behind a jump host, which no probe
+  reaches (I-103).
 - **A fleet run fails at `Refuse a key dir that holds anything but SSH keys` with `kontroll_device_key_dir (…) holds
   more than SSH keys: …` or `… is not a directory`** → the dir the run renders its SSH keys into, and removes whole
   after, holds something else (the names listed), or the path is a file or a link. Most often

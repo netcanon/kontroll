@@ -15,14 +15,71 @@
 # no_log:              true on the push (the session carries the device login + the diff may echo a secret line)
 # noqa: var-naming[no-role-prefix] — backend_* are the shared cross-backend contract params (uniform name
 # regardless of backend), like backup_capable / backend_backup_command.
-- name: Apply config lines via the netcommon_cli backend  # noqa: var-naming[no-role-prefix]
-  ansible.netcommon.cli_config:
-    config: "{{ backend_config_lines | join('\n') }}"
-  register: _cli_config
-  no_log: true
+#
+# Under network_cli a device that takes no connection (a refused port, no route) fails the push as a task; it is not
+# unreachable, so the calling play's `ignore_unreachable` did not tolerate it, and one network device down failed the
+# whole wiring run (I-103). The rescue probes the port once, as the backup's read does (tasks/backup.yml, I-65): no
+# TCP connection is recorded as not run (`kontroll_configure_unreached`, and `kontroll_configure_result` saying why),
+# which passes the run, and wire-logging.yml's report names the device; a connection taken is a push that failed (the
+# session, its credential, or a line the device refused), and the rescue fails it again, with a message saying so, for
+# the caller to record by that task's name. A device reached through a jump host (`kontroll_via_jump`, a var of
+# wire-logging.yml's device play) is not probed: the controller cannot reach its address, so a probe would say nothing
+# of it, and its push that failed fails. The probe is a TCP connect and changes nothing, so a dry run makes it too. The
+# rescue reads nothing of the failed push (it is no_log, its result the censored one). The probe reads `ansible_port`
+# (else 22): a port set only in an SSH config is not the one probed.
+- name: Clear the not-reached record (the rescue sets it where the device took no connection)
+  ansible.builtin.set_fact:
+    kontroll_configure_unreached: false
+
+- name: Push the config lines, telling a device not reached from a push that failed (I-103)
+  block:
+    - name: Apply config lines via the netcommon_cli backend  # noqa: var-naming[no-role-prefix]
+      ansible.netcommon.cli_config:
+        config: "{{ backend_config_lines | join('\n') }}"
+      register: _cli_config
+      no_log: true
+  rescue:
+    - name: Probe the device's port after a failed push
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host | default(inventory_hostname) }}"
+        port: "{{ ansible_port | default(22, true) }}"
+        timeout: 5
+        connect_timeout: 2
+      delegate_to: localhost
+      check_mode: false
+      register: _cli_push_probe
+      ignore_errors: true            # a port that takes no connection is recorded below, not a task failure
+      when: not (kontroll_via_jump | default(false) | bool)   # no probe reaches it past a jump host
+
+    - name: Record a device that took no connection as not run (the run passes; the caller's report names it)
+      ansible.builtin.set_fact:
+        kontroll_configure_result: >-
+          {{ backend_config_label | default('config') }}: not run — unreachable: the device took no TCP connection on
+          port {{ ansible_port | default(22, true) }}, so nothing was pushed
+        kontroll_configure_unreached: true
+      when: _cli_push_probe is failed
+
+    - name: Fail a push to a device that took the connection or sits behind a jump host (its message says which)
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }}: {{ 'the device is reached through a jump host, which no probe reaches,'
+          if (kontroll_via_jump | default(false) | bool) else 'the device took a TCP connection on port '
+          ~ (ansible_port | default(22, true)) ~ ',' }} and the push of {{ backend_config_label | default('config') }}
+          failed (the session, its credential, or a line the device refused; the push is no_log, so its own error is
+          not printed)
+      when: _cli_push_probe is not failed
+
+- name: Record an unreachable device as not run (the run passes; the caller's report names it)
+  ansible.builtin.set_fact:
+    kontroll_configure_result: >-
+      {{ backend_config_label | default('config') }}: not run — unreachable: the device did not answer its connection,
+      so nothing was pushed
+    kontroll_configure_unreached: true
+  when: _cli_config is unreachable
 
 - name: Record the configure result (non-secret — the changed flag only, never the diff)
   ansible.builtin.set_fact:
     kontroll_configure_result: >-
       {{ backend_config_label | default('config') }}:
       {{ 'changed' if _cli_config is changed else 'already-applied' }}
+  when: _cli_config is not failed and _cli_config is not unreachable

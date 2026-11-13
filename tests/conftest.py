@@ -35,6 +35,7 @@ os.environ.setdefault("GUI_AUDIT_LOG",
 sys.path.insert(0, os.path.join(ROOT, "tests"))      # import _hermetic (a helper beside this file)
 import _checkout  # noqa: E402
 import _hermetic  # noqa: E402
+import _network_lab  # noqa: E402
 
 # HERMETIC OVERLAY — installed at IMPORT time, before any test module is collected (several read the fleet at module
 # import, before a fixture could run). From here on a reader that goes through kontroll.paths at the REAL checkout
@@ -157,6 +158,17 @@ def not_the_service_uid_env(monkeypatch):
     if not hasattr(os, "getuid"):
         return
     monkeypatch.setenv("KONTROLL_OPERATOR_UID", str(1000 if os.getuid() == 1001 else os.getuid()))
+
+
+@pytest.fixture
+def ports():
+    """A port on this machine that takes no connection, and one that takes each connection and closes it at once, both
+    at `host`: a second loopback address (127.0.0.2, where this machine has one, as Linux does; else 127.0.0.1), which
+    the hosts that probe them are given. So a probe of the controller's own loopback address in place of the host's
+    finds no listener: a mutant that probed 127.0.0.1 passed this fixture's first form, whose hosts were all there
+    (I-65's review, N-2). For the rows that run a play's port probe for real (backup-configs.yml's, I-65; the CLI
+    backend's push, I-103): tests/_network_lab.py."""
+    yield from _network_lab.serve_ports()
 
 
 @pytest.fixture

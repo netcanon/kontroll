@@ -41,6 +41,9 @@ DISPATCH = {
                          + HANDLERS_IN_BLOCK,
                          "the wiring stopped while the role's handlers ran (the failure is printed above)"),
 }
+# The vars a dispatching play holds: wire-logging.yml's one tells the CLI backend's push probe a device behind a jump
+# host (I-103).
+PLAY_VARS = {"wire-logging.yml": {"kontroll_via_jump"}}
 # The marker as the rescue reads it: false where it is not defined.
 DUE = "(_kontroll_handlers_due | default(false) | bool)"
 NAMED = "ansible_failed_task.name | default('(unnamed)', true)"
@@ -105,10 +108,10 @@ def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_bl
     tests/unit/test_group_dispatch_refuses_local.py requires, so a refused host fails there with nothing run on it) and
     one block holding the work, with a rescue and no `always`; the work ends with a `set_fact` of
     `_kontroll_handlers_due: true` and a `meta: flush_handlers`, after the role's include. Its keys are the ones it
-    had, so no `any_errors_fatal`, `max_fail_percentage` or `serial` changes which hosts a failure stops, and
-    `ignore_unreachable` is true (a down host is tolerated, not fatal: CLAUDE.md). Guards the block dropped (an install
-    or wiring that fails on every host ends the run before the key cleanup again: I-64), the work moved out of the
-    block, the refusal moved into it (the rescue would record a refused host, and the scan's first-task rule would no
+    had (and wire-logging.yml's one var, `kontroll_via_jump`: I-103), so no `any_errors_fatal`, `max_fail_percentage`
+    or `serial` changes which hosts a failure stops, and `ignore_unreachable` is true (a down host is tolerated, not
+    fatal: CLAUDE.md). Guards the block dropped (an install or wiring that fails on every host ends the run before the
+    key cleanup again: I-64), the work moved out of the block, the refusal moved into it (the rescue would record a refused host, and the scan's first-task rule would no
     longer hold), an `always` that runs work on a failed host, `ignore_unreachable` turned off (a down host would fail
     the run, and with every host down end it before the cleanup), and the flush dropped (the role's handlers run at the
     play's end, outside the block, so one that fails on every host ends the run before the cleanup again: I-86), the
@@ -120,7 +123,9 @@ def test_the_dispatching_play_refuses_first_then_runs_its_work_in_one_rescued_bl
     `tags: [never]` on the marker passed every row on 2.19.4, and kill only on 2.18.19)."""
     title, _record, work, _text = DISPATCH[name]
     play = _play(name, title)
-    assert set(play) == {"name", "hosts", "gather_facts", "ignore_unreachable", "tasks"}, play
+    keys = {"name", "hosts", "gather_facts", "ignore_unreachable", "tasks"} | ({"vars"} if name in PLAY_VARS else set())
+    assert set(play) == keys, play
+    assert set(play.get("vars") or {}) == PLAY_VARS.get(name, set()), play
     assert play["ignore_unreachable"] is True and play["gather_facts"] is False, play
     tasks = play["tasks"]
     assert len(tasks) == 2, tasks

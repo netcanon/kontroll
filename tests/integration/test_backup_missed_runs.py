@@ -19,19 +19,17 @@ It needs ansible-playbook and git: where either is missing every row is skipped.
 git reaches the play but the collections path its configuration names: its configuration, home and temporary directory,
 the inventory, the captures and the log are the row's own.
 """
-import functools
 import json
 import os
 import re
 import shutil
-import socket
 import subprocess
-import threading
 
 import pytest
 import yaml
 
 import _missed_alerts as ma
+import _network_lab
 
 pytestmark = [
     pytest.mark.integration,
@@ -78,53 +76,6 @@ GONE = "- name: Include a file the class does not ship\n  ansible.builtin.includ
 QUIET = "- name: Read nothing and record nothing\n  ansible.builtin.debug:\n    msg: a backup that records no result\n"
 
 
-def _listener(address):
-    """A socket bound to `address` at a free port, or None where this machine has no such address."""
-    server = socket.socket()
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server.bind((address, 0))
-    except OSError:
-        server.close()
-        return None
-    return server
-
-
-@pytest.fixture
-def ports():
-    """A port on this machine that takes no connection, and one that takes each connection and closes it at once, both
-    at `host`: a second loopback address (127.0.0.2, where this machine has one, as Linux does; else 127.0.0.1), which
-    the hosts that probe them are given. So a probe of the controller's own loopback address in place of the host's
-    finds no listener: a mutant that probed 127.0.0.1 passed this fixture's first form, whose hosts were all there
-    (I-65's review, N-2)."""
-    server = _listener("127.0.0.2") or _listener("127.0.0.1")
-    host = server.getsockname()[0]
-    probe = socket.socket()
-    probe.bind((host, 0))
-    closed = probe.getsockname()[1]
-    probe.close()
-    server.listen(16)
-    server.settimeout(0.5)
-    stop = threading.Event()
-
-    def serve():
-        while not stop.is_set():
-            try:
-                conn, _ = server.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                return
-            conn.close()
-
-    thread = threading.Thread(target=serve, daemon=True)
-    thread.start()
-    yield type("Ports", (), {"host": host, "closed": closed, "plain": server.getsockname()[1]})()
-    stop.set()
-    thread.join(5)
-    server.close()
-
-
 def _raw(command, **more):
     return dict({"ansible_host": "192.0.2.31", "device_role": "backend_raw_ssh", "backend_backup_command": command},
                 **more)
@@ -133,15 +84,6 @@ def _raw(command, **more):
 def _api(recipe, host):
     return {"ansible_host": host, "device_role": "backend_api", "backend_api_recipe": recipe,
             "t_api_token": "test-only-token"}
-
-
-@functools.lru_cache(maxsize=None)
-def _collections_path():
-    """The collections path this machine's Ansible reads, as its own configuration sets it: the lab's home is the
-    row's own, which would hide the collections an image installs under the user's home."""
-    p = subprocess.run(["ansible-config", "dump", "--format", "json"], capture_output=True, text=True, timeout=120)
-    (row,) = [r for r in json.loads(p.stdout) if isinstance(r, dict) and r.get("name") == "COLLECTIONS_PATHS"]
-    return os.pathsep.join(row["value"])
 
 
 def _lab(tmp_path, ports, hosts):
@@ -179,8 +121,8 @@ def _lab(tmp_path, ports, hosts):
     backups = tmp_path / "backups"
     backups.mkdir(mode=0o700)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("ANSIBLE_", "KONTROLL_"))}
-    env.update(ANSIBLE_COLLECTIONS_PATH=_collections_path(), ANSIBLE_CONFIG=str(cfg), ANSIBLE_HOME=str(home),
-               ANSIBLE_LOCAL_TEMP=str(home / "tmp"),
+    env.update(ANSIBLE_COLLECTIONS_PATH=_network_lab.collections_path(), ANSIBLE_CONFIG=str(cfg),
+               ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"),
                ANSIBLE_NOCOLOR="1", ANSIBLE_DEPRECATION_WARNINGS="0", ANSIBLE_LOCALHOST_WARNING="0",
                ANSIBLE_LOG_PATH=str(tmp_path / "ansible.log"), ANSIBLE_CALLBACK_RESULT_FORMAT="yaml",
                ANSIBLE_PERSISTENT_CONNECT_TIMEOUT="15", ANSIBLE_PERSISTENT_COMMAND_TIMEOUT="15",
@@ -296,16 +238,6 @@ def test_a_dry_run_names_no_device(tmp_path, ports):
     assert found == {} and len(stamps) == 1
 
 
-def _network_cli(env, network_os):
-    """Whether the lab's Ansible (its environment `env`) has the network_cli connection and `network_os`'s cliconf."""
-    for kind, name in (("connection", "ansible.netcommon.network_cli"), ("cliconf", network_os)):
-        p = subprocess.run(["ansible-doc", "-t", kind, "-j", name], env=env, capture_output=True, text=True,
-                           timeout=120)
-        if p.returncode != 0 or name not in p.stdout:
-            return False
-    return True
-
-
 @pytest.mark.parametrize("role, network_os", [("cisco_ios", "cisco.ios.ios"),
                                               ("routeros", "community.routeros.routeros")])
 def test_a_network_device_not_reached_is_unreachable_and_one_that_answered_badly_failed(tmp_path, ports, role,
@@ -329,7 +261,7 @@ def test_a_network_device_not_reached_is_unreachable_and_one_that_answered_badly
                                  "sw-plain": dict(cli, ansible_port=ports.plain),
                                  "sw-jump": dict(cli, ansible_port=ports.closed,
                                                  ansible_paramiko_proxy_command="false %h %p")})
-    if not shutil.which("ansible-doc") or not _network_cli(lab.env, network_os):
+    if not shutil.which("ansible-doc") or not _network_lab.has_network_cli(lab.env, network_os):
         pytest.skip("needs ansible.netcommon's network_cli and %s" % network_os)
     rc, out, log = _play(lab, "-e", "kontroll_run_id=run-i65")
     found, stamps = _series(log)

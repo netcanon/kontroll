@@ -11,6 +11,24 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible): a down network device no longer fails the logging wiring run (I-103, 2026-11-12)
+
+`wire-logging.yml` tolerates a down host (`ignore_unreachable`), but under network_cli a device that takes no
+connection fails the push as a task, not as unreachable: one network device down failed the whole wiring run, as the
+backup's read did before I-65.
+
+- The CLI backend's push (`backend_netcommon_cli`'s `configure`) probes the device's port after a failed push, as its
+  backup read does: a port that takes no TCP connection is not run (`kontroll_configure_unreached`), which passes the
+  run, and a `Wiring run report` play after the key cleanup names the device with the port. A device that took the
+  connection (its credential or a line it refused) fails the wiring, with a message saying so, and the summary names
+  it, as before.
+- A device reached through a jump host is not probed (the controller cannot reach its address): a push that fails
+  there fails. The jump-host test (`kontroll_via_jump`, which was the backup play's `kontroll_backup_via_jump`) is a
+  var of both probing plays, and a unit row holds the two expressions the same.
+- `test_wire_logging_unreached_runs.py` runs the shipped wiring for real over network_cli devices at a port that
+  takes no connection, one that takes it and speaks no SSH, and one behind a jump host, real and `--check --diff`.
+  The rows that run a probe share conftest.py's `ports` and `tests/_network_lab.py`.
+
 ### fix(dashboards): the onboard-error and auth-denied alerts fire on a one-off (I-102, 2026-11-12)
 
 Both rules waited as long as their window (`for: 10m` over ten minutes, `for: 5m` over five), so the line that met

@@ -33,7 +33,7 @@ collector host from `instance/instance.yml`'s `mgmt_ip` (override with `-e colle
 
 | `tasks_from:` | Does |
 |---|---|
-| `main` (default) | Push the syslog-host config line(s) via the `backend_netcommon_cli` `configure` entrypoint (idempotent `cli_config`, `--check`-safe). |
+| `main` (default) | Push the syslog-host config line(s) via the `backend_netcommon_cli` `configure` entrypoint (idempotent `cli_config`, `--check`-safe). A device that takes no connection is not run, which passes the run, and the run's report names it; one that took the connection and failed fails the run (I-103). |
 | `backup` | Capture `show logging` as the rollback reference before a change (read-only). |
 
 ## Extending / overriding

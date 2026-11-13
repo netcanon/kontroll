@@ -43,7 +43,7 @@
     # passes and its summary names the device with the reason (the per-device alert reads that line); a connection
     # taken is a read that failed, recorded FAILED, which fails the run. The probe is a TCP connect and changes
     # nothing, so a dry-run makes it too. The rescue reads nothing of the failed read (it is no_log, its result the
-    # censored one). A device reached through a jump host (backup-configs.yml's kontroll_backup_via_jump) is not
+    # censored one). A device reached through a jump host (backup-configs.yml's kontroll_via_jump) is not
     # probed: the controller cannot reach its address, so a probe would say nothing of it, and its read that failed is
     # recorded FAILED (I-65).
     - name: Read the config, telling a device not reached from a read that failed
@@ -66,7 +66,7 @@
           check_mode: false
           register: _cli_probe
           ignore_errors: true            # a port that takes no connection is recorded below, not a task failure
-          when: not (kontroll_backup_via_jump | default(false) | bool)   # no probe reaches it past a jump host
+          when: not (kontroll_via_jump | default(false) | bool)   # no probe reaches it past a jump host
 
         - name: Record a device that took no connection as not run (the run passes; the summary names it)
           ansible.builtin.set_fact:
@@ -81,7 +81,7 @@
           ansible.builtin.set_fact:
             kontroll_backup_result: >-
               FAILED: {{ 'the device is reached through a jump host, which no probe reaches,'
-              if (kontroll_backup_via_jump | default(false) | bool) else 'the device took a TCP connection on port '
+              if (kontroll_via_jump | default(false) | bool) else 'the device took a TCP connection on port '
               ~ (ansible_port | default(22, true)) ~ ',' }} and `{{ backend_backup_command | default('show
               running-config') }}` failed (the session, its credential, or the command), so no capture was written and
               any earlier one is kept.

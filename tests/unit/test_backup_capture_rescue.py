@@ -40,8 +40,8 @@ def _parse(text):
 
 def test_the_capture_play_sets_any_errors_fatal_false_and_no_other_play_keyword():
     """The capture play's keys are exactly its name, `hosts: all`, `gather_facts: false`, `ignore_unreachable: true`,
-    `any_errors_fatal: false`, its vars (only `kontroll_backup_via_jump`, which tells its probes a host behind a jump
-    host: I-65; a play var outranks a host's own, so any other would rebind it for every class) and its tasks. Guards
+    `any_errors_fatal: false`, its vars (only `kontroll_via_jump`, which tells its probes a host behind a jump host:
+    I-65; a play var outranks a host's own, so any other would rebind it for every class) and its tasks. Guards
     I-12's rescue where a pin of the tasks cannot see: a caller's `any_errors_fatal` (ANSIBLE_ANY_ERRORS_FATAL, an
     ansible.cfg) failed every other host once one host's capture failed, rescue or not, so a host whose read had
     answered was dropped from every later play, uncaptured and with no summary line (the I-12 reads' O1); the play's
@@ -51,7 +51,7 @@ def test_the_capture_play_sets_any_errors_fatal_false_and_no_other_play_keyword(
     play = _capture_play()
     keys = {"name", "hosts", "gather_facts", "ignore_unreachable", "any_errors_fatal", "vars", "tasks"}
     assert set(play) == keys, sorted(play)
-    assert set(play["vars"]) == {"kontroll_backup_via_jump"}, play["vars"]
+    assert set(play["vars"]) == {"kontroll_via_jump"}, play["vars"]
     assert play["hosts"] == "all" and play["gather_facts"] is False and play["ignore_unreachable"] is True, play
     assert play["any_errors_fatal"] is False, play
 
