@@ -18,6 +18,9 @@ inventory); this role just lands the agent so that target goes from DOWN → UP.
 ## Invocation
 - **Backfill the fleet:** `ansible-playbook playbooks/install-node-exporter.yml --check --diff` (then for real).
 - **One host (onboard):** `ansible-playbook playbooks/install-node-exporter.yml -e target=<host>`.
+- A host the play cannot reach passes the run: its `Install run report`, after the key cleanup, names one whose fact
+  gathering was unreachable (nothing installed) and one that answered it and then not a re-check after its install
+  (a `ping`, one more connection per host: its install may not be done). See docs/troubleshooting.md (I-92).
 - The play refuses a host whose `ansible_connection` is not of the ssh family (`ssh`, `paramiko_ssh`) before
   anything runs on it: under `local`, or a network plugin such as `network_cli`, the agent would be installed on
   the control node. It then freezes the connection at the one it checked, so no later task runs over another.

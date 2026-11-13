@@ -167,6 +167,16 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
   instead, the device answered and the push failed: that task's message, earlier in the output, says whether its
   port took the connection (its credential, or a line it refused) or it sits behind a jump host, which no probe
   reaches (I-103).
+- **`install-node-exporter.yml` passes and its `Install run report` reads `<host>: not installed: its fact gathering
+  was unreachable`, or `<host>: its install may not be done: it answered the fact gathering, then not the re-check
+  after its install`** → the host was down or refused the run's connection (its key, its host key), so nothing was
+  installed on it; or it answered first and stopped answering during the install, each task it did not answer
+  ignored, so node_exporter may be missing or stopped there. The other hosts were installed. Fix its reachability and
+  run the install again (`-e target=<host>`; a host that answers installs, and a second run reports `0 changed`). A
+  host that stopped answering and answered again before the re-check is not named: its recap counts each task it did
+  not answer as `ignored` (I-92). Under a caller's `any_errors_fatal` (`ANSIBLE_ANY_ERRORS_FATAL`) such a host stops
+  every host instead, and the run fails before the key cleanup, its rescue's message naming the host's own
+  unreachable gathering or re-check (I-97).
 - **A fleet run fails at `Refuse a key dir that holds anything but SSH keys` with `kontroll_device_key_dir (…) holds
   more than SSH keys: …` or `… is not a directory`** → the dir the run renders its SSH keys into, and removes whole
   after, holds something else (the names listed), or the path is a file or a link. Most often
