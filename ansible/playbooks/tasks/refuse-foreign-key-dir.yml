@@ -5,8 +5,9 @@
 # `/tmp` or a typo for a real dir was chmodded by the render and removed, with all it held, by the cleanup (a real run
 # since the key seam; a dry run too since I-87's first commit: I-95). A path that is not a directory (a file, or a link,
 # even one to a directory), or a directory that holds anything but regular files named `*.key` (a subdirectory, a link,
-# a file of another name, a hidden one), is refused by name and kept as it is. An earlier run's keys (an aborted run's,
-# or those of a run this one overlaps) are `*.key` files, so they pass.
+# a file of another name, hidden or not), is refused by name and kept as it is. An earlier run's keys (an aborted run's,
+# or those of a run this one overlaps) are `*.key` files, so they pass, and so does the `.<random>.key` file a key write
+# cut short before its rename leaves (I-96).
 #
 # The render imports this file before its first write, for each key-auth host (a refused host fails, the others go on);
 # the cleanup imports it before its delete, once (refused, every host fails and the run ends there, nothing removed).

@@ -16,7 +16,11 @@ neither removes the keys of a real run it overlaps nor logs in with them (the I-
 a running job's keys, which then ended green with its key-auth host not run). And the key dir must hold nothing but
 `*.key` files: the cleanup removes it whole, so a `KONTROLL_SSH_KEY_DIR` naming a dir that holds anything else (a home
 dir, `~/.ssh`) lost all it held, in a real run and, after I-87's first commit, a dry one; such a path is refused by
-the render and by the cleanup, and kept (I-95).
+the render and by the cleanup, and kept (I-95). And the render's key write staged the key: a `copy` with `content`
+wrote it to a temp file under the controller's `~/.ansible/tmp` and put it into a remote temp dir there on its way,
+outside the key dir, where a run killed mid-copy leaves it; the key now goes from `sops` to its file inside one
+process the write starts, never a module's argument, so no file the run writes or keeps and no line it prints holds
+it, however the run stages or prints a module's arguments (I-96).
 
 The rows run a probe playbook beside the shipped ones, in a copy of ansible/playbooks: the shipped preamble, a play over
 the key-auth host whose one task (a `ping`, tagged `probe`) opens its connection, and the shipped cleanup. The
@@ -60,6 +64,7 @@ CRED = "dev_1"   # the onboard's cred_key: the host's name with `_` for `-`, in 
 # The stand-in key the SOPS domain holds: two lines of text, not a key (nothing here can log in anywhere).
 KEY = "stand-in key text for the key render rows, not a key\nits second line\n"
 PING = "Ping the key-auth host over its connection"
+WRITE = "Materialize this host's SSH private key to a 0600 file (no_log — the key never reaches a log/diff)"
 GUARD = "Refuse a key dir that holds anything but SSH keys (the cleanup removes it whole)"
 PROBE = [
     {"name": "Fleet preamble", "ansible.builtin.import_playbook": "_fleet-preamble.yml"},
@@ -102,6 +107,21 @@ def _age_recipient_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _seal(base, recipient, fields):
+    """Encrypt `fields` (a host's SOPS field name to its value) with the installed sops to the age `recipient`, and
+    write them as the lab's SOPS domain under `base`; the plain text sops reads is removed once it has."""
+    plain = os.path.join(base, "lab.plain.yml")
+    with open(plain, "w", encoding="utf-8") as fh:
+        fh.write(yaml.safe_dump(fields))
+    enc = subprocess.run(["sops", "--encrypt", "--age", recipient, "--input-type", "yaml", "--output-type", "yaml",
+                          plain], cwd=base, capture_output=True, text=True, timeout=120)
+    os.unlink(plain)
+    assert enc.returncode == 0, enc.stderr
+    assert "stand-in key text" not in enc.stdout, enc.stdout
+    with open(os.path.join(base, "inst", "secrets", "lab.sops.yml"), "w", encoding="utf-8") as fh:
+        fh.write(enc.stdout)
 
 
 @pytest.fixture(scope="module")
@@ -150,15 +170,8 @@ def lab(tmp_path, sops_collections):
         "ansible_host": "192.0.2.40", "ansible_connection": "ssh", "ansible_user": "tester",
         "ansible_python_interpreter": "{{ ansible_playbook_python }}", "kontroll_ssh_key_domain": "lab",
         "ansible_ssh_private_key_file": "{{ kontroll_device_key_dir }}/%s.key" % CRED}}}}}}), encoding="utf-8")
-    plain = tmp_path / "lab.plain.yml"
-    plain.write_text(yaml.safe_dump({"%s_ssh_private_key" % CRED: KEY}), encoding="utf-8")
-    enc = subprocess.run(["sops", "--encrypt", "--age", bech32("age", public), "--input-type", "yaml",
-                          "--output-type", "yaml", str(plain)], cwd=str(tmp_path), capture_output=True, text=True,
-                         timeout=120)
-    plain.unlink()
-    assert enc.returncode == 0, enc.stderr
-    assert "stand-in key text" not in enc.stdout, enc.stdout
-    (secrets / "lab.sops.yml").write_text(enc.stdout, encoding="utf-8")
+    recipient = bech32("age", public)
+    _seal(str(tmp_path), recipient, {"%s_ssh_private_key" % CRED: KEY})
 
     keys = tmp_path / "keys"
     check_keys = tmp_path / "keys.check"
@@ -184,20 +197,23 @@ def lab(tmp_path, sops_collections):
                FAKESSH_KEY_SHA256=hashlib.sha256(KEY.encode()).hexdigest(), PYTHONDONTWRITEBYTECODE="1",
                PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
     return type("Lab", (), {"tree": str(tree), "inventory": str(inventory / "hosts.yml"), "keys": str(keys),
-                            "check_keys": str(check_keys), "base": str(tmp_path), "log": str(log), "env": env})()
+                            "check_keys": str(check_keys), "base": str(tmp_path), "log": str(log), "env": env,
+                            "recipient": recipient})()
 
 
-def _run(lab, *args, playbook="zz-probe-keys.yml", key_dir=None, env_add=None):
-    """Run the probe playbook (or `playbook`; with `args`, `key_dir` as KONTROLL_SSH_KEY_DIR when given and `env_add`
-    over the row's environment); return its exit code, its output, the host's recap counts and what the stand-in ssh
-    was given, one entry per call."""
+def _run(lab, *args, playbook="zz-probe-keys.yml", key_dir=None, env_add=None, env_drop=(), host=HOST):
+    """Run the probe playbook (or `playbook`; with `args`, `key_dir` as KONTROLL_SSH_KEY_DIR when given, `env_add`
+    over the row's environment and `env_drop` out of it); return its exit code, its output, `host`'s recap counts and
+    what the stand-in ssh was given, one entry per call."""
     env = dict(lab.env, **(env_add or {}))
+    for name in env_drop:
+        env.pop(name, None)
     if key_dir is not None:
         env["KONTROLL_SSH_KEY_DIR"] = key_dir
     p = subprocess.run(["ansible-playbook", "-i", lab.inventory, "playbooks/" + playbook, *args],
                        cwd=lab.tree, env=env, capture_output=True, text=True, timeout=600)
     out = p.stdout + p.stderr
-    m = re.search(r"^%s\s*:\s*ok=\d+.*?\bunreachable=(\d+)\s+failed=(\d+)\b.*?\bignored=(\d+)" % re.escape(HOST),
+    m = re.search(r"^%s\s*:\s*ok=\d+.*?\bunreachable=(\d+)\s+failed=(\d+)\b.*?\bignored=(\d+)" % re.escape(host),
                   p.stdout, re.M)
     assert m, out
     seen = []
@@ -263,7 +279,8 @@ def test_a_first_run_makes_the_key_dir_and_removes_it(lab, args):
     """On a controller no earlier run has left a key dir on, a real run and a dry run (`--check`) alike make the dir
     (0700; a dry run's own, with `.check`) and render the key in it, so the host's connection logs in with it, and the
     dir is gone after. The other rows start from a dir an earlier run left, so they cannot tell a dry run that skips
-    the dir's task: the copy into a dir that does not exist fails the host, and a first dry run on a fresh box (the
+    the dir's task: the key write into a dir that does not exist fails the host (mkstemp finds no dir), and a first
+    dry run on a fresh box (the
     mandated one before a first apply) reaches no key-auth device (I-87; the dir task's `check_mode: false` dropped
     survived every other real-run row)."""
     own, _other = _dirs(lab, args)
@@ -311,6 +328,189 @@ def test_a_run_that_skips_the_always_tag_renders_and_removes_no_key(lab):
     assert "Permission denied (publickey)" in out, out
     assert seen and not any(s["exists"] for s in seen), seen
     assert os.listdir(lab.keys) == ["stale.key"] and os.listdir(lab.check_keys) == ["stale.key"], out
+
+
+# How a run is made to put a module's arguments in a file, keep it, or print them: the environment and arguments. An
+# unpipelined run puts the ping's module over the stand-in ssh, which has no sftp: `piped` sends it on ssh's stdin.
+KEEP = {"ANSIBLE_KEEP_REMOTE_FILES": "1", "ANSIBLE_SSH_TRANSFER_METHOD": "piped"}
+STAGING = {
+    "vvv": ({}, ["-vvv"]),                                                    # each command run and file put
+    "check-diff-vvv": ({}, ["-vvv", "--check", "--diff"]),
+    "keep-remote-files": (KEEP, ["-vvv"]),                                    # unpipelined; its module files kept
+    "debug": ({"ANSIBLE_DEBUG": "1"}, []),                                    # a module's arguments and raw result
+}
+
+
+def _files_holding_the_key(lab):
+    """Each file under the row's whole dir (the inventory, the key dirs and their parent, the Ansible home and the
+    run's local and remote temp dirs in it) that holds a line of the key, and the module files of the key write under
+    the temp dirs (AnsiballZ_command.py: kept only under keep_remote_files)."""
+    held, kept = [], []
+    temps = (lab.env["ANSIBLE_LOCAL_TEMP"], lab.env["ANSIBLE_REMOTE_TEMP"])
+    for where, _subdirs, files in os.walk(lab.base):
+        for name in files:
+            if not stat.S_ISREG(os.lstat(os.path.join(where, name)).st_mode):
+                continue
+            with open(os.path.join(where, name), "rb") as fh:
+                data = fh.read()
+            if any(line.encode() in data for line in KEY.splitlines()):
+                held.append(os.path.join(where, name))
+            if name == "AnsiballZ_command.py" and where.startswith(temps):
+                kept.append(os.path.join(where, name))
+    return held, kept
+
+
+@pytest.mark.parametrize("how", sorted(STAGING))
+def test_no_file_the_run_keeps_and_no_line_it_prints_holds_the_key(lab, how):
+    """A run at `-vvv` (which prints each command the local connection runs and each file it puts), a `--check --diff`
+    run at `-vvv`, a run with keep_remote_files on (`ANSIBLE_KEEP_REMOTE_FILES=1`, which turns pipelining off, so a
+    module is put as a file holding its arguments, and keeps that file; `ansible_pipelining=false` beside it changes
+    nothing, so it is not a shape of its own: I-96 re-read B, N5), and a run under `ANSIBLE_DEBUG=1` (which prints a
+    module's arguments and its raw result whatever `no_log` says): the key write runs and changes, the host's
+    connection is given the rendered 0600 key, the run passes, no line of the key is in the output, and no file under
+    the row's dir holds one once the run has ended (the inventory, the key dir's parent, the Ansible home and the run's
+    temp dirs; the key dir is gone); under keep_remote_files the write's module file is there, kept, so the walk reads
+    what it ran with, and under any other shape there is none. Guards I-96: a `command` given the key on `stdin` put
+    it in its module's arguments, which an unpipelined run writes into the module file (kept under keep_remote_files)
+    and ANSIBLE_DEBUG prints, and the same for a task env var or an argv holding it; and a write that leaves a copy of
+    the key beside the key dir (a second sops call with `--output`: I-96 re-read B, N2). What this row cannot see: a
+    `copy` with `content`, whose temp files under the controller's `~/.ansible/tmp` are gone when the run ends (it
+    fails here only by its kept module file's name; the unit argv row is its guard), and a lost `no_log` on the write,
+    whose result holds no key (the unit no-log row is its guard, per the hard rule: I-96 re-read B, S1, N1)."""
+    env_add, args = STAGING[how]
+    own, _other = _dirs(lab, args)
+    rc, out, recap, seen = _run(lab, *args, env_add=env_add)
+    assert rc == 0 and recap == {"unreachable": 0, "failed": 0, "ignored": 0}, (recap, out)
+    section = out.split("TASK [%s]" % WRITE, 1)[1].split("TASK [", 1)[0]
+    assert "changed: [%s -> localhost]" % HOST in section, section
+    key_file = os.path.join(own, "%s.key" % CRED)
+    want = hashlib.sha256(KEY.encode()).hexdigest()
+    calls = [s for s in seen if s["identity"] == key_file]
+    assert calls and all(s["exists"] and s["mode"] == 0o600 and s["sha256"] == want for s in calls), seen
+    assert not [line for line in out.splitlines() if any(k in line for k in KEY.splitlines())], how
+    held, kept = _files_holding_the_key(lab)
+    assert not held, held
+    assert bool(kept) == ("ANSIBLE_KEEP_REMOTE_FILES" in env_add), (kept, how)
+
+
+@pytest.mark.parametrize("fields", [
+    {"%s_ssh_private_key" % CRED: KEY.rstrip("\n")},
+    {"%s_ssh_private_key" % CRED: KEY + "\n"},
+    {"%s_ssh_private_key" % CRED: KEY, "dev_2_ssh_private_key": "another host's key text\n"},
+    {"%s_ssh_private_key" % CRED: "\u00a0" + KEY + "\u00a0"},
+], ids=["no-final-newline", "two-final-newlines", "another-field-after-it", "nbsp-wrapped"])
+def test_the_rendered_key_ends_with_one_newline_whatever_its_field_ends_with(lab, fields):
+    """The host's field holding its key with no final newline, with two, followed by another host's field (an
+    onboard domain holds each key-auth host's key), and wrapped in a no-break space (U+00A0): the rendered key file is
+    the key with one final newline (KEY's bytes), which the stand-in logs in with, and the run passes. Guards the key
+    write's strip and its one added newline: OpenSSH refuses a key with no final newline ("error in libcrypto",
+    Permission denied; the scratch-VM dogfood's `content: >-` wrote the key one byte short), a field may hold the key
+    with none or with more, and a pasted key the GUI sent untrimmed in a no-break space is one OpenSSH refuses, which
+    the copy's `| trim` removed and `bytes.strip()` kept (I-96 re-read A, S2)."""
+    _seal(lab.base, lab.recipient, fields)
+    rc, out, recap, seen = _run(lab)
+    assert rc == 0 and recap == {"unreachable": 0, "failed": 0, "ignored": 0}, (recap, out)
+    key_file = os.path.join(lab.keys, "%s.key" % CRED)
+    want = hashlib.sha256(KEY.encode()).hexdigest()
+    calls = [s for s in seen if s["identity"] == key_file]
+    assert calls and all(s["exists"] and s["mode"] == 0o600 and s["sha256"] == want for s in calls), seen
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]], ids=["real", "check"])
+def test_an_earlier_file_at_the_key_path_is_replaced_not_written_through(lab, args):
+    """A key file an earlier run left at the host's key path (a dry run's own, `.check`), 0644 and a hard link to an
+    operator's file elsewhere (a regular `*.key` file, which the key-dir guard passes): the render replaces it, so the
+    host logs in with a new 0600 file holding the key, the run passes and removes the dir, and the operator's file keeps
+    its text and its mode. Guards the key write's rename (I-96): a write into the path keeps an existing file's mode
+    (0644, which ssh refuses: an ignored unreachable host) and writes through a hard link into the file it shares; the
+    `copy` it replaced moved a new file over the path, as the rename does."""
+    own, _other = _dirs(lab, args)
+    elsewhere = os.path.join(lab.base, "elsewhere")
+    os.makedirs(elsewhere)
+    notes = os.path.join(elsewhere, "notes.txt")
+    with open(notes, "w", encoding="utf-8") as fh:
+        fh.write("an operator's file the key plays must not touch\n")
+    os.chmod(notes, 0o644)
+    key_file = os.path.join(own, "%s.key" % CRED)
+    os.link(notes, key_file)
+    rc, out, recap, seen = _run(lab, *args)
+    assert rc == 0 and recap == {"unreachable": 0, "failed": 0, "ignored": 0}, (recap, out)
+    want = hashlib.sha256(KEY.encode()).hexdigest()
+    calls = [s for s in seen if s["identity"] == key_file]
+    assert calls and all(s["exists"] and s["mode"] == 0o600 and s["sha256"] == want for s in calls), seen
+    with open(notes, encoding="utf-8") as fh:
+        assert fh.read() == "an operator's file the key plays must not touch\n"
+    assert stat.S_IMODE(os.stat(notes).st_mode) == 0o644, oct(os.stat(notes).st_mode)
+    assert not os.path.exists(own), os.listdir(own)
+
+
+@pytest.mark.parametrize("host", ["sw\u00e9-1", "a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 59],
+                         ids=["not-ascii", "251-characters"])
+def test_a_host_whose_name_is_not_ascii_or_251_characters_long_logs_in_with_its_key(lab, host):
+    """A key-auth host named `swé-1` (a name a hand-written inventory can give), and one whose name is 251 characters
+    (its key file's name, 255, the most a file system's name holds; the onboard accepts 253), each with its key in the
+    lab's domain under its own field: the run renders the key at `<cred>.key`, 0600, the host logs in with it, the run
+    passes and the dir is gone. Guards I-96 re-read A, S1, with the real sops: the write named its new file after the
+    host, so a name of 243 characters or more overflowed 255 (`File name too long`), and it named the field to sops as
+    JSON's ASCII escape (`\\u00e9`), which sops does not unescape, so it found no field; the `copy` it replaced
+    rendered both."""
+    cred = host.replace("-", "_")
+    with open(lab.inventory, "w", encoding="utf-8") as fh:
+        fh.write(yaml.safe_dump({"all": {"children": {"g": {"hosts": {host: {
+            "ansible_host": "192.0.2.41", "ansible_connection": "ssh", "ansible_user": "tester",
+            "ansible_python_interpreter": "{{ ansible_playbook_python }}", "kontroll_ssh_key_domain": "lab",
+            "ansible_ssh_private_key_file": "{{ kontroll_device_key_dir }}/%s.key" % cred}}}}}}, allow_unicode=True))
+    _seal(lab.base, lab.recipient, {"%s_ssh_private_key" % cred: KEY})
+    rc, out, recap, seen = _run(lab, host=host)
+    assert rc == 0 and recap == {"unreachable": 0, "failed": 0, "ignored": 0}, (recap, out)
+    key_file = os.path.join(lab.keys, "%s.key" % cred)
+    want = hashlib.sha256(KEY.encode()).hexdigest()
+    calls = [s for s in seen if s["identity"] == key_file]
+    assert calls and all(s["exists"] and s["mode"] == 0o600 and s["sha256"] == want for s in calls), seen
+    assert not os.path.exists(lab.keys), os.listdir(lab.keys)
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]], ids=["real", "check"])
+def test_a_key_write_that_fails_where_the_decrypt_check_passed_is_named(lab, args):
+    """The age identity given to the community.sops lookup alone (`ANSIBLE_SOPS_AGE_KEYFILE`, the run's
+    `SOPS_AGE_KEY_FILE` unset): the decrypt check passes, the key write's sops cannot decrypt, and the host fails at
+    the task after the write, whose message names the host, the write's exit code, that the write runs the `sops` on
+    PATH with the run's SOPS_* environment and not the lookup's own options, and the command to run by hand (`sops
+    --decrypt --extract` of the host's field and the domain, to /dev/null); no line of the key is in the output, and
+    the write's own task is not reported changed. Guards I-96 re-read A, N1 and N2: the write's own failure printed
+    only `censored` (no_log) after a probe that passed, with nothing to say why."""
+    rc, out, recap, seen = _run(lab, *args, env_add={"ANSIBLE_SOPS_AGE_KEYFILE": lab.env["SOPS_AGE_KEY_FILE"]},
+                                env_drop=("SOPS_AGE_KEY_FILE",))
+    assert rc != 0 and recap["failed"] == 1, (recap, out)
+    flat = " ".join(out.split())
+    assert re.search(r"The key write for %s failed \(rc [1-9][0-9]*\)" % re.escape(HOST), flat), out
+    assert "SOPS_* environment" in flat and "ANSIBLE_SOPS_*" in flat, out
+    assert "sops --decrypt --extract" in flat and "%s_ssh_private_key" % CRED in flat, out
+    assert "lab.sops.yml" in flat and "> /dev/null" in flat, out
+    section = out.split("TASK [%s]" % WRITE, 1)[1].split("TASK [", 1)[0]
+    assert "changed: [" not in section and "censored" not in section, section
+    assert not [line for line in out.splitlines() if any(k in line for k in KEY.splitlines())], out
+    assert not seen, seen
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]], ids=["real", "check"])
+def test_the_file_a_key_write_cut_short_leaves_is_passed_and_removed(lab, args):
+    """A file a key write cut short before its rename leaves in the key dir (`.<random>.key`, 0600, beside the
+    earlier run's stale key): the next real run, and the next dry run in its own dir, pass the key-dir guard, render
+    the key, log in, pass and remove the dir with that file in it. Guards the write's leftover against the guard: a
+    name the guard refused (a hidden name it read as foreign, or one not ending `.key`) would fail every run after a
+    cut-short write until someone removed it by hand, and one the cleanup kept would hold a key (I-96 re-read A, the
+    cut table: SIGTERM and SIGKILL leave it)."""
+    own, _other = _dirs(lab, args)
+    left = os.path.join(own, ".k3yw81t.key")
+    with open(left, "w", encoding="utf-8") as fh:
+        fh.write("not a key: what a key write cut short left\n")
+    os.chmod(left, 0o600)
+    rc, out, recap, seen = _run(lab, *args)
+    assert rc == 0 and recap == {"unreachable": 0, "failed": 0, "ignored": 0}, (recap, out)
+    key_file = os.path.join(own, "%s.key" % CRED)
+    assert [s for s in seen if s["identity"] == key_file and s["exists"]], seen
+    assert not os.path.exists(own), os.listdir(own)
 
 
 # How a key dir the key plays must refuse is made, and the words the refusal gives for it.

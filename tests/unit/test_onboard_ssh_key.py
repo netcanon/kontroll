@@ -4,7 +4,12 @@ contract the adversary flagged (docs/reviews/2026-06-18-ssh-auth-unification/). 
 itself (_render-ssh-keys.yml) is proven by a scratch-VM dogfood (Windows can't run ansible); here we pin the
 data-write + the static no_log contract that keep the key off git, the inventory, and any log.
 """
+import json
 import os
+import re
+import stat
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -93,13 +98,16 @@ def test_apply_routes_creds_through_stdin_never_argv(monkeypatch):
 
 
 def test_render_play_keeps_no_log_on_the_key():
-    """MF-2: the _render-ssh-keys.yml tasks that touch the device key (the decrypt probe + the materializing copy)
-    MUST carry `no_log: true` — without it a `--check --diff` or the Semaphore job log (Vector-tailed into Loki)
-    would print the PEM. The one line the whole no-leak story rests on; static-asserted like test_file_tail_ssh.py."""
-    src = open(os.path.join(ROOT, "ansible", "playbooks", "_render-ssh-keys.yml"), encoding="utf-8").read()
-    assert src.count("no_log: true") >= 2, "the decrypt-probe set_fact AND the key-copy task must both be no_log"
-    copy_idx = src.index('.key"')                                        # the copy task's dest path
-    assert "no_log: true" in src[copy_idx:copy_idx + 500], "the key-materializing copy task must carry no_log: true"
+    """MF-2: the _render-ssh-keys.yml tasks that read the device key — the decrypt probe, whose text holds the
+    community.sops lookup, and the key write, whose argv runs `sops --decrypt` — MUST carry `no_log: true`: without
+    it a `--check --diff` or the Semaphore job log (Vector-tailed into Loki) would print what the task read (the
+    probe's templated lookup; the write's result, sops' errors with it). The one line the whole no-leak story rests on;
+    read from the parsed play, so a task that reads the key is found wherever its text sits (this row once searched
+    500 characters after the key file's path)."""
+    tasks, write = _render_tasks()
+    readers = [t for t in tasks if "community.sops.sops" in str(t)] + [write]
+    assert len(readers) == 2 and "sops" in write["ansible.builtin.command"]["argv"][2], readers
+    assert all(t.get("no_log") is True for t in readers), "the decrypt probe AND the key write must both be no_log"
 
 
 def test_loud_fail_when_a_key_host_is_undecryptable():
@@ -115,13 +123,16 @@ def test_render_and_cleanup_force_local_delegation():
     """REGRESSION GUARD (scratch-VM dogfood, 2026-06-18): every materialization/cleanup task MUST carry
     `delegate_to: localhost`. A fleet host's `ansible_connection` (network_cli/ssh/httpapi, set by its
     backend+group_vars) OVERRIDES a play's `connection: local` keyword (Ansible var-beats-keyword precedence), so
-    without delegation these LOCAL file ops route over the DEVICE connection — a switch can't run `file`/`copy`, and
+    without delegation these LOCAL file ops route over the DEVICE connection — a switch can't run `file`/`command`, and
     the key NEVER materializes for ANY real host (the dogfood caught exactly this: UNREACHABLE on the dir-create
-    task). Pin the count so a newly-added render task that forgets to delegate fails CI, not the next live run."""
+    task). Read from the parsed play (every task but the key-dir guard's import, whose own tasks each delegate), so a
+    newly-added render task that forgets to delegate fails CI, not the next live run."""
     render = open(os.path.join(ROOT, "ansible", "playbooks", "_render-ssh-keys.yml"), encoding="utf-8").read()
     cleanup = open(os.path.join(ROOT, "ansible", "playbooks", "_cleanup-ssh-keys.yml"), encoding="utf-8").read()
-    # 5 render tasks (2 asserts + file + set_fact + copy) each delegate; the comment header also names it, so >=5.
-    assert render.count("delegate_to: localhost") >= 5, "every render task must delegate_to: localhost"
+    (play,) = yaml.safe_load(render)
+    loose = [t["name"] for t in play["tasks"]
+             if "ansible.builtin.import_tasks" not in t and t.get("delegate_to") != "localhost"]
+    assert not loose, "every render task must delegate_to: localhost: %s" % loose
     assert "delegate_to: localhost" in cleanup, "the cleanup rm must delegate_to: localhost (run_once host hijack)"
 
 
@@ -203,34 +214,36 @@ def test_the_key_render_writes_the_keys_in_every_run_mode():
     """`_render-ssh-keys.yml` is one play tagged `always`, whose two writes (the key dir, the key file) carry
     `check_mode: false`, and no task carries a `check_mode` or `tags` of its own otherwise; the import of
     tasks/refuse-foreign-key-dir.yml comes before the decrypt probe and either write, for each key-auth host alone (its
-    `when` the writes' own), and the dir is made after the decrypt assert. Guards I-87: skipped in a dry run, the dir
+    `when` the writes' own), and the dir is made after every assert. Guards I-87: skipped in a dry run, the dir
     and the copy wrote no key, so every key-auth host's connection named a key file that did not exist, could not log
     in, and counted as an ignored unreachable host: the `--check --diff` dry-run CLAUDE.md requires passed having
     reached no key-auth device (measured on ansible-core 2.20.10 against a key-only SSH server). I-93: untagged, a
     `--tags` run rendered no key for a tagged device task. I-95: a key dir that holds anything else, chmodded and
     written into before the guard could refuse it. And a dry run whose every key-auth host fails the decrypt assert
     leaving an empty dir the cleanup never reaches (the I-87 reads, N2). The decrypt probe (`set_fact`) and the asserts
-    run in a dry run as they are. tests/integration/test_ssh_key_render_runs.py runs it in each mode."""
+    run in a dry run as they are. Every task runs for a key-auth host only; the last, which names a failed key write,
+    only when that write failed too. tests/integration/test_ssh_key_render_runs.py runs it in each mode."""
     with open(os.path.join(ROOT, "ansible", "playbooks", "_render-ssh-keys.yml"), encoding="utf-8") as fh:
         plays = yaml.safe_load(fh)
     (play,) = plays
     assert play["tags"] == ["always"], play
     tasks = play["tasks"]
-    writes = {t["name"]: t for t in tasks if "ansible.builtin.file" in t or "ansible.builtin.copy" in t}
+    writes = {t["name"]: t for t in tasks if "ansible.builtin.file" in t or "ansible.builtin.command" in t}
     assert len(writes) == 2 and all(t["check_mode"] is False for t in writes.values()), writes
     assert writes["Ensure the per-run ephemeral key dir exists (0700, run-uid-owned)"]["ansible.builtin.file"] == {
         "path": "{{ kontroll_device_key_dir }}", "state": "directory", "mode": "0700"}, writes
     others = [t for t in tasks if t["name"] not in writes]
     assert others and not any({"check_mode", "tags"} & set(t) for t in others), others
     at = {kind: next(i for i, t in enumerate(tasks) if kind in t) for kind in (
-        "ansible.builtin.import_tasks", "ansible.builtin.set_fact", "ansible.builtin.file", "ansible.builtin.copy")}
+        "ansible.builtin.import_tasks", "ansible.builtin.set_fact", "ansible.builtin.file", "ansible.builtin.command")}
     guard = tasks[at["ansible.builtin.import_tasks"]]
     assert guard == {"name": guard["name"], "ansible.builtin.import_tasks": "tasks/refuse-foreign-key-dir.yml",
                      "when": "kontroll_ssh_key_domain is defined"}, guard
     assert at["ansible.builtin.import_tasks"] < at["ansible.builtin.set_fact"] < at["ansible.builtin.file"], at
     last_assert = max(i for i, t in enumerate(tasks) if "ansible.builtin.assert" in t)
-    assert last_assert < at["ansible.builtin.file"] < at["ansible.builtin.copy"], (last_assert, at)
-    assert all(t.get("when") == "kontroll_ssh_key_domain is defined" for t in tasks), tasks
+    assert last_assert < at["ansible.builtin.file"] < at["ansible.builtin.command"], (last_assert, at)
+    assert all(t.get("when") == "kontroll_ssh_key_domain is defined" for t in tasks[:-1]), tasks
+    assert tasks[-1]["when"].startswith("kontroll_ssh_key_domain is defined and "), tasks[-1]
 
 
 def test_the_key_dir_guard_refuses_anything_but_regular_key_files():
@@ -289,8 +302,6 @@ def test_the_key_dir_is_a_dry_runs_own_and_drops_a_trailing_slash(env, run_id, c
     reads: one dir for both modes, so a dry run's cleanup removed the keys of a real run it overlapped, which ended
     green with its key-auth host not run; and a trailing `/` that made a dry run's dir a hidden `.check` inside the
     real run's. tests/integration/test_ssh_key_render_runs.py runs it in Ansible."""
-    import re
-
     import jinja2
     with open(os.path.join(ROOT, "ansible", "playbooks", "group_vars", "all.yml"), encoding="utf-8") as fh:
         expr = yaml.safe_load(fh)["kontroll_device_key_dir"]
@@ -354,17 +365,263 @@ def test_domain_confinement_refuses_a_cross_domain_secret(monkeypatch):
         _plan(monkeypatch, creds={"evil": "leak-me"})           # onboard targets 'network', field claims 'OTHER_DOMAIN'
 
 
-def test_render_copy_guarantees_one_trailing_newline():
-    r"""REGRESSION GUARD (scratch-VM dogfood, 2026-06-18): the key-materializing copy MUST use a literal block
-    (`content: |`) and `| trim`. The community.sops lookup strips the decrypted file's trailing newline, which —
-    given yaml.safe_dump's encoding of a value ending in '\n' — drops the KEY's OWN trailing newline on `from_yaml`
-    reparse; OpenSSH then rejects the 1-byte-short key ('error in libcrypto' -> publickey denied). `| trim` plus the
-    literal block re-add exactly one newline. With the original `content: >-` the dogfood's key-auth SSH FAILED
-    (byte-verified: materialized key was 398 bytes / 6 lines vs the valid 399 / 7)."""
-    src = open(os.path.join(ROOT, "ansible", "playbooks", "_render-ssh-keys.yml"), encoding="utf-8").read()
-    assert "content: |\n" in src, "the key copy must use a literal block (content: |) so a trailing newline survives"
-    assert "| trim }}" in src, "the extracted key must be `| trim`-normalized so exactly one newline is re-added"
-    assert "content: >-" not in src, "content: >- strips the trailing newline -> OpenSSH 'error in libcrypto'"
+def _render_play():
+    """The render play, as it parses."""
+    with open(os.path.join(ROOT, "ansible", "playbooks", "_render-ssh-keys.yml"), encoding="utf-8") as fh:
+        (play,) = yaml.safe_load(fh)
+    return play
+
+
+def _render_tasks():
+    """The render play's tasks, and its key write (its one `command` task), as the play parses."""
+    play = _render_play()
+    (write,) = [t for t in play["tasks"] if "ansible.builtin.command" in t]
+    return play["tasks"], write
+
+
+# A stand-in `sops` for the key write's script: it adds its arguments to FAKE_SOPS_ARGV, one line per call, and prints
+# the field FAKE_SOPS_OUT holds, its bytes as the environment holds them (a field that is not UTF-8 too).
+_FAKE_SOPS = """#!%s
+import json, os, sys
+with open(os.environ["FAKE_SOPS_ARGV"], "a") as fh:
+    fh.write(json.dumps(sys.argv[1:]) + "\\n")
+sys.stdout.buffer.write(os.environb[b"FAKE_SOPS_OUT"])
+sys.exit(int(os.environ["FAKE_SOPS_RC"]))
+"""
+_KEY = _PEM + "\n"
+_POSIX = pytest.mark.skipif(os.name != "posix", reason="runs the key write's script with a stand-in sops on PATH, "
+                                                       "as the control node does (a POSIX executable and file modes)")
+
+
+# Put before the key write's script when a row runs it: a Python audit hook that records, in KEY_WRITE_AUDIT, each
+# process the script starts (its argv), each file it opens to write (`os.open` or `open`, not by fd; os.devnull aside),
+# each link it makes and each rename; with KEY_WRITE_INTERRUPT set, the rename raises KeyboardInterrupt (as a Ctrl-C
+# in the write's window does).
+_AUDIT = """import json as _json, os as _os, sys as _sys
+_audit = open(_os.environ["KEY_WRITE_AUDIT"], "w")
+def _say(*what):
+    _audit.write(_json.dumps(list(what)) + "\\n")
+    _audit.flush()
+def _hook(event, args):
+    if event == "open" and isinstance(args[0], str) and args[0] != _os.devnull:
+        mode, flags = args[1], args[2]
+        if (mode and set(mode) & set("wax+")) or (mode is None and flags & (_os.O_WRONLY | _os.O_RDWR | _os.O_CREAT)):
+            _say("write", args[0])
+    elif event == "subprocess.Popen":
+        argv = args[1]
+        _say("popen", [_os.fsdecode(a) for a in argv] if not isinstance(argv, (str, bytes)) else [_os.fsdecode(argv)])
+    elif event in ("os.link", "os.symlink"):
+        _say(event, _os.fsdecode(args[0]), _os.fsdecode(args[1]))
+    elif event == "os.rename":
+        _say("rename", _os.fsdecode(args[0]), _os.fsdecode(args[1]))
+        if _os.environ.get("KEY_WRITE_INTERRUPT"):
+            raise KeyboardInterrupt
+_sys.addaudithook(_hook)
+"""
+
+
+def _run_key_write(tmp_path, stored, rc=0, cred="dev_1", interrupt=False):
+    """Run the key write's script as its argv does (`python -c <script> <key path> <domain> <field>`), after the audit
+    hook, the key path `keys/<cred>.key` under `tmp_path` and the field `<cred>_ssh_private_key`, with the stand-in sops
+    first on PATH printing `stored` and exiting `rc` (and the rename interrupted, with `interrupt`); return the finished
+    process, the arguments sops was given at each call, and what the audit hook recorded, in order."""
+    bin_dir, keys = tmp_path / "bin", tmp_path / "keys"
+    bin_dir.mkdir(exist_ok=True)
+    keys.mkdir(mode=0o700, exist_ok=True)
+    (bin_dir / "sops").write_text(_FAKE_SOPS % sys.executable, encoding="utf-8")
+    os.chmod(bin_dir / "sops", 0o755)
+    said, audit = tmp_path / "sops-argv.json", tmp_path / "audit.jsonl"
+    for old in (said, audit):
+        if old.exists():
+            old.unlink()
+    script = _render_tasks()[1]["ansible.builtin.command"]["argv"][2]
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), FAKE_SOPS_ARGV=str(said),
+               FAKE_SOPS_OUT=stored, FAKE_SOPS_RC=str(rc), KEY_WRITE_AUDIT=str(audit), PYTHONDONTWRITEBYTECODE="1")
+    env.pop("KEY_WRITE_INTERRUPT", None)
+    if interrupt:
+        env["KEY_WRITE_INTERRUPT"] = "1"
+    p = subprocess.run([sys.executable, "-c", _AUDIT + script, str(keys / ("%s.key" % cred)),
+                        str(tmp_path / "lab.sops.yml"), "%s_ssh_private_key" % cred],
+                       env=env, capture_output=True, text=True, timeout=60)
+    events = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()] if audit.exists() else []
+    calls = [json.loads(line) for line in said.read_text(encoding="utf-8").splitlines()] if said.exists() else []
+    return p, calls, events
+
+
+@_POSIX
+@pytest.mark.parametrize("stored", [_KEY, _PEM, _KEY + "\n", "  " + _KEY + " \n\n", "\u00a0" + _KEY + "\u00a0",
+                                    _KEY + "\u00a0"],
+                         ids=["one-final-newline", "no-final-newline", "two-final-newlines", "padded", "nbsp-wrapped",
+                              "trailing-nbsp"])
+def test_the_key_write_writes_the_field_sops_extracts_with_one_final_newline(tmp_path, stored):
+    r"""REGRESSION GUARD (scratch-VM dogfood, 2026-06-18): the key write's script starts one process, sops, once, asking
+    for the host's one field (`--decrypt --extract '["dev_1_ssh_private_key"]' <domain>`), and writes the field
+    stripped, with exactly one final newline, to a 0600 file at the key path, leaving nothing else in the key dir —
+    whether the field holds the key with one final newline, none, two, ASCII whitespace around it, or a no-break space
+    (U+00A0) around it or after it; the one file it opens to write is a new one in the key dir, named `.`, mkstemp's
+    random characters and `.key`, which it renames over the key path, and it makes no link. OpenSSH rejects a key with
+    no final newline ('error in libcrypto' -> publickey denied): with the original `content: >-` the dogfood's key-auth
+    SSH FAILED (byte-verified: the materialized key was 398 bytes / 6 lines vs the valid 399 / 7), and a field may hold
+    a key with none or with more. A pasted key wrapped in a no-break space is what the GUI sends untrimmed, and OpenSSH
+    refuses it: `bytes.strip()` kept it where the copy's `| trim` did not (I-96 re-read A, S2). The file it writes
+    guards I-96: a run killed mid-write leaves that file, which must be in the key dir (the cleanup removes the dir; a
+    key outside it is what I-96 was), pass the key-dir guard (a regular `*.key`) and name no host's key (none starts
+    with `.`). One sops call and no link: a second call writing the field to a file of its own, or a link to the new
+    file, puts the key outside the key dir with every other row green (I-96 re-read B, N2: M8, M12).
+    tests/integration/test_ssh_key_render_runs.py runs it with the real sops."""
+    p, calls, events = _run_key_write(tmp_path, stored)
+    assert p.returncode == 0, p.stderr
+    argv = ["--decrypt", "--extract", '["dev_1_ssh_private_key"]', str(tmp_path / "lab.sops.yml")]
+    assert calls == [argv], calls
+    keys = tmp_path / "keys"
+    key = keys / "dev_1.key"
+    assert key.read_bytes() == _KEY.encode() and stat.S_IMODE(key.stat().st_mode) == 0o600
+    assert os.listdir(keys) == ["dev_1.key"]
+    (started, run), (opened, new), (moved, src, dst) = events
+    assert (started, run) == ("popen", ["sops"] + argv), events
+    assert (opened, moved, src, dst) == ("write", "rename", new, str(key)), events
+    name = os.path.basename(new)
+    assert os.path.dirname(new) == str(keys) and name.startswith(".") and name.endswith(".key"), new
+
+
+@_POSIX
+@pytest.mark.parametrize("cred", ["a" * 63 + "." + "b" * 63 + "." + "c" * 63 + "." + "d" * 59, "sw\u00e9_1"],
+                         ids=["251-characters", "not-ascii"])
+def test_the_key_write_renders_a_host_name_of_any_length_or_script(tmp_path, cred):
+    """A host whose cred key is 251 characters (its key file's name, 255, the most a file system's name holds; the
+    onboard accepts a host name of 253) or holds a character outside ASCII (`swé_1`, which a hand-written inventory
+    can name): the script asks sops for the field by its name as it stands (`["swé_1_ssh_private_key"]`, not JSON's
+    `\\u00e9` escape) and writes the key to `<cred>.key`, 0600, the key dir holding it alone. Guards I-96 re-read A, S1:
+    the new file was named after the host (`<cred>-` and mkstemp's characters), so a name of 243 characters or more
+    overflowed 255 and failed the write (`File name too long`), and sops reads the text between the quotes as it
+    stands, so the escaped name named no field — both hosts the `copy` it replaced rendered. The integration rows run
+    both through the render with the real sops."""
+    p, calls, events = _run_key_write(tmp_path, _KEY, cred=cred)
+    assert p.returncode == 0, p.stderr
+    assert calls == [["--decrypt", "--extract", '["%s_ssh_private_key"]' % cred, str(tmp_path / "lab.sops.yml")]], calls
+    key = tmp_path / "keys" / ("%s.key" % cred)
+    assert key.read_bytes() == _KEY.encode() and stat.S_IMODE(key.stat().st_mode) == 0o600
+    assert os.listdir(tmp_path / "keys") == ["%s.key" % cred]
+
+
+@_POSIX
+@pytest.mark.parametrize("earlier", ["hard-link", "link", "dangling-link", "read-only-key"])
+def test_the_key_write_replaces_an_earlier_file_at_the_key_path_never_writing_through_it(tmp_path, earlier):
+    """An earlier entry at the key path — a hard link to an operator's 0644 file, a link to it, a link to nothing, or
+    an earlier run's 0400 key — is replaced: the path is a regular 0600 file holding the key, the operator's file keeps
+    its text and its mode, the dangling link's target is not made, and the key dir holds the key alone. Guards I-96's
+    write: a write into the path keeps an existing file's mode (0644, which ssh refuses) and writes through a hard
+    link or a link into the file it names; the `copy` it replaced moved a new file over the path, as the rename does.
+    In a run the key-dir guard refuses a link or a directory at the path before any write (I-96 re-read A, N3), so a
+    run meets the regular-file cases alone: tests/integration/test_ssh_key_render_runs.py runs the hard-link case
+    through the render."""
+    keys = tmp_path / "keys"
+    keys.mkdir(mode=0o700)
+    notes = tmp_path / "notes.txt"
+    notes.write_text("an operator's file the key write must not touch\n", encoding="utf-8")
+    os.chmod(notes, 0o644)
+    key = keys / "dev_1.key"
+    if earlier == "hard-link":
+        os.link(notes, key)
+    elif earlier == "link":
+        os.symlink(notes, key)
+    elif earlier == "dangling-link":
+        os.symlink(tmp_path / "nowhere", key)
+    else:
+        key.write_text("an earlier run's key\n", encoding="utf-8")
+        os.chmod(key, 0o400)
+    p, _said, _events = _run_key_write(tmp_path, _KEY)
+    assert p.returncode == 0, p.stderr
+    assert not key.is_symlink() and key.read_bytes() == _KEY.encode(), earlier
+    assert stat.S_IMODE(key.stat().st_mode) == 0o600, oct(key.stat().st_mode)
+    assert notes.read_text(encoding="utf-8") == "an operator's file the key write must not touch\n"
+    assert stat.S_IMODE(notes.stat().st_mode) == 0o644 and not (tmp_path / "nowhere").exists()
+    assert os.listdir(keys) == ["dev_1.key"]
+
+
+@_POSIX
+def test_the_key_write_fails_and_leaves_no_file_when_sops_or_the_rename_fails(tmp_path):
+    """sops failing (exit 1, after printing part of a field) fails the script and writes nothing in the key dir; the
+    rename failing (the key path is a directory) fails it and removes the new file it made there, leaving the dir as it
+    was; a field that is not UTF-8 fails it the same way; and a KeyboardInterrupt at the rename (a Ctrl-C in the write's
+    window) fails it and removes the new file too. Guards the write's loud failure (the task fails, never a silent
+    short key) and its cleanup of the new file: a file left beside the key path would hold a key the cleanup removes
+    only when the run completes. The interrupt is not an OSError: an `except OSError` there survived every other row
+    (I-96 re-read B, N3: M6), and leaves the 0600 file to the next run's cleanup."""
+    p, calls, events = _run_key_write(tmp_path, "part of a field", rc=1)
+    assert p.returncode != 0 and len(calls) == 1 and [e[0] for e in events] == ["popen"], (p.stderr, events)
+    assert os.listdir(tmp_path / "keys") == []
+    p, _calls, events = _run_key_write(tmp_path, _KEY, interrupt=True)
+    assert p.returncode != 0 and "KeyboardInterrupt" in p.stderr, p.stderr
+    assert [e[0] for e in events] == ["popen", "write", "rename"], events
+    assert os.listdir(tmp_path / "keys") == []
+    p, _calls, events = _run_key_write(tmp_path, "\udcff" + _KEY)
+    assert p.returncode != 0 and "UnicodeDecodeError" in p.stderr, p.stderr
+    assert os.listdir(tmp_path / "keys") == []
+    (tmp_path / "keys" / "dev_1.key").mkdir()
+    p, _calls, _events = _run_key_write(tmp_path, _KEY)
+    assert p.returncode != 0, p.stderr
+    assert os.listdir(tmp_path / "keys") == ["dev_1.key"] and os.listdir(tmp_path / "keys" / "dev_1.key") == []
+
+
+def test_the_key_write_takes_no_key_as_an_argument():
+    """The key write is `ansible.builtin.command` whose one argument is its argv: the playbook's Python, `-c`, the
+    script the rows above run, then the key file's path, the host's SOPS domain and its field's name; it has no `vars`
+    and no `environment`, and is delegated to localhost. The one task whose text holds the community.sops lookup is
+    the decrypt probe, which sets a boolean; no task of the play is a `copy` or a `template` or passes a `content`.
+    Guards I-96: a `copy` with `content` staged the key in temp files under the controller's `~/.ansible/tmp`, outside
+    the key dir, which a run killed mid-copy leaves (seen in flight on 2.18.19 and 2.19.4); a `command` given the key on
+    `stdin` put it in its module's arguments, which an unpipelined run writes into the module file (kept under
+    keep_remote_files, as under a `su` become) and ANSIBLE_DEBUG prints whatever `no_log` says; a task env var holding
+    it is in -vvv's EXEC line, and an argv holding it in every local user's `ps`. Nor can the key reach the write
+    another way: the write has no `args` or `module_defaults`, and the play no `module_defaults` or `environment`
+    and no `vars` that hold a lookup (a play's `module_defaults` giving the command a `stdin` from such a var passed
+    this row: I-96 re-read B, N4: M9). tests/integration/test_ssh_key_render_runs.py runs the env, stdin, argv and
+    `copy` ways and sees the first three in its output or kept module file; the `copy` it sees only by its kept
+    module file's name (its temp files are gone when the run ends), so this row is that way's guard."""
+    play = _render_play()
+    assert not {"module_defaults", "environment"} & set(play), sorted(play)
+    assert "lookup(" not in str(play.get("vars", {})) and "query(" not in str(play.get("vars", {})), play.get("vars")
+    tasks, write = _render_tasks()
+    staged = [t["name"] for t in tasks if {"ansible.builtin.copy", "ansible.builtin.template"} & set(t)
+              or any(isinstance(v, dict) and "content" in v for v in t.values())]
+    assert not staged, staged
+    args = write["ansible.builtin.command"]
+    assert set(args) == {"argv"}, args
+    assert args["argv"][:2] == ["{{ ansible_playbook_python }}", "-c"], args
+    assert args["argv"][3:] == ["{{ kontroll_device_key_dir }}/{{ inventory_hostname | replace('-', '_') }}.key",
+                                "{{ inventory_dir ~ '/../secrets/' ~ kontroll_ssh_key_domain ~ '.sops.yml' }}",
+                                "{{ inventory_hostname | replace('-', '_') ~ '_ssh_private_key' }}"], args
+    assert "{{" not in args["argv"][2] and not {"vars", "environment", "args", "module_defaults"} & set(write), write
+    assert write["delegate_to"] == "localhost", write
+    (probe,) = [t for t in tasks if "community.sops.sops" in str(t)]
+    assert set(probe["ansible.builtin.set_fact"]) == {"_ssh_key_present"}, probe
+    assert probe["ansible.builtin.set_fact"]["_ssh_key_present"].rstrip().endswith("| length > 0 }}"), probe
+
+
+def test_a_failed_key_write_is_failed_by_the_next_task_naming_its_exit_code_never_its_output():
+    """The key write registers `_ssh_key_write` with `failed_when: false`, and the task right after it is an
+    `ansible.builtin.fail`, delegated to localhost, run when the host is key-auth and the write's `rc` is not 0 (a
+    write with no `rc` counts as failed), whose message reads the write's result for its `rc` only (never its stdout,
+    stderr or msg) and names the field and the domain in the sops command to run by hand, its output sent to
+    /dev/null; no other task reads `_ssh_key_write`. Guards I-96 re-read A, N2: the write's own failure printed only
+    `censored` (no_log) after a probe that passed — sops off PATH, a key the lookup alone is given, a name the write
+    could not render, another run's cleanup in its window — with nothing to go on; and a message that read the result
+    whole could print what the write's sops said. The integration row runs a write that fails where the probe passed."""
+    tasks, write = _render_tasks()
+    assert write["register"] == "_ssh_key_write" and write["failed_when"] is False, write
+    after = tasks[tasks.index(write) + 1]
+    assert set(after) == {"name", "ansible.builtin.fail", "vars", "delegate_to", "when"}, sorted(after)
+    assert after["delegate_to"] == "localhost", after
+    assert " ".join(after["when"].split()) == ("kontroll_ssh_key_domain is defined and _ssh_key_write is defined and "
+                                               "(_ssh_key_write.rc | default(1)) != 0"), after["when"]
+    said = after["ansible.builtin.fail"]["msg"]
+    assert set(re.findall(r"_ssh_key_write[.\w]*", said)) == {"_ssh_key_write.rc"}, said
+    assert "--decrypt --extract {{ ('[\"%s\"]' % _field) | quote }} {{ _domain | quote }} > /dev/null" in said, said
+    assert after["vars"] == {"_field": write["ansible.builtin.command"]["argv"][5],
+                             "_domain": write["ansible.builtin.command"]["argv"][4]}, after["vars"]
+    readers = [t["name"] for t in tasks if "_ssh_key_write" in str(t)]
+    assert readers == [write["name"], after["name"]], readers
 
 
 def test_a_dotted_host_name_gets_a_lookup_that_resolves_one_key(monkeypatch):
