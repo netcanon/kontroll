@@ -45,7 +45,8 @@
 # Every run mode removes it, as every mode renders it: the delete carries `check_mode: false`, so a dry run (`--check`)
 # removes its dir too (I-87: skipped, a dry run removed nothing, a stale key an earlier run left included), and the
 # play is tagged `always`, so a `--tags` run does (I-93); a `--skip-tags always` (or `tagged`) run removes nothing, as
-# it renders nothing; a `--start-at-task` past the render renders none, and this play still runs. Idempotent.
+# it renders nothing; a `--start-at-task` past the render renders none, and this play still runs where the run meets
+# the named task (one it never meets, inside a role or an import, runs no task, this play's neither: I-99). Idempotent.
 #
 # Access chain used:   control node / Semaphore runner -> rm the local ephemeral key dir
 # May break:           nothing on the fleet — removes a LOCAL ephemeral dir after this run's connections completed;

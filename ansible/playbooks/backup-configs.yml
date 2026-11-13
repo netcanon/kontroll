@@ -29,6 +29,12 @@
 # May break:           none (read-only captures)
 # Fallback required:   no
 # Blast radius:        none — pure reads
+#
+# `--start-at-task` (I-99): name a task of this file's own plays. A task inside a class's backup (a role this play
+# reaches only through its include) or an import's own name (the device_role-fact refusal's) is one ansible-core
+# never meets: no task runs anywhere, the key cleanup's neither, and the run exits 0 after `[ERROR]: No matching task
+# "<name>" found`. A start inside the capture play skips the refusals before it; a start past the key cleanup (at the
+# summary) captures nothing, leaves the keys, and passes.
 
 - name: Fleet preamble — stamp the run id + materialize per-host SSH keys
   ansible.builtin.import_playbook: _fleet-preamble.yml

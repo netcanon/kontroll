@@ -177,6 +177,17 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
   not answer as `ignored` (I-92). Under a caller's `any_errors_fatal` (`ANSIBLE_ANY_ERRORS_FATAL`) such a host stops
   every host instead, and the run fails before the key cleanup, its rescue's message naming the host's own
   unreachable gathering or re-check (I-97).
+- **A fleet run (`backup-configs.yml`, `ping.yml`, `install-node-exporter.yml`, `wire-logging.yml`) started with
+  `--start-at-task` passes having run nothing, and prints `[ERROR]: No matching task "<name>" found. Note:
+  --start-at-task can only follow static includes.`** → ansible-core never met the named task, so it ran no task
+  anywhere: no capture, check, install or wiring, and no key cleanup (the run rendered no keys either; a key dir an
+  earlier run left stays). The name is of a task inside a role (a class's entrypoint, or the role a fleet play
+  includes, reached only through a dynamic include), of an `import_tasks` (an import is replaced by its tasks, so its
+  name is no task's), or, in `wire-logging.yml`, of any task after the validation play (its later plays target no host
+  until the validation names the group). Start at a task of the playbook's own plays (in `wire-logging.yml`, a
+  validation task), or run it whole. A start past the play that does the work reads results no task set:
+  `ping.yml`'s summary fails every host, `install-node-exporter.yml`'s include fails every host (its gathering
+  skipped), and a start past the key cleanup passes having done nothing (I-99).
 - **`wire-logging.yml` passes and its `Wiring run report` reads `<host>: not wired: it did not answer the probe
   before its wiring`, or `<host>: its wiring may not be done: it answered the probe before it, then not the re-check
   after it`** → an ssh host (journald-remote, file-tail-ssh) was down or refused the run's connection (its key, its

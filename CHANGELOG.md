@@ -11,6 +11,20 @@ NetConfig project.
 
 ## [Unreleased]
 
+### docs(ansible): where `--start-at-task` works in each fleet playbook (I-99, 2026-11-13)
+
+A fleet run started with `--start-at-task` naming a task ansible-core never meets (one inside a role, reached only
+through a dynamic include; an `import_tasks`' own name; in `wire-logging.yml`, any task after the validation play,
+whose later plays target no host until it names the group) runs no task anywhere, the key cleanup's neither, and
+exits 0 after `[ERROR]: No matching task "<name>" found`; `_cleanup-ssh-keys.yml`'s and `_render-ssh-keys.yml`'s
+headers said the cleanup still runs. Measured on 2.18.19 and 2.19.4 for `backup-configs.yml`, `ping.yml`,
+`install-node-exporter.yml` and `wire-logging.yml`.
+
+- Each fleet playbook's header names where a start works, and what a start past its working play does; the two key-dir
+  headers say the cleanup runs where the run meets the named task; `docs/troubleshooting.md` has the symptom.
+- `test_a_start_at_a_task_the_run_never_meets_runs_nothing_and_passes` (install and wiring) pins the core's rc 0, its
+  message and the untouched key dir, so a core that changes it fails until the words do.
+
 ### fix(ansible): the logging wiring names each ssh host it could not reach (I-92, I-97, 2026-11-13)
 
 `wire-logging.yml` tolerates a down host, but over the ssh family (`logging_journald_remote`,

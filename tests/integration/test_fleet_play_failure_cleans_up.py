@@ -370,6 +370,23 @@ def test_an_ssh_host_that_stops_answering_after_its_probe_is_named_and_the_run_p
     assert _not_wired("a") not in out and _not_wired("b") not in out, out
 
 
+@pytest.mark.parametrize("play", ["install", "wire"])
+def test_a_start_at_a_task_the_run_never_meets_runs_nothing_and_passes(tmp_path, play):
+    """`--start-at-task` naming a task of the role the play reaches only through its include (the stub's `Stub step
+    after`), for install-node-exporter.yml and wire-logging.yml with both hosts up: ansible-core never meets it, so no
+    task runs (no `TASK [` banner, the stub's lines absent), the key dir keeps the stale key the row seeded (the key
+    cleanup ran neither), and the run exits 0 after the core's `No matching task "<name>" found` line. Pins the core's
+    behaviour the fleet playbooks' usage lines and docs/troubleshooting.md describe (I-99, measured on 2.18.19 and
+    2.19.4 for all four fleet playbooks), so a core that changes it (a failing rc, a run that starts) fails here and the
+    words are updated with it."""
+    args = ("--start-at-task", "Stub step after")
+    rc, out, _recap_failed, gone = (_install(tmp_path, {}, args=args) if play == "install" else
+                                    _wire(tmp_path, {}, refused=False, args=args))
+    assert rc == 0 and not gone, out
+    assert 'No matching task "Stub step after" found' in out, out
+    assert "TASK [" not in out and "AFTER a" not in out, out
+
+
 def test_the_real_wiring_role_runs_nothing_on_a_down_ssh_host(tmp_path):
     """The shipped logging_journald_remote over host a, down: its probe is unreachable and ignored, the role's include
     is skipped and none of the role's tasks runs, the run passes (rc 0) with a not failed, the key dir is gone, and
