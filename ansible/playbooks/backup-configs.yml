@@ -87,8 +87,10 @@
   vars:
     # A host reached through a jump host: a ProxyCommand or ProxyJump in its SSH arguments, or a proxy command for
     # paramiko or libssh. The controller cannot reach its address, so no port probe below or in a class says anything
-    # of it: a connection or a read that failed there is recorded FAILED, never not reached (I-65).
-    kontroll_backup_via_jump: >-
+    # of it: a connection or a read that failed there is recorded FAILED, never not reached (I-65). wire-logging.yml's
+    # device play holds the same expression for the CLI backend's push probe (I-103): tests/unit/test_logging_wiring.py
+    # holds the two the same.
+    kontroll_via_jump: >-
       {{ ((ansible_paramiko_proxy_command | default('') | string | length) > 0)
          or ((ansible_libssh_proxy_command | default('') | string | length) > 0)
          or ([ansible_ssh_common_args | default(''), ansible_ssh_extra_args | default(''),
@@ -169,7 +171,7 @@
       when:
         - kontroll_backup_unreachable | default(false) | bool
         - not (kontroll_backup_probed | default(false) | bool)
-        - not (kontroll_backup_via_jump | bool)
+        - not (kontroll_via_jump | bool)
 
     - name: Record a host that took no connection as not run (the run passes; the summary names it)
       ansible.builtin.set_fact:
@@ -182,7 +184,7 @@
       ansible.builtin.set_fact:
         kontroll_backup_result: >-
           FAILED: {{ 'the device is reached through a jump host, which no probe reaches,'
-          if (kontroll_backup_via_jump | bool) else 'the device took a TCP connection on port '
+          if (kontroll_via_jump | bool) else 'the device took a TCP connection on port '
           ~ (ansible_port | default(22, true)) ~ ',' }} and its session did not open (its key or credential refused, or
           its SSH server), so nothing was read and any earlier capture is kept.
         kontroll_backup_failed: true

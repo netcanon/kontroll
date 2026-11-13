@@ -23,7 +23,7 @@
 #      unreachable and not so probed is probed by the capture play
 #      (backup-configs.yml): where its port takes the connection, its session
 #      did not open (a refused key is unreachable to Ansible too), and it is
-#      recorded FAILED. Skip the probe where kontroll_backup_via_jump is true.
+#      recorded FAILED. Skip the probe where kontroll_via_jump is true.
 #      A probe reads ansible_port (else 22) or the class's own port: a port
 #      set only in an SSH config is not the one probed (I-65),
 #   6. carry an access-chain header; set no_log:true on any secret-bearing task.

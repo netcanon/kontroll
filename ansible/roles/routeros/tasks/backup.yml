@@ -55,7 +55,7 @@
           check_mode: false
           register: _ros_probe
           ignore_errors: true            # a port that takes no connection is recorded below, not a task failure
-          when: not (kontroll_backup_via_jump | default(false) | bool)   # no probe reaches it past a jump host
+          when: not (kontroll_via_jump | default(false) | bool)   # no probe reaches it past a jump host
 
         - name: Record a device that took no connection as not run (the run passes; the summary names it)
           ansible.builtin.set_fact:
@@ -70,7 +70,7 @@
           ansible.builtin.set_fact:
             kontroll_backup_result: >-
               FAILED: {{ 'the device is reached through a jump host, which no probe reaches,'
-              if (kontroll_backup_via_jump | default(false) | bool) else 'the device took a TCP connection on port '
+              if (kontroll_via_jump | default(false) | bool) else 'the device took a TCP connection on port '
               ~ (ansible_port | default(22, true)) ~ ',' }} and `/export show-sensitive` failed (the session, its
               credential, or the command), so no capture was written and any earlier one is kept.
             kontroll_backup_failed: true

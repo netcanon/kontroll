@@ -1564,6 +1564,10 @@ stack; the **capability** half — device-side wiring `no_log` + a per-method `s
   `logging_{syslog_push,journald_remote,file_tail_ssh}` + `ansible/playbooks/wire-logging.yml` — are now built:
   idempotent, `--check`-safe, access-chain-headed, with a `backup` rollback entrypoint and `no_log` on any
   credential task. The operator runs them `--check --diff` FIRST per the edge-firewall/core-switch hard rule.)*
+  A network_cli push that fails is told apart by one port probe from the controller: no TCP connection is a device
+  not reached, which passes the run and the report names; a connection taken (a refused or rotated credential among
+  them) or a device behind a jump host fails the wiring, so a bad credential never reads as a device that is down
+  (I-103; `test_wire_logging_unreached_runs.py`, `test_logging_wiring.py`).
 - **The syslog ingress only listens when used + is mgmt-bound + reversible.** The published `:5514` is harmless
   when no class declares `syslog_push` (nothing listens inside the container → connection refused); a device
   starts shipping only after `logging_syslog_push` points it at the collector (a reversible config line —

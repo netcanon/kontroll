@@ -33,6 +33,14 @@
 # drop the other hosts from every later play unnamed: tests/unit/test_fleet_play_rescue.py refuses either in every
 # role under roles/.
 #
+# A down host is tolerated (`ignore_unreachable`), but under network_cli a device that takes no connection fails the
+# push as a task, not as unreachable, so one network device down failed the whole run (I-103). The CLI backend's push
+# (backend_netcommon_cli's `configure`) probes the device's port after a failed push: a port that takes no TCP
+# connection is not run, which passes the run, and the report after the cleanup names the device with its reason; a
+# connection taken, or a device behind a jump host (`kontroll_via_jump`, which no probe reaches), is a failed wiring,
+# which the summary names. A host on the ssh family that stops answering has each task's unreachable result ignored:
+# the run passes, and only its `UNREACHABLE!` lines name it (I-92).
+#
 # Access chain used:   control VM (mgmt VLAN) -> the target class's inventory_group (per the method's role)
 # May break:           per the dispatched role's access-chain header (e.g. a device's syslog config only)
 # Fallback required:   per the dispatched role (console for edge_firewall/core_switch)
@@ -125,6 +133,15 @@
        else hostvars['localhost']._wire_group | default('__no_target__') }}
   gather_facts: false             # the wiring roles need no host facts (cli_config / lineinfile / systemd)
   ignore_unreachable: true        # a down host is tolerated, not fatal (CLAUDE.md hard rule)
+  vars:
+    # A device behind a jump host, which the CLI backend's push probe does not probe (I-103): backup-configs.yml's
+    # capture play holds the same expression (I-65), and tests/unit/test_logging_wiring.py holds the two the same.
+    kontroll_via_jump: >-
+      {{ ((ansible_paramiko_proxy_command | default('') | string | length) > 0)
+         or ((ansible_libssh_proxy_command | default('') | string | length) > 0)
+         or ([ansible_ssh_common_args | default(''), ansible_ssh_extra_args | default(''),
+              ansible_ssh_args | default('')] | join(' '))
+            is search('proxycommand|proxyjump|(^| )-J', ignorecase=true) }}
   tasks:
     - name: Refuse a host whose connection is not one the wiring role is written for
       ansible.builtin.import_tasks: tasks/refuse-local-connection.yml
@@ -236,6 +253,20 @@
         - hostvars['localhost']._wire_group is not defined
         - hostvars['localhost']._wire_refused is not defined
       tags: [always]
+
+# A network device that took no connection is not run, which passes the run (a down host is tolerated, not fatal:
+# CLAUDE.md); this names each one, with its reason (I-103). It connects to nothing: its one task is a `debug`.
+- name: Wiring run report
+  hosts: >-
+    {{ '__no_target__' if hostvars['localhost']._wire_refused is defined
+       else hostvars['localhost']._wire_group | default('__no_target__') }}
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Name a device not run (it took no connection; the run passes)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ kontroll_configure_result }}"
+      when: kontroll_configure_unreached | default(false) | bool
 
 - name: Wiring run summary
   hosts: >-

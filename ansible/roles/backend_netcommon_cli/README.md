@@ -12,6 +12,7 @@ it by declaring `role: backend_netcommon_cli` + `network_os` (see
 |---|---|---|
 | `check` | liveness via `cli_command` (`backend_liveness_command`, default `show version`) | none |
 | `backup` | capture config via `cli_command` (`backend_backup_command`, default `show running-config`) | none (read-only) |
+| `configure` | push `backend_config_lines` via `cli_config` (labelled `backend_config_label`; idempotent, `--check`-safe) | the config subsystem the lines touch |
 
 ## Params (set by the device class / its group_vars)
 - `network_os` — e.g. `cisco.ios.ios`, `arista.eos.eos` (drives the cliconf plugin).
@@ -38,6 +39,12 @@ naming the command (the session, its credential, or the command), which fails th
 device reached through a jump host (a ProxyCommand or ProxyJump, or a paramiko or libssh
 proxy command) is not probed, as the controller cannot reach its address: a read that fails
 there is `FAILED` (I-65).
+
+The `configure` push is told apart the same way (I-103): a push that fails is followed by one probe of the port. No
+TCP connection records the device not run (`kontroll_configure_unreached`, with `kontroll_configure_result` naming the
+port), which passes the run, and wire-logging.yml's report names it after the key cleanup. A connection taken, or a
+device behind a jump host (`kontroll_via_jump`, a var of wire-logging.yml's device play), fails the push again with a message
+saying which, so the caller records a failed wiring. The push is `no_log`, so its own error is not printed.
 
 The `check` entrypoint runs `cli_command` the same way and has no such skip: under `--check`
 a `backend_liveness_command` that does not start with `show` is refused by the module, and
