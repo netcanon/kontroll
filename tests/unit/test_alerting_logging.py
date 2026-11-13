@@ -1,7 +1,8 @@
 """Hermetic shape pins for the Grafana-provisioned logging alert rules (Layer 3, no live Grafana in CI).
 
 Guards: a rule that pins a wrong/empty datasource uid (silently never fires), an unbounded window or a missing
-debounce `for:` (alert spam / never-clears). Where an alert goes — the policy tree and the one contact point — is
+debounce `for:` (alert spam / never-clears), or a `for:` that lets what the rule is for leave its window before it
+fires (I-102). Where an alert goes — the policy tree and the one contact point — is
 tests/unit/test_alerting_metrics.py's (T32). Also pins the `auth-denied` token as a shared contract (V1 M-9: the
 body-substring matchers are content-coupled — if the emitter's wording drifts from this token, the security alert
 silently stops firing).
@@ -23,6 +24,8 @@ _TRANSFORMS = os.path.join(_ROOT, "docker", "vector", "config.d", "transforms")
 
 # the audit-log token the auth-denied alert keys off — MUST match what api/audit.py + gui emit (M-9 contract).
 AUTH_DENIED_TOKEN = "auth-denied"
+# the one rule that is for lines through its whole window (a crash loop), not one line (I-102)
+CRASH_STORM = "kontroll-log-container-restart"
 
 
 def _load(name):
@@ -77,6 +80,64 @@ def test_every_rule_has_a_debounce_and_a_bounded_window():
             rtr = d.get("relativeTimeRange", {})
             assert rtr.get("from", 0) > 0, "rule %r data node %r has an unbounded relativeTimeRange" % (
                 r.get("title"), d.get("refId"))
+
+
+def _seconds(text):
+    return int(text[:-1]) * {"s": 1, "m": 60, "h": 3600}[text[-1]]
+
+
+def _fired_phases(rule, interval, lines):
+    """The phases (seconds into the group's first interval, every 5 s) at which `rule` fires over lines at the times
+    `lines` (seconds), read as Grafana's alert state reads its evaluations, one every `interval`: an evaluation counts
+    the lines its window holds (later than the window's start, not later than the evaluation) against the
+    condition's threshold; the first one over it makes the rule Pending, one still over it at least `for` after that
+    makes it fire, and one not over it makes it Normal again."""
+    window = max(d["relativeTimeRange"]["from"] for d in rule["data"])
+    (cond,) = [d for d in rule["data"] if d["refId"] == rule["condition"]]
+    (evaluator,) = [c["evaluator"] for c in cond["model"]["conditions"]]
+    assert evaluator["type"] == "gt", (rule["uid"], evaluator)
+    wait, end = _seconds(rule["for"]), max(lines) + window + _seconds(rule["for"]) + 2 * interval
+    fired = []
+    for phase in range(0, interval, 5):
+        since = None
+        for e in range(phase, end, interval):
+            over = sum(1 for t in lines if e - window < t <= e) > evaluator["params"][0]
+            since = (since if since is not None else e) if over else None
+            if over and e - since >= wait:
+                fired.append(phase)
+                break
+    return fired
+
+
+def _threshold(rule):
+    (cond,) = [d for d in rule["data"] if d["refId"] == rule["condition"]]
+    return cond["model"]["conditions"][0]["evaluator"]["params"][0]
+
+
+@pytest.mark.parametrize("uid", sorted(r["uid"] for r in _rules()))
+def test_each_rule_fires_on_what_it_is_for_at_every_phase_of_its_evaluations(uid):
+    """Each logging rule fires on one line (for a count rule, a burst one over its threshold, at one moment) at every
+    phase of its group's evaluations, and waits at most two of them, so it pages within minutes; but the crash
+    storm, which is for a crash loop and waits its whole window: one crash fires it at no phase, and a crash a minute
+    fires it at every phase. Read as Grafana's alert state reads its evaluations (Pending at the first one over the
+    threshold, firing at one still over it `for` later; `_fired_phases`); no Grafana runs here. Guards I-102: the
+    onboard-error and auth-denied rules waited as long as their window (`for: 10m` over 10 minutes, `for: 5m` over
+    5), so the line left the window as the wait ended, and a one-off onboard error, or a burst of denials, never
+    alerted; and I-65's first fault, the backup rule's the same. A wait of most of the window (9 minutes of 10) still
+    fires, late, which the bound on the wait holds."""
+    (group,) = [g for g in _load("logging-rules.yaml")["groups"] if any(r["uid"] == uid for r in g["rules"])]
+    (rule,) = [r for r in group["rules"] if r["uid"] == uid]
+    interval = _seconds(group["interval"])
+    every = list(range(0, interval, 5))
+    burst = [1] * (int(_threshold(rule)) + 1)
+    window = max(d["relativeTimeRange"]["from"] for d in rule["data"])
+    if uid == CRASH_STORM:
+        assert _seconds(rule["for"]) == window, rule["for"]
+        assert _fired_phases(rule, interval, burst) == [], "one crash must not read as a crash storm"
+        assert _fired_phases(rule, interval, list(range(1, 2 * window + interval, 60))) == every
+    else:
+        assert _seconds(rule["for"]) <= 2 * interval, (uid, rule["for"])
+        assert _fired_phases(rule, interval, burst) == every, (uid, rule["for"])
 
 
 def test_every_rule_reads_no_lines_as_ok_and_a_failed_query_as_an_error():

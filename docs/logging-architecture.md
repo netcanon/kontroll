@@ -282,7 +282,10 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   Each rule counts lines, and nothing matching returns no series, so each sets `noDataState: OK`: under the
   default (NoData) every logging alert showed as live on the Alerting page. Each also sets `execErrState: Error`,
   so a query that fails (Loki down) shows the rule as Error; under the default (Alerting) a Loki outage fired the
-  crash-storm and auth-denied alerts as if they had happened.
+  crash-storm and auth-denied alerts as if they had happened. Each rule waits one evaluation (`for: 1m`) inside a
+  longer window, so one line fires it (for the auth-denied count, a burst of six); a wait as long as the window let
+  the line leave it as the wait ended, and the onboard-error and auth-denied rules never fired on a one-off (I-102).
+  The crash storm alone waits its whole window (five minutes over five): a crash loop fires it, one crash does not.
 
 ---
 
