@@ -20,6 +20,9 @@
 # Backfill the fleet:   ansible-playbook playbooks/install-node-exporter.yml --check --diff   (then for real)
 # One host (onboard):   ansible-playbook playbooks/install-node-exporter.yml -e target=<host>
 #                       (an unreachable host passes with nothing installed: the run's report says so)
+# --start-at-task:      a task of this file's own plays (I-99). One inside the role, or an import's own name, is never
+#                       met: no task runs, the key cleanup's neither, and the run exits 0 after `[ERROR]: No matching
+#                       task`. A start at the install's include skips the gathering it reads: every host fails there.
 #
 # The play runs node_exporter on every host of the target pattern, whatever the host's device_role, so a host whose
 # connection is not of the ssh family is refused before anything runs on it (tasks/refuse-local-connection.yml).

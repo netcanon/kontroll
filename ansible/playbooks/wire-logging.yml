@@ -9,6 +9,9 @@
 #   collector override:         add -e collector_host=<ip>  (else instance/instance.yml mgmt_ip)
 #   one host of the class:      add --limit <host>:localhost  (the validation play runs on localhost; a limit that
 #                               leaves it out wires nothing, and the run fails saying so: I-88)
+#   --start-at-task:            a task of the validation play (I-99). The later plays target no host until it names
+#                               the class's group, so a task of theirs, or of a role, is never met: no task runs, the
+#                               key cleanup's neither, and the run exits 0 after `[ERROR]: No matching task`.
 #
 # The wiring play runs `-e role` on every host of the class's group, whatever the host's device_role, so a host
 # whose connection is not one the role is written for (the method's `wiring_connections`, logging/README.md) is

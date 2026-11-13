@@ -23,7 +23,8 @@
 # requires passed having reached no key-auth device (I-87). A dry run's dir is its own (group_vars/all.yml appends
 # `.check`), so it never touches a real run's keys. The play is tagged `always`, so a `--tags` run renders them too
 # (I-93); a `--skip-tags always` (or `tagged`) run renders none, as it prints no run-id stamp, and so does a
-# `--start-at-task` past this play (its key-auth hosts cannot log in and are ignored; the cleanup still runs).
+# `--start-at-task` past this play (its key-auth hosts cannot log in and are ignored; the cleanup still runs where the
+# run meets the named task: I-99).
 # _cleanup-ssh-keys.yml removes them in every mode alike. Before any write, tasks/refuse-foreign-key-dir.yml refuses a
 # key dir that is not a directory or holds anything but `*.key` files, which the cleanup would remove with it (I-95);
 # the dir is made after the decrypt check, so a run whose every key-auth host fails that check makes none.

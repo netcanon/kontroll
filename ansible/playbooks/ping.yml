@@ -11,6 +11,12 @@
 # Fallback required:   no
 # Blast radius:        none — pure reads
 #
+# `--start-at-task` (I-99): name a task of this file's own plays. A task inside a class's check (a role this play
+# reaches only through its include) or an import's own name is one ansible-core never meets: no task runs anywhere,
+# the key cleanup's neither, and the run exits 0 after `[ERROR]: No matching task "<name>" found`. A start past the
+# reach play reads results no task set: the summary fails every host, and a start at the last play passes having
+# checked nothing.
+#
 # The probe's port, first set wins (S28): `mgmt_port` (a hand override, normally unset) → `ansible_port` (what
 # Ansible itself connects on; the onboard form's SSH port) → `kontroll_probe_port` (the port the host's backend
 # declares, written at onboard: 443 for `api`) → 22. A host that sets none of the three is probed on 22, as before.
