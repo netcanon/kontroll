@@ -122,8 +122,10 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
   # tests/integration/test_local_canonical_as_root.py run local-canonical.yml itself (a dry-run, three applies,
   # a dry-run: the second apply after a landing is 0 changed), those of
   # tests/integration/test_g9_age_key_gate_real_stat.py run deploy-stack's age-key gate on keys of uid or gid 1001
-  # (the group leg and the owner read bit, against a real stat), and those of tests/unit/test_storage_root_floor.py
-  # make storage roots root's and run install-prereqs.sh as root with stand-ins, so they need root — and every one
+  # (the group leg and the owner read bit, against a real stat), those of tests/unit/test_storage_root_floor.py
+  # make storage roots root's and run install-prereqs.sh as root with stand-ins, and those of
+  # tests/unit/test_storage_root_launchers.py make and list root's storage roots as the launchers' step does (I-35),
+  # so they need root — and every one
   # of them was SKIPPED in the suite above unless this gate itself runs as root. So: as root, directly; else through
   # `sudo -n` (never a prompt) where that works; else the step is skipped, which --strict counts as a failure — a
   # gate that cannot be root has not shown that root's git is the service's. No row may be skipped (as for the sops
@@ -147,6 +149,7 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
                tests/integration/test_canonical_normalise_as_root.py tests/integration/test_local_canonical_as_root.py \
                tests/integration/test_g9_age_key_gate_real_stat.py tests/integration/test_tls_owner_dry_run.py \
                tests/unit/test_storage_root_floor.py \
+               tests/unit/test_storage_root_launchers.py \
                --deselect tests/unit/test_storage_root_floor.py::test_install_prereqs_without_root_makes_nothing \
                tests/unit/test_stale_config.py::test_a_store_files_mode_or_owner_changed_makes_its_service_stale \
                tests/unit/test_stale_config.py::test_a_link_targets_owner_changed_makes_its_service_stale \

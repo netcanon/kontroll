@@ -1001,9 +1001,13 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   creates the owner and mode of the path it was asked for, so the first store would otherwise make the root its own.
   On the installer path, whose container binds the root so that Docker would make it `0755` before the play looks,
   `scripts/install-prereqs.sh` makes it so on the host first, where it runs before the installer's first `up` (the
-  quickstart and a launch kit's install begin with it); it makes none under a directory that is not root's, or that
-  others may write and is not sticky, each judged where its links lead, where what it made could be swapped for a link
-  before its `chown` and `chmod`, which follow one (I-24; `tests/unit/test_storage_root_floor.py`). A root that exists
+  quickstart and a launch kit's install begin with it), and so does each launcher before its first `docker compose
+  run`, as root or through a `sudo -n` that asks no password, else printing the one command that does (I-35;
+  `tests/unit/test_storage_root_launchers.py`: through sudo it sources the launcher's own copy of the helper as root,
+  which grants nothing that sudo did not already give its operator); neither makes one under a directory that is not
+  root's, or that others may write and is not sticky, each judged where its links lead, where what it made could be
+  swapped for a link before its `chown` and `chmod`, which follow one (I-24; `tests/unit/test_storage_root_floor.py`).
+  A root that exists
   is not changed; one that is not root's alone, or that others may not pass through, is refused, with the fix. Under a
   `0711` root every local account reaches a store below it by its name, so a store's own mode is what closes it: the
   secret ones are closed (the captures `0700`, Loki `0750`, Vector's dir `0700`, the TLS dirs `0750`, the age key
@@ -1011,7 +1015,8 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   `snmp.yml`, Vector's SSH key and the GUI's age key, so one would test guesses at the SNMP credentials), and those
   the containers read by the bit for others — the audit dirs and the Ansible run-log dir, `0755` — are open to every
   local account, as they already were under an installer-mode root Docker made (`0755`, as every one was before I-24,
-  and as one still is where install-prereqs.sh did not run before the installer) and were not under a root an earlier
+  and as one still is where neither install-prereqs.sh nor a launcher could make it before the installer) and were
+  not under a root an earlier
   build's first store made `0700`. A clone that is not wholly the owner
   the flag names — anything in it the service can write while unarmed (every entry is looked at, not the top alone),
   anything not the service's (root's, another uid's) or not a directory while armed — is removed (Python's rmtree,
