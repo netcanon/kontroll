@@ -38,8 +38,14 @@
 # (backend_netcommon_cli's `configure`) probes the device's port after a failed push: a port that takes no TCP
 # connection is not run, which passes the run, and the report after the cleanup names the device with its reason; a
 # connection taken, or a device behind a jump host (`kontroll_via_jump`, which no probe reaches), is a failed wiring,
-# which the summary names. A host on the ssh family that stops answering has each task's unreachable result ignored:
-# the run passes, and only its `UNREACHABLE!` lines name it (I-92).
+# which the summary names. A host on the ssh family is probed (a `ping`) before its role and re-checked after its
+# handlers, two more connections per host (I-92): one that does not answer the probe is not wired (its role is not
+# run), in a dry run too, and one that answers it and then not the re-check may not be wired, each task it did not
+# answer ignored. Either passes the run (its recap counts each unanswered task `ignored`), and the report names it.
+# One that answers again by the re-check is not named. Under a caller's any_errors_fatal an ignored unreachable
+# result trips it as a failure does: every host is failed in the rescue and the run ends at the device play with the
+# keys kept, with one host or more; the rescue's message names a host whose own probe or re-check was unreachable as
+# such (I-97), and any other with the causes it cannot tell apart.
 #
 # Access chain used:   control VM (mgmt VLAN) -> the target class's inventory_group (per the method's role)
 # May break:           per the dispatched role's access-chain header (e.g. a device's syslog config only)
@@ -162,11 +168,26 @@
           ansible.builtin.set_fact:
             _kontroll_handlers_due: false
 
+        # A host on the ssh family that does not answer is not wired: its role is not included, so none of its tasks
+        # waits on the connection, and the run's report names it (I-92). The results are registered under the
+        # wiring's own names, so an install imported beside this play (whose report reads its own) is not read here.
+        # The ssh family is written in the `when` (install-node-exporter.yml's refusal list), a literal no var can
+        # widen, read over the connection the refusal froze: tests/unit/test_group_dispatch_refuses_local.py lets this
+        # play run a module that is not network-safe only under that gate. Not network_cli: ansible-core's network
+        # connections run a plain module on the controller, so a `ping` there answers for a device that is down; the
+        # CLI backend's push probes the device instead (I-103). tests/unit/test_logging_wiring.py holds every method's
+        # `wiring_connections` to one of the two.
+        - name: Probe the host before its wiring (the run's report names one that does not answer, I-92)
+          ansible.builtin.ping:
+          register: _kontroll_wire_probe
+          when: ansible_connection in ['ssh', 'ansible.builtin.ssh', 'paramiko_ssh', 'ansible.builtin.paramiko_ssh']
+
         - name: Apply the dispatched logging wiring role (collector resolved control-side)
           ansible.builtin.include_role:
             name: "{{ role }}"
           vars:
             logging_collector_host: "{{ hostvars['localhost']._wire_collector }}"
+          when: _kontroll_wire_probe is not unreachable
 
         # The handlers the role's tasks notify run here, inside the block, not at the play's end, outside it, where
         # one that failed failed its host and, on every host, ended the run before the cleanup (I-86). A failed
@@ -180,6 +201,17 @@
 
         - name: Run the role's handlers inside the block, so a failed one is recorded (I-86)
           ansible.builtin.meta: flush_handlers
+
+        # A host that answered the probe and stopped answering later has each later task's unreachable result
+        # ignored, so its wiring ends with nothing failed (I-92). One more connection asks whether it still answers;
+        # the run's report, after the cleanup, names one that does not. Inside the block, so a re-check that fails
+        # (not unreachable) is recorded as a failed task is.
+        - name: Re-check the host after its wiring (the run's report names one that no longer answers, I-92)
+          ansible.builtin.ping:
+          register: _kontroll_wire_recheck
+          when:
+            - ansible_connection in ['ssh', 'ansible.builtin.ssh', 'paramiko_ssh', 'ansible.builtin.paramiko_ssh']
+            - _kontroll_wire_probe is not unreachable
       rescue:
         - name: Record the failed wiring for the run's last play (the task's name; its result is printed above)
           ansible.builtin.set_fact:
@@ -199,13 +231,22 @@
             kontroll_wire_failed: the wiring stopped while the role's handlers ran (the failure is printed above)
           when: ansible_failed_task is not defined and (_kontroll_handlers_due | default(false) | bool)
 
+        # Under a caller's any_errors_fatal an ignored unreachable result moves every host here, the unreachable one
+        # too, and ansible-core then holds each as failed, so this cannot record it and let it go on: it names a host
+        # whose own probe or re-check was unreachable by that cause (I-97), and any other by the causes the condition
+        # cannot tell apart.
         - name: Fail a host stopped with no failed task of its own (no later play would see it)
           ansible.builtin.fail:
             msg: >-
-              {{ inventory_hostname }}: stopped with no failed task of its own: the wiring role {{ role }} could not
-              be loaded, or another host's failure stopped it (a run_once task, a caller's any_errors_fatal, under
-              which before ansible-core 2.19.2 its own failed handler names no task either); the cause is printed
-              above
+              {{ inventory_hostname }}: {% if _kontroll_wire_probe is defined and _kontroll_wire_probe is unreachable
+              %}it did not answer the probe before its wiring, so nothing was wired on it, and it was stopped with the
+              play's other hosts (a caller's any_errors_fatal stops every host at an unreachable one as at a failed
+              one, or another host's run_once task failed){% elif _kontroll_wire_recheck is defined
+              and _kontroll_wire_recheck is unreachable %}it did not answer the re-check after its wiring, which may
+              not be done, and a caller's any_errors_fatal stops every host at an unreachable one as at a failed
+              one{% else %}stopped with no failed task of its own: the wiring role {{ role }} could not be loaded, or
+              another host's failure stopped it (a run_once task, a caller's any_errors_fatal, under which before
+              ansible-core 2.19.2 its own failed handler names no task either); the cause is printed above{% endif %}
           when: >-
             ansible_failed_task is not defined
             and (not (_kontroll_handlers_due | default(false) | bool)
@@ -255,7 +296,9 @@
       tags: [always]
 
 # A network device that took no connection is not run, which passes the run (a down host is tolerated, not fatal:
-# CLAUDE.md); this names each one, with its reason (I-103). It connects to nothing: its one task is a `debug`.
+# CLAUDE.md); this names each one, with its reason (I-103), and each host on the ssh family that did not answer the
+# device play's probe (not wired) or its re-check (its wiring may not be done: I-92). It reads what the device play
+# recorded and registered and connects to nothing: its tasks are `debug`s. Before the summary, the run's last play.
 - name: Wiring run report
   hosts: >-
     {{ '__no_target__' if hostvars['localhost']._wire_refused is defined
@@ -267,6 +310,16 @@
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }}: {{ kontroll_configure_result }}"
       when: kontroll_configure_unreached | default(false) | bool
+    - name: Name a host that did not answer the probe before its wiring (nothing was wired; the run passes)
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: not wired: it did not answer the probe before its wiring"
+      when: _kontroll_wire_probe is defined and _kontroll_wire_probe is unreachable
+    - name: Name a host that stopped answering after its probe (its wiring may not be done; the run passes)
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: its wiring may not be done: it answered the probe before it, then not the re-check
+          after it (each task it did not answer was ignored)
+      when: _kontroll_wire_recheck is defined and _kontroll_wire_recheck is unreachable
 
 - name: Wiring run summary
   hosts: >-

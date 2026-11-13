@@ -32,6 +32,9 @@ ansible-playbook ansible/playbooks/wire-logging.yml -e role=logging_file_tail_ss
 
 `wire-logging.yml` runs this role only over its method's `wiring_connections`
 (`logging/file_tail_ssh.yml`); a host on another connection is refused first (SECURITY.md C4).
+It probes the host (a `ping`) before the role and re-checks it after its handlers: a host that does not answer the
+probe is not wired, and the run's `Wiring run report` names it, and one that answered and then not the re-check
+(its key may not be authorized); the run passes for both. See docs/troubleshooting.md (I-92).
 
 ## Entrypoints
 

@@ -177,6 +177,15 @@ A config the service reloads by itself (Grafana's dashboards, Prometheus's file_
   not answer as `ignored` (I-92). Under a caller's `any_errors_fatal` (`ANSIBLE_ANY_ERRORS_FATAL`) such a host stops
   every host instead, and the run fails before the key cleanup, its rescue's message naming the host's own
   unreachable gathering or re-check (I-97).
+- **`wire-logging.yml` passes and its `Wiring run report` reads `<host>: not wired: it did not answer the probe
+  before its wiring`, or `<host>: its wiring may not be done: it answered the probe before it, then not the re-check
+  after it`** → an ssh host (journald-remote, file-tail-ssh) was down or refused the run's connection (its key, its
+  host key), so its wiring role was not run; or it answered the probe and stopped answering during the wiring, each
+  task it did not answer ignored, so its journald or its read key may not be set there. The other hosts were wired.
+  Fix its reachability and wire it again (`--limit <host>:localhost`; a second run reports `0 changed`). A host that
+  stopped answering and answered again before the re-check is not named: its recap counts each task it did not
+  answer as `ignored` (I-92). Under a caller's `any_errors_fatal` such a host stops every host instead, and the run
+  fails before the key cleanup, its rescue's message naming the host's own unreachable probe or re-check (I-97).
 - **A fleet run fails at `Refuse a key dir that holds anything but SSH keys` with `kontroll_device_key_dir (…) holds
   more than SSH keys: …` or `… is not a directory`** → the dir the run renders its SSH keys into, and removes whole
   after, holds something else (the names listed), or the path is a file or a link. Most often
