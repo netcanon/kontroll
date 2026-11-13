@@ -1,0 +1,98 @@
+# Grafana-managed alert rules over Prometheus: a scrape target that answered in the last 7 days and has stopped. A
+# provisioning DROP-IN beside logging-rules.yaml, routed by policies.yaml; the Prometheus datasource by its FIXED uid
+# `prometheus` (provisioning/datasources/prometheus.yml). No Prometheus `rule_files` and no Alertmanager: one rule
+# engine and one routing tree (logging-rules.yaml's reason).
+#
+# "Was up in the last 7 days" is what makes a target real, with no per-host list: a placeholder target (the shipped
+# tree's TEST-NET examples), a class enabled before its device exists, or a device onboarded but unreachable has never
+# answered, so it never fires. A target dead for longer than the window stops: Grafana sends it as RESOLVED although
+# the target is still down (the window passed, not the target), so a decommissioned host does not page forever, and
+# each rule's `description` says what such a RESOLVED means. The window is the rule's bounded lookback; change it in
+# both places. A target whose `up` (a probed device's `probe_success`) reads 1 at any of the rule's 1-minute
+# evaluations within 10 minutes never fires (`for: 10m` starts again), a flapping one included; a lone answer that the
+# next failed scrape or probe hides before an evaluation does not count. An alert on a flapping target is a follow-up
+# (`avg_over_time(up[10m]) < 0.5`, say).
+#
+# `== bool 0` keeps a series for every recently-up target (0 while it answers, 1 once it does not), so the rule reads
+# Normal per target instead of NoData; no recently-up target at all is no series, read as OK. A failed query
+# (Prometheus down) shows as Error, routed like any alert. Each alert carries the target's labels (`host` on every
+# generated target, `group` on the node targets), so the notification names the host.
+#
+# The blackbox job needs its own rule: its scrape target is the exporter (`__address__` → blackbox-exporter:9115,
+# prometheus/jobs.d/blackbox.generated.yml), so its `up` is 1 whenever the exporter answers, whatever the device
+# does. `probe_success` is the device's answer. The SNMP and Proxmox jobs scrape through an exporter too; their `up`
+# reads the exporter's answer for that target, which fails when the device does not answer (check it on the first
+# live render: docs/logging-architecture.md G6).
+#
+# tests/unit/test_alerting_metrics.py pins the shape and runs these expressions through `promtool test rules`.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: kontroll-metrics
+    folder: Homelab
+    interval: 1m
+    rules:
+      - uid: kontroll-metrics-target-down
+        title: Scrape target down
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels: {severity: critical, kontroll: metrics}
+        annotations:
+          summary: "A scrape target that answered in the last 7 days has stopped answering."
+          description: "A RESOLVED after 7 days of this alert means the 7-day window passed, not that it answers."
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              instant: true
+              range: false
+              expr: (up == bool 0) and on (job, instance) (max_over_time(up[7d]) == 1)
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+              refId: C
+      - uid: kontroll-metrics-probe-failing
+        title: Probed device not answering
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels: {severity: critical, kontroll: metrics}
+        annotations:
+          summary: "A probed device that answered in the last 7 days has stopped answering its probe."
+          description: "A RESOLVED after 7 days of this alert means the 7-day window passed, not that it answers."
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              instant: true
+              range: false
+              expr: (probe_success == bool 0) and on (job, instance) (max_over_time(probe_success[7d]) == 1)
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: C
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+              refId: C

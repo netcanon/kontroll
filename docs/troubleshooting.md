@@ -73,13 +73,19 @@ sum by (target) (count_over_time({source="internal", service="blackbox-exporter"
 # Volume of a chatty emitter (sizing-lever input; pairs with the dashboard "Top services" panel):
 topk(10, sum by (service) (count_over_time({source="internal"} [1h])))
 
-# What the "Container restart / crash storm" alert counts, by container (its rule sums the same over 5m). Run it
+# What the "Container crash storm" alert counts, by container (its rule sums the same over 5m). Run it
 # when the alert fires, and over the last 7 days before changing the rule: Grafana logs the rule's uid at every
 # evaluation and each deploy prints `TASK [Restart …]` banners, so a looser filter counts lines that are no crash.
 sum by (container_name) (count_over_time({source="internal"} | json container_name, message | __error__=""
   | container_name != "" | line_format "{{.message}}" |~ "(?i)restart|panic|exited"
   !~ `kontroll-log-container-restart|^(TASK|RUNNING HANDLER) \[` [5m]))
 ```
+
+A failed delivery's error and retry lines are container lines too: they name the alert's title and folder, the
+contact point, the matchers of the policy route it took (the heartbeat's `{kontroll="heartbeat"}`), any label that
+route groups by, and the notifier's host (Vector keeps a URL's scheme and host). No string in the alerting files but
+the crash rule's own uid and query says a counted word (`tests/unit/test_alerting_metrics.py`), but a notifier host
+whose name holds one, or a label value a route groups by (a host's name), counts its own failed deliveries.
 
 ## 3. The degrade path — debugging when Loki/Vector is down
 
@@ -476,6 +482,44 @@ came from: `storage root <root> (<source>)`.
 |---|---|---|
 | `kontroll_storage_root is <a> (an -e or an instance var), but this run is inside the installer, which binds <b> from the host …` | an `-e` or the instance's inventory vars name a root the launcher's shell does not (a shell without the `export` binds `/var/lib/kontroll`) | name one root: `export KONTROLL_STORAGE_ROOT=<a>` before the launcher, in every shell that runs it, and keep `kontroll_storage_root: <a>` in the instance vars as well, so that a shell without the export is refused, not moved back to the default root; or keep `<b>` and drop `kontroll_storage_root` |
 | `<knob> is <dir>, outside the storage root <root>, and this run is inside the installer …` (with `(which leads to <path>)` after `<dir>` when a `..` or a link takes it elsewhere) | a store with its own knob (`kontroll_logs_dir`, `kontroll_backups_dir`, `kontroll_api_audit_dir`, `kontroll_gui_audit_dir`, `kontroll_ansible_log_dir`) is set outside the bound root, or leads out of it | mount that disk under the root (the message names a mount point from the knob's name; a mount, not a link) and point the knob there, or drop the knob to keep the store under the root |
+
+## 14. No alert arrives, or the daily heartbeat stopped
+
+Every alert goes to one webhook (`dashboards/grafana/provisioning/alerting/contactpoints.yaml`), and the heartbeat
+rule always fires and is re-sent once a day (its route's `repeat_interval: 24h`), so a day without it means the
+chain broke somewhere. In order:
+
+1. **A URL is set.** A deploy without one prints `alerting: no notifier URL in the dashboards secrets domain`. Set
+   it in the Secrets dialog (Dashboards → Alert notifier URL), then re-deploy grafana — the dialog shows the step
+   after staging. The URL reaches Grafana only when its container is made again. A deploy that stops on
+   `dashboards.alert_notifier_url must be one http(s) URL …` has a URL set by hand that `docker/.env`'s quoting or
+   the log redaction cannot carry: set it again in the dialog.
+2. **Grafana delivers.** Grafana → Alerting → Contact points shows `kontroll-default`'s last delivery and its
+   error; Grafana's own lines are `{source="internal", service="grafana"} |= "Notify"`. A refused connection to
+   `127.0.0.1:9` means the container still has the not-configured default (step 1).
+3. **The rules evaluate.** Grafana → Alerting → Alert rules: `kontroll heartbeat` is Firing. Error means Grafana
+   cannot query Prometheus — `docker ps` for prometheus, and the `prometheus` datasource.
+4. **Grafana runs.** Nothing alerts while it is down. That is why a monitor that expects the heartbeat about every
+   24h, with a grace of about 26h, is the only check that sees the whole box go quiet. With the one notifier URL,
+   that is a relay of your own that forwards alerts to you and pings the monitor on `kontroll: heartbeat`; a
+   healthcheck ping URL set as the notifier URL reads every alert as a success and tells you nothing.
+
+An ntfy topic shows each alert's raw JSON as the message, unless a relay reshapes it (to be confirmed on the first
+live render, `docs/logging-architecture.md` G6).
+
+A target that never answered **this Prometheus** raises no alert (its `up` was never 1 in the 7-day window): a
+rebuilt box, or a new `prometheus-data` volume, starts that window afresh, so a device down at the rebuild is silent
+until it answers once. A target whose `up` (a probed device's `probe_success`) reads 1 at any of the rule's 1-minute
+evaluations within 10 minutes never fires, a flapping one included; a lone answer that the next failed scrape or
+probe hides before an evaluation does not count.
+One dead for longer than the window stops: Grafana sends it as RESOLVED although it is still down (the window
+passed, not the target; the alert's `description` says so). All by design (`metrics-rules.yaml`'s header). A
+policy made in the Grafana UI is replaced at the next Grafana start; add a route to `policies.yaml` instead.
+
+To stop alerts (a leaked ntfy topic, say), delete `alert_notifier_url` in the editor
+`sops instance/secrets/dashboards.sops.yml` opens, then re-deploy grafana: the dialog keeps a blank value as the URL
+already set. Grafana's database (`grafana-data`) keeps the old URL in its configuration history (SECURITY.md
+R-ALERT-1).
 
 ## See also
 - [../SECURITY.md](../SECURITY.md) **C23** — an error body carries no exception text; the id that finds the details

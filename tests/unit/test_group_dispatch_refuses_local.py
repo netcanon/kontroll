@@ -106,7 +106,7 @@ _CFG_INVENTORY = {"enable_plugins": "yaml, ini, constructed"}
 # filter file is code ansible-core imports on the controller, so a change to one changes this pin in the same
 # diff, where a reviewer reads it (fold 6's read B, N1).
 _FILTER_FILES = {
-    "kontroll_sops.py": "472dd716094ef6a3334a9129f2da2a21ae10776ab9797a3e0d69e9bb5f92191b",
+    "kontroll_sops.py": "b17e653c6b6afd4548e04b4a3e81a132398a7d81d7d53ea9a8f5a29f7e883f6f",
     "kontroll_token.py": "503e3d20ed57425fdc839154e14b0a867ea947d1108d203b11fb46f656811153",  # gitleaks:allow (a hash)
 }
 

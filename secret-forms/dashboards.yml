@@ -4,7 +4,7 @@
 # encrypts each value into instance/secrets/dashboards.sops.yml via gitio.sops_set. See secret-forms/README.md.
 domain: dashboards
 label: Dashboards & API token
-description: Grafana admin login + the kontroll API token that arms privileged mutation (C10).
+description: Grafana admin login, the alert notifier URL, and the API token that arms privileged mutation (C10).
 order: 30
 recipients: base          # informational: /.sops.yaml key_group (base = control + break-glass; no Semaphore key)
 # `rotatable: true` opts a field into the Secrets-dialog rotation UX (overwrite-confirm + an actuation
@@ -47,3 +47,14 @@ fields:
     rotatable: true
     actuation: {kind: recreate, service: api, api_privileged: true}
     help: Bearer token that arms the privileged API/GUI mutation routes (propose-then-promote).
+  - key: alert_notifier_url
+    label: Alert notifier URL
+    type: password            # the URL is the credential of every URL-shaped notifier (ntfy topic, webhook token)
+    required: false           # unset: alerts evaluate and reach no one, and every deploy says so
+    shape: http_url           # no whitespace or other non-printable character, quote, backslash, $ or #
+    rotatable: true
+    actuation: {kind: recreate, service: grafana}
+    help: >-
+      Where Grafana POSTs every alert as JSON: an ntfy topic, a Gotify URL, or a relay of your own (a healthcheck ping
+      URL reads every alert as a success). One http(s) URL with no whitespace or other non-printable character, quote,
+      backslash, $ or #. A blank keeps the URL set; to clear it, see secret-forms/README.md. Re-deploy grafana after.

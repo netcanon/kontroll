@@ -37,9 +37,10 @@ TASKS = ("Look for the host's persistent journal", "Choose the host journal dire
 RENDER = "Render docker/.env (secrets — never logged)"
 GID_TASKS = ("Discover the host systemd-journal GID", "Extract the numeric systemd-journal GID")
 UP = "Bring up the selected stack service(s)"
-NOT_IN_RUN = "This run does not bring Vector up; docker/.env names it for the next `up` that does."
-REFUSED_NOT_IN_RUN = ("This run does not bring Vector up, but docker/.env would carry the value to the next `up` "
-                      "that does.")
+NOT_IN_RUN = ("This run does not bring Vector up; the env file this deploy renders names it for the next `up` "
+              "that does.")
+REFUSED_NOT_IN_RUN = ("This run does not bring Vector up, but the env file this deploy renders would carry the value to "
+                      "the next `up` that does.")
 SUFFIX = "does not bring Vector up"   # in both, and short enough that no folding of the playbook's text splits it
 
 pytestmark = [
@@ -265,7 +266,8 @@ def test_a_stack_without_vector_still_chooses_the_journal(tmp_path, host, contai
 def test_a_stack_without_vector_still_refuses_a_bad_journal(tmp_path):
     """With no `vector` in stack_services, kontroll_journal_dir naming a directory journald does not write, or a
     /var/log/journal the host lacks, still stops the play at the refusal, in a dry-run and an apply, and the refusal
-    says that this run does not bring Vector up but docker/.env would carry the value to the next `up` that does.
+    says that this run does not bring Vector up but the env file this deploy renders (docker/.env) would carry the
+    value to the next `up` that does.
     Guards I-60's other half: docker/.env would carry the value to the next `up` of Vector, which would bind it (and
     make a /var/log/journal the host lacks, I-25), while the run that wrote it passed; and a refusal that named only a
     bind this run does not make, which told an operator deploying the api alone nothing of why (the I-60 reads, A N3;

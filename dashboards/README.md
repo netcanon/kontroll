@@ -11,8 +11,14 @@ Grafana is **deployed** (Phase 5, `${KONTROLL_MGMT_IP}:3002`).
   initializes/loginto it); its generated runtime files are gitignored.
 - `grafana/provisioning/` — datasources + dashboard *providers* + **alerting** (auto-loaded).
 - `grafana/provisioning/alerting/` — Grafana-managed **alert rules** (`logging-rules.yaml`:
-  container restart, backup failure, onboard error, `auth-denied` spike) + a default no-op
-  contact point (`contactpoints.yaml`). NO separate Loki ruler — add a rule = a drop-in here.
+  container crash storm, backup failure, onboard error, `auth-denied` spike; `metrics-rules.yaml`: a
+  scrape target or probed device that answered in the last 7 days and stopped; `heartbeat-rule.yaml`:
+  an alert that always fires, delivered daily, that proves delivery), the **policy tree**
+  (`policies.yaml`, which replaces any policy made in the UI at each Grafana start) and the one
+  **contact point** (`contactpoints.yaml`: a webhook whose URL is the `dashboards` domain's
+  `alert_notifier_url`, set in the Secrets dialog). NO separate
+  Loki ruler and no Prometheus `rule_files` — add a rule = a drop-in here, labelled `kontroll:` and
+  `severity:` so a route can match it.
 - `grafana/dashboards/` — one JSON per dashboard, auto-loaded by the provider. Most are
   **community-sourced**: a device class declares Grafana.com dashboard ids in its
   `module.yml` (`dashboards: [{gnet, name}]`) and `scripts/fetch-dashboards.py` fetches +
@@ -46,11 +52,14 @@ Grafana is **deployed** (Phase 5, `${KONTROLL_MGMT_IP}:3002`).
 |---|---|
 | Missing widget token | Homepage renders the tile without live data |
 | Bad dashboard JSON | Grafana logs and skips it; others load |
+| No alert notifier URL set | Rules evaluate; every delivery fails at a closed loopback port (`docker/services/grafana.yaml`'s default) and shows on the contact point; each deploy prints `alerting: no notifier URL …` ([troubleshooting §14](../docs/troubleshooting.md)) |
 | Changed a datasource `uid` on an existing Grafana | provisioning fails fatally ("data source not found") — recreate the `grafana-data` volume (state is all provisioned, nothing lost). A first-time deploy is unaffected. |
 
 ## Testing
-YAML is linted by `tests/validate` (yamllint). Live rendering is verified
-post-deploy (L3), not in CI.
+YAML is linted by `tests/validate` (yamllint). The alerting files are pinned hermetically:
+`tests/unit/test_alerting_logging.py` (the log rules) and `tests/unit/test_alerting_metrics.py` (routing,
+the notifier URL's path, the metrics rules — run through `promtool test rules` where promtool is installed —
+and the heartbeat). Live rendering is verified post-deploy (L3), not in CI.
 
 ## See also
 - [../PLAN.md](../PLAN.md) §8 (dashboard design)

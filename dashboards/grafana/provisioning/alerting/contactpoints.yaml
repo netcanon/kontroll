@@ -1,15 +1,31 @@
-# A single benign DEFAULT contact point so the alert rules provision cleanly without forcing the operator to
-# wire Slack/email up front (21-design-logging-continuation.md §2.2). It is DEFINED but not routed by a
-# notification policy here, so it never actually sends — the homelab operator watches the Grafana Alerting
-# panel; an actual notifier (Slack/email/webhook) is an opt-in later drop-in, NOT a blocker. Keeping this file
-# present is also what stops provisioning from failing on a rule that resolves to a missing contact point.
+# The one contact point every alert routes to (policies.yaml): a webhook whose URL is the operator's, read from the
+# Grafana container's environment. KONTROLL_ALERT_URL is rendered into docker/.env from the `alert_notifier_url` key
+# of the `dashboards` SOPS domain (deploy-stack.yml, inside its no_log task); the Secrets dialog sets it (Dashboards →
+# Alert notifier URL). The URL is the credential for every URL-shaped notifier, so it is never written here.
+#
+# Fixed `type: webhook`: a plain JSON POST, which an ntfy topic takes (it shows the raw JSON as the message, unless a
+# relay reshapes it), as do Gotify and a relay of your own. A healthcheck ping URL is no notifier: it reads every
+# alert as a success ping (heartbeat-rule.yaml says how to watch the heartbeat). The type is not a knob (the plan's
+# MF-15): a notifier that is not URL-shaped (e-mail, Telegram) is an operator-authored contact point, a follow-up.
+#
+# Unset, the URL is a closed local port (docker/services/grafana.yaml's default): Grafana provisions cleanly, and
+# every delivery fails and shows as a failed delivery on this contact point; each deploy that brings Grafana up says
+# so.
+# Grafana interpolates `$NAME` in provisioning files from its environment (a literal `$` is written `$$`).
+#
+# `deleteContactPoints` removes the inert e-mail placeholder (`root@localhost`, never routed) a box provisioned before
+# this file had.
 apiVersion: 1
 contactPoints:
   - orgId: 1
-    name: kontroll-logging-default
+    name: kontroll-default
     receivers:
-      - uid: kontroll-logging-noop
-        type: email
-        disableResolveMessage: true
+      - uid: kontroll-default-notifier
+        type: webhook
+        disableResolveMessage: false
         settings:
-          addresses: root@localhost     # placeholder; unrouted (no notification policy points here) => inert
+          url: $KONTROLL_ALERT_URL
+          httpMethod: POST
+deleteContactPoints:
+  - orgId: 1
+    uid: kontroll-logging-noop

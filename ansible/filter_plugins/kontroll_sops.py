@@ -17,16 +17,30 @@ so no decrypted value escapes the no_log boundary (C12). Pairs with the `kontrol
 str.format-composes the env value from this dict, also fail-soft).
 """
 import os
+import re
 import subprocess
 
 import yaml
 
+# A secret domain is a name the Secrets dialog takes (scripts/kontroll/paths.py `_COMPONENT_RE`; this plugin runs
+# without the tool's package on its path, so tests/unit/test_gen_secret_env.py holds this copy to it): no `/` and no
+# `.`, so no spelling of one names another file.
+_DOMAIN_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
+# The platform-core domains (scripts/gen-secret-env.py PLATFORM_CORE_DOMAINS, held equal by the same test):
+# deploy-stack decrypts them fail-closed for its own .env lines, never through this filter.
+_PLATFORM_CORE = frozenset({"semaphore", "dashboards"})
+
 
 def kontroll_sops_domain(domain, secrets_dir):
     """domain (the SOPS file stem) + the resolved secrets dir -> the decrypted dict, or {} (absent/undecryptable).
-    Never raises, never logs the plaintext."""
+    Never raises, never logs the plaintext. A domain that is not a name the Secrets dialog takes (`./dashboards`,
+    `x/../dashboards`, a path to another file), or that is a platform-core one, is {} too: gen-secret-env refuses
+    both, and this second seat does not rest on the committed manifest alone (T32 fold 3 read B, S1; fold 4's read
+    100, N1, N2)."""
     if not domain or not secrets_dir:
         return {}
+    if not isinstance(domain, str) or not _DOMAIN_RE.fullmatch(domain) or domain in _PLATFORM_CORE:
+        return {}                                   # no path spelling reaches another file, nor this one a core file
     path = os.path.join(secrets_dir, "%s.sops.yml" % domain)
     if not os.path.exists(path):
         return {}                                   # un-onboarded domain — fail-soft to empty, never a hard fail

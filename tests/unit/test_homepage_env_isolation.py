@@ -82,9 +82,11 @@ def _deploy_tasks():
 
 def test_deploy_stack_renders_the_portal_env_with_widget_keys_only_under_no_log():
     """The render task exists, writes `{{ stack_dir }}/.env.homepage` 0600, is `no_log` (it handles decrypted
-    values), runs only when Homepage is deployed, and its template emits NOTHING but `homepage_var_*` keys: none of
-    the stack secret names may appear in it. Guards both the missing render (Homepage silently loses its widgets)
-    and a template that grows a stack secret back."""
+    values), runs only when Homepage is deployed, and its template emits NOTHING but `homepage_var_*` keys: its one
+    loop over the dashboards domain filters on exactly that prefix, and none of the stack secret names may appear in
+    it. Guards both the missing render (Homepage silently loses its widgets) and a template that grows a stack secret
+    back, a loop filter that also takes another key of the domain (`or k == 'alert_notifier_url'` passed the prefix
+    check, T32 read B, N6) included."""
     renders = [t for t in _deploy_tasks()
                if isinstance(t.get("ansible.builtin.copy"), dict)
                and str(t["ansible.builtin.copy"].get("dest", "")).endswith("/.env.homepage")]
@@ -96,6 +98,9 @@ def test_deploy_stack_renders_the_portal_env_with_widget_keys_only_under_no_log(
     assert "'homepage' in stack_services" in str(t.get("when", "")), "rendered only when Homepage is deployed"
     content = copy["content"]
     assert "homepage_var_" in content, "the template must select the homepage_var_* keys"
+    loops = re.findall(r"{%-?\s*for\b.*?%}", content, flags=re.S)
+    assert loops == ["{% for k, v in (_dash | default({})).items() if k is string and k.startswith('homepage_var_') %}"
+                     ], loops
     for forbidden in ("SEMAPHORE_", "GRAFANA_ADMIN", "GUI_PASSWORD", "GUI_USER", "KONTROLL_API_TOKEN", "PVE_",
                       "KONTROLL_STAGE_PUSHES", "_sem.", "_secret_env"):
         assert forbidden not in content, "the portal env must never carry %s" % forbidden

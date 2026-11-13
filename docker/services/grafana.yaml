@@ -16,6 +16,10 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
       GF_SERVER_ROOT_URL: "https://grafana.${KONTROLL_DOMAIN:-localhost}"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # The alert notifier's URL, read by provisioning/alerting/contactpoints.yaml (`$KONTROLL_ALERT_URL`). Rendered
+      # into .env from the dashboards SOPS domain; unset or empty, a closed port on the container's own loopback, so
+      # provisioning stays valid and every delivery fails visibly (the contact point's failed-delivery state).
+      KONTROLL_ALERT_URL: ${KONTROLL_ALERT_URL:-http://127.0.0.1:9/kontroll-alerting-not-configured}
     labels:
       # The binds this service reloads on its own (container targets, space-separated): the deploy's
       # restart-on-config-change (scripts/stale-config.py) leaves them out, so a

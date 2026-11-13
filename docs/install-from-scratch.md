@@ -160,7 +160,8 @@ offline break-glass backup):
   (`GUI_PASSWORD`/Grafana/API token, shown once, on a terminal). See SECURITY.md **C11**.
 - **SOPS domains** (`instance/secrets/<domain>.sops.yml`) — each VALUE minted by the operator, encrypted on the
   box: `network` (device creds), `proxmox` (read-only API token), `compute` (docker-host SSH), `dashboards`
-  (Grafana admin pw, GUI pw, **`kontroll_api_token`** for C10), `semaphore` (DB/admin pw, access-key
+  (Grafana admin pw, GUI pw, **`kontroll_api_token`** for C10, the optional `alert_notifier_url` alerts post to),
+  `semaphore` (DB/admin pw, access-key
   encryption), `snmp_observability` (the SNMPv3 v3 read user). A new domain gets `base_recipients`
   (the control key, and the break-glass key where one was chosen) via the `.sops.yaml` catch-all.
 - **SSH keys** (the fleet/device SSH key, the GitHub deploy key) — generated on the box. On the compose-native path

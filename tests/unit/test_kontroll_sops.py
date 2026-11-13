@@ -51,3 +51,29 @@ def test_successful_decrypt_returns_the_parsed_dict(tmp_path, monkeypatch):
     monkeypatch.setattr(kontroll_sops.subprocess, "run",
                         lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="proxmox_api_user: root@pam\n"))
     assert kontroll_sops_domain("proxmox", str(tmp_path)) == {"proxmox_api_user": "root@pam"}
+
+
+def test_a_domain_that_is_not_a_secret_domain_name_reads_no_file(tmp_path, monkeypatch):
+    """A domain spelled as a path (`./pve-lab`, `x/../pve-lab` beside a directory `x`, `../<dir>/pve-lab`, an
+    absolute one, `pve-lab.x`), one the Secrets dialog would not take (`Pve-lab`, `pve-lab `, `-pve`, a list), and a
+    platform-core domain (`dashboards`, `semaphore`) each yield {} without running sops, though the file each names
+    is there; `pve-lab` and `9site`, which the dialog writes, decrypt. Why: the filter joins the domain into a path,
+    so `./dashboards` reached the platform-core dashboards file (the Grafana admin password, the alert URL) for a
+    drop-in that gen-secret-env's exact-name refusal let through (T32 fold 3 read B, S1); a rule weakened to its first
+    letter passed every spelling this tried while no file it named was there, and the filter read a domain the dialog
+    writes as {} (fold 4's reads 90, N5 and 100, N1, N2). The generator refuses the same names, so the deploy does not
+    rest on the committed manifest alone."""
+    (tmp_path / "x").mkdir()
+    for name in ("pve-lab", "9site", "dashboards", "semaphore", "pve-lab.x", "Pve-lab", "pve-lab ", "-pve"):
+        (tmp_path / ("%s.sops.yml" % name)).write_text("enc")
+    ran = []
+    monkeypatch.setattr(kontroll_sops.subprocess, "run", lambda *a, **k: ran.append(a) or types.SimpleNamespace(
+        returncode=0, stdout="alert_notifier_url: https://example.test/x"))
+    for spelling in ("./pve-lab", ".//pve-lab", "x/../pve-lab", "../%s/pve-lab" % tmp_path.name,
+                     str(tmp_path / "pve-lab"), "pve-lab.x", "Pve-lab", "pve-lab ", "-pve", "dashboards", "semaphore"):
+        assert os.path.exists(os.path.join(str(tmp_path), "%s.sops.yml" % spelling)), spelling
+        assert kontroll_sops_domain(spelling, str(tmp_path)) == {}, spelling
+    assert kontroll_sops_domain(["pve-lab"], str(tmp_path)) == {}
+    assert ran == []
+    for domain in ("pve-lab", "9site"):
+        assert kontroll_sops_domain(domain, str(tmp_path)) == {"alert_notifier_url": "https://example.test/x"}

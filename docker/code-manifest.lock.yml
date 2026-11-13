@@ -54,7 +54,7 @@ files:
   scripts/kontroll/service/refresh.py: "3aef2ed12246e0001c3b2e4d9ef423adcd61a9432340cb7110f15a85951cdaf6"
   scripts/kontroll/service/scaffold.py: "2d5f2acdb96d0f8c1a1bf0d609dcdb3601049a97e0e95b4bbe1b1c441e23967f"
   scripts/kontroll/service/search.py: "0e9bc6b0a3bad037d05b9396320b7d160bb6a93fc3752943d0a51390227f2557"
-  scripts/kontroll/service/secrets.py: "1f4dabf1ebb379cc9a1840655e393968d72b61091cfefd8f2b062d7ad7efe01d"
+  scripts/kontroll/service/secrets.py: "ddbf87b444847f3f256731cd7b0e203671e39327bbfe5f6ca073b9faa548a40b"
   scripts/kontroll/service/settings.py: "4f45b3cbdeb0e027d507ba45d669434d21ec052a8168757d642473f9ba749db3"
   scripts/kontroll/service/units.py: "39edd46131c576fcf79f96a93a5667ddd2e3bb20820eb0ec4f0d1a40d9b841ba"
   scripts/kontroll/yamlscalar.py: "3579bb5c36ade8d63f1637378936a3acd85a20d437c9638455470b5d722cc7c0"

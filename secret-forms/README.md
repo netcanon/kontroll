@@ -24,6 +24,7 @@ fields:
     required: true
     generate: hex32               # OPTIONAL — offer a generate button (hex32 | base64_32)
     default: admin                # OPTIONAL — a non-secret default (text only)
+    shape: http_url               # OPTIONAL — the form a provided value must take (http_url), checked before encrypting
     rotatable: true               # OPTIONAL — opt this field into the Secrets-dialog ROTATION UX (#141)
     actuation:                    # OPTIONAL — how a NEW value goes LIVE (post-promote hand-off; the GUI runs none)
       kind: recreate              #   recreate | grafana-cli | semaphore-admin | none (absent ⇒ stage-only)
@@ -38,6 +39,23 @@ fields:
 value on the box (`hex32` = `openssl rand -hex 32`; `base64_32` = `openssl rand -base64 32`). `text` is a
 plain non-secret field (usernames, emails). **Recipiency is owned by your instance's `.sops.yaml`** (`instance/.sops.yaml`; the shipped
 template is [`instance.example/.sops.yaml`](../instance.example/.sops.yaml)), not this file — `recipients:` is documentation only.
+
+`shape` refuses a provided value before anything is encrypted: the routes answer 422 naming the field and the rule,
+never the value. The set is closed (`secrets._SHAPES`, held over every descriptor by
+`tests/unit/test_secrets_service.py`; an unknown name refuses every value, and every shape a value that is not a
+string). `http_url` is one http(s) URL with no whitespace or other non-printable character, quote, backslash, `$` or
+`#`: a value `docker/.env` carries in single quotes (a `'` would end them, and compose prints a line it cannot parse)
+and Vector can redact in Grafana's failed-delivery line (a space, a quote, a backslash or a character Go escapes stops
+the redaction mid-path); a `$` or `#` would change the line were it unquoted. `deploy-stack.yml` checks the same rule
+at render for `alert_notifier_url`, for a value set with `sops` by hand; a field that adopts a shape and is rendered
+into `docker/.env` needs a render check of its own. Printable is judged by each side's Python: a character the
+deploy's Python does not know yet (one new in Unicode 15, under Debian 12's Python 3.11) is refused at the deploy
+though the dialog, on a newer Python, may take it; percent-encode it in a path or query, and write a host in its
+`xn--` form.
+
+A blank value keeps what is set, so the dialog cannot clear a field. To remove an optional one (to stop alerts
+after a leaked notifier URL, say), delete its key in the editor `sops instance/secrets/<domain>.sops.yml` opens
+(never on the command line, SECURITY.md C11), then re-deploy the service its `actuation:` names.
 
 ## Rotation (`rotatable:` + `actuation:`, #141)
 

@@ -65,6 +65,76 @@ def test_build_plan_missing_required_is_error(monkeypatch):
     assert secrets_service.build_secret_plan("acme", {})["error"] == "missing:acme_dns_token"
 
 
+_PWS = {"grafana_admin_password": "pw", "gui_admin_password": "pw"}     # the dashboards domain's required two
+# Values the http_url shape refuses: one docker/.env's quotes, Vector's redaction of Grafana's failed-delivery line
+# or an unquoted line could not carry, or not one http(s) URL (T32, S1).
+_BAD_URLS = ["https://192.0.2.10/a b", "https://192.0.2.10/a$b", "https://192.0.2.10/a${b}", "https://192.0.2.10/#x",
+             'https://192.0.2.10/"x', "https://192.0.2.10/'x", "https://192.0.2.10/a\\b",
+             "https://192.0.2.10/x\nKONTROLL_X=1", "https://192.0.2.10/x\t",
+             "https://192.0.2.10/x\x00", " https://192.0.2.10/x", "ftp://192.0.2.10/x", "https://",
+             "192.0.2.10/x"]
+
+
+def test_every_shape_a_descriptor_names_is_one_the_plan_knows():
+    """Every `shape:` a secret-forms descriptor declares is in the closed set `secrets._SHAPES`, and the notifier
+    URL declares `http_url`. Why: a misspelt shape would refuse every value the dialog sends (fail closed, but a
+    form nobody can save), and a notifier URL with no shape would be stored however docker/.env would mangle it."""
+    shapes = {(form["domain"], f["key"]): f["shape"] for form in catalog.load_secret_forms()
+              for f in form.get("fields", []) if "shape" in f}
+    assert shapes.get(("dashboards", "alert_notifier_url")) == "http_url"
+    for where, shape in shapes.items():
+        assert shape in secrets_service._SHAPES, "%s.%s: shape %r is not one the plan knows" % (where + (shape,))
+
+
+@pytest.mark.parametrize("value", _BAD_URLS + [42, ["https://192.0.2.10/x"]])
+def test_build_plan_refuses_a_value_its_shape_refuses(monkeypatch, value):
+    """A provided notifier URL its field's `http_url` shape refuses is `bad_value:<key>` with the rule's words as
+    the hint, and the plan carries nothing to encrypt and never the value. Why: docker/.env carries the URL into
+    Grafana's environment single-quoted, where a `'` ends the quote (and a line compose cannot parse, it prints in an
+    un-no_logged task's error); a space, a quote, a backslash or a character Go escapes would stop Vector's redaction
+    of Grafana's failed-delivery line mid-path; a `$` or a `#` would change the line were it unquoted; and a value
+    that is not one http(s) URL (another scheme, no host, not a string) is no notifier URL at all (T32 read B, S1;
+    fold 2 read A, N1)."""
+    monkeypatch.setattr(secrets_service, "_existing_keys", lambda d: set())
+    plan = secrets_service.build_secret_plan("dashboards", dict(_PWS, alert_notifier_url=value))
+    assert plan == {"error": "bad_value:alert_notifier_url", "hint": secrets_service._SHAPES["http_url"][1]}
+    assert "whitespace" in plan["hint"] and "$" in plan["hint"]
+
+
+@pytest.mark.parametrize("value", ["https://ntfy.example/kontroll-x7q", "http://192.0.2.10:8080/hook?a=1&tok=x%20y"])
+def test_build_plan_takes_a_url_its_shape_takes(monkeypatch, value):
+    """A notifier URL in the shape (one http(s) URL, a query and a percent escape included) is provided as sent.
+    Why: the shape check must not refuse the URLs ntfy and a webhook relay hand out."""
+    monkeypatch.setattr(secrets_service, "_existing_keys", lambda d: set())
+    plan = secrets_service.build_secret_plan("dashboards", dict(_PWS, alert_notifier_url=value))
+    assert plan["error"] is None and plan["to_set"]["alert_notifier_url"] == value
+
+
+def test_build_plan_refuses_every_value_of_an_unknown_shape(monkeypatch):
+    """A field whose `shape:` the plan does not know refuses every provided value, and a blank one is still
+    skipped. Why: the shape set is closed; a typo must fail closed rather than store a value unchecked."""
+    monkeypatch.setattr(secrets_service, "_existing_keys", lambda d: set())
+    monkeypatch.setattr(catalog, "secret_form", lambda d: {"domain": d, "fields": [{"key": "u", "shape": "htp_url"}]})
+    plan = secrets_service.build_secret_plan("x", {"u": "https://192.0.2.10/x"})
+    assert plan["error"] == "bad_value:u" and "htp_url" in plan["hint"]
+    blank = secrets_service.build_secret_plan("x", {"u": ""})
+    assert blank["error"] is None and blank["view"] == [{"key": "u", "label": "u", "source": "skipped"}]
+
+
+@pytest.mark.parametrize("value", [42, True, ["https://192.0.2.10/x"], {"u": "https://192.0.2.10/x"}])
+def test_build_plan_refuses_a_value_that_is_not_a_string_for_any_shape(monkeypatch, value):
+    """A shaped field refuses a provided value that is not a string (a number, a bool, a list, a mapping) before its
+    shape's rule is asked, so a shape whose rule takes anything still stores only a string, and a string it takes is
+    stored. Why: the dialog's JSON can send any type, and `http_url`'s own rule held the type check alone; a second
+    shape whose rule left it out would hand SOPS a list or a mapping (T32 fold 1 read B, N3)."""
+    monkeypatch.setattr(secrets_service, "_existing_keys", lambda d: set())
+    monkeypatch.setitem(secrets_service._SHAPES, "anything", (lambda v: True, "any value"))
+    monkeypatch.setattr(catalog, "secret_form", lambda d: {"domain": d, "fields": [{"key": "u", "shape": "anything"}]})
+    assert secrets_service.build_secret_plan("x", {"u": value}) == {"error": "bad_value:u", "hint": "any value"}
+    taken = secrets_service.build_secret_plan("x", {"u": "x"})
+    assert taken["error"] is None and taken["to_set"] == {"u": "x"}
+
+
 def test_build_plan_keeps_already_set(monkeypatch):
     """A required field left blank but ALREADY set in the domain is kept (source already_set), not re-written
     — re-saving a form without re-typing a password doesn't blank it."""

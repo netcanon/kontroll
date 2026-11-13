@@ -541,8 +541,8 @@
           % _journal_host_how) if _journal_dir in ['/var/log/journal', '/run/log/journal'] else
           ('The host journal directory from %s is %s: journald writes /var/log/journal (persistent) or
           /run/log/journal (volatile), and Vector binds one of those two.' % (_journal_how, _journal_dir)) }}{{ '' if
-          'vector' in stack_services else ' This run does not bring Vector up, but docker/.env would carry the value
-          to the next `up` that does.' }}
+          'vector' in stack_services else ' This run does not bring Vector up, but the env file this deploy renders
+          would carry the value to the next `up` that does.' }}
         quiet: true
 
     - name: Say which host journal Vector reads (I-25)
@@ -556,8 +556,33 @@
         msg: >-
           {{ _not_known if _journal_how == 'NOT KNOWN' else
              'Vector reads the host journal at %s (from %s).' % (_journal_dir, _journal_how) }}{{ '' if
-          'vector' in stack_services else ' This run does not bring Vector up; docker/.env names it for the next
-          `up` that does.' }}
+          'vector' in stack_services else ' This run does not bring Vector up; the env file this deploy renders
+          names it for the next `up` that does.' }}
+
+    - name: Check the alert notifier URL's shape (a bool; the URL never leaves the no_log task)
+      # The Secrets dialog refuses a URL that docker/.env's single quotes or Vector's redaction cannot carry
+      # (secret-forms `shape: http_url`); this holds one set with sops by hand. A `'` ends the quote, and compose prints
+      # a line it cannot parse in the bring-up, which is not no_log; a space, a `"`, a `\` or a character Go escapes
+      # stops the redaction's path in Grafana's failed-delivery line, so the rest of the URL reaches Loki; a `$` or a
+      # `#` would change the line were it unquoted. The rule is the form's: printable, and none of a space, a quote, a
+      # backslash, `$` or `#`. A list, not a pattern, holds the characters: Jinja would read a pattern's backslash.
+      ansible.builtin.set_fact:
+        _alert_url_ok: >-
+          {{ _u == '' or (_u is match('https?://.') and _u.isprintable()
+             and (_refused | select('in', _u) | list | length) == 0) }}
+      vars:
+        _u: "{{ _dash.alert_notifier_url | default('', true) | string }}"
+        _refused: [" ", '"', "'", "\\", "$", "#"]
+      no_log: true
+
+    - name: Refuse a notifier URL the Secrets dialog's http_url shape refuses
+      ansible.builtin.assert:
+        that: _alert_url_ok | bool
+        quiet: true
+        fail_msg: >-
+          dashboards.alert_notifier_url must be one http(s) URL with no whitespace or other non-printable character,
+          quote, backslash, $ or # (the value is rendered single-quoted into docker/.env, and Grafana's failed-delivery
+          line must stay redactable). Set it again in the Secrets dialog, which refuses such a value.
 
     - name: Render docker/.env (secrets — never logged)
       ansible.builtin.copy:
@@ -581,6 +606,10 @@
           SEMAPHORE_ADMIN_EMAIL={{ _sem.semaphore_admin_email }}
           SEMAPHORE_ACCESS_KEY_ENCRYPTION={{ _sem.semaphore_access_key_encryption }}
           GRAFANA_ADMIN_PASSWORD={{ _dash.grafana_admin_password }}
+          {# The alert notifier's URL (contactpoints.yaml): optional, so absent or null renders empty and
+             grafana.yaml's default applies. A URL-shaped notifier's URL is its credential, hence the SOPS domain
+             and no_log. Single-quoted, so compose reads it literally; the shape check above refuses a quote. #}
+          KONTROLL_ALERT_URL='{{ _dash.alert_notifier_url | default('', true) }}'
           LOKI_RETENTION_PERIOD={{ loki_retention_period | default('720h') }}
           PROM_RETENTION_TIME={{ prom_retention_time | default('90d') }}
           PROM_RETENTION_SIZE={{ prom_retention_size | default('20GB') }}
@@ -632,6 +661,22 @@
           KONTROLL_CANONICAL_MODE=rw
           {% endif %}
       no_log: true
+
+    - name: Decide whether an alert notifier URL is set (a bool; the URL never leaves the no_log task)
+      ansible.builtin.set_fact:
+        _has_alert_url: "{{ (_dash.alert_notifier_url | default('', true) | string | trim | length) > 0 }}"
+      no_log: true
+      when: "'grafana' in stack_services"
+
+    - name: Say so when Grafana's alerts reach no one (never a silent default)
+      # The rules evaluate either way; without a URL every notification fails at a closed port (grafana.yaml's
+      # default), which shows only on the Alerting page. An operator who never set one would otherwise read silence
+      # as health (T32).
+      ansible.builtin.debug:
+        msg: >-
+          alerting: no notifier URL in the dashboards secrets domain — alert rules evaluate, nobody is notified.
+          Set it in the Secrets dialog (Dashboards → Alert notifier URL) and re-deploy grafana.
+      when: "'grafana' in stack_services and not (_has_alert_url | bool)"
 
     - name: Render docker/.env.homepage — the portal's OWN env, widget tokens only (never the stack secrets)
       # Homepage used to `env_file` the WHOLE stack .env: the Semaphore DB password and access-key encryption secret,
