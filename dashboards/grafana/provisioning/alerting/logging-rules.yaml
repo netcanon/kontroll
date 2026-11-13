@@ -163,12 +163,14 @@ groups:
               conditions:
                 - evaluator: {type: gt, params: [0]}
               refId: C
+      # One error fires it. The wait is one evaluation, well inside the window: a wait as long as the window let the
+      # line leave it as the wait ended, so a one-off error never fired (I-102).
       - uid: kontroll-log-onboard-error
         title: Onboard / capability error
         condition: C
         noDataState: OK
         execErrState: Error
-        for: 10m
+        for: 1m
         labels: {severity: warning, kontroll: logging}
         annotations: {summary: "An onboard or capability-promote surfaced an error in the audit stream."}
         data:
@@ -194,12 +196,14 @@ groups:
               conditions:
                 - evaluator: {type: gt, params: [0]}
               refId: C
+      # More than five denials inside five minutes fire it, a burst included: with a wait as long as the window the
+      # count had to stay over five for five minutes, so a burst of denials never fired (I-102).
       - uid: kontroll-log-auth-denied-spike
         title: auth-denied spike
         condition: C
         noDataState: OK
         execErrState: Error
-        for: 5m
+        for: 1m
         labels: {severity: critical, kontroll: logging}
         annotations: {summary: "Repeated auth-denied in the privileged-surface audit log (brute-force / misconfig)."}
         data:

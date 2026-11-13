@@ -11,6 +11,17 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(dashboards): the onboard-error and auth-denied alerts fire on a one-off (I-102, 2026-11-12)
+
+Both rules waited as long as their window (`for: 10m` over ten minutes, `for: 5m` over five), so the line that met
+the condition left the window just as the wait ended: a one-off onboard error, or a burst of more than five denials
+inside five minutes, never alerted.
+
+- `logging-rules.yaml`: each waits one evaluation (`for: 1m`). The crash storm keeps its wait of its whole window:
+  it is for a crash loop, and one crash still fires nothing.
+- `test_alerting_logging.py` runs each logging rule's pending-then-firing state over one line (a burst over a count
+  threshold) at every phase of its group's evaluations, and the crash storm over one crash and over a crash a minute.
+
 ### fix(ansible): a backup names each device it missed, and its alert fires per device (I-65, I-82, 2026-11-12)
 
 A device the nightly backup missed was named only in its job's output. No alert read it: of the server's own
