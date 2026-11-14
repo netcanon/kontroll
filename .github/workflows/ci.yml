@@ -32,6 +32,10 @@ concurrency:
 env:
   # Opt in to Node.js 24 for JavaScript actions ahead of the forced cutover (netcanon parity).
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  # The offline suite's worker processes (pytest-xdist), read by the tests job's pytest step and by validate.sh's
+  # pytest step alike: in one process the suite held one core of the runner while the others idled. Kept low, as a
+  # self-hosted host may carry several runners, each running a job (tests/README.md "Parallel runs").
+  KONTROLL_PYTEST_WORKERS: '2'
 
 jobs:
   validate:
@@ -212,7 +216,9 @@ jobs:
         env:
           KONTROLL_REQUIRE_CHECKOUT: "1"
           KONTROLL_ANSIBLE_CORE: ${{ matrix.ansible-core }}
-        run: pytest -m "not e2e and not slow" --cov=scripts --cov=gui --cov=api --cov-report=term-missing
+        run: >-
+          pytest -m "not e2e and not slow" -n "$KONTROLL_PYTEST_WORKERS"
+          --cov=scripts --cov=gui --cov=api --cov-report=term-missing
 
   snmp-modules:
     name: snmp modules (generator rebuild · CGO byte-gate)

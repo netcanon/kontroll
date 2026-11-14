@@ -86,7 +86,12 @@ PY="$(command -v python3 || command -v python || true)"
 if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
   # KONTROLL_REQUIRE_CHECKOUT=1: a row marked requires_checkout that would be skipped here (the tree is no git
   # checkout) stops the session instead, so the gate cannot pass without having run them (I-51).
-  step pytest 0 env KONTROLL_REQUIRE_CHECKOUT=1 "$PY" -m pytest -m "not e2e and not slow" -q
+  # KONTROLL_PYTEST_WORKERS=N (CI's workflow sets it): the suite runs on N worker processes (pytest-xdist,
+  # tests/requirements-dev.txt); unset or empty, in this one. A count xdist refuses, or no xdist where one is set,
+  # fails the step.
+  xdist=()
+  [ -n "${KONTROLL_PYTEST_WORKERS:-}" ] && xdist=(-n "$KONTROLL_PYTEST_WORKERS")
+  step pytest 0 env KONTROLL_REQUIRE_CHECKOUT=1 "$PY" -m pytest -m "not e2e and not slow" -q ${xdist[@]+"${xdist[@]}"}
   # the plaintext guard's predicate against a document the INSTALLED sops writes: the ciphertext token, the
   # encrypted comment and the metadata block are sops's shapes, not ours, and a sops bump that changes one must
   # fail HERE — not refuse every healthy secret file at the next deploy. A step of its own, behind `have sops`:

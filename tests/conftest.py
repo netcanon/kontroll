@@ -113,6 +113,23 @@ def pytest_collection_modifyitems(items):
             it.add_marker(pytest.mark.skip(reason=reason))
 
 
+def pytest_configure(config):
+    """The KONTROLL_REQUIRE_CHECKOUT refusal above, asked once more by a run that starts worker processes (`-n N`,
+    pytest-xdist: tests/README.md "Parallel runs"), before it starts one. The workers collect the rows, so the hook
+    above raises its error inside a worker, where xdist reports a crashed worker and an INTERNALERROR and the reason is
+    lost; the run still failed, but said nothing of why. The controller collects nothing, so it cannot count the
+    marked rows: it asks for the reason alone, which only a run that sets the variable meets (validate's pytest step
+    and CI's pytest job, both of the whole suite). A worker, and a run with no workers, leave it to the hook."""
+    if os.environ.get("KONTROLL_REQUIRE_CHECKOUT") != "1" or hasattr(config, "workerinput"):
+        return
+    if not getattr(config.option, "numprocesses", None):
+        return
+    reason = _checkout.checkout_reason(ROOT)
+    if reason:
+        raise pytest.UsageError("KONTROLL_REQUIRE_CHECKOUT=1, and the rows marked requires_checkout would be skipped "
+                                "on every worker: %s" % reason)
+
+
 @pytest.fixture
 def isolated_git(tmp_path_factory, monkeypatch):
     """Every git a test starts sees the test, and nothing of whoever runs the suite. Its CONFIGURATION is empty:

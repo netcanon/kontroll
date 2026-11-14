@@ -4,6 +4,9 @@
 # NEITHER ansible nor the lab. PyYAML + flask are import-time deps of the modules under test.
 pytest>=8
 pytest-cov>=5
+# pytest-xdist: CI runs the offline suite on KONTROLL_PYTEST_WORKERS worker processes (.github/workflows/ci.yml),
+# where one process held one core of the runner; unset, as in a local run, the suite runs in one (tests/README.md).
+pytest-xdist>=3.8
 PyYAML>=6
 flask>=3.0
 # fastapi + httpx: the typed API (api/) imports FastAPI; Starlette's TestClient (httpx) drives
