@@ -114,24 +114,63 @@ def pytest_collection_modifyitems(items):
 
 
 @pytest.fixture
-def isolated_git(tmp_path_factory, monkeypatch):
-    """Every git a test starts sees the test, and nothing of whoever runs the suite. Its CONFIGURATION is empty:
+def isolated_git(tmp_path_factory):
+    """Every git a test starts sees the test, and nothing of whoever runs the suite. No variable of git's reaches it:
+    every `GIT_*` in the runner's environment is removed, not a list of names. A suite started from a git hook
+    inherits `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE`, and a test's `git -C <scratch> init`, `config` and
+    `add -A` would then act on the DEVELOPER's repository instead of the scratch one; a parent git hands down keys and
+    switches (`GIT_CONFIG_PARAMETERS`, `GIT_NO_REPLACE_OBJECTS`, `GIT_NAMESPACE`, a pull hook's `GIT_REFLOG_ACTION`,
+    which failed two reflog rows); and under a pathspec reading the runner set (`GIT_LITERAL_PATHSPECS`,
+    `GIT_GLOB_PATHSPECS`) a test of a printed put-back passes a form that is wrong, or fails one that is right (read
+    B-f17, S1). A list of names missed the ones nobody had named (read B-f18, N1). And its CONFIGURATION is empty:
     `GIT_CONFIG_GLOBAL` names an empty file, the system file is switched off, `XDG_CONFIG_HOME` is a directory with
     nothing in it — a global hooks path, excludes file, `core.safecrlf` or signing setting must not decide a test.
-    And no variable points it at a REPOSITORY: `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`
-    and `GIT_COMMON_DIR` are removed — nor does a key or a switch handed down by a parent git reach it
-    (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`, `GIT_NO_REPLACE_OBJECTS`, `GIT_DEFAULT_HASH`). A suite started from a git hook inherits them, and a test's
-    `git -C <scratch> init`, `config` and `add -A` would then act on the DEVELOPER's repository instead of the
-    scratch one. For tests that run the real git (name it in `pytest.mark.usefixtures`, and as a parameter of any
-    fixture that copies `os.environ`)."""
-    home = tmp_path_factory.mktemp("no-git-config")
-    (home / "gitconfig").write_bytes(b"")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
-    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
-                 "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_NO_REPLACE_OBJECTS", "GIT_DEFAULT_HASH"):
-        monkeypatch.delenv(name, raising=False)
+    For tests that run the real git (name it in `pytest.mark.usefixtures`, and as a parameter of any fixture that
+    copies `os.environ`); a test file whose source starts git takes it in its module `pytestmark`, and builds a git's
+    environment from `os.environ` at each call, never once at import, which keeps a hook's `GIT_DIR` whatever this
+    fixture does (read B-f19, S1). All of it is set in a MonkeyPatch of the fixture's own, not the row's, so a row's
+    `monkeypatch.undo()` puts back the row's patches alone: set through the row's, an undo took the fixture's
+    environment out with them and handed every git after it the runner's (read B-f18, S1; read B-f19, N3). A row
+    whose own `monkeypatch` was set up before this fixture (an autouse fixture asked for it) sets no `GIT_*` through
+    it: torn down after this fixture, its undo puts this fixture's configuration back for every later row (read
+    B-r21, S4), and `_every_row_gives_the_git_environment_back` below fails such a row at its teardown. A fixture
+    wider than a row is set up before this one holds, so it starts no git (read B-r21, N7).
+    tests/unit/test_suite_git_isolation.py holds each test file to these, and the fixture to outlasting an undo."""
+    with pytest.MonkeyPatch.context() as mp:
+        for name in [k for k in os.environ if k.startswith("GIT_")]:
+            mp.delenv(name)
+        home = tmp_path_factory.mktemp("no-git-config")
+        (home / "gitconfig").write_bytes(b"")
+        mp.setenv("GIT_CONFIG_GLOBAL", str(home / "gitconfig"))
+        mp.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        mp.setenv("XDG_CONFIG_HOME", str(home))
+        yield
+
+
+def _git_environment():
+    return {k: v for k, v in os.environ.items() if k.startswith("GIT_") or k == "XDG_CONFIG_HOME"}
+
+
+@pytest.fixture(autouse=True)
+def _every_row_gives_the_git_environment_back():
+    """Every row ends with the git environment it began with: no `GIT_*` and no `XDG_CONFIG_HOME` outlives the row
+    that set it. An autouse fixture of the root conftest is set up before every other function-scoped fixture, so it
+    is torn down after all of them, the row's own `monkeypatch` among them. A row whose `monkeypatch` was set up
+    before `isolated_git` (an autouse fixture asked for it) and set a `GIT_*` after it put the fixture's empty
+    configuration back once the fixture had gone, for every later row (read B-r21, S4). The variables are put back
+    and the row fails at teardown, naming them, never their values; tests/unit/test_suite_git_isolation.py plants
+    such a row."""
+    before = _git_environment()
+    yield
+    after = _git_environment()
+    changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    for k in changed:
+        if k in before:
+            os.environ[k] = before[k]
+        else:
+            os.environ.pop(k, None)
+    if changed:
+        pytest.fail("this row left the git environment changed after its teardown: " + ", ".join(changed))
 
 
 @pytest.fixture

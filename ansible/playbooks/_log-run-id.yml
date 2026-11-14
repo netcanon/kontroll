@@ -4,8 +4,9 @@
 # tests/unit/test_run_id_stamp_imported.py) so every run's id lands in the run's output (the ansible log
 # where ansible/ansible.cfg is read, AND the Semaphore job output, Postgres-backed, queryable via the
 # task API) — the key that correlates one operation across the ansible log, the Semaphore job, and
-# (ahead) the aggregated logs. A caller may inject `-e kontroll_run_id=...`; otherwise a UTC timestamp
-# is used.
+# (ahead) the aggregated logs; a run that stops after a sync (_stop-after-sync.yml's play, right after
+# this in bootstrap.yml and deploy-stack.yml) stops under it too. A caller may inject
+# `-e kontroll_run_id=...`; otherwise a UTC timestamp is used.
 #
 # hosts: all:localhost + run_once. It starts from `all` (NOT hosts: localhost) so the stamp still
 # fires under `--limit <host>` — the onboard verify path runs `ping.yml --limit <host>`, which a

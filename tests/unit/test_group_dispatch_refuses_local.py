@@ -98,9 +98,10 @@ _SSH_CONNECTION = {"pipelining": "True", "ssh_args": "-o ControlMaster=auto -o C
 # `[inventory]` that default enables `script` and `auto` (fold 7's read B, N2; read A, N1). So the file is held to its
 # shipped sections, keys and values; a change to it changes these in the same diff.
 _CFG_SECTIONS = ("defaults", "inventory", "ssh_connection")
-_CFG_DEFAULTS = {"collections_path": "collections", "filter_plugins": "filter_plugins", "host_key_checking": "False",
+_CFG_DEFAULTS = {"callback_result_format": "yaml", "collections_path": "collections",
+                 "filter_plugins": "filter_plugins", "host_key_checking": "False",
                  "interpreter_python": "auto_silent", "inventory": "../instance/inventory",
-                 "log_path": "./.ansible/ansible.log", "nocows": "True", "result_format": "yaml",
+                 "log_path": "./.ansible/ansible.log", "nocows": "True",
                  "retry_files_enabled": "False", "roles_path": "roles", "stdout_callback": "default",
                  "vars_plugins_enabled": "host_group_vars,community.sops.sops"}
 _CFG_INVENTORY = {"enable_plugins": "yaml, ini, constructed"}

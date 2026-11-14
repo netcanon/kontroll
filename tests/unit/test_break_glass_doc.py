@@ -58,16 +58,24 @@ def test_the_runbook_uses_the_tools_own_commands():
 
 
 def test_the_runbook_levels_the_checkout_first_and_its_dry_run_answers_no():
-    """The "Before you start" list fast-forwards the checkout to the canonical, then lists what the checkout holds
-    that the canonical lacks (expecting nothing), before the rollback tag; and step 3's dry run tells the operator to
-    answer **n** to every file. Guards a re-wrap committed on a stale base — the landing then refuses, and its remedy
-    is a rebase over ciphertext a promoted proposal re-encrypted, which cannot merge — a checkout only AHEAD of the
-    canonical passing as level (`merge --ff-only` prints "Already up to date." for it: T11 fold 4's read B, N1), and
-    a dry run that writes."""
+    """The "Before you start" list levels the checkout with the canonical by the sync (`kontroll-land.py --sync`,
+    which reads the canonical in place) before the rollback tag, and names the sync's in-step answer and the one that
+    means commits here the canonical lacks (`… is an ancestor of HEAD`), each as the sync's source says it; it asks
+    for no `git fetch local` and no `local/main..HEAD`; and step 3's dry run tells the operator to answer **n** to
+    every file. Guards a re-wrap committed on a stale base — the landing then refuses, and its remedy is a rebase over
+    ciphertext a promoted proposal re-encrypted, which cannot merge — a checkout only AHEAD of the canonical passing
+    as level (T11 fold 4's read B, N1), the level step itself: `git merge --ff-only local/main` refuses a checkout
+    whose own commit sits beside a promote, the case the sync exists for (read B-r21, S2), and `git log
+    local/main..HEAD` after the sync lists the checkout's own landed commits as missing from the canonical, as a sync
+    that finds the checkout in step leaves `local/main` where the last fetch put it; and a dry run that writes."""
     doc = open(os.path.join(ROOT, "docs", "break-glass.md"), encoding="utf-8").read()
-    order = [doc.index(c) for c in ("git fetch local && git merge --ff-only local/main",
-                                    "git log --oneline local/main..HEAD", "git tag pre-break-glass")]
+    order = [doc.index(c) for c in ("python3 -B scripts/kontroll-land.py --sync", "git tag pre-break-glass")]
     assert order == sorted(order)
+    flat = " ".join(doc.split())
+    assert "in step — HEAD is the canonical's main" in flat and "is an ancestor of HEAD` names commits here" in flat
+    assert "git fetch local" not in doc and "local/main..HEAD" not in doc
+    gitio = open(os.path.join(ROOT, "scripts", "kontroll", "gitio.py"), encoding="utf-8").read()
+    assert "in step — HEAD is the canonical's main (%s)" in gitio and "is an ancestor of HEAD (%s)" in gitio
     step3 = doc[doc.index("**Step 3"):doc.index("**Step 4")]
     assert "Answer **n** to every file" in step3 and "**y**" not in step3
 

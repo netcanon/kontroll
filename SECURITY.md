@@ -1213,6 +1213,197 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   `tests/unit/test_land.py` (real git at every door: the library, the command, `land_main`, `commit_and_push`
   outside staging, the two shell scripts under bash), `tests/unit/test_local_canonical.py` (the play's two
   tasks), `tests/unit/test_staging_isolation.py` (the hook: `main` from every uid).
+  **The sync: the worktree brought forward, with no transport** (T25). After a promote, every landing from the
+  operator's worktree was refused (not a fast-forward) until the worktree held the promote's commit, and the remedy
+  the refusal named — `git fetch local && git rebase local/main`, by hand — ran the canonical's serving side
+  (`upload-pack`, under the canonical's config, as the fetcher: root in the installer container).
+  `gitio.sync_worktree` (`scripts/kontroll-land.py --sync`) is the landing turned round: `main` read once, by its
+  full name, in the seam; the worktree offers its newest commits and the canonical says which it holds (`cat-file
+  --batch-check`, in the seam); the canonical packs `main` without them (`pack-objects --revs --stdout`, in the
+  seam, no `--thin`) onto a pipe into the worktree's `index-pack --strict --stdin`; `main` is checked whole there;
+  and the worktree's own commits since are replayed on top (`git rebase <main>`, committed as `kontroll` — the
+  committer's environment too — unsigned, with autostash, autosquash, update-refs and rebase-merges off, no editor
+  and no git-lfs download: the operator's config decides none of it). `index-pack` reads at most `_SYNC_MAX_PACK`
+  bytes; a larger pack is refused, and named as the worktree's refusal. A replay that stops is undone (`rebase
+  --abort`) and its conflicted files named; a merge in the worktree's own history is refused, not flattened (the
+  remedy is a `git merge`); so is a commit of HEAD's already on another remote (a remote-tracking ref other than
+  `local`'s holds it: a replay would give it a new id, and the branch and its upstream would part); so are
+  uncommitted changes to tracked files, a rebase, merge, cherry-pick, revert or bisect in progress, a worktree named
+  below the top of its repository (git names its ignored files from there, and main's from the top), and a history
+  that shares nothing with `main`. A replay gives each replayed commit a new id. An ignored file of the operator's
+  at a path `main` tracks, under one, or where `main` has a directory — which the replay would overwrite, or remove
+  with its directory, without a word — is refused before the replay and named, HEAD unchanged (and so is a worktree
+  whose ignored files, or main's, git cannot list). **As whom:** the sync writes the WORKTREE, so it is refused to
+  anyone but the worktree's owner (`os.geteuid()` against the owner of its git directory, before anything is
+  written); the deploy runs it — and the state commit and the `local` remote before it — as the operator (`setpriv
+  --reuid/--regid --clear-groups --no-new-privs` and `env -i`, inside the installer container), because what root's
+  git wrote in the operator's repository (objects, the index, `config` through a lock file) the operator's own git
+  could not write over afterwards; the deploy's sync therefore reads the canonical as the operator too (the seam's
+  change to the service uid is root's alone). Root-owned files an earlier build left there are NAMED — in the git
+  directory git itself names (`--git-common-dir`: a linked worktree's objects are in the common one) — before the
+  state commit, and the deploy refuses until a one-time `chown -R` by hand; nothing re-owns the tree. A rebase,
+  merge, cherry-pick, revert or bisect in progress is refused there too, before the state commit, which would
+  otherwise commit onto a replay's detached HEAD (and the abort would take it away). `update.sh` and
+  `update-from-bundle.sh` refuse a caller that does not own the checkout's git directory (root, under sudo), then
+  ask `--sync --check` and refuse on any status but 0 (3, or 1 when it cannot say) before they fetch or merge. **The
+  trust this adds:** on an ARMED box the canonical's `main` has a second writer, the promote, and the sync carries
+  what is on `main` into the operator's checkout — which the NEXT deploy runs as the installer's root (the docker
+  socket, the control age key, the operator's `~/.ssh`): more than a Semaphore job reaches. What a promote puts on
+  `main` passed the promote's gate (which judges the collection set, not code); a direct `update-ref` by a writer of
+  the canonical's files (the accepted-risk row on arming, below) passes no gate, the sync cannot tell the two apart,
+  and when HEAD then IS `main` the landing is `up to date` and judges nothing. So a deploy that brought the worktree
+  forward STOPS, naming what came in — the commits `main` gained (the newest 20, and a count of the rest), every
+  path that changed, and each mode change, symlink and gitlink, in plain git as the operator, a character a terminal
+  acts on shown as `?` — and lands and runs nothing of that tree in that run; the next run's dry-run is of the tree
+  its real run applies. It stops IN THE SYNC'S OWN TASK (`kontroll-land.py --sync --stop-as local-canonical`: it
+  says what came in, removes the mark and exits 4, which fails the task; the sync is the copy the run started with,
+  so no script of the tree that came in runs for it), because no task of that run may come after the sync: an
+  Ansible worker forked after the tree changed can import the tree's filter plugins (`ansible/ansible.cfg`'s
+  `filter_plugins`) when it first templates — the promoted code, as root, in the run whose dry-run previewed the
+  tree before it. The sync leaves a mark in the worktree's git directory (`gitio.SYNC_MARK`: HEAD before it —
+  written BEFORE the replay, so a run killed in the replay leaves it too, and a sync that cannot write it is refused
+  with HEAD as it was, and a mark the failed write made is removed (one there before stays); a replay put back — HEAD
+  where it was, nothing in progress, the tracked files HEAD's (none flagged skip-worktree or assume-unchanged, which
+  git's status does not compare: a checkout of main stopped part-way can leave main's bytes in one, unseen) and no
+  untracked file that was not there before it (listed case for case, whatever `core.ignoreCase` says) — removes a mark
+  that sync wrote; written and read as a regular file,
+  never through a link nor waiting on a FIFO;
+  anything else at its path stops the run as a mark that could not be read, and the stop names it, to remove by hand; a
+  rebase in progress beside the mark is a replay cut short, and the stop names the `git rebase --abort` that puts HEAD
+  back and keeps the mark until it, never "in step", nor is a HEAD that does not hold the canonical's main (asked as the
+  operator): HEAD back where it was before the sync is said as a sync that did not finish, with the `git status` that
+  names main's files the replay left, which the next run would load as root (case for case, `-c core.ignoreCase=false`:
+  with it true, git's status hides a file whose name differs from a tracked one's only in case), and the `ls-files -v`
+  that names the tracked files that status does not compare (under `-c core.quotePath=true`, whatever the operator's own
+  config says, a quoted name given back as `$'…'`), each to compare with main's as git's checkout writes it (`cat-file
+  --filters`; a link by its text, `readlink -nv`) and put back where it holds main's bytes or is missing; each of the
+  stop's refusals, and the sync's and the landing check's, that prints a command holds a line break, so Ansible's YAML
+  display prints it as a block, every command as written (as one line it is a quoted scalar: each `'` doubled, the line
+  wrapped mid-command; the landing task's own refusal, which only a promote between the landing check and the landing
+  makes it print, is still shown so); a git directory whose path holds a line break — any character Python's line split
+  splits on — stops the run unread; a mark whose first line is not a commit id is "not known"), and the stop after a
+  sync (`ansible/playbooks/tasks/stop-after-sync.yml`) keys on the mark: the run after a sync by hand — or after a run
+  killed before it stopped, in its sync's replay too — stops too, before it lands, deploys or runs the worktree's
+  scripts (in `bootstrap.yml` and in `deploy-stack.yml` right after the run-id stamp, `_stop-after-sync.yml`'s play —
+  before deploy-stack's root play that installs Docker — and in `local-canonical.yml` after its uid check, where the
+  refusal
+  of an operation in progress — or of a HEAD on no branch, which a replay quit part-way leaves, or
+  one naming a ref outside `refs/heads/` — follows it before any script of the worktree runs), names
+  what came in, removes the mark (the real run, beside no rebase in progress; `--check` leaves it)
+  and fails. A play run through the installer's passthrough other than these — any other playbook of the tree, such as
+  `reload-observability.yml`, `ping.yml` or `backup-configs.yml` — does not stop, and leaves the mark for the next
+  deploy. **What the stop cannot hold.** Ansible reads every playbook a run imports when the run starts, so the run
+  whose own sync brought the tree in stops on the playbooks it started with, in the sync's task: that stop holds. After
+  a sync by hand, the next run's playbooks — the stop itself, the run's `ansible.cfg` and its filter plugins, and the
+  installer image, built from the worktree — are the tree that came in, and whether that run stops is that tree's own to
+  say; so is the run-id stamp before the stop (I-41), which runs no task of the worktree but templates the id from the
+  inventory's vars for the first host, which a promote can change: a fleet vars file that does not parse ends that run
+  before the stop speaks, and every run after it, until it is mended in the worktree. So the listings that hold are the
+  stopping run's and the hand sync's own (`kontroll-land.py --sync` prints what came in and says to read it before the
+  next deploy); a rebase or merge of `local/main` by hand, after a refused sync,
+  leaves no mark and lists nothing — read `git log --stat HEAD..local/main` before it. What came in is for a human to
+  read before the next run: that run, its dry-run too, runs the tree's own playbooks and scripts as root. The replay
+  runs none of the commits' content as a program (a rebase is a merge of trees, not a run), and no hook or fsmonitor
+  program runs in any git of the sync — the operator's own neither (`core.hooksPath=/dev/null`, `core.fsmonitor=false`):
+  a hooks path into the tree names hooks a promote can bring, on disk before anyone read them. A content filter
+  (`clean`, `smudge`, `process`) or merge driver of the operator's own config still runs in the replay and in its undo
+  (`rebase --abort`, `status`, `reset --hard`), as in any checkout of theirs, and a `.gitattributes` that came in can
+  select it for content that came in; one whose command names a program in the tree runs the version that came in, and
+  one a config file in the tree defines — an `include.path`/`includeIf` of the operator's config into the tree — is the
+  promote's to write (the accepted-risk row on arming, below). A replay git stopped part-way through its checkout is put
+  back: the tracked files are HEAD's again (`reset --hard`), and of the files of main's it wrote, each regular file
+  reached through no link and holding main's bytes is removed (main holds them) and the rest named; a tracked file
+  flagged skip-worktree or assume-unchanged, which the status does not compare (and `reset --hard` leaves alone when it
+  is skip-worktree), is counted and said unchecked, with the command that names it and how to compare it with main's and
+  put HEAD's back, and the mark stays. How to put the canonical's `main` back when what came in is not what was promoted
+  is this control's open question (Q-4). On a disarmed (`separated`) box nothing promotes, and every sync is "in step".
+  `tests/unit/test_sync.py` (real git: in step, a promote brought across, a replay that keeps its author whatever the
+  caller's committer or signing config, the check that brings nothing, a conflict undone, a merge or a commit published
+  on any remote refused, every operation in progress refused — a linked worktree's in its own git directory — the owner
+  check, the canonical byte for byte unchanged and its planted hooks silent, no hook of the operator's hooks path run
+  though a promote brought it, nor one of theirs in any git of the sync, a conflict undone or not, a shallow file in it
+  ignored, the pack only what the worktree lacks and bounded, its temporary pack removed, the seam's and the pack's
+  refusals and the undo's named, a replay stopped mid-checkout put back and main's files it wrote removed or named —
+  real git as the operator over a directory of root's too, no hook run — a status or a listing of the undo's that failed
+  said (a put-back status that times out or cannot start: the mark kept), a tracked file flagged skip-worktree or
+  assume-unchanged — two counted as two, the commands quoted — or flags git could not list or whose listing timed out,
+  said and the mark kept, a case variant of a tracked file main brought found under `core.ignoreCase`, each status a
+  sentence prints case for case, the compare as git's checkout writes it (a link by its text, run as printed on a link
+  that holds main's target and on one that does not) and a name the listing quotes given back as `$'…'` (a `'` in it
+  too), listed whatever the operator's own `core.quotePath` says, `core.ignoreStat` said when set in any of git's
+  spellings and unsaid when its read times out, the box's names held to a spaced and quoted case, run on posix, not
+  skipped, a conflict beside an untracked file of the operator's there before removing the mark it wrote, a link put at
+  the mark after the sync looked left, a name git would quote or split removed and named escaped, an undo cut short or
+  stopped on a lock said with its reason and the lock named, an ignored file in main's way refused before the replay and
+  one beside main's files left, git's reason with the paths it names, the command's exits and what it says came in,
+  `--stop-as` — exit 4, what came in and the mark removed or not, the refusal said as the play's — the mark — written
+  before the replay (one that cannot be written — a directory, a FIFO with or without a reader, a full disk — refuses,
+  HEAD as it was, and a mark the failed write made is removed, one there before kept; a sync killed in its replay leaves
+  it, and the next sync refuses the rebase in progress and names the abort that puts HEAD back, the worktree and the
+  lock quoted — the abort run as printed), removed by a replay put back or never started and by no other (one there
+  before, HEAD elsewhere or unreadable after the abort, an operation in progress, tracked files that differ or that git
+  could not compare, an untracked file the replay left or that git could not list), its first line kept, a linked
+  worktree's in its own git directory, never written or read through a link, nor removed once it is no longer a regular
+  file — a worktree named below its top, one git names no top for and one whose top git cannot say, a top whose name
+  ends in a space brought forward, a git directory whose name ends in one holding the mark its readers find, an ignored
+  nested repository and a one-character name in main's way, `_blob_id` of a FIFO, a device and a sha256 repository's
+  file, a sha256 repository's undo, the abort's own timeout (HEAD read on its own), the could-not-say remedy's index,
+  `--stop-as`'s name pattern, its refusal's one period and its listing since HEAD before, and no HEAD before with a mark
+  git cannot list from said as such — the docs' count of the commits named held to the code's, §10's table rows whole
+  (each split as GFM splits it into its header's cells, its delimiter row's too, no row wrapped onto a line GFM reads
+  as a row of its own, no `\\|`, no escaped backtick nor one that opens no code span, no bare `|` in a code span), and
+  every copy of the listing in it and its compares held to gitio's own, the update scripts' refusals, the check's and
+  the owner's, before the upstream's), `tests/unit/test_stop_after_sync.py` (bootstrap's and deploy-stack's stop, right
+  after the stamp; the stop's git as the operator; the listing it prints held to the sync's and escaped — a moved path,
+  exactly as many commits as are named; the mark read as its path, its first line and a rebase in progress beside it,
+  and a link, a
+  dangling link or a directory at its path failing the read with its own exit and the path; the message's remedy for
+  each read that failed — the path to remove by hand (a mark the operator cannot read named before the read fails), a
+  path with a line break refused before anything is printed (a separate git directory's too), or git's sentence with the
+  owner's `chown` — and for a replay cut short the abort, its lock, the status and the flagged files, the mark kept,
+  never "in step" (an empty mark and a dangling link beside a rebase read as such); "in step" only when HEAD holds the
+  canonical's main, and HEAD back where it was before the sync said as a sync that did not finish, the flagged files
+  named; each status case for case under `core.ignoreCase`, each command on one line of Ansible's YAML display, a
+  carriage return in the mark's first line (of one sync or two); each command quoted for a worktree whose path holds a
+  space; the worktree each stop and sync names by default, the top of the tree the play runs from; the flagged-files
+  sentence held to gitio's `_CUT_SHORT`, word for word; a linked worktree's mark read in its own git directory),
+  `tests/unit/test_local_canonical.py` (the refusals' messages, the busy refusal's abort, lock, status and flagged files
+  when a rebase is in progress among them, quoted for the shell — a linked worktree's lock in its own git directory —
+  the busy refusal's status case for case, its, the not-operator refusal's, the `--check` sync refusal's and the
+  landing-check refusal's commands each on one line of Ansible's YAML display, a HEAD on no branch with nothing in
+  progress, or naming a ref outside `refs/heads/` (a remote's, a tag, one under neither, `refs/headsx/`, a branch name
+  linked on to a remote's), listed (a branch with no commit yet is not) and refused — the line read by its end, and
+  asked and answered as the operator (a tag's answer where root reads a branch among them), a linked worktree's and a
+  separate git directory's too — with the way back named (the branch the sync started on after a quit and the one the
+  reflog names, above its newest `rebase (start)`, after a switch of the operator's own, `symbolic-ref HEAD` naming a
+  ref that is not a branch and a `for-each-ref` of `refs/heads/` listing the branches and nothing else, by the name
+  the switch takes beside a tag of that name, while `git branch` fails, the branch listing; the compare of a file in
+  the switch's way, untracked or tracked with local changes, with the branch's (`refs/heads/<branch>`) as checkout
+  writes it and a link's by its text, each run, HEAD elsewhere too and beside a tag of the branch's name, on names
+  with a space, the put-back too, and one that differs moved out of the worktree to a directory of its own, the
+  operator's home kept as it was and three files of one name each kept, a name with a space moving that file alone;
+  the put-back reading its name literally (one that starts with `:`, a glob's, one not in HEAD too; one that starts
+  with `-` or is named `HEAD` kept from git's options and revisions by the `--`), on a name with a `$`, a `'` or a
+  backslash, beside a case twin and under the operator's GIT_ICASE_ and GIT_LITERAL_PATHSPECS, and putting HEAD's
+  back, not the index's; the link compare saying "differs" for a name that names nothing and for an empty file beside
+  no link, printing something wherever it does not say the same, reading a worktree whose path needs quoting, and
+  leaving the operator's shell and its directory as they were; the quote rule standing before every command it
+  governs; a name with a `$` compared (the link's compare too) and moved as it is, one with a `'` written as the arm
+  says, and a file `~/kontroll-moved` left alone; the listing of a branch whose name holds a slash; the printed reflog
+  rule run after a quit and after a detach, and `--points-at` after the quit; the switch with `--no-guess`, run on a
+  remote's branch of its name; `symbolic-ref HEAD` run on a tag, on a chain and on a detached HEAD; §10's busy row
+  holding each command in a code span, the not-a-branch clause and the way back to the next run whole), the busy
+  refusal's flagged-files sentence held to gitio's `_CUT_SHORT`, word for word, and the busy check right after the
+  stop, the run-id line carried, the sync's task stopping the run itself, the stop at the play's top only),
+  `tests/integration/test_local_canonical_as_root.py` (the deploy after a promote, as root: brought forward as the
+  operator, STOPPED in the sync's task with what came in named, a promoted script not run and a promoted filter plugin
+  not imported, landed by the next run, nothing of another uid's left in the operator's repository, 0 changed after; a
+  sync by hand stopping the next dry-run and run before they land, deploy or run its scripts; bootstrap's stop play
+  stopping on the mark, what came in escaped, and deploy-stack's stamp and stop — read from it — stopping under its
+  name and the id the stamp printed before the next play; a link at the mark's path, a mark that cannot be removed, a
+  first line that is not a commit id, the caller's run id when the stop runs alone; root's own sync refused; a
+  refused sync and a refused check; root's files, an operation in progress and a HEAD on no branch refused before
+  the state commit; the operator's gid; the state commit's failure and its identity).
 - **Every GUI write surface rides this propose-only staging — including the Homepage editor (#136).** The
   onboard/capability/secret/keygen writes and the new `:8443` **Homepage editor** (`POST /api/homepage` — rearrange
   the portal tiles) all go through `gitio.commit_and_push(run_id=…)` → `proposed/<run_id>`; **none imports
@@ -1389,8 +1580,10 @@ group-writable bare repo — so a **container RCE** (not a leaked token; the tok
 **playbook**, **not** a compromised container: a breach of any armed container can **non-fast-forward or delete
 `main` directly** (history rewrite), a higher-impact path than "park a rejectable proposal." This is **accepted**,
 bounded by: the canonical is a **reconstructible cache** (the operator workstation + GitHub remain the source of
-truth — a rewritten canonical is re-pushed and the divergence is visible); the **dominant** residual (fleet root
-via the scoped age key onboard-gui/semaphore already hold) strictly dominates canonical-write; mgmt-VLAN +
+truth — a rewritten canonical is re-pushed and the divergence is visible; since T25 the deploy's sync brings a
+moved `main` into the operator's checkout, so the divergence shows as the deploy's stop, which names what came in,
+no longer as a refused landing — see the sync, above); the **dominant** residual (fleet root via the scoped age
+key onboard-gui/semaphore already hold) strictly dominates canonical-write; mgmt-VLAN +
 single-operator; and a **deploy without `api_privileged` mounts `:ro` everywhere**, so this exists only while
 armed. The leaked-**token** path remains strictly propose-only (the API never calls `promote_ref` / a direct
 `main` push — the `from_env` + `_push_target` fail-closed coupling enforces it). Accepted as the cost of making
@@ -2640,7 +2833,7 @@ another key file named absolute and quoted, in every read-back of a run; shown o
 | Device config captures are not encrypted at rest | A backup capability with `destination: offsite` would move secret-bearing captures (running-config hashes/PSKs) outside the local `0700`/uid-1001 store with no encryption-at-rest story | Yes (deferred) | The backup-capability ships `destination: local` only — captures stay `0700`, git **never pushed** (C8). The dialog now exposes a `destination` knob (#123) that **offers** `offsite` for discoverability but **refuses it at propose** (`backup.build_plan` → `bad_param`, fail-closed with the C8 reason), so no offsite copy can be promoted until an encryption-at-rest design closes this. `retention` is likewise declared/carried (`kontroll_backup_retention`) and its prune **enforcement** is now LIVE (#125 — a fail-closed, default-safe history rewrite of the local captures repo only; see C8). C1's `kontroll_backup_deploy` backs up the **encrypted repo**, not device captures. |
 | Captures are READABLE over the GUI backup viewer (C14) | An authenticated mgmt-VLAN operator — or a GUI-process compromise (which already holds the age key → fleet root, C10) — can read device running-configs (hashes/PSKs/communities) over HTTP, **redacted-by-default but best-effort** (a novel vendor token shape can leak into the view) | Yes (compensated; **gated ship** G1–G5 incl. human sign-off) | **`:ro` mount** (no write-back, compose-pinned on the `:ro` suffix), **read-only git only** (no actuation/rewrite — AST + argv pins), **rev/file validated before any `git show`** (traversal/injection closed), **redacted-by-default + redact-then-diff** (defense-in-depth, not the boundary), behind the GUI's **fail-closed auth + TLS + mgmt-VLAN bind** (C3), **every read audited NAMES-only**. The secret-densest vendor (FortiGate, history-excluded) is **listed but never rendered** (its on-disk blob stays off the wire). Captures stay `0700`/uid-1001 at rest, history **local-only, never pushed** (C8 unchanged). Marginal exposure dominated by the existing onboard-gui-with-key residual (C10). Raw download **deferred** (C2). See [C14](#c14--capture-read-over-the-gui-is-a-read-only-romounted-redacted-audited-surface). |
 | The network API/GUI becomes a canonical-writer (C10) | A compromised/leaked-token service could push to the source of truth every clone + deploy trusts | Yes (compensated) | **Propose-then-promote**: the service only pushes a `proposed/<run_id>` staging ref — a trusted promote step fast-forwards `main`, so a leaked token can only stage a proposal: it cannot promote one, and nothing it stages reaches `main` — the only tree an enact reads — before a trusted promoter has landed it (under `separated`, a human who can reject it; [docs/trust-mode.md](docs/trust-mode.md) says what `solo` changes). **No age key** is mounted (no standing decrypt). `receive.denyNonFastForwards`/`denyDeletes` + a push-only clone + rate-limit + mgmt-VLAN-only (C3) bound it. **Corrected 2026-07-05:** the "only parks rejectable proposals" property held for `push:false` but was **breached by `push:true`** — the content clone's `origin` **is** the canonical, so `commit_and_push`'s optional `git push origin HEAD` advanced `main`. Closed by the `and not staging` guard (`gitio.py`) + the canonical's `update` hook (an allow-list since 2026-10-13: as uid 1001 a push may create `refs/heads/proposed/<run id>` and nothing else; it does not see a write that is not a push). That a staging service never advances `main` is structurally true again (`docs/reviews/2026-07-05-c10-origin-push-breach/` — a design record kept in the private repository). See [C10](#c10--privileged-mutation-enablement-the-network-service-writes-the-canonical---live-verified-gated-by-api_privileged) + [docs/privileged-mutation-enablement.md](docs/privileged-mutation-enablement.md). |
-| Arming (`api_privileged`) gives every network container `:rw` on the canonical (C10, item C) | A **container RCE** (api/onboard-gui/semaphore) can `update-ref`/rewrite/delete `main` **directly** — `update-ref` is not a push, so deny* + the FF-only gate (which bound the promote *playbook*) do **not** constrain it; a breach can non-FF/delete main, not just stage | Yes (compensated) | Gated on `api_privileged` — the **read-only deploy mounts `:ro` everywhere** (default), so this exists only when armed. The leaked-**token** path stays strictly propose-only (`from_env`+`_push_target` fail-closed coupling). Bounded: the canonical is a **reconstructible cache** (operator workstation + GitHub are truth — re-pushable, divergence visible), and the **dominant** residual (fleet root via the scoped age key onboard-gui/semaphore already hold) strictly dominates canonical-write; mgmt-VLAN + single-operator. The alternative (Semaphore SSH-to-host + sudo) is strictly worse (host root). **Narrowed 2026-07-05, 2026-10-13:** the canonical's `update` hook refuses every push from the service's uid but the creation of a proposal, so the tool's own code cannot push `main`, a tag or a second version of a proposal. The hook runs as the pusher: it is a check on what the service's code does, not a bound on a container RCE. The residual is a uid-1001 RCE using `git update-ref`/`packed-refs` rewrite **directly** (not a push — the hook only fires on receive-pack) — unchanged, still bounded by the reconstructible-cache + offsite-mirror-fsck follow-on. **Narrowed 2026-10-13 (2):** what such a writer leaves in the canonical's own files no longer reaches a git that runs as ROOT through a promote — every git the promote, the listing, the discard and the export start there as root is the service uid (C10, rule 5); the promoter still reads the commit it is asked to land, as its caller. It does not narrow what the row is about: a writer that moves `main` decides what the next deploy, and every Semaphore job, runs from it. |
+| Arming (`api_privileged`) gives every network container `:rw` on the canonical (C10, item C) | A **container RCE** (api/onboard-gui/semaphore) can `update-ref`/rewrite/delete `main` **directly** — `update-ref` is not a push, so deny* + the FF-only gate (which bound the promote *playbook*) do **not** constrain it; a breach can non-FF/delete main, not just stage | Yes (compensated) | Gated on `api_privileged` — the **read-only deploy mounts `:ro` everywhere** (default), so this exists only when armed. The leaked-**token** path stays strictly propose-only (`from_env`+`_push_target` fail-closed coupling). Bounded: the canonical is a **reconstructible cache** (operator workstation + GitHub are truth — re-pushable, divergence visible), and the **dominant** residual (fleet root via the scoped age key onboard-gui/semaphore already hold) strictly dominates canonical-write; mgmt-VLAN + single-operator. The alternative (Semaphore SSH-to-host + sudo) is strictly worse (host root). **Narrowed 2026-07-05, 2026-10-13:** the canonical's `update` hook refuses every push from the service's uid but the creation of a proposal, so the tool's own code cannot push `main`, a tag or a second version of a proposal. The hook runs as the pusher: it is a check on what the service's code does, not a bound on a container RCE. The residual is a uid-1001 RCE using `git update-ref`/`packed-refs` rewrite **directly** (not a push — the hook only fires on receive-pack) — unchanged, still bounded by the reconstructible-cache + offsite-mirror-fsck follow-on. **Narrowed 2026-10-13 (2):** what such a writer leaves in the canonical's own files no longer reaches a git that runs as ROOT through a promote — every git the promote, the listing, the discard and the export start there as root is the service uid (C10, rule 5); the promoter still reads the commit it is asked to land, as its caller. It does not narrow what the row is about: a writer that moves `main` decides what the next deploy, and every Semaphore job, runs from it. **Widened 2026-10-25 (T25):** the bound "reconstructible cache … divergence visible" no longer holds for the operator's checkout: the deploy's sync brings what is on `main` into it with no git by hand, and the next deploy runs it as the installer's root. Compensated by the stop: a deploy that brought the worktree forward lands and runs nothing of that tree, and names its commits and the files they change, for a human to read before the next run (whose dry-run already runs the tree's scripts). Residual, and a follow-up: a `main` that does not descend from the commit the deploy last landed (a rewrite, not a promote) is brought forward like a promote; refusing it needs the deploy to keep that commit. Residual, the replay and its undo: no hook or fsmonitor program runs in any git of the sync, but a content filter or merge driver of the operator's own git config does — in the replay and in its undo (`rebase --abort`, `status`, `reset --hard`), as in any checkout of theirs — and a `.gitattributes` that came in can select it for content that came in, before anyone read it; one whose command names a program in the tree runs the version that came in, as the operator, and a config file in the tree that the operator's config includes lets the promote define the filters themselves. Mitigation: configure no filter or merge driver that names a path in the tree, and include no config file from the tree (`include.path`/`includeIf`). Refusing the tree's attributes in the sync needs `--attr-source` (git 2.42) or a checkout with an empty attributes stack: a follow-up. |
 | Secret values + a minted private key cross the mgmt-side hop (C11) | A submitted secret / a show-once private key travels in the request/response body | Yes | TLS (GUI) or the operator's reverse proxy (`byo_proxy`, API) protects it; **mgmt-VLAN-only, never WAN** (C3), behind C9 fail-closed auth. Symmetric to the already-accepted secret-entry exposure. The private key is **show-once** and never persisted; `.sops.yaml` edits are additive + parse-verified. See [C11](#c11--guided-secret--key-onboarding-is-no-leak-by-construction). |
 | ~~Vector runs root with a `:ro` docker socket~~ → **HARDENED: non-root + socket-proxy** (C12) | A Vector RCE could `POST /containers/create` = host root (the raw socket is root-equivalent even `:ro`) | **No — closed (GATE A passed)** | Vector now runs **non-root** (uid 10002) and holds **no raw socket** — `docker_logs` targets a `docker-socket-proxy` (`POST=0`, GET/HEAD-only); journald via the discovered `systemd-journal` GID; audit dirs via `o+r` (never `group_add:1001` — it would leak the TLS keys). A Vector RCE is now an unprivileged log-reader: through the proxy it can list containers, inspect them (each one's inspect JSON, its Config with `Env` among it and its Mounts: the stated residual) and read their logs, and since 2026-10-21 nothing else under `/containers` (before, the stock grant also passed `archive`, `export` and a websocket `attach`; the proxy does not start without that limit; `test_socket_proxy_start_script.py`). **GATE A dogfood (2026-06-18): PASSED** — non-root Vector shipped 1822 journald events + container logs through the proxy; `POST` → 403. **Promotion unblocked.** See [C12](#c12--the-logging-pipeline-is-a-secret-surface-collector-privilege-label-hygiene-mgmt-only). |
 | Loki stores plaintext log bodies + has no auth (C12) | A log line may carry a secret an upstream device failed to redact; Loki itself is unauthenticated | Yes | The store is `0750`/uid-10001 at rest (C8 boundary), mgmt-VLAN-only (C3), queryable only through Grafana (`access: proxy` — the browser never touches Loki); the stack's own logs are `no_log`-clean (C2). **The hardening is an opt-in basic-auth reverse-proxy gateway** — a gated Caddy `loki_auth` service, OFF by default; Loki stays single-tenant `auth_enabled:false` behind it; Grafana + the Vector sink carry the cred from a `logging_loki_auth` SOPS domain — **not** Loki's own `auth_enabled` (that is X-Scope-OrgID *tenancy, not authentication*, and breaks the `fake`-tenant store). `loki_auth: off` is a strict no-op. **Un-defer trigger:** Loki `:3100` reachable beyond the single-operator mgmt VLAN, OR the C9 GUI/API SSO residual closes — whichever first (this is the FIRST of the three to un-defer). Blueprint: `docs/reviews/2026-06-18-logging-ingress-hardening/99-synthesis.md`. |

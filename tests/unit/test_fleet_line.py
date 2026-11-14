@@ -30,7 +30,7 @@ import yaml
 from kontroll import inventory, paths
 from kontroll.service import actuation, backup, logsvc, observe
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("isolated_git")]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MARK = "SECRET-MARKER"
@@ -43,8 +43,8 @@ HOSTILE = [None, True, False, 123, 1.5, {"a": 1}, ["x"], "../x", "/etc", "a/b", 
 IDS = ["null", "true", "false", "int", "float", "mapping", "list", "dotdot", "absolute", "slash", "newline",
        "uppercase", "empty", "too-long", "climbs-back-to-a-class", "climbs-back-by-two", "marker",
        "date", "bytes", "trailing-space", "leading-space", "non-ascii-digit", "leading-underscore"]
-ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test",
-       "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.test", "PYTHONIOENCODING": "utf-8"}
+ENV_ADD = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.test", "PYTHONIOENCODING": "utf-8"}
 
 
 def _script(name):
@@ -195,7 +195,7 @@ def _tree(root, fleet_text):
 
 def _gen_requirements(root, *flags):
     return sp.run([sys.executable, "-B", os.path.join(ROOT, "scripts", "gen-requirements.py"), *flags, "--root", str(root)],
-                  cwd=ROOT, env=ENV, capture_output=True, text=True, encoding="utf-8")
+                  cwd=ROOT, env={**os.environ, **ENV_ADD}, capture_output=True, text=True, encoding="utf-8")
 
 
 @pytest.mark.parametrize("flags", [("--fleet-check",), ("--conflict-check",), ()], ids=["fleet-check", "conflict-check", "generate"])
@@ -251,7 +251,7 @@ def test_all_modules_ignores_a_directory_that_is_not_a_class_key(tmp_path, monke
 
 # --- the promote gate ---------------------------------------------------------------------------------------------- #
 def _git(repo, *args):
-    sp.run(["git", *args], cwd=repo, env=ENV, check=True, capture_output=True)
+    sp.run(["git", *args], cwd=repo, env={**os.environ, **ENV_ADD}, check=True, capture_output=True)
 
 
 def _fleet(repo, text):
@@ -510,8 +510,8 @@ def test_the_removal_promotes_end_to_end_on_a_bare_canonical(tmp_path, capsys):
          "0000000000c3:refs/heads/proposed/0000000000c3")
 
     def ref(name):
-        return sp.run(["git", "rev-parse", "--verify", "--quiet", name], cwd=bare, env=ENV, capture_output=True,
-                      text=True).stdout.strip()
+        return sp.run(["git", "rev-parse", "--verify", "--quiet", name], cwd=bare, env={**os.environ, **ENV_ADD},
+                      capture_output=True, text=True).stdout.strip()
 
     main_was, removal = ref("refs/heads/main"), ref("refs/heads/proposed/0000000000c3")
     assert promote.main(["0000000000b2", "--repo", str(bare)]) == 2

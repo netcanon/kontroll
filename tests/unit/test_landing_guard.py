@@ -4,7 +4,8 @@ fails, naming the mock it lacks, on every checkout; a scratch worktree passes th
 Why: seven rows mocked `gitio._run` but not `gitio.land_main`, so a non-staging `commit_and_push` ran the real
 landing from the write root, this checkout. They passed where the checkout has no `local` remote (CI, a clone) and,
 where it has one (a control node's checkout), landed the developer's HEAD on that canonical's `main` and passed
-too. These rows hold the guard that makes the omission fail everywhere instead.
+too. These rows hold the guard that makes the omission fail everywhere instead. The file takes `isolated_git`
+module-wide, as every test file that starts git does (tests/unit/test_suite_git_isolation.py).
 """
 import os
 import subprocess
@@ -14,7 +15,7 @@ import pytest
 import _landing_guard
 from kontroll import gitio, paths
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("isolated_git")]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -74,7 +75,6 @@ def test_a_row_that_mocks_run_but_not_the_landing_fails_on_any_checkout(monkeypa
         gitio.commit_and_push(["x.yml"], ["m"])
 
 
-@pytest.mark.usefixtures("isolated_git")
 def test_a_worktree_outside_this_checkout_reaches_the_real_landing(tmp_path, monkeypatch):
     """A scratch worktree passes through untouched: `_canonical_of` on a scratch repository whose `local` remote
     names a scratch bare repository returns that directory (the real lookup ran), and a sibling of the checkout
