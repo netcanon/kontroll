@@ -69,9 +69,12 @@ def world():
 
 
 @pytest.fixture(autouse=True)
-def _the_answer_is_asked_again(monkeypatch):
-    """`canon._can_drop` remembers its answer for the life of a process; a row starts without one."""
-    monkeypatch.setattr(canon, "_DROP", [])
+def _the_answer_is_asked_again():
+    """`canon._can_drop` remembers its answer for the life of a process; a row starts without one. In a MonkeyPatch
+    of its own: asking for the row's would set that up before `isolated_git` (read B-r21, S4)."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(canon, "_DROP", [])
+        yield
 
 
 def _build(world, name="canonical"):

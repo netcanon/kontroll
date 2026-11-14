@@ -137,9 +137,9 @@ def test_the_delete_never_follows_a_ref_that_turned_symbolic_after_the_read(tmp_
     r = R.build(tmp_path)
     rid = "bbbbbbbbbbbb"
     R.write_ref_file(r.bare, canon.PROPOSED + rid, "ref: " + canon.MAIN)
-    monkeypatch.setattr(canon, "read_ref", lambda cdir, ref: (r.main, "commit", ""))
-    discard.discard_proposal(rid, canonical=r.bare)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(canon, "read_ref", lambda cdir, ref: (r.main, "commit", ""))
+        discard.discard_proposal(rid, canonical=r.bare)
     assert canon.read_ref(r.bare, canon.MAIN) == (r.main, "commit", ""), "the delete followed the pointer to main"
 
 

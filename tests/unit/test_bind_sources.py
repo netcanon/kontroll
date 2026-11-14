@@ -58,6 +58,8 @@ import subprocess
 import pytest
 import yaml
 
+import _checkout
+
 pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -71,9 +73,12 @@ _JINJA_VAR = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
 def _tracked(root):
     """The set of tracked files (relative, forward slashes) when `root` is a git checkout, else None."""
+    # Every repository variable out: a hook's GIT_DIR would answer for its repository, not root's (read B-r21, N3).
+    env = {k: v for k, v in os.environ.items() if k not in _checkout._GIT_REPO_VARS}
     try:
-        top = subprocess.run(["git", "-C", root, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-        run = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True)
+        top = subprocess.run(["git", "-C", root, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             env=env)
+        run = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True, env=env)
     except OSError:
         return None                                       # no git: read the disk
     if top.returncode != 0 or run.returncode != 0 or not run.stdout:

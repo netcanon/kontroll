@@ -20,6 +20,32 @@
 - name: Stamp the run correlation id
   ansible.builtin.import_playbook: _log-run-id.yml
 
+# Right after the run-id stamp (I-41), before anything else runs — this tree's root plays included: a run after a
+# sync that brought the worktree forward stops, saying what came in, under the run's id (T25; SECURITY.md C10).
+# local-canonical.yml, imported below, stops on its own sync; this stops a host-direct deploy after a sync by hand
+# before its Docker play (read A-f2, N4). It is _stop-after-sync.yml's play, the same text (a unit test holds them
+# equal) but its `stop_play`, this playbook's name: an import's `vars:` would set that, and they reach every play an
+# import brings in, which the deploy's walk refuses (tests/unit/_deploy_walk.py).
+- name: Stop when a sync brought the worktree forward and no run has stopped on it since
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    worktree: "{{ playbook_dir }}/../.."
+    operator_uid: "{{ lookup('env', 'KONTROLL_OPERATOR_UID') or ansible_user_uid }}"
+    in_container: "{{ (lookup('env', 'KONTROLL_IN_CONTAINER') | default('', true)) | length > 0 }}"
+    operator_gid: >-
+      {{ lookup('env', 'KONTROLL_OPERATOR_GID') or (operator_uid if (in_container | bool) else ansible_user_gid) }}
+    as_operator: >-
+      {{ ('setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid ~ ' --clear-groups --no-new-privs -- env -i'
+          ~ ' PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C'
+          ~ ' GIT_TERMINAL_PROMPT=0') if (in_container | bool) else '' }}
+    stop_play: deploy-stack
+
+  tasks:
+    - name: Stop after a sync, before landing, deploying or running the worktree's scripts
+      ansible.builtin.import_tasks: tasks/stop-after-sync.yml
+
 - name: Install Docker Engine + Compose on the control node
   hosts: localhost
   connection: local

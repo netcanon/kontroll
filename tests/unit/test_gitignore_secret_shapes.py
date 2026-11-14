@@ -50,9 +50,13 @@ TRACKABLE = [
 ]
 
 
-@pytest.fixture(scope="module")
-def instance_repo(tmp_path_factory):
-    tree = tmp_path_factory.mktemp("instance-repo")
+@pytest.fixture
+def instance_repo(tmp_path):
+    """A scratch instance repository: the shipped `.gitignore` and `instance.example/.gitignore`, then `git init`.
+    One per row: a fixture wider than a row is set up before the row's `isolated_git` holds, so under a hook's
+    GIT_DIR a module-scoped one's `init` reinitialised the hook's repository (read B-r21, N7)."""
+    tree = tmp_path / "instance-repo"
+    tree.mkdir()
     shutil.copyfile(os.path.join(ROOT, ".gitignore"), str(tree / ".gitignore"))
     (tree / "instance").mkdir()
     shutil.copyfile(os.path.join(ROOT, "instance.example", ".gitignore"), str(tree / "instance" / ".gitignore"))

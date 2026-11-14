@@ -78,7 +78,14 @@ image builds (from the local checkout). Only **canonical-state distribution** is
 - `onboard --push` is repurposed to the **optional** GitHub (offsite backup) step.
 - A `local-canonical.yml` play (idempotent) ensures the bare repo exists + lands the
   working tree's HEAD on it (`scripts/kontroll-land.py`, `--check` first under the dry-run; used after a
-  developer code-pull; the operator never needs it).
+  developer code-pull; the operator never needs it). Before it lands, it brings the working tree FORWARD to
+  what a promote put on the canonical's `main` (`kontroll-land.py --sync`, as the operator: the promote's
+  commits come across as a pack, with no fetch, and the tree's own commits — the instance-state commit among
+  them — are replayed on top), so the deploy after a promote is no longer refused: it brings the tree forward
+  and STOPS after naming what came in, and the next run — its dry-run first — lands and deploys it. A deploy
+  after a promote is two runs, and what one runs is what its dry-run saw. A sync by hand leaves the same mark
+  the stop keys on, so the next deploy stops on it too — but that deploy's playbooks are the tree that came in
+  already: read what the hand sync prints before you run it (SECURITY.md C10).
 
 **Phase-A exit:** a Semaphore job (ping/backup) runs end-to-end from the local repo;
 onboarding a device + running it requires zero GitHub.
@@ -93,7 +100,10 @@ onboarding a device + running it requires zero GitHub.
   *code* file was edited locally — surfaced, never silently lost), then lands the merged
   HEAD on the local canonical through the promote gate (`scripts/kontroll-land.py`; a tree
   the gate refuses stays in the checkout, exit 2, with the sentence). This kills the Phase-A
-  caveat (a dev code-push clobbering state).
+  caveat (a dev code-push clobbering state). A promote that moved the canonical past the checkout stops it
+  before it fetches (exit 3, or 1 when the check cannot say): `kontroll-land.py --sync` brings the checkout
+  forward first, and prints what came in — read it before the next deploy. Run it as the checkout's owner,
+  never under sudo — the script refuses another uid.
 - **Remoteless boxes** (a production instance with no upstream remote — the whole point
   of this doc) can't `fetch origin`, so [scripts/update-from-bundle.sh](../scripts/update-from-bundle.sh)
   applies a `git bundle` of new product code (built `git bundle create … <box-HEAD>..main`

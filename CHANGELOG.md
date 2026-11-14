@@ -11,6 +11,245 @@ NetConfig project.
 
 ## [Unreleased]
 
+### fix(ansible, scripts): a deploy brings the worktree past a promote — no fetch, as the operator (T25, 2026-10-24)
+
+A promote moves the canonical's `main` to a commit the operator's worktree has never seen, and from then on every
+landing from it was refused (not a fast-forward): each deploy failed until the operator ran `git fetch local && git
+rebase local/main` by hand — and a fetch runs the canonical's serving side (`upload-pack`, under the canonical's
+config, as the fetcher), which the canonical's doors had removed everywhere else. Inside the installer container the
+deploy's state commit also ran as root in the operator's repository and left root's objects, index and ref files
+there, which the operator's own git could not write over. The sync is the landing turned round, and what writes the
+operator's repository is now the operator.
+
+- **`gitio.sync_worktree(worktree, canonical, check)`** (new) and **`kontroll-land.py --sync [--check]`**: `main` read
+  once by its full name in the seam; what the worktree lacks comes across as one pack on a pipe (the worktree offers its
+  newest commits, the canonical's `cat-file --batch-check` says which it holds, its `pack-objects` packs `main` without
+  them, the worktree's `index-pack --strict` reads at most `_SYNC_MAX_PACK` bytes of it, and `rev-list --objects` checks
+  `main` is whole; a temporary pack a refused `index-pack` left is removed); `refs/remotes/local/main` then names
+  `main`, as a fetch left it; and the worktree's own commits since are replayed onto it (`git rebase`, committed as
+  `kontroll` whatever the caller's `GIT_COMMITTER_*`, unsigned, with autostash, autosquash, update-refs and
+  rebase-merges off, no editor, no git-lfs download). No hook and no fsmonitor program runs in any git of the sync, the
+  operator's own neither (`core.hooksPath=/dev/null`, `core.fsmonitor=false`): a hooks path into the tree names hooks a
+  promote can bring, and they are on disk before anyone read them. A content filter or merge driver of the operator's
+  own config still runs in the replay and in its undo — one a config file of the tree's defines too, when the operator's
+  config includes it (SECURITY.md, the arming row). Exit 0 in step or brought forward, 3 (`--check`) something to bring
+  forward, 1 not brought forward — with HEAD, the branch and the tracked files as they were unless the sentence says the
+  worktree could not be put back, that git could not say whether the tracked files are HEAD's, or that HEAD does not
+  descend from `main` (it then names HEAD). Of the files of `main` git wrote before a replay stopped, each regular file
+  reached through no link and holding main's bytes is removed (main holds them; its bytes hashed by the sync itself, any
+  name) and named, escaped, and the rest are left untracked and named (a link, other bytes); an untracked file of the
+  operator's is kept, and the untracked files are listed before the replay (a worktree whose list git cannot make is
+  refused, HEAD unchanged). An IGNORED file of the operator's at a path `main` tracks, under one, or where `main` has a
+  directory — which the replay would overwrite, or remove with its directory, without a word — is refused before the
+  replay and named, HEAD unchanged (and so is a worktree whose ignored files, or main's, git cannot list). An undo that
+  did not finish, or stopped, says so with git's reason, and names the lock to remove when one is in the way. The
+  refusals: a conflict (undone, its files named), a merge in the worktree's own history (refused, not flattened; the
+  sentence names the `git merge` that brings it forward instead), a commit already on another remote (a replay would
+  give it a new id; the same `git merge`), no common history, tracked changes not committed, a rebase, merge,
+  cherry-pick, revert or bisect in progress (a linked worktree's in its own git directory), a caller that does not own
+  the worktree, a pack refused, cut short or too large (the worktree's refusal, even when the canonical's packer was cut
+  off by it). The sentence's reason is git's first `error:` or `fatal:` line with the indented lines under it (the paths
+  it names), else its first line that is not a `hint:`; every line of a sentence ends with a full stop. No hook or
+  config-named program of the canonical runs, and nothing runs its serving side. It prints `kontroll_run_id=… sync …`
+  first. A sync that brings the worktree forward also prints what came in since HEAD before it (`gitio.came_in`: the
+  newest 20 commits, `<short id> <author>: <subject>`, and a count of the rest; the files they change, with mode changes
+  and links; control characters as `?`) and that the next deploy runs that tree's own playbooks and scripts as root;
+  and, before its replay, it appends HEAD before it to the mark, `<git dir>/KONTROLL_SYNCED`, keeping the first line, so
+  a second sync before any run stopped lists both, and a sync killed in its replay leaves the mark too (and the next
+  sync refuses the rebase it left in progress, before any "in step", and names the `git rebase --abort` that puts HEAD
+  back: HEAD is then on `main`, and `git rebase --continue` can drop the commit it was replaying; the sentence also
+  names the lock a killed git left, to remove first, the `git status` that names main's files the replay left — case for
+  case, whatever `core.ignoreCase` says — and the `ls-files -v` that names the tracked files it does not compare, each
+  to compare with main's as git's checkout writes it and put back where it holds main's bytes or is missing, each path
+  quoted for the shell, as it is in every command a sync's or a landing's sentence prints, and each stop or git refusal
+  of the deploy's that prints a command shown as a block, every command as written — but the landing task's own, which
+  only a promote between its check and it prints); a replay put back (HEAD where it was, nothing in progress, the
+  tracked files HEAD's — none flagged skip-worktree or assume-unchanged, which git's status does not compare: the undo's
+  sentence counts those, says how to name them and how to compare each with main's and put HEAD's back — and no
+  untracked file that was not there before it, listed case for case whatever `core.ignoreCase` says) removes a mark that
+  sync wrote, and so does a write of the mark that failed (a full disk; a mark there before stays). The mark is written
+  and read as a regular file, never through a link (git's `--git-path` names a link's target) and never waiting on a
+  FIFO: anything else at its path is a mark that could not be read, and a mark that could not be written refuses the
+  sync, HEAD as it was. A `--worktree` that is not the top of its repository is refused: one below it (the ignored files
+  git lists there are named from that directory, so none matched main's), or one whose top git cannot say;
+  `--worktree`'s default, the current directory, must be the top for `--sync`, and a top whose name ends in a space is
+  read as it is. An ignored nested repository (`dir/`) in main's way is refused like an ignored file. `sync_worktree`,
+  `_bring_main`, `_receive_in_worktree`, `_pack_in_canonical`, `_undo_replay`, `_clear_what_main_left` and `clear_mark`
+  are registered write verbs. **`--sync --stop-as <play>`** (new) is a play's own sync: brought forward, it says what
+  came in as the play's stop (since HEAD before the sync when git cannot list from the mark's first line), removes the
+  mark and exits 4; refused, it says the refusal as the play's, on standard output, with exit 1.
+- **The deploy** (`ansible/playbooks/local-canonical.yml`): the `local` remote, the instance-state commit and the
+  sync run as the operator (`setpriv` to `KONTROLL_OPERATOR_{UID,GID}`, no supplementary group, no new privileges,
+  an environment of its own) inside the installer container; host-direct the play is the operator already. Right after
+  the stop at its top — before its audit, fleet check and plaintext guard run the worktree's scripts as root, which a
+  checkout cut short leaves half main's — it refuses a rebase, merge, cherry-pick, revert or bisect in progress (each
+  name in the worktree's own git directory, a link too, as the sync reads them); before the state commit it names what
+  in the worktree's git directory (git's `--git-common-dir`) is not the operator's — both read-only, so the dry-run says
+  them first. The sync runs
+  after the state commit and before the landing; under `--check --diff` it says whether a promote is ahead and
+  changes nothing. **A real run that brings the worktree forward STOPS in the sync's own task** (`kontroll-land.py
+  --sync --stop-as local-canonical`: `local-canonical: STOPPED after bringing the worktree forward …`, exit 4, a
+  failed run) after naming what came in — the commits and the files they change — and removes the mark; it lands and
+  deploys nothing of that tree: the next run, its dry-run first, previews and then applies the tree it now holds. A
+  deploy after a promote is therefore two runs. The stop is the sync's task and not a later one: an Ansible worker
+  forked after the tree changed can import the tree's filter plugins when it first templates, as root (measured). A
+  sync by hand, or a run killed before it stopped, leaves the mark, and the stop after a sync
+  (`ansible/playbooks/tasks/stop-after-sync.yml`) stops the next run and its dry-run on it: it reads the mark, says
+  what came in in plain git as the operator (each line's control characters as `?`), removes the mark on a real run
+  and fails (`STOPPED before landing, deploying or running the worktree's scripts`) — at the top of
+  `local-canonical.yml`, after its uid check, and in `bootstrap.yml` and `deploy-stack.yml` as the play right after
+  the run-id stamp (`_stop-after-sync.yml`, copied into deploy-stack.yml; `deploy-stack: STOPPED …`, before its root
+  play that installs Docker; only the stamp comes first, as every playbook a run starts with prints its id first —
+  I-41; the stamp runs no task of the worktree, but it templates the run id from the inventory's vars for the first
+  host (group_vars/all.yml names the key dir by it), which a promote can change, so a fleet vars file that does not
+  parse ends that run before the stop speaks). That run's playbooks, and its filter plugins, are already the new
+  tree's, which is why the hand sync says what came in first
+  (SECURITY.md C10). The stop's message ends with the run's `kontroll_run_id` — the one the stamp printed first (a
+  caller's `-e kontroll_run_id=…`, or the stamp's own); run alone, with no stamp before it, the caller's, when it
+  passed one. A mark that could
+  not be read stops the run as "not known" (the stop removes no mark it could not read): a path no sync writes (a link,
+  a directory, a FIFO) is named, with the `rm -r --` that removes it; a mark the operator cannot read (root's, mode
+  0600) is named before `head` fails on it, with the `rm -f --` that removes it as the operator; a git directory whose
+  path holds a line break (any character Python's line split splits on) is refused before anything is printed; and any
+  other failure says to do what git's sentence
+  says — for git's refusal of another user's repository, the `chown` of the worktree's top and its git directory to the
+  operator's ids (git's `safe.directory` does not reach the installer's git). A rebase in progress beside the mark is a
+  replay cut short: the stop names the `git rebase --abort` that puts HEAD back, the lock to remove first, the `git
+  status` that names main's files the replay left and the `ls-files -v` that names the tracked files it does not
+  compare, never "in step", and keeps the mark until the abort (so bootstrap and deploy-stack, which refuse no operation
+  in progress, stop too); and so does the deploy's refusal of a rebase in progress. Otherwise the stop says "in step"
+  only when HEAD holds the canonical's main (asked as the operator): HEAD
+  back where it was before the sync is a sync that did not finish, the commits listed main's and not the worktree's, and
+  the stop names the `git status` that lists main's files it left — a filter plugin among them would load as root in the
+  next run — and, for a replay quit (`git rebase --quit`) rather than aborted, the `checkout HEAD -- <path>` that puts
+  HEAD's back in a tracked file it shows changed; HEAD before the sync is "not known" when the mark's first line is
+  not a commit id. A
+  sync that is refused fails its own task, its sentence said as the play's (`local-canonical: REFUSING to land — …
+  exited 1: …`); under `--check` the play says the check's refusal (`… (--check) exited <N>:`). The Report prints the
+  landing's own lines (`kontroll_run_id=… land …`).
+- **`ansible/ansible.cfg`** sets the default callback's result format as `callback_result_format = yaml`, the key
+  ansible reads: the bare `result_format` it replaces is no key, and every result printed as JSON (the stop's
+  listing among them, on one line).
+- **`update.sh` / `update-from-bundle.sh`** refuse a caller that does not own the checkout's git directory (root
+  under sudo; exit 1), then ask `--sync --check` before they fetch or merge, and refuse (`!! REFUSING to update`,
+  exit 3 when a promote is ahead, or 1 when the check could not say or a real sync would refuse): a merge made on
+  top would only be refused at the landing. `update.sh`'s closing line now says the services run the last deploy's
+  code until the next one.
+- The landing's NOT_A_FAST_FORWARD remedy now names `kontroll-land.py --sync` in place of the fetch and rebase.
+- The deploy refuses to commit or land while the worktree's HEAD is on no branch and nothing is in progress (a replay
+  quit part-way, `git rebase --quit`, leaves it so), or names a ref outside `refs/heads/` (a hand-made `git
+  symbolic-ref`, which `git symbolic-ref HEAD` names, and with which `git branch` fails, `--points-at` too, until you
+  switch, while a `git for-each-ref` of `refs/heads/` lists your branches, by the name `git switch` takes
+  (`%(refname:lstrip=2)`; `%(refname:short)` printed `heads/<name>` beside a tag of that name); a branch with no
+  commit yet is a branch): switch back to your branch — after a replay quit part-way, `git branch --points-at
+  ORIG_HEAD` names the one the sync started on (unless a reset, stash, merge, pull, rebase or `git am` of your own, or
+  a commit on it, came since); after a switch or detach of your own, the reflog names it (a `checkout: moving from`
+  above its newest `rebase (start)`: one below it is older than the sync), and where the two differ the reflog's is
+  yours; `git branch` lists yours; a file in the switch's way, untracked or tracked with local changes, is the cut
+  replay's copy of your own commit's, to compare with your branch's as checkout writes it (a link by its text, in
+  bash, with a `test -L` after the compare, so a name that names nothing, or no link there, reads as differing, never
+  as the same, and prints git's, readlink's or cmp's complaint; the branch read as `refs/heads/<branch>`, which a tag
+  of its name does not shadow) and to remove or put back
+  where it is the same, or move out of the worktree where it differs, to a directory of its own (`mkdir -p
+  ~/kontroll-moved && mv --backup=numbered … ~/kontroll-moved/`: your home is left as it was, where a moved dotfile
+  would take effect, and a file of that name moved there before is kept, as `<name>.~1~` and on; moved aside inside
+  it, the next deploy commits it as instance state), each `<path>` written `'<path>'`, as git lists a name in the way
+  unquoted (the commands are bash's, and a `'` in a name is written `'\''`), the put-back's read literally
+  (`git --literal-pathspecs checkout HEAD -- '<path>'`: a name that starts with `:` is no pathspec magic;
+  GIT_GLOB_PATHSPECS or GIT_ICASE_PATHSPECS in the operator's shell makes it fail loud, GIT_LITERAL_ and
+  GIT_NOGLOB_PATHSPECS change nothing, and it never puts back another file); then `git switch
+  --no-guess`, so a branch name the reflog holds but you have since renamed or deleted is refused rather than made
+  afresh from a remote's — then deploy again. The listing of flagged files quotes a name as git does by default,
+  whatever the operator's own `core.quotePath` says, and says how to give it to the shell (`$'…'`, each `'` in it
+  written `\'`), a flagged link is compared by its text, in one command (`readlink -nv`: without the newline `readlink`
+  ends it with), every printed copy of the listing says its commands are bash's (`$'…'` and `<(…)`, which dash reads
+  otherwise), and the deploy's two refusals that carry `kontroll-land`'s sentence print each command on one line.
+- **Upgrading.** If an earlier deploy ran inside the installer container (its `remote add`, or its state commit),
+  the operator's `<worktree>/.git` holds root's files, and the deploy now stops before the state commit with
+  `local-canonical: REFUSING to commit or land — <worktree>/.git holds what is not the operator's …`; nothing in the
+  worktree was changed. Once, by hand: `sudo chown -R <uid>:<gid> <worktree>/.git` (the message names both, and the
+  directory), then deploy again. A host-direct deploy, and a fresh install, need nothing.
+- Tests: `tests/unit/test_sync.py` (new: in step, a promote brought across, the worktree's own commits replayed and
+  landed whatever the caller's committer or signing config, `--check`, a conflict undone, a merge or a commit published
+  on any remote refused, or one git could not count, no common history, tracked changes, an untracked file in the way
+  (git's reason names it, the file kept), each operation in progress and the names themselves, a linked worktree's own
+  rebase, a caller who does not own the worktree, no commit, an unreadable canonical, a symbolic `main`, the pack only
+  what the worktree lacks, none when it holds `main`, the canonical's packer failing, an fsck refusal, a pack over the
+  bound (its temporary pack removed, another git's kept) and the bound itself, an `index-pack` that did not finish, a
+  pack without `main`, a locked remote-tracking ref, an undo that did not or could not put HEAD back, a replay stopped
+  mid-checkout (the tracked files put back), a replay that ends off `main`, git's reason and not its hint, no hook of
+  the operator's hooks path run, the canonical only read with none of its hooks run and its shallow file ignored, the
+  command's exits and what it says came in, the mark — written before the replay (a sync killed in it leaves the mark),
+  removed by an undone replay that wrote it and by no other, its first line kept, one that cannot be written (a
+  directory, a FIFO: refused, HEAD as it was), one that is a link — a registered write with no transport word, the
+  replay's switches and environment, the operator's other branches left where they were, the update scripts' refusals,
+  no hook or fsmonitor in any git of the sync, main's files removed or named — a link, a name with a newline, a carriage
+  return or a quote — a failed status, listing or `ls-tree`, an ignored file or nested repository in main's way refused
+  — a one-character name too — and one beside main's files left, a worktree named below its top, `_blob_id` of a FIFO, a
+  device and a sha256 repository's file and of no other hash, a sha256 repository's undo, an undo cut short (HEAD read
+  on its own) or stopped on a lock, the remedy for an index git cannot read, `--stop-as` — its name's pattern, its
+  refusals, joined by one period — its listing since HEAD before when the mark's first line cannot be listed from, the
+  mark removed only after what came in is said, a linked worktree's mark, a file flagged skip-worktree or
+  assume-unchanged — two counted as two, the commands quoted — or flags git could not list or whose listing timed out —
+  said and the mark kept, a case variant of a tracked file under `core.ignoreCase`, `core.ignoreStat` said when set, the
+  printed compare reading main's file as checkout writes it, a put-back status that times out or cannot start, a
+  conflict beside an untracked file of the operator's, a link put at the mark after the sync looked, a git directory
+  whose name ends in a space, the abort a rebase in progress names run as printed from a path with a space and a quote —
+  and every command a refusal or an undo prints quoted for such a path, the flagged listing as printed — every name, one
+  that is not UTF-8 and one with a TAB, under the operator's own `core.quotePath` too, and a quoted name, a `'` in it
+  too, read back as `$'…'` — the printed link compare, `core.ignoreStat` however true is spelled and a read of it that
+  times out, the box held to the names it is given — its spaced case run on posix, kept from running by no mark — the
+  docs-count row, §10's table rows whole (each split as GFM splits it into its header's cells, its delimiter row's
+  too, no row wrapped onto a line GFM reads as a row of its own, no `\\|`, no escaped backtick, no bare `|` in a code
+  span), and every copy of the listing in it and its compares held to gitio's own);
+  `tests/unit/test_stop_after_sync.py` (new: bootstrap's and deploy-stack's stop right after the stamp, the stop's
+  git as the operator — real git too — the listing it prints held to `came_in` and escaped, the mark read as its path
+  and first line, and a link, a dangling link or a directory failing it, the message's remedy for each read that failed
+  — a mark the operator cannot read named first, a path with a line break refused, a separate git directory's too — an
+  empty mark and a dangling link beside a rebase, the mark kept beside one, each command quoted for a worktree with a
+  space, each status case for case under `core.ignoreCase`, each command shown as written by Ansible's YAML display, a
+  carriage return in the mark's first line (of one sync or two), and whether HEAD holds main, is where it was before the
+  sync, or neither, with the remedy for each, its flagged-files sentence held to gitio's `_CUT_SHORT`, word for word,
+  and a linked worktree's mark read in its own git directory); `test_fresh_install_compat.py` (the result format, as
+  ansible itself reads it); `test_local_canonical.py` (the operator's prefix on every write of the worktree, the
+  leftover check and the busy check and their refusals — the busy one rendered when git could not say and for a HEAD on
+  no branch (told from a worktree under a directory named `HEAD` by the listed line's end, and a linked worktree's or a
+  separate git directory's HEAD so read; its compares run on a file under an eol attribute and on a link, HEAD elsewhere
+  too, and beside a tag of the branch's name on names with a space, the put-back too; the HEAD line and the git-dir line
+  asked and answered as the operator, a tag's answer too; the printed reflog rule run after a quit and after a detach,
+  and `--points-at` after the quit, the printed put-back on names that start with `:` or `-`, on a file named `HEAD`, on
+  glob names (one not in HEAD too), on a name with a `$`, a `'` or a backslash, beside a case twin, under the operator's
+  GIT_ICASE_ and GIT_LITERAL_PATHSPECS (each row first checking that git reads its variable) and against a staged edit,
+  the quote rule standing before every command it governs, the printed compares (the link's too) and move on a name with
+  a `$`, the link compare on a name that names nothing and on an empty file beside no link, each "differs", printing
+  something wherever it does not say the same, reading a worktree whose path needs quoting, and leaving the operator's
+  shell and its directory as they were, the case-fold probe and the put-back rows' helper each held to what it says, the
+  tests' own git given the fixture's environment at each call (and `isolated_git` taking out every GIT_* the runner set,
+  in a MonkeyPatch of its own that a row's `monkeypatch.undo()` does not reach; every test file whose source starts git,
+  the suite's files beyond T25's among them, taking it module-wide and building git's environment at each call, not once
+  at import; `test_suite_git_isolation.py` holding each file to both by its source, a file in unless it is named with
+  why, and the fixture to outlasting an undo), the move on one with a `'` and beside a file `~/kontroll-moved`, the
+  printed switch on a remote's branch of its name, the listing beside a tag, a remote's branch and a ref of neither, and
+  on a tag's HEAD, a branch `op/work` among them, the printed move for three files of one name into a home holding one
+  and for a name with a space, and the printed `symbolic-ref` on a tag, on a chain and on a detached HEAD; §10's busy
+  row holding each command in a code span, the not-a-branch clause and the way back to the next run whole), and the busy
+  check run on a linked worktree, on a HEAD on no branch, on one naming a ref outside `refs/heads/` (a remote's, a tag,
+  one under neither, `refs/headsx/`, a branch name linked on to a remote's), and on a branch with no commit yet, which
+  it does not list, its flagged-files sentence held to gitio's `_CUT_SHORT`, word for word, a link among the names,
+  right after the stop, its abort, lock, status and flagged files quoted, the status case for case, the commands shown
+  as written by Ansible's display (the HEAD refusal's, the sync refusal's and the landing check's too), a linked
+  worktree's lock — the play's names held equal to the sync's, the sync's task stopping the run itself and the check's
+  refusal, the stop at the play's top, the Report); `test_land.py` (the remedy, quoted for a path with a space and a
+  quote, the box held to the names it is given, the seam's allow-list, the doors); the as-root integration
+  `test_local_canonical_as_root.py` (a promote brought forward as the operator, the run STOPPED in the sync's task with
+  what came in named, a promoted script not run and a promoted filter plugin not imported, landed by the next run, 0
+  changed after; root's own sync refused, writing nothing; root's files in the operator's git refused and the named
+  remedy enough; the state commit replayed; a refused sync and a refused check; a sync by hand stopping the next dry-run
+  and run; bootstrap's stop play stopping on the mark, escaped; deploy-stack's stamp and stop, read from it, the stop
+  naming the id the stamp printed; a link at the mark, a mark that cannot be removed, a first line that is not an id,
+  the caller's run id when the stop runs alone; an operation in progress; a HEAD on no branch; the operator's gid; a
+  failing state commit; the operator's git taking none of the play's environment).
+
 ### fix(ansible): the SSH key render and cleanup never become, so the run's ssh can read the key (I-107, 2026-11-13)
 
 `_render-ssh-keys.yml` and `_cleanup-ssh-keys.yml` set no `become`, so a fleet run given `-b`, `ANSIBLE_BECOME=1` or

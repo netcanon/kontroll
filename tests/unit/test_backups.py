@@ -27,7 +27,7 @@ import yaml
 from _readonly_pins import assert_no_git_write, assert_read_only
 from kontroll.service import backups
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("isolated_git")]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _HAVE_GIT = shutil.which("git") is not None

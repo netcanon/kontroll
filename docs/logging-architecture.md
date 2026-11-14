@@ -122,9 +122,11 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   not installed is stamped and its run goes on (I-52), and with `tags: [always]` a `--tags` run is
   stamped too. ONE line per run: a later import of the stamp in the same run (local-canonical.yml
   under deploy-stack.yml) prints nothing, so a run of the shipped playbooks never carries two
-  `now()` ids (I-41). (Investigated: Semaphore does not expose its task id as a runner env var, so
-  an in-playbook id is the reliable mechanism;
-  it co-appears with the Semaphore task id in the job output for cross-reference.)
+  `now()` ids (I-41). bootstrap.yml runs `_stop-after-sync.yml`'s play right after it, and
+  deploy-stack.yml its copy of that play, so a run that stops after a sync by hand (T25) stops under
+  the run's id. (Investigated: Semaphore does not expose its task id as a runner env var, so an
+  in-playbook id is the reliable mechanism; it co-appears with the Semaphore task id in the job
+  output for cross-reference.)
   *Durability enhancement (since shipped):* a persistent `ANSIBLE_LOG_PATH`
   (`/var/lib/kontroll/ansible-log`, surviving the ephemeral job clone) **and** a host
   logrotate bound on it (`deploy-stack.yml` drops `/etc/logrotate.d/kontroll-ansible-log`,
@@ -151,10 +153,28 @@ aggregation stack, naturally alongside the Phase-5 Grafana deployment.
   shape as a request's), or the run id of the proposal `--propose` makes — and then its verdict on one line:
   `landed refs/heads/main <commit> (was <commit>)`, `up to date`, `would land` (`--check`), or `REFUSED: …` /
   `kontroll-land: …` on stderr with the exit status the caller reads (0 / 2 / 1). It goes to the deploy's
-  Ansible log (the play's `--check` task and its landing task both register it), to the update script's
-  run-log (`scripts/lib/run-log.sh`), or to the operator's terminal. No credential is in it; the gate's
+  output (the play's `--check` task and its landing task both register it, and the play's closing Report prints
+  the landing's lines — a command task's own output is not printed), to the update script's run-log
+  (`scripts/lib/run-log.sh`), or to the operator's terminal. No credential is in it; the gate's
   sentence can name a module file and, for a `signature_policy` that is not a word it takes, repeat the
-  value — as the promote's does.
+  value — as the promote's does. The sync (`kontroll-land.py --sync`, T25 — the deploy's two sync tasks, the real one
+  with `--stop-as local-canonical`, and the update scripts' check) prints `kontroll_run_id=<stamp> sync [--check]
+  <worktree> <- refs/heads/main of <canonical>` first (an id kontroll-land mints for each call, as it does for a
+  landing, and not the run's: in a deploy the sync's two tasks, the stop its own sync makes (exit 4) and the landing
+  each carry an id of their own beside the one the run's stamp printed first), then one `kontroll-land: …` line: `in
+  step — …`, `would bring forward — …` (exit 3), `brought forward — HEAD is <commit>: <n> commit(s) of the worktree's
+  own on the canonical's main <commit> (HEAD was <commit>)`, then what came in, or the refusal on stderr (exit 1) — a
+  conflict names its files. Same
+  destinations: in the deploy, a sync that brought the worktree forward STOPS the run in its own task, its output
+  (exit 4) the sync's `kontroll_run_id` and `brought forward` lines, `local-canonical: STOPPED …`, what came in and
+  HEAD before the sync (the one pointer back), and its refusal is said there too, on standard output (exit 1). The
+  next run after a sync by hand stops as well (`bootstrap:`, `deploy-stack:` or `local-canonical:`), its message
+  carrying HEAD before the sync and what came in — the newest 20
+  commits as `<id> <author>: <subject>` and a count of the older ones, every path changed with its letter, each
+  mode change, symlink and gitlink, a character a terminal acts on shown as `?` — and the run's
+  `kontroll_run_id`, the one its stamp printed first (a caller's `-e kontroll_run_id=…` — no API route passes
+  one yet — or the stamp's own); a refused sync's or landing's message carries its lines and its sentence. No
+  credential, and no file content, is in it.
 - ✅ **The GUI's internal-error line** — `gui/app.py` `_internal_error` answers an exception no route designed with
   a 500 whose sentence quotes a minted id (`ref <id>`, twelve hex), and logs to the GUI's stderr
   `internal-error kontroll_run_id=<id> route=<endpoint> what=<what> type=<exception type>` with the frames on the

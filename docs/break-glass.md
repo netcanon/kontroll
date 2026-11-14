@@ -58,11 +58,14 @@ and without the hand-back.
    sops build, `sops -d <file> >/dev/null` succeeds for every domain file.
 3. On the host, the checkout is level with the canonical and clean, and a tag marks where you started:
    ```bash
-   git fetch local && git merge --ff-only local/main   # level with the canonical; refused? troubleshooting.md §10
-   git log --oneline local/main..HEAD                  # expect no output: nothing here the canonical lacks
-   git status --short                                  # expect no output
-   git tag pre-break-glass-$(date -u +%Y%m%d)          # the rollback point
+   python3 -B scripts/kontroll-land.py --sync   # expect `in step — HEAD is the canonical's main (…)`: below
+   git status --short                           # expect no output
+   git tag pre-break-glass-$(date -u +%Y%m%d)   # the rollback point
    ```
+   The sync reads the canonical in place and fetches nothing. Any other answer is not level: `… is an ancestor of
+   HEAD` names commits here the canonical lacks (land them, then run this step again); `brought forward` brought in
+   a promote (read what it names; the next deploy stops once on it and lands nothing; deploy again, then run this
+   step again); a refusal is in troubleshooting.md §10.
    A re-wrap committed on a stale base is refused at the landing, and a rebase cannot merge ciphertext that a
    promoted proposal re-encrypted.
 
@@ -70,8 +73,8 @@ and without the hand-back.
 trusted machine, the private half stored offline, only the `age1…` value (after `Public key:`) copied to the
 control node. (The GUI's
 **Keys** dialog → "Break-glass recovery key" can mint it on the node instead: copy the private key it shows once,
-promote the proposal it stages, bring it into the checkout with `git fetch local && git merge --ff-only
-local/main`, and continue at step 3.)
+promote the proposal it stages, bring it into the checkout with `python3 -B scripts/kontroll-land.py --sync`
+(the next deploy or landing then stops once, naming what came in, and lands nothing), and continue at step 3.)
 
 **Step 2 — add the public half** (installer shell):
 
