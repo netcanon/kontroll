@@ -7,15 +7,17 @@ name: smoke — the compose-up smoke (nightly; not a gate)
 #
 # NOT A GATE. No push runs it and no required check names it: registry rate limits and dropped schedules will give
 # red nights that are not the tree's fault. It runs nightly on the default branch, by hand (workflow_dispatch), and on
-# a pull request that changes this file or the smoke script, so a change to the smoke proves itself before it lands
-# (a schedule runs only the default branch's copy, and a dispatch needs the file there). A red run, or no run for two
+# a pull request that changes this file, the smoke script or the install guide, so a change to the smoke or to the
+# quickstart it runs proves itself before it lands (a schedule runs only the default branch's copy, and a dispatch
+# needs the file there). A change to the scripts the quickstart runs shows the next night. A red run, or no run for two
 # days, is a leading indicator in STATUS.md; GitHub notifies a scheduled run's failure to whoever last changed its
 # cron line.
 #
 # ALWAYS GitHub-hosted, and only on the public repository. The job runs the installer with sudo and a root-equivalent
 # Docker socket, so it must never land on a shared self-hosted runner: `runs-on` is hard-coded, not the
-# KONTROLL_RUNS_ON variable (see ci.yml "RUNNERS"), and the job is skipped where that variable is set or the
-# repository is private (the private instance repository inherits this file through its sync, and sets the variable).
+# KONTROLL_RUNS_ON variable (see ci.yml "RUNNERS"), and the job is skipped where that variable is set, on every
+# event, and where the event's payload says the repository is private (a schedule's payload may name no repository,
+# so there the variable is the private repository's lock; it inherits this file through its sync and sets it).
 # It holds no secret: the contents permission is read-only, and the control key, the break-glass recipient and the
 # passwords are minted on the runner and die with it. The log is public, so the script redacts the rendered .env's
 # values and any age secret key from what it prints on a failure.
@@ -31,6 +33,7 @@ on:
     paths:
       - '.github/workflows/smoke.yml'
       - 'tests/smoke/**'
+      - 'docs/install-from-scratch.md'
 
 permissions:
   contents: read

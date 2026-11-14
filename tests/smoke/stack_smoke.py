@@ -21,14 +21,17 @@ again from a new login, as the guide says).
 2. Containers. After a settle window, and once no healthcheck is still starting, every container of the stack's
    compose project (the deploy's own `--project-directory docker`) is running, has not restarted and is healthy where
    it has a healthcheck. A container whose restart policy is `no` and which exited 0 is a one-shot that finished, and
-   passes. A project with no running container fails: a smoke is never green because nothing started.
+   passes. A project with no running container fails: a smoke is never green because nothing started. The containers
+   are judged again after the port probes, so one that crashed while they ran is a fault too.
 3. Ports. Every TCP port a running container publishes answers HTTP on it (on 127.0.0.1 for a port bound to every
    address) with a status from 200 to 399, or 401 (a login the smoke does not hold), within a bound.
 
 Exit 0 when every check holds, 1 when a step or a check failed, 2 when the guide's block cannot be read or the run is
-refused. On a failure it prints the project's containers, each one's log tail and the disk use, with every value of
-the rendered docker/.env and any age secret key replaced by [redacted]: the values are throwaway, but the log of a
-public workflow is public. The install prints no minted value itself when its output is not a terminal.
+refused. On a failure it prints the project's containers, each one's log tail and the disk use, and last the
+`SMOKE FAILED` line, with every value of the rendered docker/.env and any age secret key replaced by [redacted] in all
+of it: the values are throwaway, but the log of a public workflow is public. The install's own output is printed as it
+comes: it shows no minted value when its output is not a terminal, but compose names a docker/.env line it cannot
+parse.
 """
 import argparse
 import http.client
@@ -112,8 +115,9 @@ def commands(block, subs):
     """The command lines of the quickstart block, in order, each continuation joined and its placeholders replaced
     from `subs`; comment lines, blank lines and the `$EDITOR` line are skipped. Refused (exit 2): a placeholder not in
     `subs`, a command that is not one of KNOWN_COMMANDS, a line that holds a shell operator, an expansion or a
-    redirection (so a known command cannot carry another), a comment inside a continued command, or a block that ends
-    in a continuation or holds no command."""
+    redirection (so a known command cannot carry another), a comment or a blank line inside a continued command, a
+    backslash the shell would not read as a continuation (a space, a tab or a comment after it, or one escaped), or a
+    block that ends in a continuation or holds no command."""
     out, pending = [], ""
     for raw in block:
         line = raw.strip()
@@ -124,6 +128,12 @@ def commands(block, subs):
             continue
         line = _strip_comment(line)
         if line.endswith("\\"):
+            # The shell continues a line only at a backslash that is its last character and is not itself escaped
+            # (an odd run of them); after a space, a tab or a comment, or as `\\`, the next line is a command.
+            if not raw.endswith("\\") or (len(line) - len(line.rstrip("\\"))) % 2 == 0:
+                raise SmokeError("%s: the quickstart line %r ends in a backslash the shell does not read as a "
+                                 "continuation (a space, a tab or a comment after it, or a backslash escaped)"
+                                 % (GUIDE, raw.strip()), 2)
             pending += line[:-1].rstrip() + " "
             continue
         line, pending = (pending + line).strip(), ""
@@ -184,8 +194,8 @@ def container_faults(records):
 
 def published_ports(records):
     """(container, host, port) for each TCP port a running container publishes, once per host and port; a port bound
-    to every address is reached on 127.0.0.1, and one bound only to an IPv6 address is left out (the stack binds the
-    management address, which the smoke sets to 127.0.0.1)."""
+    to every address (IPv4's or IPv6's) is reached on 127.0.0.1, and one bound only to another IPv6 address is left
+    out (the stack's services bind every address or the management address, which the smoke sets to 127.0.0.1)."""
     seen, out = set(), []
     for rec in records:
         if not (rec.get("State") or {}).get("Running"):
@@ -235,6 +245,17 @@ def redact(text, values):
     for value in sorted(values, key=len, reverse=True):
         text = text.replace(value, "[redacted]")
     return _AGE_SECRET.sub("[redacted]", text)
+
+
+def _redact_env(text):
+    """`text` redacted as the diagnostics are: every value of the rendered docker/.env, when there is one, and every
+    age secret key."""
+    try:
+        with open(os.path.join(ROOT, "docker", ".env"), encoding="utf-8") as fh:
+            values = env_values(fh.read())
+    except OSError:
+        values = set()
+    return redact(text, values)
 
 
 def _run(cmd, **kw):
@@ -371,6 +392,9 @@ def run(settle, keep):
         faults = container_faults(records)
         print("==> ports", flush=True)
         faults += _port_faults(published_ports(records))
+        # Looked at once more after the probes, which can take a minute a port: a container that crashed meanwhile has
+        # restarted, or is restarting, since the first look.
+        faults += [f for f in container_faults(_inspect_project()) if f not in faults]
         if faults:
             raise SmokeError("the stack did not come up as it should:\n  - " + "\n  - ".join(faults))
         print("==> smoke green: %d container(s), %d port(s)" % (len(records), len(published_ports(records))))
@@ -404,7 +428,8 @@ def main(argv=None):
         run(args.settle, args.keep)
         return 0
     except SmokeError as exc:
-        print("SMOKE FAILED: %s" % exc, file=sys.stderr)
+        sys.stdout.flush()      # the diagnostics first, so the log's last line names the failure
+        print("SMOKE FAILED: %s" % _redact_env(str(exc)), file=sys.stderr)
         return exc.code
 
 

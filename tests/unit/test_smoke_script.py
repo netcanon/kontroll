@@ -15,6 +15,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -81,6 +82,12 @@ def test_the_quickstart_block_the_smoke_runs_is_the_one_in_the_docs():
     (_quote("scripts/kontroll-installer.sh check { x }"), "the shell character '{'"),
     (_quote("scripts/kontroll-installer.sh fresh-init \\", "# a comment", "    --mgmt-ip <ip>"),
      "continued into a comment line"),
+    (_quote("scripts/kontroll-installer.sh fresh-init \\", "", "    --mgmt-ip <ip>"), "continued into a blank line"),
+    (_quote("scripts/kontroll-installer.sh fresh-init \\ ", "    --mgmt-ip <ip>"), "not read as a continuation"),
+    (_quote("scripts/kontroll-installer.sh fresh-init \\   # the scaffold", "    --mgmt-ip <ip>"),
+     "not read as a continuation"),
+    (_quote("scripts/kontroll-installer.sh fresh-init \\\\", "    --mgmt-ip <ip>"), "not read as a continuation"),
+    (_quote("scripts/kontroll-installer.sh check < /dev/null"), "the shell character '<'"),
     (_quote("scripts/kontroll-installer.sh fresh-init \\"), "ends inside a continued command"),
     (_quote("# only comments", "$EDITOR instance/fleet.yml"), "holds no command"),
 ])
@@ -88,7 +95,9 @@ def test_a_quickstart_the_smoke_cannot_read_is_refused(text, says):
     """A guide the smoke cannot read as one block of known commands is refused with exit 2 and a message naming why:
     the heading renamed or doubled, no block or two, a placeholder or a command the smoke does not know (a lookalike
     of a known command's name included), a known command that carries another (a separator, a pipe, a background,
-    an expansion, a redirection, a brace), a continuation into a comment or off the end, and a block with no command.
+    an expansion, a redirection, a brace), a continuation into a comment, a blank line or off the end, a backslash
+    the shell does not read as a continuation (a space, a tab or a comment after it, or a backslash escaped), and a
+    block with no command.
     Guards the smoke and the guide drifting apart silently: each of these would otherwise run nothing, run something
     unvetted with sudo on the runner (the known-command check alone reads only a line's first words), or substitute
     nothing for a value the install needs."""
@@ -172,9 +181,10 @@ def test_each_published_tcp_port_is_probed_once_where_it_can_be_reached():
                               "3002/tcp": [{"HostIp": "::1", "HostPort": "3002"}],
                               "3003/tcp": [{"HostIp": "", "HostPort": "3003"}]}),
         _box(name="c", running=False, status="exited", ports={"3004/tcp": [{"HostIp": "0.0.0.0", "HostPort": "3004"}]}),
+        _box(name="d", ports={"3005/tcp": [{"HostIp": "::", "HostPort": "3005"}]}),
     ]
     assert smoke.published_ports(boxes) == [("a", "127.0.0.1", 3000), ("b", "127.0.0.1", 3001),
-                                            ("b", "127.0.0.1", 3003)]
+                                            ("b", "127.0.0.1", 3003), ("d", "127.0.0.1", 3005)]
 
 
 @pytest.mark.parametrize("status, ok", [(200, True), (204, True), (302, True), (399, True), (401, True),
@@ -206,6 +216,88 @@ def test_a_failures_diagnostics_carry_no_env_value_and_no_age_secret_key():
 class _Done:
     def __init__(self, rc, out):
         self.returncode, self.stdout = rc, out
+
+
+def test_the_project_query_lists_stopped_containers_too(monkeypatch):
+    """The containers judged are every container of the stack's compose project, stopped ones included: compose is
+    asked `ps --all --quiet` with the deploy's own arguments, and each id it lists is inspected. Guards a container
+    that exited dropping out of the judgement: a plain `ps` lists running containers only, and a stack whose one
+    service died beside a running one would read as green."""
+    calls = []
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        return _Done(0, "c1\nc2\n") if cmd[-1] == "--quiet" else _Done(0, "[]")
+    monkeypatch.setattr(smoke, "_run", fake)
+    assert smoke._inspect_project() == []
+    assert calls == [smoke.STACK + ["ps", "--all", "--quiet"], ["docker", "inspect", "c1", "c2"]]
+
+
+def test_the_containers_are_judged_after_the_settle_window_and_the_healthchecks(monkeypatch):
+    """The containers are judged once the settle window has passed and no healthcheck is still starting, or at the
+    bound if one still is. Guards the judgement being made the moment `up` returns, before a crash-looping
+    container has crashed once, or never ending while a healthcheck stays at starting."""
+    now = [0]
+    monkeypatch.setattr(smoke.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(smoke.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
+    for health, judged_at in ((None, 60), ("healthy", 60), ("starting", 300)):
+        now[0] = 0
+        monkeypatch.setattr(smoke, "_inspect_project", lambda: [_box(health=health)])
+        smoke._wait_settled(60, 300)
+        assert now[0] == judged_at, (health, now[0])
+
+
+def test_a_port_that_does_not_answer_as_served_is_a_fault(monkeypatch):
+    """Each probed port that answers nothing, or a status `status_ok` refuses, within its bound is a fault naming the
+    container, the address and what it answered; one that answers as served is not. Guards the port check reading a
+    dead GUI behind an Up container, or a proxy's 502, as green."""
+    answers = {3000: None, 3001: 502, 3002: 200}
+    monkeypatch.setattr(smoke, "_http_status", lambda host, port, timeout=10: answers[port])
+    ip = smoke.MGMT_IP
+    faults = smoke._port_faults([("a", ip, 3000), ("b", ip, 3001), ("c", ip, 3002)], bound=0)
+    assert faults == ["a publishes %s:3000, which answered nothing" % ip,
+                      "b publishes %s:3001, which answered HTTP 502" % ip]
+
+
+def test_the_failure_line_carries_no_env_value(tmp_path, monkeypatch, capsys):
+    """The SMOKE FAILED line is redacted as the diagnostics are: a step's error that quotes a value of the rendered
+    docker/.env (compose's error on a .env it cannot read quotes the line) prints it as [redacted]. Guards the one
+    line every failure prints, on stderr, carrying what the diagnostics above it took out."""
+    (tmp_path / "docker").mkdir()
+    (tmp_path / "docker" / ".env").write_text("SEMAPHORE_ADMIN_PASSWORD=s3cretpassw0rd\n", encoding="utf-8")
+    monkeypatch.setattr(smoke, "ROOT", str(tmp_path))
+
+    def failing(settle, keep):
+        raise smoke.SmokeError("docker compose ps failed (exit 1):\nbad line: s3cretpassw0rd")
+    monkeypatch.setattr(smoke, "run", failing)
+    assert smoke.main(["--throwaway"]) == 1
+    err = capsys.readouterr().err
+    assert "s3cretpassw0rd" not in err and "bad line: [redacted]" in err
+
+
+_LAST_LINE_PROBE = """import importlib.util, sys
+spec = importlib.util.spec_from_file_location("stack_smoke", sys.argv[1])
+smoke = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(smoke)
+def failing(settle, keep):
+    print("---- a line of the diagnostics")
+    raise smoke.SmokeError("the cause")
+smoke.run = failing
+sys.exit(smoke.main(["--throwaway"]))
+"""
+
+
+def test_the_failure_line_is_the_last_line_of_a_log_that_merges_both_streams():
+    """With stdout and stderr in one pipe, as the workflow's log takes them, the SMOKE FAILED line comes after
+    everything the run printed: the smoke flushes its stdout before it prints the cause on stderr. Guards the cause
+    landing above the diagnostics, with the log's last line a container's log tail that names nothing (stdout is
+    block-buffered into a pipe and was flushed only at exit)."""
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    r = subprocess.run([sys.executable, "-B", "-c", _LAST_LINE_PROBE, os.path.join(ROOT, "tests", "smoke",
+                                                                                   "stack_smoke.py")],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    assert r.returncode == 1, r.stdout
+    assert r.stdout.splitlines()[-2:] == ["---- a line of the diagnostics", "SMOKE FAILED: the cause"], r.stdout
 
 
 def test_a_failure_before_the_stack_was_rendered_prints_no_container_query(tmp_path, monkeypatch, capsys):
@@ -339,6 +431,32 @@ def test_the_first_failed_line_stops_the_run_and_the_stack_is_taken_down(tmp_pat
     if down:
         expected.append(smoke.STACK + ["down", "--volumes", "--remove-orphans"])
     assert calls == expected
+
+
+@pytest.mark.parametrize("second, fault", [([_box()], None),
+                                           ([_box(restarts=1)], "has restarted 1 time(s)"),
+                                           ([_box(status="restarting", restarts=1, Restarting=True)], "is restarting")])
+def test_a_container_that_crashes_while_the_ports_are_probed_is_a_fault(tmp_path, monkeypatch, second, fault):
+    """The containers are judged a second time after the port probes, which can take a minute a port: one that was up
+    at the first look and crashed while the ports were probed (it has restarted, or is restarting) fails the run with
+    exit 1 naming it; one still up passes. Guards "stayed up" meaning only "was up when the settle window ended": the
+    restart counts read once, before the probes, miss a crash during them."""
+    root = _tree(tmp_path, _quote("scripts/kontroll-installer.sh check"))
+    monkeypatch.setattr(smoke, "ROOT", str(root))
+    monkeypatch.setattr(smoke, "_uid", lambda: 1000)
+    monkeypatch.setattr(smoke, "_mint_recipient", lambda: "age1example")
+    monkeypatch.setattr(smoke, "_diagnostics", lambda: None)
+    monkeypatch.setattr(smoke, "_run", lambda cmd, **kw: None)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, cwd=None, **kw: subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(smoke, "_wait_settled", lambda settle, bound: [_box()])
+    monkeypatch.setattr(smoke, "_port_faults", lambda ports: [])
+    monkeypatch.setattr(smoke, "_inspect_project", lambda: second)
+    if fault is None:
+        smoke.run(0, keep=False)
+        return
+    with pytest.raises(smoke.SmokeError) as err:
+        smoke.run(0, keep=False)
+    assert err.value.code == 1 and fault in str(err.value) and "docker-semaphore-1" in str(err.value), str(err.value)
 
 
 @pytest.mark.skipif(shutil.which("age-keygen") is None, reason="age-keygen is not installed here")

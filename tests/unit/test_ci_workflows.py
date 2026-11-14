@@ -2170,10 +2170,12 @@ def _smoke_job():
 
 def test_the_smoke_never_runs_on_a_self_hosted_runner():
     """smoke.yml's job names `ubuntu-latest` itself (not the KONTROLL_RUNS_ON variable every other job reads), and is
-    skipped where that variable is set or the repository is private. The smoke runs the installer with sudo and a
-    root-equivalent Docker socket and leaves keys, a canonical and a gid-1001 group behind: on the private repository's
-    persistent, shared self-hosted runners that is a deploy onto the box (the one outcome the plan ruled out), and a
-    public repository must never reach a self-hosted runner at all. The private repository inherits this file through
+    skipped where that variable is set, on every event, and where the event's payload says the repository is
+    private (a schedule's payload may name no repository, so there the variable is the private repository's lock).
+    The smoke runs the installer with sudo and a root-equivalent Docker socket and leaves keys, a canonical and a
+    gid-1001 group behind: on the private repository's persistent, shared self-hosted runners that is a deploy onto
+    the box (the one outcome the plan ruled out), and a public repository must never reach a self-hosted runner at
+    all. The private repository inherits this file through
     its sync, so the condition, not the file's absence, is what keeps it off there. Guards the job being tidied into
     the shared `runs-on` expression, or the condition dropped."""
     job = _smoke_job()
@@ -2182,14 +2184,16 @@ def test_the_smoke_never_runs_on_a_self_hosted_runner():
 
 
 def test_the_smoke_is_not_a_push_gate():
-    """smoke.yml runs on a schedule, by hand, and on a pull request that changes the smoke itself — never on a push,
-    on a pull request that does not touch it, or as a gating workflow. Registry rate limits and dropped schedules give
-    red nights that are not the tree's fault, so the smoke must not become a check every change waits on; the
-    paths-filtered pull request is there so a change to the smoke proves itself before it lands (a schedule runs only
-    the default branch's copy). Guards a broadened trigger turning a slow, flaky job into a de facto gate."""
+    """smoke.yml runs on a schedule, by hand, and on a pull request that changes the smoke itself or the install
+    guide whose quickstart it runs — never on a push, on a pull request that touches neither, or as a gating
+    workflow. Registry rate limits and dropped schedules give red nights that are not the tree's fault, so the smoke
+    must not become a check every change waits on; the paths-filtered pull request is there so a change to the
+    smoke, or to the quickstart it runs, proves itself before it lands (a schedule runs only the default branch's
+    copy). Guards a broadened trigger turning a slow, flaky job into a de facto gate."""
     trig = _triggers("smoke.yml")
     assert set(trig) == {"schedule", "workflow_dispatch", "pull_request"}, trig
-    assert trig["pull_request"] == {"paths": [".github/workflows/smoke.yml", "tests/smoke/**"]}, trig["pull_request"]
+    assert trig["pull_request"] == {"paths": [".github/workflows/smoke.yml", "tests/smoke/**",
+                                              "docs/install-from-scratch.md"]}, trig["pull_request"]
     assert [entry["cron"] for entry in trig["schedule"]] == ["23 4 * * *"]
     assert "smoke.yml" not in GATING_WORKFLOWS
 
@@ -2201,7 +2205,7 @@ def test_the_smoke_holds_no_secret_and_read_only_permissions():
     passwords on the runner and needs nothing from the repository. Guards a secret, a write grant or a persisted
     credential creeping into a public job that executes the changed tree."""
     text = _read(os.path.join(".github", "workflows", "smoke.yml"))
-    assert "secrets." not in text and "GITHUB_TOKEN" not in text
+    assert "secrets." not in text and "GITHUB_TOKEN" not in text and "github.token" not in text
     assert yaml.safe_load(text)["permissions"] == {"contents": "read"}
     job = _smoke_job()
     assert "permissions" not in job
@@ -2235,6 +2239,8 @@ def test_the_smoke_runs_as_an_operator_whose_uid_is_not_the_services():
     assert len(setup) == 1, setup
     run = setup[0]["run"]
     assert "useradd --create-home --groups docker --shell /bin/bash kontroll-op" in run and "--uid" not in run
+    assert "usermod" not in run
+    assert "echo 'kontroll-op ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/kontroll-op" in run
     assert "cp -a . /home/kontroll-op/kontroll" in run and "chown -R kontroll-op: /home/kontroll-op/kontroll" in run
     assert steps.index(setup[0]) == len(steps) - 2 and steps[-1]["run"] == SMOKE_RUN
 

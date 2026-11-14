@@ -19,38 +19,43 @@ crash-loops, a bind source missing on a fresh host, a broken `.env` render, or a
 passed every check until an operator met it.
 
 - **New.** `.github/workflows/smoke.yml` runs `tests/smoke/stack_smoke.py --throwaway` on a fresh GitHub-hosted
-  runner, nightly, by hand, and on a pull request that changes the smoke. The script reads the one fenced block
-  under the guide's *Compose-native quickstart* heading and runs its command lines as written, from the repository
-  root: only `<ip>` (`127.0.0.1`), `<domain>` (`example.test`) and `<age1…>` (a break-glass recipient minted for the
-  run, whose private half is deleted first) are replaced, and the `$EDITOR` line is dropped. A block it cannot read
-  (a placeholder or a command it does not know, or a known command carrying another through a shell operator, an
-  expansion or a redirection) is refused before anything runs. The job runs it as an operator account it makes (sudo,
-  the docker group): the runner's own account has uid 1001, the network service's, which the install refuses (the
-  first run found it at the dry run; since I-18 the quickstart's first line refuses it; the smoke refuses uid 1001
-  itself, before it mints a key or runs a line). It checks out the
-  whole history, as the guide's clone has: a shallow checkout's commit cannot be landed whole on the canonical (the
-  third run found it). Then, after a settle
-  window, every
-  container of the stack's compose project must be running, never restarted and healthy where it has a healthcheck
-  (a no-restart one-shot that exited 0 passes; an empty project fails), and every TCP port a running container
-  publishes must answer HTTP with 2xx, 3xx or 401. At the end the stack is taken down with its volumes (`--keep`
-  leaves it). A failure prints the disk use and each container's log tail, with the rendered `.env`'s values and any
-  age secret key redacted (and, when nothing was rendered yet, says so instead of querying a stack that is not there).
-  The default services only (Semaphore and Homepage); no device.
-- **Not a gate, public only.** No push runs it and no required check names it. `runs-on: ubuntu-latest` is
-  hard-coded and the job is skipped where `KONTROLL_RUNS_ON` is set or the repository is private, so it never
-  reaches a self-hosted runner; it holds no secret (SECURITY.md R-SMOKE-1). A red night, or no run for two days, is
-  a leading indicator in STATUS.md.
+  runner, nightly, by hand, and on a pull request that changes the smoke or the install guide. The script reads the
+  one fenced block under the guide's *Compose-native quickstart* heading and runs its command lines as written, from
+  the repository root: only `<ip>` (`127.0.0.1`), `<domain>` (`example.test`) and `<age1…>` (a break-glass recipient
+  minted for the run, whose private half is deleted first) are replaced, and the `$EDITOR` line is dropped. A block it
+  cannot read (a placeholder or a command it does not know, or a known command carrying another through a shell
+  operator, an expansion or a redirection, or a backslash the shell does not read as a continuation) is refused before
+  anything runs. The job runs it as an operator account it makes (sudo, the docker group): the runner's own account
+  has uid 1001, the network service's, which the install refuses (the first run found it at the dry run; since I-18
+  the quickstart's first line refuses it; the smoke refuses uid 1001 itself, before it mints a key or runs a line). It
+  checks out the whole history, as the guide's clone has: a shallow checkout's commit cannot be landed whole on the
+  canonical (the third run found it). Then, after a settle window, every container of the stack's compose project must
+  be running, never restarted and healthy where it has a healthcheck (a no-restart one-shot that exited 0 passes; an
+  empty project fails), and every TCP port a running container publishes must answer HTTP with 2xx, 3xx or 401; the
+  containers are judged again after the port probes, so one that crashed while they ran fails the run. At the end the
+  stack is taken down with its volumes (`--keep` leaves it). A failure prints the disk use and each container's log
+  tail (or, when nothing was rendered yet, says so instead of querying a stack that is not there), and last its `SMOKE
+  FAILED` line, with the rendered `.env`'s values and any age secret key redacted in all of it; the install's own
+  output is printed as it comes (compose names a `.env` line it cannot parse). The default services only (Semaphore
+  and Homepage); no device.
+- **Not a gate, public only.** No push runs it and no required check names it. `runs-on: ubuntu-latest` is hard-coded
+  and the job is skipped where `KONTROLL_RUNS_ON` is set (on every event) and where the event's payload says the
+  repository is private (a schedule's may name none: there the variable is the lock), so it never reaches a
+  self-hosted runner; it holds no secret (SECURITY.md R-SMOKE-1). A red night, or no run for two days, is a leading
+  indicator in STATUS.md.
 - **Tests.** `unit/test_smoke_script.py`: the real guide reads as the known command sequence; a renamed or doubled
-  heading, no block or two, an unknown placeholder or command, a known command carrying another, a continuation into
-  a comment or off the end, and an empty block are refused, and refused before a key is minted or a line runs, as are
-  an account with uid 1001 and a tree with an `instance/`; trailing comments and continuations
-  are read as the shell reads them; the container judgement (restarts, a restart loop or a pause Docker reports as
-  running, health, exits, an empty project), the ports probed, the statuses taken, the redaction, the diagnostics
-  (no compose query before a render; a failed `ps` printed, never read as ids), the refusal without `--throwaway`, the
-  first failed line stopping the run, and the teardown. `unit/test_ci_workflows.py`: the job never runs on a
-  self-hosted runner, is not a push gate, holds no secret and only `contents: read`, and runs the smoke as an operator
-  account whose uid useradd picks.
+  heading, no block or two, an unknown placeholder or command, a known command carrying another, a continuation into a
+  comment, a blank line or off the end, a backslash the shell does not read as a continuation (a space, a tab or a
+  comment after it, or one escaped), and an empty block are refused, and refused before a key is minted or a line
+  runs, as are an account with uid 1001 and a tree with an `instance/`; trailing comments and continuations are read
+  as the shell reads them; the container judgement (restarts, a restart loop or a pause Docker reports as running,
+  health, exits, an empty project), the project query (`ps --all`), the settle wait, the second look after the port
+  probes, the ports probed (an IPv6 any-address bind included), the port faults, the statuses taken, the redaction
+  (the `SMOKE FAILED` line's too, printed last), the diagnostics (no compose query before a render; a failed `ps`
+  printed, never read as ids), the refusal without `--throwaway`, the first failed line stopping the run, and the
+  teardown. `unit/test_ci_workflows.py`: the job never runs on a self-hosted runner, is not a push gate, holds no
+  secret (no `github.token` either) and only `contents: read`, checks out the whole history, and runs the smoke as an
+  operator account whose uid useradd picks (never changed after, with its sudoers line).
 - **Docs.** docs/qa-and-release-pipeline.md §5 (the smoke is built, not a gate; its later increments), the pyramid
   rows in tests/README.md and docs/testing-standards.md, a marker on the guide's quickstart block (it runs nightly),
   ci.yml's header, SECURITY.md R-SMOKE-1, and STATUS.md's leading indicators.
