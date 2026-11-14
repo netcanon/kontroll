@@ -66,9 +66,11 @@
     # In the container a run that is not root has no uid to give up: it is the operator (CI's fresh-node check runs
     # the installer's passes as the operator's account) and runs the same environment without setpriv, whose
     # --clear-groups needs CAP_SETGID even to its own ids (I-123); one that is neither is refused by the stop below.
+    # Root is the process's own effective uid (os.geteuid()), never `ansible_user_uid`: that is the passwd entry
+    # LOGNAME or USER names, which an environment, an `-e` or a `-b` under su makes another's while the run is root.
     as_operator: >-
       {{ ((('setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid ~ ' --clear-groups --no-new-privs -- ')
-           if (ansible_user_uid | int) == 0 else '')
+           if (ansible_effective_user_id | int) == 0 else '')
           ~ 'env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C'
           ~ ' GIT_TERMINAL_PROMPT=0') if (in_container | bool) else '' }}
     # What git leaves in the worktree's git directory while an operation is in progress — the same names the sync

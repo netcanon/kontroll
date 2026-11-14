@@ -1237,14 +1237,14 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   anyone but the worktree's owner (`os.geteuid()` against the owner of its git directory, before anything is
   written); the deploy runs it — and the state commit and the `local` remote before it — as the operator (`setpriv
   --reuid/--regid --clear-groups --no-new-privs` and `env -i`, inside the installer container, from root; a run there
-  that is the operator runs as itself, and one that is neither root nor the operator is refused before the worktree
-  is read, I-123), because what root's
-  git wrote in the operator's repository (objects, the index, `config` through a lock file) the operator's own git
-  could not write over afterwards; the deploy's sync therefore reads the canonical as the operator too (the seam's
-  change to the service uid is root's alone). Root-owned files an earlier build left there are NAMED — in the git
-  directory git itself names (`--git-common-dir`: a linked worktree's objects are in the common one) — before the
-  state commit, and the deploy refuses until a one-time `chown -R` by hand; nothing re-owns the tree. A rebase,
-  merge, cherry-pick, revert or bisect in progress is refused there too, before the state commit, which would
+  that is the operator runs as itself, and one that is neither root nor the operator — by the process's own uid and
+  gid, never the passwd entry LOGNAME or USER names — is refused before the worktree's git is read, I-123), because
+  what root's git wrote in the operator's repository (objects, the index, `config` through a lock file) the
+  operator's own git could not write over afterwards; the deploy's sync therefore reads the canonical as the operator
+  too (the seam's change to the service uid is root's alone). Root-owned files an earlier build left there are NAMED —
+  in the git directory git itself names (`--git-common-dir`: a linked worktree's objects are in the common one) —
+  before the state commit, and the deploy refuses until a one-time `chown -R` by hand; nothing re-owns the tree. A
+  rebase, merge, cherry-pick, revert or bisect in progress is refused there too, before the state commit, which would
   otherwise commit onto a replay's detached HEAD (and the abort would take it away). `update.sh` and
   `update-from-bundle.sh` refuse a caller that does not own the checkout's git directory (root, under sudo), then
   ask `--sync --check` and refuse on any status but 0 (3, or 1 when it cannot say) before they fetch or merge. **The
@@ -1356,9 +1356,10 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   as a row of its own, no `\\|`, no escaped backtick nor one that opens no code span, no bare `|` in a code span), and
   every copy of the listing in it and its compares held to gitio's own, the update scripts' refusals, the check's and
   the owner's, before the upstream's), `tests/unit/test_stop_after_sync.py` (bootstrap's and deploy-stack's stop, right
-  after the stamp; the stop's git as the operator; the listing it prints held to the sync's and escaped — a moved path,
-  exactly as many commits as are named; the mark read as its path, its first line and a rebase in progress beside it,
-  and a link, a
+  after the stamp; the stop's git as the operator; a run in the installer container that is neither root nor the
+  operator refused at its first task, by the process's own ids, and the stop play itself run so; the listing it
+  prints held to the sync's and escaped — a moved path, exactly as many commits as are named; the mark read as its
+  path, its first line and a rebase in progress beside it, and a link, a
   dangling link or a directory at its path failing the read with its own exit and the path; the message's remedy for
   each read that failed — the path to remove by hand (a mark the operator cannot read named before the read fails), a
   path with a line break refused before anything is printed (a separate git directory's too), or git's sentence with the

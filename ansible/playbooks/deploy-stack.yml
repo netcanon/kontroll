@@ -38,7 +38,7 @@
       {{ lookup('env', 'KONTROLL_OPERATOR_GID') or (operator_uid if (in_container | bool) else ansible_user_gid) }}
     as_operator: >-
       {{ ((('setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid ~ ' --clear-groups --no-new-privs -- ')
-           if (ansible_user_uid | int) == 0 else '')
+           if (ansible_effective_user_id | int) == 0 else '')
           ~ 'env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C'
           ~ ' GIT_TERMINAL_PROMPT=0') if (in_container | bool) else '' }}
     stop_play: deploy-stack

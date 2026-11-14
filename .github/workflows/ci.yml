@@ -160,12 +160,14 @@ jobs:
         # control node. Skipped where KONTROLL_RUNS_ON is set (the private repository's self-hosted runners):
         # those are persistent and shared, and the plays' `check_mode: false` reads run there under sudo. It runs as
         # the account the step above made, in its copy of the checkout; sudo resets the environment, so what the
-        # check needs of this job's is passed by name.
+        # check needs of this job's is passed by name: LD_LIBRARY_PATH too when it is set (actions/setup-python
+        # exports it on Linux, and sudo drops every LD_ variable). `id` first, so the log names the account it runs as.
         if: ${{ !vars.KONTROLL_RUNS_ON }}
         run: >-
-          sudo -u fresh-op -H env "PATH=/home/fresh-op/tools:$PATH" ANSIBLE_COLLECTIONS_PATH=/home/fresh-op/collections
+          sudo -u fresh-op -H env "PATH=/home/fresh-op/tools:$PATH"
+          ${LD_LIBRARY_PATH:+"LD_LIBRARY_PATH=$LD_LIBRARY_PATH"} ANSIBLE_COLLECTIONS_PATH=/home/fresh-op/collections
           ANSIBLE_DEPRECATION_WARNINGS=false PYTHONWARNINGS=ignore::DeprecationWarning
-          bash -c 'cd ~/kontroll && bash tests/fresh-node-check.sh'
+          bash -c 'id && cd ~/kontroll && bash tests/fresh-node-check.sh'
 
   tests:
     name: pytest (unit · integration · gui) — py${{ matrix.python }}

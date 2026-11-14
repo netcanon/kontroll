@@ -2327,11 +2327,13 @@ def test_every_workflow_step_that_runs_apt_goes_through_the_lock_retry():
 
 
 # The fresh-node check's run line: as the operator account the step before it makes, with this job's PATH (the pinned
-# tools' copy first) and the collections' copy passed by name, since sudo resets the environment (I-123).
+# tools' copy first), its LD_LIBRARY_PATH when set and the collections' copy passed by name, since sudo resets the
+# environment and drops every LD_ variable (I-123), and `id` first, so the log names the account the check runs as.
 FRESH_RUN = ('sudo -u fresh-op -H env "PATH=/home/fresh-op/tools:$PATH" '
+             '${LD_LIBRARY_PATH:+"LD_LIBRARY_PATH=$LD_LIBRARY_PATH"} '
              "ANSIBLE_COLLECTIONS_PATH=/home/fresh-op/collections "
              "ANSIBLE_DEPRECATION_WARNINGS=false PYTHONWARNINGS=ignore::DeprecationWarning "
-             "bash -c 'cd ~/kontroll && bash tests/fresh-node-check.sh'")
+             "bash -c 'id && cd ~/kontroll && bash tests/fresh-node-check.sh'")
 
 
 def test_validate_job_runs_the_fresh_node_check():
@@ -2341,17 +2343,18 @@ def test_validate_job_runs_the_fresh_node_check():
     networks: T27's first real run failed there without it), and every module's collections by a third, from
     `gen-requirements.py --all-modules` into the runner's temp dir; it runs as an operator account that a fourth step
     makes right before it (useradd picks the uid, never `--uid` or `usermod`; the docker group; passwordless sudo; its
-    own copies of the checkout, the collections and the pinned tools), through `sudo -u` with the job's PATH and the
-    collections' copy passed by name; the five steps are skipped exactly where KONTROLL_RUNS_ON is set (the private
-    repository's persistent, shared runners), and none is softened (`continue-on-error` on the step or on the job,
-    `|| true`, a `shell:` of its own: each step has only a name, its skip, an env and its run). Why the account: the
-    check names the account that runs it as the operator, and the plays run the operator's git as the operator; a
-    GitHub-hosted runner's own account has uid 1001, which local-canonical.yml refuses as an operator, and a stand-in
-    uid it cannot become stopped the deploy pass with setpriv's exit 127 (I-123). Guards the one gate that has Ansible
-    evaluate the plays being dropped or neutered in a workflow edit unnoticed, as the promtool and vector checks were
-    skipped on every green run for months (2026-10-08 review); and the check run with the example fleet's collections
-    only, which its mock inventory (a host for every class) outgrows: T27's fold-1 read showed its backup pass then
-    stops at RouterOS's unresolved module on a GitHub-hosted runner, before its summary (B2)."""
+    own copies of the checkout, the collections and the pinned tools), through `sudo -u` with the job's PATH, its
+    LD_LIBRARY_PATH when set and the collections' copy passed by name, `id` first; the five steps are skipped exactly
+    where KONTROLL_RUNS_ON is set (the private repository's persistent, shared runners), and none is softened
+    (`continue-on-error` on the step or on the job, `|| true`, a `shell:` of its own: each step has only a name, its
+    skip, an env and its run). Why the account: the check names the account that runs it as the operator, and the
+    plays run the operator's git as the operator; a GitHub-hosted runner's own account has uid 1001, which
+    local-canonical.yml refuses as an operator, and a stand-in uid it cannot become stopped the deploy pass with
+    setpriv's exit 127 (I-123). Guards the one gate that has Ansible evaluate the plays being dropped or neutered in
+    a workflow edit unnoticed, as the promtool and vector checks were skipped on every green run for months
+    (2026-10-08 review); and the check run with the example fleet's collections only, which its mock inventory (a
+    host for every class) outgrows: T27's fold-1 read showed its backup pass then stops at RouterOS's unresolved
+    module on a GitHub-hosted runner, before its summary (B2)."""
     job = yaml.safe_load(_read(".github/workflows/ci.yml"))["jobs"]["validate"]
     steps = job["steps"]
     assert "continue-on-error" not in job, job.get("continue-on-error")
@@ -2364,7 +2367,7 @@ def test_validate_job_runs_the_fresh_node_check():
     assert "sudo useradd --create-home --groups docker --shell /bin/bash fresh-op" in account, account
     assert "--uid" not in runs[i - 1] and "usermod" not in runs[i - 1], account
     assert "echo 'fresh-op ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/fresh-op > /dev/null" in account, account
-    for copy in ("sudo cp -a . /home/fresh-op/kontroll",
+    for copy in ("sudo chmod 0440 /etc/sudoers.d/fresh-op", "sudo cp -a . /home/fresh-op/kontroll",
                  'sudo cp -a "$HOME/.ansible/collections" /home/fresh-op/collections',
                  'sudo cp -a "$RUNNER_TEMP/kontroll-tools" /home/fresh-op/tools',
                  "sudo chown -R fresh-op: /home/fresh-op/kontroll /home/fresh-op/collections /home/fresh-op/tools"):

@@ -549,7 +549,7 @@ def test_the_worktree_is_written_as_the_operator_and_brought_forward_before_the_
     play_vars = _canonical_play(yaml.safe_load(open(PLAYBOOK, encoding="utf-8")))["vars"]
     who = str(play_vars["as_operator"]).replace("\n", " ")
     for word in ("setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid", "--clear-groups",
-                 "--no-new-privs -- ')", "if (ansible_user_uid | int) == 0 else '')", "~ 'env -i PATH=",
+                 "--no-new-privs -- ')", "if (ansible_effective_user_id | int) == 0 else '')", "~ 'env -i PATH=",
                  "HOME=/nonexistent",
                  "GIT_TERMINAL_PROMPT=0", "if (in_container | bool) else ''"):
         assert word in who, (word, who)

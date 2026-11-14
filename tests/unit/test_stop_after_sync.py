@@ -175,34 +175,52 @@ _ENV_ONLY = "env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin
             "GIT_TERMINAL_PROMPT=0"
 
 
-@pytest.mark.parametrize("in_container, uid, gid, prefix, allowed", [
-    (True, 0, 0, "setpriv --reuid=1000 --regid=1000 --clear-groups --no-new-privs -- " + _ENV_ONLY, True),
-    (True, 1000, 1000, _ENV_ONLY, True),
-    (True, 1002, 1002, _ENV_ONLY, False),
-    (True, 1000, 1002, _ENV_ONLY, False),
-    (False, 1000, 1000, "", True),
-    (False, 1002, 1002, "", True),
-], ids=["container-root", "container-operator", "container-other", "container-other-gid", "host", "host-other"])
+# (in_container, the run's own uid and gid, the passwd entry's (`ansible_user_uid`/`_gid`) when LOGNAME or USER
+# names another account's, the prefix, whether the refusal lets it through)
+@pytest.mark.parametrize("in_container, uid, gid, named, prefix, allowed", [
+    (True, 0, 0, None, "setpriv --reuid=1000 --regid=1000 --clear-groups --no-new-privs -- " + _ENV_ONLY, True),
+    (True, 1000, 1000, None, _ENV_ONLY, True),
+    (True, 1002, 1002, None, _ENV_ONLY, False),
+    (True, 1000, 1002, None, _ENV_ONLY, False),
+    (True, 1002, 1000, None, _ENV_ONLY, False),
+    (True, 0, 0, (1000, 1000), "setpriv --reuid=1000 --regid=1000 --clear-groups --no-new-privs -- " + _ENV_ONLY, True),
+    (True, 1002, 1002, (1000, 1000), _ENV_ONLY, False),
+    (True, 1000, 1000, (0, 0), _ENV_ONLY, True),
+    ("False", 1002, 1002, None, "", True),
+    (False, 1000, 1000, None, "", True),
+    (False, 1002, 1002, None, "", True),
+], ids=["container-root", "container-operator", "container-other", "container-other-gid", "container-other-uid",
+        "container-root-named-operator", "container-other-named-operator", "container-operator-named-root",
+        "in-container-the-string-false", "host", "host-other"])
 def test_in_the_container_only_a_root_run_gives_its_ids_up_and_one_that_is_neither_root_nor_the_operator_is_refused(
-        in_container, uid, gid, prefix, allowed):
+        in_container, uid, gid, named, prefix, allowed):
     """`as_operator`, rendered for an operator of uid and gid 1000: in the installer's mode (`in_container`) a run
     that is root gives its ids up to the operator's (`setpriv`, no group, no new privileges) before the environment
     of its own (`env -i`, a PATH, no HOME, no prompt); a run there that is the operator has the same environment and
-    no setpriv; host-direct it is nothing. The stop's first task is the refusal, and its condition holds for root and
-    for the operator (uid and gid both) in the container and for any run host-direct, and fails for a run in the
-    container that is neither. Guards I-123: setpriv's `--clear-groups` needs CAP_SETGID even to a run's own ids, so
-    the public runner's fresh-node check (not root) got exit 127 from the stop's first read and stopped as if on a
-    mark; and a run that can become no operator stopped on a message about a mark it never read."""
-    values = dict(operator_uid="1000", operator_gid="1000", in_container=in_container, ansible_user_uid=uid,
-                  ansible_user_gid=gid)
+    no setpriv; host-direct (`in_container` false, or the string "False" an `-e` gives) it is nothing. The stop's
+    first task is the refusal, run on every run (no `when`), and its condition holds for root and for the operator
+    (uid and gid both) in the container and for any run host-direct, and fails for a run in the container that is
+    neither; its sentence names the run's ids. Root, the operator and the sentence are the process's own ids
+    (`ansible_effective_user_id`, `ansible_real_group_id`), whatever passwd entry LOGNAME or USER names
+    (`ansible_user_uid`/`_gid`). Guards I-123: setpriv's `--clear-groups` needs CAP_SETGID even to a run's own ids,
+    so the public runner's fresh-node check (not root) got exit 127 from the stop's first read and stopped as if on
+    a mark; and since only root gives its ids up, a run that is neither would otherwise run the operator's git as
+    itself. And the refusal keyed on `ansible_user_uid`: root whose LOGNAME or USER named the operator (an
+    environment, an `-e`, a `-b` under su) took no setpriv and wrote the operator's repository as root, and a third
+    account so named passed the refusal (I-123's read A, S1)."""
+    passwd = named or (uid, gid)
+    values = dict(operator_uid="1000", operator_gid="1000", in_container=in_container, ansible_effective_user_id=uid,
+                  ansible_real_group_id=gid, ansible_user_uid=passwd[0], ansible_user_gid=passwd[1])
     stop = _load("_stop-after-sync.yml")[0]
     assert _render(stop["vars"]["as_operator"], **values) == prefix
     first = _stop_tasks()[0]
     assert first["name"].startswith("Refuse a run in the installer container that is neither root nor the operator")
+    assert "when" not in first, ("the refusal runs on every run: in the container it is the only thing between a "
+                                 "run that is neither and the operator's git")
     assert _render("{{ %s }}" % first["ansible.builtin.assert"]["that"], **values) == str(allowed)
     said = _render(first["ansible.builtin.assert"]["fail_msg"], stop_play="deploy-stack", **values)
     assert said.startswith("deploy-stack: this run is uid %d, gid %d, and KONTROLL_IN_CONTAINER is set" % (uid, gid))
-    assert "Nothing of the worktree was read or changed" in said, said
+    assert "Nothing of the worktree's git was read or changed" in said, said
 
 
 @pytest.mark.skipif(not (sys.platform.startswith("linux") and shutil.which("ansible-playbook") and shutil.which("git")
@@ -210,12 +228,14 @@ def test_in_the_container_only_a_root_run_gives_its_ids_up_and_one_that_is_neith
                     reason="runs ansible-playbook in the installer's mode as an account that is not root (Linux)")
 def test_the_stop_play_in_the_installers_mode_runs_as_the_operator_it_is_and_refuses_one_it_is_not(tmp_path):
     """`_stop-after-sync.yml`, run by `ansible-playbook` with KONTROLL_IN_CONTAINER=1 by an account that is not
-    root, as CI's fresh-node check runs the installer's passes, on a worktree with no mark: named as the operator
-    itself (its uid and gid), its reads run (`git rev-parse` through `as_operator`, no setpriv) and the play passes;
-    named another operator, it fails at its first task with the sentence that says why, and no setpriv ran. Guards
-    I-123 end to end, where the gate cannot see it: the gate's suite runs as root, where setpriv works, so the stop's
-    read failing with exit 127 for a run that is not root (setpriv's `--clear-groups`) showed only on the public
-    runner, and it read as a stop on a mark."""
+    root, as CI's fresh-node check runs the installer's passes. Named as the operator itself (its uid and gid), on a
+    worktree with no mark the play passes with nothing changed, and with a mark planted it reads the mark as the run
+    (no setpriv), stops on it with its sentence and removes it; named another operator, by uid or by gid, it fails
+    at its first task with the sentence that says why, and neither setpriv nor a read ran. Guards I-123 end to end,
+    where the gate cannot see it: the gate's suite runs as root, where setpriv works, so the stop's read failing
+    with exit 127 for a run that is not root (setpriv's `--clear-groups`: "setgroups failed") showed only on the
+    public runner, and it read as a stop on a mark; a run that passes without its reads having run (only a planted
+    mark shows they did); and a refusal that compares the uid alone (I-123's read B, N1 and N2)."""
     wt = tmp_path / "wt"
     subprocess.run(["git", "init", "-q", "-b", "main", str(wt)], check=True, capture_output=True)
     home = tmp_path / "ansible-home"
@@ -224,7 +244,8 @@ def test_the_stop_play_in_the_installers_mode_runs_as_the_operator_it_is_and_ref
     me, mine = os.geteuid(), os.getegid()
 
     def play(uid, gid):
-        env = dict(os.environ, ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"), ANSIBLE_NOCOLOR="1",
+        env = dict(os.environ, ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"),
+                   ANSIBLE_REMOTE_TEMP=str(home / "remote-tmp"), ANSIBLE_NOCOLOR="1",
                    ANSIBLE_CONFIG=str(home / "ansible.cfg"), ANSIBLE_RETRY_FILES_ENABLED="0",
                    ANSIBLE_PYTHON_INTERPRETER="auto_silent", ANSIBLE_DEPRECATION_WARNINGS="0",
                    KONTROLL_IN_CONTAINER="1", KONTROLL_OPERATOR_UID=str(uid), KONTROLL_OPERATOR_GID=str(gid))
@@ -235,11 +256,18 @@ def test_the_stop_play_in_the_installers_mode_runs_as_the_operator_it_is_and_ref
     ran = play(me, mine)
     assert ran.returncode == 0 and re.search(r"localhost\s*:\s*ok=\d+\s+changed=0\s+unreachable=0\s+failed=0",
                                              ran.stdout), ran.stdout + ran.stderr
-    refused = play(me + 1, mine)
-    out = " ".join((refused.stdout + refused.stderr).split())
-    assert refused.returncode == 2 and "this run is uid %d, gid %d, and KONTROLL_IN_CONTAINER is set" % (me, mine) \
-        in out, out
-    assert "setresuid" not in out and "Read the mark" not in out, out
+    mark = wt / ".git" / "KONTROLL_SYNCED"
+    mark.write_text("x\n", encoding="utf-8")
+    stopped = play(me, mine)
+    said = " ".join((stopped.stdout + stopped.stderr).split())
+    assert stopped.returncode == 2 and "STOPPED before landing" in said and "The mark is removed" in said, said
+    assert not mark.exists() and "setpriv" not in said, said
+    for uid, gid in ((me + 1, mine), (me, mine + 1)):
+        refused = play(uid, gid)
+        out = " ".join((refused.stdout + refused.stderr).split())
+        assert refused.returncode == 2 and "this run is uid %d, gid %d, and KONTROLL_IN_CONTAINER is set" % (me, mine) \
+            in out and "nor the operator (uid %d, gid %d)" % (uid, gid) in out, out
+        assert "setpriv" not in out and "Read the mark" not in out, out
 
 
 def test_the_stop_runs_its_git_as_the_operator_reads_the_syncs_mark_and_escapes_what_it_prints():

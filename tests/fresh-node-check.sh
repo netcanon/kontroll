@@ -47,7 +47,8 @@
 # node, where scaffolding a second instance is wrong; there (a /srv/kontroll.git, a /var/lib/kontroll) the deploy
 # passes would read that node's canonical and storage, so the result says nothing about a fresh node. Run it by hand
 # from a checkout on a machine that is not a control node, as an account whose uid is not 1001 (it is the operator
-# the deploy passes name, and it refuses uid 1001 first): `bash tests/fresh-node-check.sh` (needs ansible-playbook
+# the deploy passes name, and it refuses uid 1001 first) with passwordless sudo, for the plays' `become` tasks, and
+# access to the Docker daemon, as CI's account has: `bash tests/fresh-node-check.sh` (needs ansible-playbook
 # with every module's collections, as the published runner image has them — `python3 scripts/gen-requirements.py
 # <file> --all-modules`, then `ansible-galaxy collection install -r <file>` — sops, age-keygen and git, and for the
 # deploy passes the `docker` Python library, the buildx plugin and a Docker daemon to read). KONTROLL_FRESH_KEEP=1
@@ -58,10 +59,18 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 for tool in git ansible-playbook sops age-keygen python3; do
   command -v "$tool" >/dev/null || { echo "fresh-node-check: FAIL — $tool is not on PATH" >&2; exit 1; }
 done
-# The operator the deploy passes name is the account that runs the check (below), and uid 1001 is the network
-# service's, which local-canonical.yml refuses as an operator (Q-6). A GitHub-hosted runner's account has it, so CI's
-# validate job runs this as an account it makes; refused here first, before anything is made.
-if [ "$(id -u)" = 1001 ]; then
+# The operator the deploy passes name is the account that runs the check (its name, uid and gid, read here and
+# exported below), and uid 1001 is the network service's, which local-canonical.yml refuses as an operator (Q-6). A
+# GitHub-hosted runner's account has it, so CI's validate job runs this as an account it makes. Refused here first,
+# before anything is made: that uid, and an account with no name (no passwd entry), which no play can name.
+if ! KONTROLL_OPERATOR_USER=$(id -un 2>/dev/null); then
+  echo "fresh-node-check: FAIL — this account (uid $(id -u)) has no name (no passwd entry), and the deploy passes" \
+       "name the operator by it: run the check as an account that has one" >&2
+  exit 1
+fi
+KONTROLL_OPERATOR_UID=$(id -u)
+KONTROLL_OPERATOR_GID=$(id -g)
+if [ "$KONTROLL_OPERATOR_UID" = 1001 ]; then
   echo "fresh-node-check: FAIL — this account has uid 1001, the network service's, which local-canonical.yml refuses" \
        "as an operator (Q-6): run the check as an account with another uid (CI's validate job makes one)" >&2
   exit 1
@@ -89,11 +98,8 @@ export ANSIBLE_NOCOLOR=1
 # The installer's launcher always names the operator (docker/services/installer.yaml requires it), and the plays run
 # the operator's git as the operator: the installer's root gives its ids up to the operator's (setpriv), and a run
 # that is the operator runs it as itself (I-123). This check is not the installer's root, so the operator it names
-# is the account that runs it, whose export the tree below is; a stand-in uid it cannot become stopped the deploy
-# pass at its first read of the worktree.
-KONTROLL_OPERATOR_USER=$(id -un)
-KONTROLL_OPERATOR_UID=$(id -u)
-KONTROLL_OPERATOR_GID=$(id -g)
+# is the account that runs it (read above), whose export the tree below is; a stand-in it is not is refused at the
+# stop's first task.
 export KONTROLL_OPERATOR_USER KONTROLL_OPERATOR_UID KONTROLL_OPERATOR_GID
 # The launchers also read the host's journal directory, which the installer container cannot see (I-25); this host's
 # own answer stands in, as they would give it.

@@ -282,12 +282,14 @@ def _exe(path, text):
 
 
 # The stub id: the account the script runs as, FAKE_UID / FAKE_GID / FAKE_USER (1000, 1000, fresh-op by default), so
-# the rows do not depend on the suite's own uid (CI's is 1001, which the script refuses). Anything else is the real id.
+# the rows do not depend on the suite's own uid (CI's is 1001, which the script refuses); FAKE_USER empty is an account
+# with no name, for which `id -un` fails as id does. Anything else is the real id.
 _ID = """#!/bin/sh
 case "$*" in
   -u) echo "${FAKE_UID:-1000}";;
   -g) echo "${FAKE_GID:-1000}";;
-  -un) echo "${FAKE_USER:-fresh-op}";;
+  -un) [ -n "${FAKE_USER-fresh-op}" ] || { echo "id: cannot find name for user ID ${FAKE_UID:-1000}" >&2; exit 1; }
+       echo "${FAKE_USER-fresh-op}";;
   *) exec /usr/bin/id "$@";;
 esac
 """
@@ -396,16 +398,19 @@ def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkou
 def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_files_inside(tmp_path):
     """Every `ansible-playbook` runs with the operator named as the installer's launcher names one, and the operator
     is the account the script runs as (KONTROLL_OPERATOR_USER, _UID, _GID = its name, uid and gid as `id` gives them,
-    whatever the caller exported), with TMPDIR inside the script's directory, PYTHONDONTWRITEBYTECODE=1 and
+    whatever the caller exported: here op-x, 4242 and 4343, none of them the caller's or the stub's defaults, and the
+    gid not the uid), with TMPDIR inside the script's directory, PYTHONDONTWRITEBYTECODE=1 and
     ANSIBLE_NOCOLOR=1, and with neither the caller's ANSIBLE_CONFIG nor its ANSIBLE_FORCE_COLOR. Guards: with no
     operator named, local-canonical.yml takes the caller's uid (T27's fold-1 read, B1); a stand-in operator the run
     cannot become stopped the deploy pass at the stop's first read of the worktree, exit 127 from setpriv, on the
     public runner (I-123: the plays run the operator's git as the operator, and only root can become another); a
     caller's ANSIBLE_CONFIG replaces the export's ansible.cfg, and colour codes leave the stops' parse nothing to
     read (S4, N7); a module's temporary files and Python's bytecode landed beside the caller's TMPDIR and
-    collections (N1)."""
+    collections (N1); the ids written as literals, or the gid read as the uid, which a stand-in of 1000 for both
+    could not tell from `id`'s answers (I-123's read B, S1)."""
     r, calls, p = _run(tmp_path, extra_env={"ANSIBLE_CONFIG": "/elsewhere/ansible.cfg", "ANSIBLE_FORCE_COLOR": "1",
-                                            "KONTROLL_OPERATOR_UID": "1001"})
+                                            "KONTROLL_OPERATOR_UID": "1001", "FAKE_UID": "4242",
+                                            "FAKE_GID": "4343", "FAKE_USER": "op-x"})
     assert r.returncode == 0, r
     plays = _plays(calls)
     assert len(plays) == 8, calls
@@ -413,7 +418,7 @@ def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_f
     for c in plays:
         e = c["env"]
         assert (e["KONTROLL_OPERATOR_USER"], e["KONTROLL_OPERATOR_UID"], e["KONTROLL_OPERATOR_GID"]) == (
-            "fresh-op", "1000", "1000"), c
+            "op-x", "4242", "4343"), c
         assert e["TMPDIR"].startswith(inside) and e["TMPDIR"].endswith("/tmp"), c
         assert e["PYTHONDONTWRITEBYTECODE"] == "1" and e["ANSIBLE_NOCOLOR"] == "1", c
         assert e["ANSIBLE_CONFIG"] is None and e["ANSIBLE_FORCE_COLOR"] is None, c
@@ -421,14 +426,29 @@ def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_f
 
 def test_an_account_with_the_services_uid_is_refused_before_anything_is_made(tmp_path):
     """Run as an account with uid 1001 (the stub `id`), the script fails with exit 1 and a sentence naming the
-    network service's uid and what to do, before it makes its directory or runs kontroll-init or a play. Guards the
+    network service's uid and what to do, before it makes its directory (KONTROLL_FRESH_KEEP=1, so one made before
+    the refusal would be kept and seen) or runs kontroll-init or a play. Guards the
     operator the deploy passes name being the account that runs the check: uid 1001 is the one local-canonical.yml
     refuses as an operator (Q-6), so a run as it would fail in the deploy pass on a message about something else,
     after the export, the keys and the plays it did run (a GitHub-hosted runner's own account has uid 1001; CI's
-    validate job runs the check as an account it makes)."""
-    r, calls, p = _run(tmp_path, extra_env={"FAKE_UID": "1001"})
+    validate job runs the check as an account it makes); and the refusal moved below the directory's making, which
+    the EXIT trap's removal hid from a row run without KONTROLL_FRESH_KEEP (I-123's read B, N3)."""
+    r, calls, p = _run(tmp_path, extra_env={"FAKE_UID": "1001", "KONTROLL_FRESH_KEEP": "1"})
     assert r.returncode == 1 and "this account has uid 1001, the network service's" in r.stderr, r
     assert "CI's validate job makes one" in r.stderr, r.stderr
+    assert calls == [] and os.listdir(p["tmpdir"]) == [], (calls, os.listdir(p["tmpdir"]))
+
+
+def test_an_account_with_no_name_is_refused_before_anything_is_made(tmp_path):
+    """Run as an account `id -un` has no name for (the stub `id` fails as id does for a uid with no passwd entry),
+    the script fails with exit 1 and a sentence of its own naming the uid, before it makes its directory (kept and
+    seen with KONTROLL_FRESH_KEEP=1) or runs kontroll-init or a play. Guards the operator's name read after the
+    directory was made, under `set -e`: such a run ended on id's own message, with no sentence of the check's, and
+    no play could name the operator either (Ansible gathers no user facts for an account with no name; I-123's
+    read A, N3)."""
+    r, calls, p = _run(tmp_path, extra_env={"FAKE_USER": "", "FAKE_UID": "4242", "KONTROLL_FRESH_KEEP": "1"})
+    assert r.returncode == 1 and "this account (uid 4242) has no name" in r.stderr, r
+    assert "cannot find name" not in r.stderr, r.stderr
     assert calls == [] and os.listdir(p["tmpdir"]) == [], (calls, os.listdir(p["tmpdir"]))
 
 
