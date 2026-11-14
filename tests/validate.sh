@@ -86,7 +86,15 @@ PY="$(command -v python3 || command -v python || true)"
 if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
   # KONTROLL_REQUIRE_CHECKOUT=1: a row marked requires_checkout that would be skipped here (the tree is no git
   # checkout) stops the session instead, so the gate cannot pass without having run them (I-51).
-  step pytest 0 env KONTROLL_REQUIRE_CHECKOUT=1 "$PY" -m pytest -m "not e2e and not slow" -q
+  # KONTROLL_PYTEST_WORKERS=N (CI's workflow sets it): the suite runs on N worker processes (pytest-xdist,
+  # tests/requirements-dev.txt), rows handed out by `worksteal` (under the default `load` one worker ran the
+  # ansible-playbook rows, collected first, alone); unset or empty, in this one. A count xdist refuses, or no xdist
+  # where one is set, fails the step. The refuse-local-runtime and key-render-runtime steps below take the same
+  # arguments; the as-root step does not (one of its rows forks a pty, which in a worker is a fork of a threaded
+  # process: Python warns it may deadlock).
+  xdist=()
+  [ -n "${KONTROLL_PYTEST_WORKERS:-}" ] && xdist=(-n "$KONTROLL_PYTEST_WORKERS" --dist worksteal)
+  step pytest 0 env KONTROLL_REQUIRE_CHECKOUT=1 "$PY" -m pytest -m "not e2e and not slow" -q ${xdist[@]+"${xdist[@]}"}
   # the plaintext guard's predicate against a document the INSTALLED sops writes: the ciphertext token, the
   # encrypted comment and the metadata block are sops's shapes, not ours, and a sops bump that changes one must
   # fail HERE — not refuse every healthy secret file at the next deploy. A step of its own, behind `have sops`:
@@ -111,18 +119,19 @@ if [ -n "$PY" ] && "$PY" -m pytest --version >/dev/null 2>&1; then
     t=tests/integration; t="$t/test_refuse_local_connection_runtime.py $t/test_wire_logging_allowlist_runtime.py
       $t/test_device_role_fact_guard_runtime.py $t/test_refuse_missing_entrypoint_runs.py
       $t/test_ping_refused_class_runs.py $t/test_ping_check_failed_runs.py"
-    out="$(PYTEST_ADDOPTS= "$0" -m pytest $t -rs --color=no 2>&1)"; rc=$?
+    out="$(PYTEST_ADDOPTS= "$0" -m pytest $t -rs --color=no "$@" 2>&1)"; rc=$?
     printf "%s\n" "$out"
-    [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
+    [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY" ${xdist[@]+"${xdist[@]}"}
   # the per-run SSH key render and cleanup (ansible/playbooks/_render-ssh-keys.yml, _cleanup-ssh-keys.yml) in every
   # run mode, a real run, a dry run and a `--tags` run, around a key the INSTALLED sops encrypted and community.sops
   # decrypts: a dry run that renders no key reaches no key-auth host, and passes (I-87, I-93). Behind `have sops`
   # and `have ansible-playbook`, and no test may be skipped (as above): a missing community.sops is a skip, so it
   # fails here.
   have sops && have ansible-playbook; step key-render-runtime $? bash -c '
-    out="$(PYTEST_ADDOPTS= "$0" -m pytest tests/integration/test_ssh_key_render_runs.py -rs --color=no 2>&1)"; rc=$?
+    out="$(PYTEST_ADDOPTS= "$0" -m pytest tests/integration/test_ssh_key_render_runs.py -rs --color=no "$@" 2>&1)"
+    rc=$?
     printf "%s\n" "$out"
-    [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY"
+    [ "$rc" -eq 0 ] && ! printf "%s\n" "$out" | grep -q "^SKIPPED"' "$PY" ${xdist[@]+"${xdist[@]}"}
   # the change of identity, with REAL uids (rule 5 of kontroll.canon). The rows of tests/integration/test_canon_drop.py
   # chown a canonical to the play's layout and start git as the service, and those of
   # tests/integration/test_content_clone_as_service.py run the deploy's content-clone tasks with ansible-playbook

@@ -44,6 +44,8 @@ CI runs the suite (`pytest -m "not e2e and not slow"`) in one leg per Python, ea
 installer's, the control image's (every Semaphore job's), the validate job's — with every module's collections, so a
 row that runs ansible-playbook runs on a shipped core there, never on the runner image's own (I-94). The pins live in
 `.github/workflows/ci.yml`'s `tests` matrix; `tests/unit/test_ci_ansible_cores.py` holds them to their sources.
+Each leg, and the validate job's pytest step, runs the suite on several worker processes ([Parallel
+runs](#parallel-runs)).
 A step can also **WARN**: `status-as-of` (`tests/check-status.py`) warns when `STATUS.md` or its last live run
 is more than a month old. A warning is counted and shown in the last line (`VALIDATE: PASS (0 skipped, 1
 warned)`) and never fails the run, also under `--strict` — a date must not turn `main` red; the publish
@@ -123,11 +125,52 @@ CalledProcessError that said nothing of why (I-51).
 
 Where `KONTROLL_REQUIRE_CHECKOUT=1` a reason is a session error instead of a skip: validate's pytest step and CI's
 offline pytest job set it, since both run in a checkout, where a skipped marked row would pass a gate that never ran it.
+Under worker processes (`-n`, [Parallel runs](#parallel-runs)) the workers collect the rows, so the conftest's
+`pytest_configure` asks first, in the process that starts them: where the variable is 1 and the tree is not a checkout
+it stops the session with the reason before a worker starts, whatever rows were asked for (in a worker the error is a
+crashed worker and an INTERNALERROR that names no reason).
 
 A new row that shells out to git about this tree takes the marker, unless it can read the files on disk instead
 when git cannot list them and stay a whole check on an archive (as the doc-link and bind-source checks do); a row
 that builds its own repository in `tmp_path` does not need it. `unit/test_requires_checkout.py` pins the answer, and
 runs the marked files in tests/unit and tests/integration (the two it scans) in a copy that is not a checkout.
+
+## Parallel runs
+
+CI runs the offline suite on `KONTROLL_PYTEST_WORKERS` worker processes (pytest-xdist, from
+`tests/requirements-dev.txt`). In one process the suite held one core of the runner while the others idled, and the
+rows that run ansible-playbook made that most of an hour per job. `.github/workflows/ci.yml` sets the count once, at
+the workflow's top. The `tests` job's pytest step passes it to `-n`, with `--dist worksteal`, and `validate.sh`'s
+pytest step does the same when it is set: the rows that run ansible-playbook are collected first and hold most of the
+suite's time, and xdist's default `load` handed them all to the first worker (measured: one worker busy for most of
+the run, the other idle); `worksteal` moves rows from a busy worker's queue to an idle one. `validate.sh`'s
+refuse-local-runtime and key-render-runtime steps take the same arguments; its as-root step stays in one process,
+since one of its rows forks a pty, which in a worker is a fork of a threaded process (Python warns it may
+deadlock). Unset or empty, `validate.sh` runs the suite in one process, as the gate's own image needs (it has no
+xdist). The count is kept low because a self-hosted host may carry several runners, each running a job at once; raise
+it with whoever runs them. `unit/test_pytest_workers.py` pins the wiring. Locally:
+
+```bash
+pytest -m "not e2e and not slow" -n 4                    # or -n auto: one worker per CPU
+KONTROLL_PYTEST_WORKERS=4 bash tests/validate.sh          # the gate's pytest step on four workers
+```
+
+Each worker is a pytest session of its own. It gets rows in no fixed order and runs them while the others run
+theirs. So a row:
+
+- writes only under its own `tmp_path` (or `tmp_path_factory`), never a fixed path another worker may write at the
+  same moment. The GUI's default audit log (`GUI_AUDIT_LOG`, set by `tests/conftest.py`) is shared by every worker,
+  so a row that reads the audit log first moves `gui.AUDIT_LOG` into its `tmp_path`, as the GUI rows do;
+- never counts on another row having run first, in its own file or another. A module- or session-scoped fixture runs
+  once in each worker that runs one of its rows;
+- binds port 0, never a fixed port, and writes nothing into the checkout (its own `tmp_path` instead: a script's
+  out-dir, too). A port the row needs CLOSED stays bound, never listening, until the row is done: a connection to it
+  is refused, and closed it can be given to another worker's listener meanwhile. Every worker installs the conftest's
+  import-time switches (the hermetic overlay, the landing guard).
+
+A run of the e2e rows and the offline rows together stays in one process: the conftest's e2e-last order, which keeps
+the e2e fakes' seams from reaching later rows, holds per worker under `load` but not under `worksteal`. Neither CI job
+mixes them (the offline runs pass `-m "not e2e and not slow"`, the e2e job runs alone).
 
 ## Adding tests
 
@@ -139,6 +182,7 @@ runs the marked files in tests/unit and tests/integration (the two it scans) in 
    A row that needs a tool skips without it, and calls it only in the row's body or a helper the row calls: a file's
    top level runs at collection, before any skip, so a tool called there stops every pytest run on a machine without
    it (`integration/test_suite_collects_without_tools.py` collects the suite with an empty PATH to catch one; I-98).
+   A row keeps to [Parallel runs](#parallel-runs)' rules: CI runs it beside other rows, in another process.
 4. **L2 vector test**: a new internal Vector shape (`docker/vector/config.d/transforms/`) gets a case in
    `docker/vector/tests/` — one event in, the label fields asserted out. The static row in
    `unit/test_compose_logging.py` already holds it to setting every templated label.
@@ -330,9 +374,10 @@ tests/smoke/         # the compose-up smoke (L3; not collected by pytest): run o
 ```
 
 ```bash
-# tests/requirements-dev.txt: pytest + pytest-cov, PyYAML, flask, FastAPI + httpx, cryptography, pytest-playwright
+# tests/requirements-dev.txt: pytest + pytest-cov + pytest-xdist, PyYAML, flask, FastAPI + httpx, cryptography,
+# pytest-playwright
 pip install -r tests/requirements-dev.txt
-pytest -m "not e2e and not slow"                   # the hermetic default (CI runs this)
+pytest -m "not e2e and not slow"                   # the hermetic default (CI runs this, with -n: Parallel runs)
 pytest --cov=scripts --cov=gui --cov=api --cov-report=term-missing
 ```
 

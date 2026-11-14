@@ -601,7 +601,8 @@ def test_vector_health_check_passes_on_200_and_fails_otherwise():
 
     Why: the row above pins the program; this one proves the command works — a check that can never pass (the old
     `wget` in an image without it) or never fail (a probe that ignores the status) both leave the container's
-    health state meaning nothing."""
+    health state meaning nothing. The "nothing listens" port stays bound, never listening, while the check runs, so
+    no other socket (another worker's server: tests/README.md "Parallel runs") can be given it and answer."""
     command = _vector_health_command()[3]
     for status, want_ok in ((200, True), (503, False)):
         handler = type("H%d" % status, (_Health,), {"status": status})
@@ -617,4 +618,4 @@ def test_vector_health_check_passes_on_200_and_fails_otherwise():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         closed = sock.getsockname()[1]
-    assert _probe(command, closed) != 0, "nothing listening must fail the check"
+        assert _probe(command, closed) != 0, "nothing listening must fail the check"
