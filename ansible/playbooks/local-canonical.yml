@@ -63,9 +63,13 @@
     # operator's own git cannot write over afterwards. So the state commit and the sync run through this prefix:
     # the operator's uid and gid, no supplementary group, no new privileges, and an environment of its own (no
     # HOME, so no root's config is read as someone who may not read it). Host-direct the play IS the operator.
+    # In the container a run that is not root has no uid to give up: it is the operator (CI's fresh-node check runs
+    # the installer's passes as the operator's account) and runs the same environment without setpriv, whose
+    # --clear-groups needs CAP_SETGID even to its own ids (I-123); one that is neither is refused by the stop below.
     as_operator: >-
-      {{ ('setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid ~ ' --clear-groups --no-new-privs -- env -i'
-          ~ ' PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C'
+      {{ ((('setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid ~ ' --clear-groups --no-new-privs -- ')
+           if (ansible_user_uid | int) == 0 else '')
+          ~ 'env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C'
           ~ ' GIT_TERMINAL_PROMPT=0') if (in_container | bool) else '' }}
     # What git leaves in the worktree's git directory while an operation is in progress — the same names the sync
     # refuses on (scripts/kontroll/gitio.py `_SYNC_BUSY`; a unit test holds the two equal). Checked before the state

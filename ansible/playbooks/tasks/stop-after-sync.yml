@@ -22,7 +22,25 @@
 #   worktree          the operator's checkout
 #   as_operator       the prefix that runs a command as the operator ('' host-direct)
 #   operator_uid, operator_gid   the operator's ids, which the owner remedy names
+#   in_container      whether the run is the installer container's
 #   stop_play         the play's name, which opens the message (default: kontroll)
+
+# In the installer container the run is root and `as_operator` gives its uid up to the operator's (setpriv); a run
+# there that is the operator (CI's fresh-node check runs the installer's passes as the operator's own account) needs
+# no setpriv, and one that is neither cannot become the operator at all: setpriv refused it (exit 127, "setresuid
+# failed"), the read below failed, and the run stopped as if on a mark it never read (I-123). Said first, in a
+# sentence, before anything of the worktree is read.
+- name: Refuse a run in the installer container that is neither root nor the operator, and say why
+  ansible.builtin.assert:
+    that: >-
+      not (in_container | bool) or (ansible_user_uid | int) == 0
+      or ((ansible_user_uid | int) == (operator_uid | int) and (ansible_user_gid | int) == (operator_gid | int))
+    fail_msg: >-
+      {{ stop_play | default('kontroll') }}: this run is uid {{ ansible_user_uid }}, gid {{ ansible_user_gid }}, and
+      KONTROLL_IN_CONTAINER is set: it is neither root, as the installer container's run is, nor the operator
+      (uid {{ operator_uid }}, gid {{ operator_gid }}), so it cannot run the operator's git as the operator. Nothing
+      of the worktree was read or changed. Run it as root, as the installer does, or as the operator's own account.
+    quiet: true
 
 - name: Read the mark a sync leaves in the worktree's git directory, as the operator (nothing is changed)
   ansible.builtin.shell: |

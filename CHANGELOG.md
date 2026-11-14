@@ -80,7 +80,10 @@ operator's repository is now the operator.
   mark and exits 4; refused, it says the refusal as the play's, on standard output, with exit 1.
 - **The deploy** (`ansible/playbooks/local-canonical.yml`): the `local` remote, the instance-state commit and the
   sync run as the operator (`setpriv` to `KONTROLL_OPERATOR_{UID,GID}`, no supplementary group, no new privileges,
-  an environment of its own) inside the installer container; host-direct the play is the operator already. Right after
+  an environment of its own) inside the installer container, from root, as the installer runs it; a run there that is
+  the operator already runs as itself (only root can become another uid), and one that is neither root nor the
+  operator is refused at the stop after a sync, before it reads the worktree, with a sentence that says so (I-123:
+  setpriv's exit 127 read as nothing to say); host-direct the play is the operator already. Right after
   the stop at its top — before its audit, fleet check and plaintext guard run the worktree's scripts as root, which a
   checkout cut short leaves half main's — it refuses a rebase, merge, cherry-pick, revert or bisect in progress (each
   name in the worktree's own git directory, a link too, as the sync reads them); before the state commit it names what
@@ -203,7 +206,8 @@ operator's repository is now the operator.
   too, no row wrapped onto a line GFM reads as a row of its own, no `\\|`, no escaped backtick, no bare `|` in a code
   span), and every copy of the listing in it and its compares held to gitio's own);
   `tests/unit/test_stop_after_sync.py` (new: bootstrap's and deploy-stack's stop right after the stamp, the stop's
-  git as the operator — real git too — the listing it prints held to `came_in` and escaped, the mark read as its path
+  git as the operator — real git too, and the stop play itself run in the installer's mode as the operator it is and
+  as one it is not, which it refuses — the listing it prints held to `came_in` and escaped, the mark read as its path
   and first line, and a link, a dangling link or a directory failing it, the message's remedy for each read that failed
   — a mark the operator cannot read named first, a path with a line break refused, a separate git directory's too — an
   empty mark and a dangling link beside a rebase, the mark kept beside one, each command quoted for a worktree with a
@@ -211,7 +215,10 @@ operator's repository is now the operator.
   carriage return in the mark's first line (of one sync or two), and whether HEAD holds main, is where it was before the
   sync, or neither, with the remedy for each, its flagged-files sentence held to gitio's `_CUT_SHORT`, word for word,
   and a linked worktree's mark read in its own git directory); `test_fresh_install_compat.py` (the result format, as
-  ansible itself reads it); `test_local_canonical.py` (the operator's prefix on every write of the worktree, the
+  ansible itself reads it); `test_fresh_node_check_script.py` (the check names the account that runs it as the
+  operator, and refuses uid 1001's before it makes anything; CI's validate job runs it as an account it makes, with
+  its own copies of the checkout, the collections and the pinned tools, `test_ci_workflows.py`);
+  `test_local_canonical.py` (the operator's prefix on every write of the worktree — the setpriv from root only —, the
   leftover check and the busy check and their refusals — the busy one rendered when git could not say and for a HEAD on
   no branch (told from a worktree under a directory named `HEAD` by the listed line's end, and a linked worktree's or a
   separate git directory's HEAD so read; its compares run on a file under an eol attribute and on a link, HEAD elsewhere

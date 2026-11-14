@@ -12,7 +12,8 @@
 #      the bootstrap secrets, minted by the real code.
 #   3. deploy-stack.yml --check --diff, with KONTROLL_IN_CONTAINER=1, the storage root the installer binds
 #      (KONTROLL_INSTALLER_STORAGE_ROOT, its default) and an operator named, as the installer's `check` verb runs it
-#      (docker/installer/entrypoint.sh; its launcher always names the operator, docker/services/installer.yaml), so
+#      (docker/installer/entrypoint.sh; its launcher always names the operator, docker/services/installer.yaml; here
+#      the account that runs the check, whose export the tree is, as a node's clone is its operator's), so
 #      the host-Docker play is skipped and the storage-root refusals are evaluated; local-canonical.yml, which it
 #      imports, is evaluated too. It must pass and reach the stack play's last task.
 #   4. The same with every service: it must FAIL, and fail for the one reason a fresh node must refuse — the
@@ -45,7 +46,8 @@
 # skips it). It is run by CI's validate job, not by tests/validate.sh: validate.sh also runs on a configured control
 # node, where scaffolding a second instance is wrong; there (a /srv/kontroll.git, a /var/lib/kontroll) the deploy
 # passes would read that node's canonical and storage, so the result says nothing about a fresh node. Run it by hand
-# from a checkout on a machine that is not a control node: `bash tests/fresh-node-check.sh` (needs ansible-playbook
+# from a checkout on a machine that is not a control node, as an account whose uid is not 1001 (it is the operator
+# the deploy passes name, and it refuses uid 1001 first): `bash tests/fresh-node-check.sh` (needs ansible-playbook
 # with every module's collections, as the published runner image has them — `python3 scripts/gen-requirements.py
 # <file> --all-modules`, then `ansible-galaxy collection install -r <file>` — sops, age-keygen and git, and for the
 # deploy passes the `docker` Python library, the buildx plugin and a Docker daemon to read). KONTROLL_FRESH_KEEP=1
@@ -56,6 +58,14 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 for tool in git ansible-playbook sops age-keygen python3; do
   command -v "$tool" >/dev/null || { echo "fresh-node-check: FAIL — $tool is not on PATH" >&2; exit 1; }
 done
+# The operator the deploy passes name is the account that runs the check (below), and uid 1001 is the network
+# service's, which local-canonical.yml refuses as an operator (Q-6). A GitHub-hosted runner's account has it, so CI's
+# validate job runs this as an account it makes; refused here first, before anything is made.
+if [ "$(id -u)" = 1001 ]; then
+  echo "fresh-node-check: FAIL — this account has uid 1001, the network service's, which local-canonical.yml refuses" \
+       "as an operator (Q-6): run the check as an account with another uid (CI's validate job makes one)" >&2
+  exit 1
+fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/kontroll-fresh.XXXXXX")
 if [ "${KONTROLL_FRESH_KEEP:-}" = 1 ]; then
@@ -76,10 +86,15 @@ export TMPDIR="$tmp/tmp" PYTHONDONTWRITEBYTECODE=1
 # The export's ansible.cfg is the one read, and every log is plain text (the checks below parse them).
 unset ANSIBLE_CONFIG ANSIBLE_FORCE_COLOR KONTROLL_IN_CONTAINER KONTROLL_INSTALLER_STORAGE_ROOT
 export ANSIBLE_NOCOLOR=1
-# The installer's launcher always names the operator (docker/services/installer.yaml requires it). Without one,
-# local-canonical.yml takes the caller's uid, and a GitHub-hosted runner's is 1001, the network service's uid, which
-# it refuses as an operator (Q-6). A fresh node's operator stands in; in check mode nothing is chowned to it.
-export KONTROLL_OPERATOR_USER=fresh-operator KONTROLL_OPERATOR_UID=1000 KONTROLL_OPERATOR_GID=1000
+# The installer's launcher always names the operator (docker/services/installer.yaml requires it), and the plays run
+# the operator's git as the operator: the installer's root gives its ids up to the operator's (setpriv), and a run
+# that is the operator runs it as itself (I-123). This check is not the installer's root, so the operator it names
+# is the account that runs it, whose export the tree below is; a stand-in uid it cannot become stopped the deploy
+# pass at its first read of the worktree.
+KONTROLL_OPERATOR_USER=$(id -un)
+KONTROLL_OPERATOR_UID=$(id -u)
+KONTROLL_OPERATOR_GID=$(id -g)
+export KONTROLL_OPERATOR_USER KONTROLL_OPERATOR_UID KONTROLL_OPERATOR_GID
 # The launchers also read the host's journal directory, which the installer container cannot see (I-25); this host's
 # own answer stands in, as they would give it.
 if [ -d /var/log/journal ]; then KONTROLL_HOST_JOURNAL_DIR=/var/log/journal

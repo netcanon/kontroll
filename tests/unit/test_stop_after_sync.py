@@ -11,9 +11,11 @@ code (the mark's name, the listing's reads, the escape of what a terminal acts o
 after the stamp to the stop, and the stop play's variables to local-canonical.yml's; and they run the two shell
 scripts the stop renders, in a scratch repository, against `gitio.came_in`: the listing the stop prints must be the one
 `kontroll-land.py --sync` printed, line for line. One row shows the stop's message through `ansible-playbook`'s own
-display, as the tree's ansible.cfg sets it. The play itself runs as root in
+display, as the tree's ansible.cfg sets it, and one runs the stop play in the installer's mode as an account that is
+not root, as CI's fresh-node check does. The play itself runs as root in
 tests/integration/test_local_canonical_as_root.py.
 """
+import json
 import os
 import re
 import shlex
@@ -54,10 +56,12 @@ def _task(start):
 
 
 def _render(text, **values):
-    """A task's text as Ansible renders it for these scripts: plain Jinja, `quote` being `shlex.quote`, and Ansible's
-    `match` and `search` tests (`re.match`, `re.search`)."""
+    """A task's text as Ansible renders it for these scripts: plain Jinja, `quote` being `shlex.quote`, Ansible's
+    `bool` filter (a boolean as it is; a string true when it is one of Ansible's true words), and Ansible's `match`
+    and `search` tests (`re.match`, `re.search`)."""
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     env.filters["quote"] = lambda s: shlex.quote(str(s))
+    env.filters["bool"] = lambda v: v if isinstance(v, bool) else str(v).strip().lower() in ("yes", "on", "1", "true")
     env.tests["match"] = lambda s, pattern: re.match(pattern, str(s)) is not None
     env.tests["search"] = lambda s, pattern: re.search(pattern, str(s)) is not None
     return env.from_string(text).render(**values)
@@ -165,6 +169,77 @@ def test_the_worktree_each_stop_and_sync_names_by_default_is_the_top_of_the_tree
         (wt,) = [p["vars"]["worktree"] for p in _load(name) if "hosts" in p]
         got = jinja2.Template(wt).render(playbook_dir=PLAYBOOKS)
         assert os.path.realpath(got) == os.path.realpath(ROOT), (name, wt, got)
+
+
+_ENV_ONLY = "env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C " \
+            "GIT_TERMINAL_PROMPT=0"
+
+
+@pytest.mark.parametrize("in_container, uid, gid, prefix, allowed", [
+    (True, 0, 0, "setpriv --reuid=1000 --regid=1000 --clear-groups --no-new-privs -- " + _ENV_ONLY, True),
+    (True, 1000, 1000, _ENV_ONLY, True),
+    (True, 1002, 1002, _ENV_ONLY, False),
+    (True, 1000, 1002, _ENV_ONLY, False),
+    (False, 1000, 1000, "", True),
+    (False, 1002, 1002, "", True),
+], ids=["container-root", "container-operator", "container-other", "container-other-gid", "host", "host-other"])
+def test_in_the_container_only_a_root_run_gives_its_ids_up_and_one_that_is_neither_root_nor_the_operator_is_refused(
+        in_container, uid, gid, prefix, allowed):
+    """`as_operator`, rendered for an operator of uid and gid 1000: in the installer's mode (`in_container`) a run
+    that is root gives its ids up to the operator's (`setpriv`, no group, no new privileges) before the environment
+    of its own (`env -i`, a PATH, no HOME, no prompt); a run there that is the operator has the same environment and
+    no setpriv; host-direct it is nothing. The stop's first task is the refusal, and its condition holds for root and
+    for the operator (uid and gid both) in the container and for any run host-direct, and fails for a run in the
+    container that is neither. Guards I-123: setpriv's `--clear-groups` needs CAP_SETGID even to a run's own ids, so
+    the public runner's fresh-node check (not root) got exit 127 from the stop's first read and stopped as if on a
+    mark; and a run that can become no operator stopped on a message about a mark it never read."""
+    values = dict(operator_uid="1000", operator_gid="1000", in_container=in_container, ansible_user_uid=uid,
+                  ansible_user_gid=gid)
+    stop = _load("_stop-after-sync.yml")[0]
+    assert _render(stop["vars"]["as_operator"], **values) == prefix
+    first = _stop_tasks()[0]
+    assert first["name"].startswith("Refuse a run in the installer container that is neither root nor the operator")
+    assert _render("{{ %s }}" % first["ansible.builtin.assert"]["that"], **values) == str(allowed)
+    said = _render(first["ansible.builtin.assert"]["fail_msg"], stop_play="deploy-stack", **values)
+    assert said.startswith("deploy-stack: this run is uid %d, gid %d, and KONTROLL_IN_CONTAINER is set" % (uid, gid))
+    assert "Nothing of the worktree was read or changed" in said, said
+
+
+@pytest.mark.skipif(not (sys.platform.startswith("linux") and shutil.which("ansible-playbook") and shutil.which("git")
+                         and hasattr(os, "geteuid") and os.geteuid() != 0),
+                    reason="runs ansible-playbook in the installer's mode as an account that is not root (Linux)")
+def test_the_stop_play_in_the_installers_mode_runs_as_the_operator_it_is_and_refuses_one_it_is_not(tmp_path):
+    """`_stop-after-sync.yml`, run by `ansible-playbook` with KONTROLL_IN_CONTAINER=1 by an account that is not
+    root, as CI's fresh-node check runs the installer's passes, on a worktree with no mark: named as the operator
+    itself (its uid and gid), its reads run (`git rev-parse` through `as_operator`, no setpriv) and the play passes;
+    named another operator, it fails at its first task with the sentence that says why, and no setpriv ran. Guards
+    I-123 end to end, where the gate cannot see it: the gate's suite runs as root, where setpriv works, so the stop's
+    read failing with exit 127 for a run that is not root (setpriv's `--clear-groups`) showed only on the public
+    runner, and it read as a stop on a mark."""
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(wt)], check=True, capture_output=True)
+    home = tmp_path / "ansible-home"
+    home.mkdir()
+    (home / "ansible.cfg").write_text("[defaults]\n", encoding="utf-8")   # nothing of the developer's or the tree's
+    me, mine = os.geteuid(), os.getegid()
+
+    def play(uid, gid):
+        env = dict(os.environ, ANSIBLE_HOME=str(home), ANSIBLE_LOCAL_TEMP=str(home / "tmp"), ANSIBLE_NOCOLOR="1",
+                   ANSIBLE_CONFIG=str(home / "ansible.cfg"), ANSIBLE_RETRY_FILES_ENABLED="0",
+                   ANSIBLE_PYTHON_INTERPRETER="auto_silent", ANSIBLE_DEPRECATION_WARNINGS="0",
+                   KONTROLL_IN_CONTAINER="1", KONTROLL_OPERATOR_UID=str(uid), KONTROLL_OPERATOR_GID=str(gid))
+        return subprocess.run(["ansible-playbook", "-i", "localhost,", os.path.join(PLAYBOOKS, "_stop-after-sync.yml"),
+                               "-e", json.dumps({"worktree": str(wt)})],
+                              cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=300)
+
+    ran = play(me, mine)
+    assert ran.returncode == 0 and re.search(r"localhost\s*:\s*ok=\d+\s+changed=0\s+unreachable=0\s+failed=0",
+                                             ran.stdout), ran.stdout + ran.stderr
+    refused = play(me + 1, mine)
+    out = " ".join((refused.stdout + refused.stderr).split())
+    assert refused.returncode == 2 and "this run is uid %d, gid %d, and KONTROLL_IN_CONTAINER is set" % (me, mine) \
+        in out, out
+    assert "setresuid" not in out and "Read the mark" not in out, out
 
 
 def test_the_stop_runs_its_git_as_the_operator_reads_the_syncs_mark_and_escapes_what_it_prints():

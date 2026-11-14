@@ -281,12 +281,25 @@ def _exe(path, text):
     os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+# The stub id: the account the script runs as, FAKE_UID / FAKE_GID / FAKE_USER (1000, 1000, fresh-op by default), so
+# the rows do not depend on the suite's own uid (CI's is 1001, which the script refuses). Anything else is the real id.
+_ID = """#!/bin/sh
+case "$*" in
+  -u) echo "${FAKE_UID:-1000}";;
+  -g) echo "${FAKE_GID:-1000}";;
+  -un) echo "${FAKE_USER:-fresh-op}";;
+  *) exec /usr/bin/id "$@";;
+esac
+"""
+
+
 def _run(tmp_path, mode="", extra_env=None, journal=None):
-    """A scratch checkout (the real script, the stub kontroll-init, one commit), fake tools first on PATH, an empty
-    caller HOME and TMPDIR, and none of the variables the script must set itself inherited (a caller that exports
-    PYTHONDONTWRITEBYTECODE, as a mutation harness does, would otherwise meet the test's check for the script); runs
-    the script from the checkout and returns (result, calls, paths). `journal`, when given, is a stand-in path the
-    script's one `[ -d /var/log/journal ]` tests in place of /var/log/journal."""
+    """A scratch checkout (the real script, the stub kontroll-init, one commit), fake tools first on PATH (`id` among
+    them: the account the script runs as is the stub's, see _ID), an empty caller HOME and TMPDIR, and none of the
+    variables the script must set itself inherited (a caller that exports PYTHONDONTWRITEBYTECODE, as a mutation
+    harness does, would otherwise meet the test's check for the script); runs the script from the checkout and
+    returns (result, calls, paths). `journal`, when given, is a stand-in path the script's one
+    `[ -d /var/log/journal ]` tests in place of /var/log/journal."""
     repo = tmp_path / "repo"
     for d in ("tests", "scripts", "ansible/playbooks"):
         (repo / d).mkdir(parents=True)
@@ -307,6 +320,7 @@ def _run(tmp_path, mode="", extra_env=None, journal=None):
     _exe(bin_ / "ansible-playbook", _PLAYBOOK)
     _exe(bin_ / "age-keygen", _KEYGEN)
     _exe(bin_ / "sops", "#!/bin/sh\nexit 0\n")
+    _exe(bin_ / "id", _ID)
     home, tmpdir, log = tmp_path / "caller-home", tmp_path / "tmpdir", tmp_path / "calls.jsonl"
     home.mkdir()
     tmpdir.mkdir()
@@ -380,14 +394,16 @@ def test_the_script_runs_every_step_in_a_throwaway_export_and_leaves_the_checkou
 
 
 def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_files_inside(tmp_path):
-    """Every `ansible-playbook` runs with the operator named as the installer's launcher names one
-    (KONTROLL_OPERATOR_USER, _UID, _GID = fresh-operator, 1000, 1000), with TMPDIR inside the script's directory,
-    PYTHONDONTWRITEBYTECODE=1 and ANSIBLE_NOCOLOR=1, and with neither the caller's ANSIBLE_CONFIG nor its
-    ANSIBLE_FORCE_COLOR. Guards: a GitHub-hosted runner is uid 1001, which local-canonical.yml refuses as an operator
-    (Q-6), so with no operator named the deploy pass failed on the very runner CI targets (T27's fold-1 read, B1); a
-    caller's ANSIBLE_CONFIG replaces the export's ansible.cfg, and colour codes leave the stops' parse nothing to read
-    (S4, N7); a module's temporary files and Python's bytecode landed beside the caller's TMPDIR and collections
-    (N1)."""
+    """Every `ansible-playbook` runs with the operator named as the installer's launcher names one, and the operator
+    is the account the script runs as (KONTROLL_OPERATOR_USER, _UID, _GID = its name, uid and gid as `id` gives them,
+    whatever the caller exported), with TMPDIR inside the script's directory, PYTHONDONTWRITEBYTECODE=1 and
+    ANSIBLE_NOCOLOR=1, and with neither the caller's ANSIBLE_CONFIG nor its ANSIBLE_FORCE_COLOR. Guards: with no
+    operator named, local-canonical.yml takes the caller's uid (T27's fold-1 read, B1); a stand-in operator the run
+    cannot become stopped the deploy pass at the stop's first read of the worktree, exit 127 from setpriv, on the
+    public runner (I-123: the plays run the operator's git as the operator, and only root can become another); a
+    caller's ANSIBLE_CONFIG replaces the export's ansible.cfg, and colour codes leave the stops' parse nothing to
+    read (S4, N7); a module's temporary files and Python's bytecode landed beside the caller's TMPDIR and
+    collections (N1)."""
     r, calls, p = _run(tmp_path, extra_env={"ANSIBLE_CONFIG": "/elsewhere/ansible.cfg", "ANSIBLE_FORCE_COLOR": "1",
                                             "KONTROLL_OPERATOR_UID": "1001"})
     assert r.returncode == 0, r
@@ -397,10 +413,23 @@ def test_every_play_runs_as_a_fresh_operator_with_plain_logs_and_its_temporary_f
     for c in plays:
         e = c["env"]
         assert (e["KONTROLL_OPERATOR_USER"], e["KONTROLL_OPERATOR_UID"], e["KONTROLL_OPERATOR_GID"]) == (
-            "fresh-operator", "1000", "1000"), c
+            "fresh-op", "1000", "1000"), c
         assert e["TMPDIR"].startswith(inside) and e["TMPDIR"].endswith("/tmp"), c
         assert e["PYTHONDONTWRITEBYTECODE"] == "1" and e["ANSIBLE_NOCOLOR"] == "1", c
         assert e["ANSIBLE_CONFIG"] is None and e["ANSIBLE_FORCE_COLOR"] is None, c
+
+
+def test_an_account_with_the_services_uid_is_refused_before_anything_is_made(tmp_path):
+    """Run as an account with uid 1001 (the stub `id`), the script fails with exit 1 and a sentence naming the
+    network service's uid and what to do, before it makes its directory or runs kontroll-init or a play. Guards the
+    operator the deploy passes name being the account that runs the check: uid 1001 is the one local-canonical.yml
+    refuses as an operator (Q-6), so a run as it would fail in the deploy pass on a message about something else,
+    after the export, the keys and the plays it did run (a GitHub-hosted runner's own account has uid 1001; CI's
+    validate job runs the check as an account it makes)."""
+    r, calls, p = _run(tmp_path, extra_env={"FAKE_UID": "1001"})
+    assert r.returncode == 1 and "this account has uid 1001, the network service's" in r.stderr, r
+    assert "CI's validate job makes one" in r.stderr, r.stderr
+    assert calls == [] and os.listdir(p["tmpdir"]) == [], (calls, os.listdir(p["tmpdir"]))
 
 
 def _journal_shape(tmp_path, shape):

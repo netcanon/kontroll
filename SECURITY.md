@@ -1236,7 +1236,9 @@ a blast-tier refusal / rate / diff-size guard set — is a **separate, gated run
   whose ignored files, or main's, git cannot list). **As whom:** the sync writes the WORKTREE, so it is refused to
   anyone but the worktree's owner (`os.geteuid()` against the owner of its git directory, before anything is
   written); the deploy runs it — and the state commit and the `local` remote before it — as the operator (`setpriv
-  --reuid/--regid --clear-groups --no-new-privs` and `env -i`, inside the installer container), because what root's
+  --reuid/--regid --clear-groups --no-new-privs` and `env -i`, inside the installer container, from root; a run there
+  that is the operator runs as itself, and one that is neither root nor the operator is refused before the worktree
+  is read, I-123), because what root's
   git wrote in the operator's repository (objects, the index, `config` through a lock file) the operator's own git
   could not write over afterwards; the deploy's sync therefore reads the canonical as the operator too (the seam's
   change to the service uid is root's alone). Root-owned files an earlier build left there are NAMED — in the git

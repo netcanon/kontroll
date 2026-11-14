@@ -133,18 +133,39 @@ jobs:
           python3 scripts/gen-requirements.py "$RUNNER_TEMP/all-modules.yml" --all-modules
           ansible-galaxy collection install -r "$RUNNER_TEMP/all-modules.yml"
 
+      - name: Make the fresh-node check's operator account (the check runs as a node's operator, never uid 1001)
+        # The check's deploy passes name the account that runs it as the operator, and the plays run the operator's
+        # git as the operator (tests/fresh-node-check.sh; I-123). A GitHub-hosted runner's own account has uid 1001,
+        # the network service's, which local-canonical.yml refuses as an operator (Q-6), so the check runs as an
+        # account made here, as the compose-up smoke's does: useradd picks its uid (the runner holds 1001), the docker
+        # group lets the deploy passes read the daemon, sudo covers the plays' `become` tasks, and it gets copies,
+        # its own, of what lives under the runner's home: the checkout, the collections and the pinned tools.
+        if: ${{ !vars.KONTROLL_RUNS_ON }}
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --groups docker --shell /bin/bash fresh-op
+          echo 'fresh-op ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/fresh-op > /dev/null
+          sudo chmod 0440 /etc/sudoers.d/fresh-op
+          sudo cp -a . /home/fresh-op/kontroll
+          sudo cp -a "$HOME/.ansible/collections" /home/fresh-op/collections
+          sudo cp -a "$RUNNER_TEMP/kontroll-tools" /home/fresh-op/tools
+          sudo chown -R fresh-op: /home/fresh-op/kontroll /home/fresh-op/collections /home/fresh-op/tools
+          id fresh-op
+
       - name: fresh-node check (a new node's install and the fleet plays, evaluated in check mode)
         # tests/fresh-node-check.sh: every gate above reads the plays or parses them; this one has Ansible EVALUATE
         # them — deploy-stack (and the local-canonical it imports) and bootstrap against the instance a real
         # `kontroll-init --fresh` writes, then ping and backup-configs against tests/mock-inventory.yml — in a
         # throwaway export of HEAD, with HOME moved into it. Not in validate.sh, which also runs on a configured
         # control node. Skipped where KONTROLL_RUNS_ON is set (the private repository's self-hosted runners):
-        # those are persistent and shared, and the plays' `check_mode: false` reads run there under sudo.
+        # those are persistent and shared, and the plays' `check_mode: false` reads run there under sudo. It runs as
+        # the account the step above made, in its copy of the checkout; sudo resets the environment, so what the
+        # check needs of this job's is passed by name.
         if: ${{ !vars.KONTROLL_RUNS_ON }}
-        env:
-          ANSIBLE_DEPRECATION_WARNINGS: "false"
-          PYTHONWARNINGS: "ignore::DeprecationWarning"
-        run: bash tests/fresh-node-check.sh
+        run: >-
+          sudo -u fresh-op -H env "PATH=/home/fresh-op/tools:$PATH" ANSIBLE_COLLECTIONS_PATH=/home/fresh-op/collections
+          ANSIBLE_DEPRECATION_WARNINGS=false PYTHONWARNINGS=ignore::DeprecationWarning
+          bash -c 'cd ~/kontroll && bash tests/fresh-node-check.sh'
 
   tests:
     name: pytest (unit · integration · gui) — py${{ matrix.python }}

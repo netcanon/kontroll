@@ -506,9 +506,10 @@ def test_the_worktree_is_written_as_the_operator_and_brought_forward_before_the_
     the landing, and a sync that brought the worktree forward stops the run (T25):
 
       - `as_operator` is, inside the installer container, `setpriv` to `operator_uid` / `operator_gid` with no
-        supplementary group and no new privileges, then `env -i` with a PATH, `HOME=/nonexistent` and no prompt —
-        and host-direct nothing (the play IS the operator there); `operator_gid` is `KONTROLL_OPERATOR_GID` when
-        it is set;
+        supplementary group and no new privileges when the run is root (a run there that is the operator, as CI's
+        fresh-node check's, has no ids to give up, and setpriv's `--clear-groups` needs CAP_SETGID even to its own:
+        I-123), then `env -i` with a PATH, `HOME=/nonexistent` and no prompt — and host-direct nothing (the play IS
+        the operator there); `operator_gid` is `KONTROLL_OPERATOR_GID` when it is set;
       - the `local` remote is added through `{{ as_operator }}` (git rewrites `.git/config` through a lock file:
         root's `remote add` left the config root's);
       - right after the stop, before anything of the worktree runs, a read-only task asks git, as the operator, for
@@ -547,8 +548,10 @@ def test_the_worktree_is_written_as_the_operator_and_brought_forward_before_the_
     image). A task dropped, moved or run as root brings one of them back."""
     play_vars = _canonical_play(yaml.safe_load(open(PLAYBOOK, encoding="utf-8")))["vars"]
     who = str(play_vars["as_operator"]).replace("\n", " ")
-    for word in ("setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid", "--clear-groups", "--no-new-privs",
-                 "-- env -i", "HOME=/nonexistent", "GIT_TERMINAL_PROMPT=0", "if (in_container | bool) else ''"):
+    for word in ("setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid", "--clear-groups",
+                 "--no-new-privs -- ')", "if (ansible_user_uid | int) == 0 else '')", "~ 'env -i PATH=",
+                 "HOME=/nonexistent",
+                 "GIT_TERMINAL_PROMPT=0", "if (in_container | bool) else ''"):
         assert word in who, (word, who)
     assert str(play_vars["operator_gid"]).split()[:5] == ["{{", "lookup('env',", "'KONTROLL_OPERATOR_GID')", "or",
                                                          "(operator_uid"], play_vars["operator_gid"]
