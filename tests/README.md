@@ -140,8 +140,13 @@ runs the marked files in tests/unit and tests/integration (the two it scans) in 
 CI runs the offline suite on `KONTROLL_PYTEST_WORKERS` worker processes (pytest-xdist, from
 `tests/requirements-dev.txt`). In one process the suite held one core of the runner while the others idled, and the
 rows that run ansible-playbook made that most of an hour per job. `.github/workflows/ci.yml` sets the count once, at
-the workflow's top. The `tests` job's pytest step passes it to `-n`, and `validate.sh`'s pytest step does the same
-when it is set. Unset or empty, `validate.sh` runs the suite in one process, as the gate's own image needs (it has no
+the workflow's top. The `tests` job's pytest step passes it to `-n`, with `--dist worksteal`, and `validate.sh`'s
+pytest step does the same when it is set: the rows that run ansible-playbook are collected first and hold most of the
+suite's time, and xdist's default `load` handed them all to the first worker (measured: one worker busy for most of
+the run, the other idle); `worksteal` moves rows from a busy worker's queue to an idle one. `validate.sh`'s
+refuse-local-runtime and key-render-runtime steps take the same arguments; its as-root step stays in one process,
+since one of its rows forks a pty, which in a worker is a fork of a threaded process (Python warns it may
+deadlock). Unset or empty, `validate.sh` runs the suite in one process, as the gate's own image needs (it has no
 xdist). The count is kept low because a self-hosted host may carry several runners, each running a job at once; raise
 it with whoever runs them. `unit/test_pytest_workers.py` pins the wiring. Locally:
 
@@ -158,8 +163,14 @@ theirs. So a row:
   so a row that reads the audit log first moves `gui.AUDIT_LOG` into its `tmp_path`, as the GUI rows do;
 - never counts on another row having run first, in its own file or another. A module- or session-scoped fixture runs
   once in each worker that runs one of its rows;
-- binds port 0, never a fixed port, and writes nothing into the checkout. Every worker installs the conftest's
+- binds port 0, never a fixed port, and writes nothing into the checkout (its own `tmp_path` instead: a script's
+  out-dir, too). A port the row needs CLOSED stays bound, never listening, until the row is done: a connection to it
+  is refused, and closed it can be given to another worker's listener meanwhile. Every worker installs the conftest's
   import-time switches (the hermetic overlay, the landing guard).
+
+A run of the e2e rows and the offline rows together stays in one process: the conftest's e2e-last order, which keeps
+the e2e fakes' seams from reaching later rows, holds per worker under `load` but not under `worksteal`. Neither CI job
+mixes them (the offline runs pass `-m "not e2e and not slow"`, the e2e job runs alone).
 
 ## Adding tests
 

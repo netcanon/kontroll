@@ -27,13 +27,14 @@ def _listener(address):
 
 
 def serve_ports():
-    """Yield the ports (`host`, `closed`, `plain`) while a thread accepts each connection to `plain` and closes it."""
+    """Yield the ports (`host`, `closed`, `plain`) while a thread accepts each connection to `plain` and closes it.
+    `closed` stays bound, never listening, until the rows are done: a connection to it is refused, and no other
+    socket, another worker's listener among them (tests/README.md "Parallel runs"), can be given its port meanwhile."""
     server = _listener("127.0.0.2") or _listener("127.0.0.1")
     host = server.getsockname()[0]
     probe = socket.socket()
     probe.bind((host, 0))
     closed = probe.getsockname()[1]
-    probe.close()
     server.listen(16)
     server.settimeout(0.5)
     stop = threading.Event()
@@ -56,6 +57,7 @@ def serve_ports():
         stop.set()
         thread.join(5)
         server.close()
+        probe.close()
 
 
 @functools.lru_cache(maxsize=None)

@@ -18,19 +18,26 @@ rest idle. Since the rows that run ansible-playbook stopped skipping in CI (I-94
 hour per job.
 
 - `.github/workflows/ci.yml` sets `KONTROLL_PYTEST_WORKERS` once, at the workflow's top. The `tests` job's pytest step
-  passes it to `-n`, and `tests/validate.sh`'s pytest step does the same when it is set. Unset or empty (a local run,
-  the gate's own image), validate runs the suite in one process, as before.
+  passes it to `-n`, with `--dist worksteal`, and `tests/validate.sh`'s pytest step does the same when it is set
+  (xdist's default `load` gave the ansible-playbook rows, collected first and most of the suite's time, all to one
+  worker); so do validate's refuse-local-runtime and key-render-runtime steps, while its as-root step stays in one
+  process (a row of it forks a pty). Unset or empty (a local run, the gate's own image), validate runs the suite in
+  one process, as before.
 - `tests/requirements-dev.txt` adds `pytest-xdist`.
 - Under workers, the `KONTROLL_REQUIRE_CHECKOUT=1` refusal (I-51) was raised in a worker. xdist reported a crashed
   worker and an INTERNALERROR (exit 3), and the reason was lost. `tests/conftest.py`'s `pytest_configure` now asks in
-  the process that starts the workers, before one starts, and stops the session with the reason (exit 4).
-  `tests/unit/test_requires_checkout.py`'s copy row runs its probe on two workers where xdist is installed.
+  the process that starts the workers, before one starts, and stops the session with the reason (exit 4), whatever
+  spelling starts them (`-n`, `--tx`, `-d`). `tests/unit/test_requires_checkout.py`'s copy row runs its probe on three
+  workers and by `--tx` where xdist is installed.
 - `tests/unit/test_pytest_workers.py` holds the wiring: one positive count at the workflow's top, set nowhere below
   it; the tests job's `-n` with the count as one quoted word; validate's step run from its own lines under bash, with
   the count unset, empty, a number, and a value with a space or a glob character (passed through as one argument, for
   xdist to refuse); and xdist named in the requirements.
 - tests/README.md "Parallel runs" says what a row must not do under it: write a fixed path another worker writes, count
-  on another row having run first, or bind a fixed port.
+  on another row having run first, bind a fixed port, or close a port it needs closed before it is done. Four rows
+  that broke the last two are fixed: `tests/_network_lab.py`'s `closed` port, test_reload_observability_runs' and
+  test_compose_logging's "nothing listening" ports stay bound until the row is done, and test_launch_kit assembles
+  its kit in its own tmp_path, not the checkout's `dist/`.
 
 ### feat(ci): the compose-up smoke, first version — the install guide's quickstart run nightly (T34, 2026-11-07)
 

@@ -195,7 +195,8 @@ protection is one mis-click from a merge). A public repository has no such branc
   evaluated in check mode, after steps that install `age` for its `kontroll-init`, the `docker`
   library for its deploy passes (which read the runner's Docker daemon; check mode leaves it as it was)
   and every module's collections (`gen-requirements.py --all-modules`) for its mock inventory's hosts.
-- **tests** (one leg per Python 3.11–3.14): `pytest -m "not e2e and not slow"` with coverage; the
+- **tests** (one leg per Python 3.11–3.14): `pytest -m "not e2e and not slow"` with coverage, on
+  `KONTROLL_PYTEST_WORKERS` worker processes (tests/README.md "Parallel runs"); the
   shell-outs are mocked (§1), no lab. Each leg installs a core the project ships — the installer's,
   the control image's (every Semaphore job's), the validate job's — and every module's collections,
   so the rows that run ansible-playbook run on a shipped core, never the runner image's own (I-94);

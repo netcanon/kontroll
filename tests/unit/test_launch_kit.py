@@ -198,16 +198,18 @@ def test_promote_slice_is_baked_and_kept_in_the_canonical_m8a():
 @pytest.mark.skipif(os.name == "nt" or not all(shutil.which(t) for t in ("bash", "git", "tar")),
                     reason="needs a POSIX bash + git + tar (on Windows `bash` resolves to the WSL stub) — runs in CI")
 @pytest.mark.requires_checkout  # reads the tree through git: skipped outside a checkout (I-51)
-def test_launch_kit_assembles_without_instance_leak():
+def test_launch_kit_assembles_without_instance_leak(tmp_path):
     """A REAL assembly (make-launch-kit.sh --allow-unpinned) must produce a tarball that contains the kontroll
     launcher + images.env + the public instance.example stub, and ZERO entries under the private instance/ overlay or
     docs/reviews. This is the image-world #72 blind-audit in miniature: a stranger who untars the kit learns nothing
-    about the lab. Guards a strip regression a text test can't catch (e.g. a path typo that no longer matches)."""
-    archive = os.path.join(ROOT, "dist", "kontroll-launch-pytest-c1.tar.gz")
+    about the lab. Guards a strip regression a text test can't catch (e.g. a path typo that no longer matches). The
+    kit is assembled into the row's own tmp_path (the script's out-dir), never the checkout's dist/, which an
+    operator's own kit, or another worker, may hold (tests/README.md "Parallel runs")."""
+    archive = os.path.join(str(tmp_path), "kontroll-launch-pytest-c1.tar.gz")
     try:
         # PYTHON=sys.executable so the script renders images.env with the exact pyyaml-bearing interpreter (not a
         # PATH `python3` that may be a stub), keeping the live assembly deterministic across environments.
-        subprocess.run(["bash", "scripts/make-launch-kit.sh", "pytest-c1", "--allow-unpinned"],
+        subprocess.run(["bash", "scripts/make-launch-kit.sh", "pytest-c1", str(tmp_path), "--allow-unpinned"],
                        cwd=ROOT, check=True, capture_output=True, text=True,
                        env={**os.environ, "PYTHON": sys.executable})
         with tarfile.open(archive) as tf:

@@ -258,17 +258,19 @@ def test_unmarked():
 
 @pytest.mark.requires_checkout
 def test_the_marked_rows_skip_with_the_reason_in_a_copy_that_is_not_a_checkout(tmp_path):
-    """Copy this tree's files (tracked, and untracked but not ignored, as they are on disk, so an uncommitted change
-    is in the copy) to a directory that is not a checkout, and run there, from a working directory that IS a checkout
-    (of something else): every file carrying the marker, whose marked rows are each SKIPPED with git's "not a git
+    """Copy this tree's files (tracked, and untracked but not ignored, as they are on disk, so an uncommitted change is
+    in the copy) to a directory that is not a checkout, and run there, from a working directory that IS a checkout (of
+    something else): every file carrying the marker, whose marked rows are each SKIPPED with git's "not a git
     repository", none failing or erroring; and a written file of one marked row (which fails if it runs) and one
     unmarked row: 1 passed, 1 skipped; and that file again with KONTROLL_REQUIRE_CHECKOUT=1, which is a usage error
-    naming the reason, also on two worker processes where pytest-xdist is installed (as in CI, which runs the suite
-    so). Guards the conftest hook (or the marker's registration, which --strict-markers would turn into an error) not
-    reaching the rows it names, a hook that skips UNMARKED rows too (an archive run reading "110 skipped", rc 0), one
-    that probes the working directory instead of the tree, the gate's variable not stopping a session that would skip
-    them, and, under workers, the refusal raised only in a worker, where xdist reports a crashed worker and an
-    INTERNALERROR (exit 3) instead of the reason. Needs a checkout itself, to list the files."""
+    naming the reason, also under worker processes where pytest-xdist is installed (as in CI, which runs the suite so),
+    at a count other than two and by `--tx`. Guards the conftest hook (or the marker's registration, which
+    --strict-markers would turn into an error) not reaching the rows it names, a hook that skips UNMARKED rows too (an
+    archive run reading "110 skipped", rc 0), one that probes the working directory instead of the tree, the gate's
+    variable not stopping a session that would skip them, and, under workers, the refusal raised only in a worker, where
+    xdist reports a crashed worker and an INTERNALERROR (exit 3) instead of the reason: a controller check keyed on one
+    count, or on `-n`, let `-n 3` or `--tx 2*popen --dist load` through to it. Needs a checkout itself, to list the
+    files."""
     files = _marked_files()
     assert files, "no test file carries the requires_checkout marker"
     env = _no_repo_vars()
@@ -313,7 +315,9 @@ def test_the_marked_rows_skip_with_the_reason_in_a_copy_that_is_not_a_checkout(t
     assert "KONTROLL_REQUIRE_CHECKOUT=1" in r.stderr and "not a git repository" in r.stderr, r.stderr[-3000:]
 
     if importlib.util.find_spec("xdist") is not None:
-        r = run([str(probe), "-n", "2"], KONTROLL_REQUIRE_CHECKOUT="1")
-        assert r.returncode == pytest.ExitCode.USAGE_ERROR, r.stdout[-3000:] + r.stderr[-2000:]
-        assert "KONTROLL_REQUIRE_CHECKOUT=1" in r.stderr and "not a git repository" in r.stderr, r.stderr[-3000:]
-        assert "INTERNALERROR" not in r.stdout + r.stderr, r.stdout[-3000:] + r.stderr[-2000:]
+        for workers in (["-n", "3"], ["--tx", "2*popen", "--dist", "load"]):
+            r = run([str(probe)] + workers, KONTROLL_REQUIRE_CHECKOUT="1")
+            assert r.returncode == pytest.ExitCode.USAGE_ERROR, (workers, r.stdout[-3000:] + r.stderr[-2000:])
+            assert "KONTROLL_REQUIRE_CHECKOUT=1" in r.stderr and "not a git repository" in r.stderr, \
+                (workers, r.stderr[-3000:])
+            assert "INTERNALERROR" not in r.stdout + r.stderr, (workers, r.stdout[-3000:] + r.stderr[-2000:])
