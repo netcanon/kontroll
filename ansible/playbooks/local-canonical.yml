@@ -13,6 +13,10 @@
 # Blast radius:        this VM only
 # Idempotence:         re-runnable; init is `creates:`-guarded, remote add tolerated,
 #                      the landing is a fast-forward compare-and-swap ("up to date" if already current);
+#                      the sync before it changes the worktree only when a promote moved the canonical's
+#                      `main` past it ("in step" otherwise) — it then rewrites the operator's checkout (the
+#                      worktree's own commits are replayed on top, with new ids) and the run STOPS in that task, a
+#                      failed run by design, so the next run lands (`kontroll-land.py --sync --stop-as`);
 #                      the fleet check, the plaintext gate and the landing's `--check` in front of
 #                      the commit and the landing are read-only. The ownership pass runs again AFTER the
 #                      landing, on what the landing left (the service's, when root landed — rule 5; and git's
@@ -29,7 +33,7 @@
   connection: local
   gather_facts: true
   vars:
-    # Operator-owned (the working tree pushes here) and runner-readable (Semaphore
+    # Operator-owned (the working tree lands here) and runner-readable (Semaphore
     # clones it via the mount). NOT under the storage root (/var/lib/kontroll): that dir is
     # root's (deploy-stack.yml makes a missing one 0711; the installer's is Docker's 0755),
     # and its stores are the services' — the secret captures 1001's 0700. The operator's
@@ -40,7 +44,7 @@
     # ephemeral installer container this play runs as root (user:0:0), so ansible_user_id is 'root' and a fact-derived
     # chown would make the canonical root-owned — breaking the (non-root) operator's own landings (`kontroll-land.py`;
     # the F-CANON bug, when they were pushes). The launcher passes the INVOKING host operator's identity in
-    # KONTROLL_OPERATOR_{USER,UID}; on a host-direct
+    # KONTROLL_OPERATOR_{USER,UID,GID}; on a host-direct
     # run those env vars are absent ⇒ fall back to the gathered facts (the SAME value), so off-container is unchanged.
     operator: "{{ lookup('env', 'KONTROLL_OPERATOR_USER') or ansible_user_id }}"
     # Chowns use the NUMERIC uid, not the name: in-container the host operator is absent from /etc/passwd, so a
@@ -50,6 +54,23 @@
     # the operator's membership are HOST gestures (MF-6) — writing a container-local group that dies with the ephemeral
     # container is pointless; the canonical bytes still get gid 1001 via the numeric `group: "1001"` chown below.
     in_container: "{{ (lookup('env', 'KONTROLL_IN_CONTAINER') | default('', true)) | length > 0 }}"
+    # The operator's primary gid — the launcher passes it beside the uid (scripts/kontroll.sh, kontroll-installer.sh);
+    # the installer's entrypoint takes the uid for it when it is absent, and so does this.
+    operator_gid: >-
+      {{ lookup('env', 'KONTROLL_OPERATOR_GID') or (operator_uid if (in_container | bool) else ansible_user_gid) }}
+    # T25: what writes the OPERATOR'S repository runs as the operator. Inside the installer container this play is
+    # root, and root's git there left root's objects, index and ref files in the operator's worktree, which the
+    # operator's own git cannot write over afterwards. So the state commit and the sync run through this prefix:
+    # the operator's uid and gid, no supplementary group, no new privileges, and an environment of its own (no
+    # HOME, so no root's config is read as someone who may not read it). Host-direct the play IS the operator.
+    as_operator: >-
+      {{ ('setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid ~ ' --clear-groups --no-new-privs -- env -i'
+          ~ ' PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C'
+          ~ ' GIT_TERMINAL_PROMPT=0') if (in_container | bool) else '' }}
+    # What git leaves in the worktree's git directory while an operation is in progress — the same names the sync
+    # refuses on (scripts/kontroll/gitio.py `_SYNC_BUSY`; a unit test holds the two equal). Checked before the state
+    # commit, which would otherwise commit onto a rebase's detached HEAD.
+    sync_busy: [rebase-merge, rebase-apply, MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD, BISECT_LOG, sequencer]
 
   tasks:
     # Q-6 of the canonical's doors: the canonical's hook and the seam tell the network service from everyone else by
@@ -65,6 +86,99 @@
           service, so this play refuses to make a canonical for them (docs/troubleshooting.md section 10). Deploy as
           an account with another uid (KONTROLL_OPERATOR_UID on a launcher run). Nothing was changed.
         quiet: true
+
+    # Before anything of the worktree runs (the audit, the fleet check, the plaintext gate, the landing's
+    # judgement): a sync that brought the worktree forward — by hand, or in a run killed before it stopped — and
+    # that no run has stopped on since stops this one, saying what came in (tasks/stop-after-sync.yml; SECURITY.md
+    # C10). This play's own sync, below, stops its run itself.
+    - name: Stop when a sync brought the worktree forward and no run has stopped on it since
+      ansible.builtin.import_tasks: tasks/stop-after-sync.yml
+      vars:
+        stop_play: local-canonical
+
+    - name: List a rebase, merge, cherry-pick, revert or bisect in progress in the worktree (names only)
+      # The state commit below commits onto HEAD, whatever HEAD is. A replay a deploy could not finish (killed, or
+      # out of time) leaves a rebase in progress and HEAD detached, and so does a rebase or a merge the operator
+      # started: the state commit would then land the instance state on that detached HEAD, and the abort the
+      # sync's refusal names (`git rebase --abort`) would take it away again. So this asks first — the names the
+      # sync refuses on (`sync_busy`), each in the worktree's own git directory (asked of git as the operator) and
+      # by its name there, a link too, as the sync reads them (`--git-path` would name a link's target) — and the
+      # refusal below stops before anything is committed. Read-only, so it runs under --check too. It runs first,
+      # right after the stop: a checkout cut short leaves the worktree's scripts half main's, and the audit, the
+      # fleet check and the plaintext guard below run them as root (read A-f6, N2). With none of them, a HEAD on no
+      # branch is listed (`<git dir>/HEAD`): a replay quit part-way (`git rebase --quit`) leaves HEAD detached on
+      # main, and the state commit would land the half-replayed pick of the operator's own commit and leave the rest
+      # undeployed (read A-f9, N3), and so is a HEAD that names a ref outside `refs/heads/` (a hand-made
+      # `git symbolic-ref HEAD refs/remotes/local/main`: the sync fetches into it, and the next state commit records
+      # the promote's revert as instance state: read A-f11, N5). A branch with no commit yet is a branch, and is not
+      # listed (read B-f11, N5). Every road the tree installs or updates by keeps a branch checked out.
+      ansible.builtin.shell: |
+        set -e
+        cd {{ worktree | quote }}
+        dir=$({{ as_operator }} git rev-parse --path-format=absolute --git-dir)
+        found=
+        for n in {% for n in sync_busy %}{{ n | quote }} {% endfor %}; do
+          if [ -e "$dir/$n" ] || [ -L "$dir/$n" ]; then echo "$dir/$n"; found=1; fi
+        done
+        [ -n "$found" ] || case $({{ as_operator }} git symbolic-ref -q HEAD) in
+          refs/heads/*) ;; *) echo "$dir/HEAD";; esac
+      args:
+        executable: /bin/bash
+      register: _wt_busy
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to commit or land while git has an operation in progress in the worktree, and say which
+      ansible.builtin.fail:
+        msg: >-
+          local-canonical: REFUSING to commit or land —
+
+          {% if _wt_busy.rc == 0 and _wt_busy.stdout_lines | select('search', '/HEAD$') | list %}HEAD is on no branch in
+          {{ worktree }}, and no operation is in progress: a replay quit part-way (`git rebase --quit`) leaves it so,
+          and the state commit would land on it; or HEAD names a ref that is not a branch (`git -C {{ worktree | quote
+          }} symbolic-ref HEAD` says which; `git branch` then fails, `--points-at` too, until you switch; `git -C
+          {{ worktree | quote }} for-each-ref --format='%(refname:lstrip=2)' refs/heads/` lists your branches). Switch
+          back to your branch — after a replay quit part-way, `git -C {{ worktree | quote }} branch --points-at
+          ORIG_HEAD` names the branch the sync started on (unless a reset, stash, merge, pull, rebase or `git am` of
+          your own, or a commit on that branch, came since); after a switch or detach of your own, `git -C {{ worktree |
+          quote }} reflog` names it (`checkout: moving from <branch>`, above its newest `rebase (start)`: one below it
+          is older than the sync), and where the two differ the reflog's is yours; `git -C {{ worktree | quote }}
+          branch` lists yours. If git says a file is in the way — untracked, or tracked with local changes — it is the
+          cut replay's copy of your own commit's (in the bash commands below, each `'<path>'` is its name as git lists
+          it, a `'` in it written `'\''`): compare it with your branch's (`git -C {{ worktree | quote }} cat-file
+          --filters refs/heads/<branch>:'<path>' | cmp - {{ worktree | quote }}/'<path>'`; for a link, its text, in
+          bash: `git -C {{ worktree | quote }} cat-file -p refs/heads/<branch>:'<path>' | cmp - <(readlink -nv -- {{
+          worktree | quote }}/'<path>') && test -L {{ worktree | quote }}/'<path>'`); where it is the same, remove it
+          (untracked) or put HEAD's back (`git -C {{
+          worktree | quote }} --literal-pathspecs checkout HEAD -- '<path>'`); where it differs, move it out of the
+          worktree, to a directory of its own (`mkdir -p ~/kontroll-moved && mv --backup=numbered -- {{ worktree |
+          quote }}/'<path>' ~/kontroll-moved/`), and look; then switch (`git -C {{ worktree | quote }} switch --no-guess
+          <branch>`) — then run again: the next run brings your commit forward again.
+          {%- elif _wt_busy.rc == 0 %}git has an operation in progress in {{ worktree }}
+          ({{ _wt_busy.stdout_lines | join(', ') }}). Finish it or abort it — `git -C {{ worktree | quote }} status`
+          says which and how; `git bisect reset` ends a bisect — then run again.{% if _wt_busy.stdout_lines
+          | select('search', '/rebase-(merge|apply)$') | list %} If it is a sync's replay cut short (a run killed in
+          it), `git -C {{ worktree | quote }} rebase --abort` puts HEAD back where it was before the replay (if git
+          says {{ ((_wt_busy.stdout_lines | first | dirname) ~ '/index.lock') | quote }} exists and no git is running,
+          remove that file first; move aside any untracked file the abort names); then `git -C {{ worktree | quote }}
+          -c core.ignoreCase=false status --untracked-files=all --ignored` names, among your own, any file of main's
+          the replay left: remove those before running again.
+          `git -C {{ worktree | quote }} -c core.quotePath=true ls-files -v | grep -v '^H '` (this and the commands
+          after it are bash's: `$'…'` and `<(…)`) names any tracked file git's status does not compare (skip-worktree,
+          assume-unchanged; under `core.ignoreStat`, every file; a name the listing prints in double quotes is quoted
+          the C way: give it to the shell as `$'…'`, with what is between the quotes, each `'` in it written `\'`): the
+          replay may have left main's bytes in one, and that status does not see them. Compare each with main's (`git -C
+          {{ worktree | quote }} cat-file --filters refs/remotes/local/main:<path> | cmp - {{ worktree | quote
+          }}/<path>`; for a link, whose target `cmp` would read, its text: `git -C {{ worktree | quote }} cat-file -p
+          refs/remotes/local/main:<path> | cmp - <(readlink -nv -- {{ worktree | quote }}/<path>)`); where one holds
+          main's bytes or is missing, put HEAD's back (`git -C {{ worktree | quote }} checkout
+          --ignore-skip-worktree-bits HEAD -- <path>`). `git rebase --continue` can drop the commit it was replaying.
+          {%- endif %}{% else %}git could not say whether an
+          operation is in progress in {{ worktree }}
+          ({{ _wt_busy.stderr_lines | default([]) | last | default('nothing was printed', true) }}).{% endif %}
+          This run committed and landed nothing, and changed nothing in the worktree.
+      when: _wt_busy.rc != 0 or (_wt_busy.stdout_lines | default([]) | length > 0)
 
     # F-CANON (#119): the canonical is group-1001 (the runtime uid:gid the privileged API/runner writes as), but a
     # FRESH control node has no NAMED group at gid 1001 AND the operator is not a member of it — so the operator's
@@ -201,7 +315,7 @@
       ansible.builtin.file:
         path: "{{ bare }}"
         state: directory
-        owner: "{{ operator_uid }}"       # the operator's working tree pushes here (numeric — MF-1, user-DB-free)
+        owner: "{{ operator_uid }}"       # the operator's working tree lands here (numeric — MF-1, user-DB-free)
         group: "1001"                     # the runtime uid (the privileged API/runner) — the C10 write grant
         mode: "2775"                      # setgid: pushed objects inherit gid 1001 so BOTH writers keep access;
                                           # others still clone (content is SOPS-encrypted). Group-write is the
@@ -309,7 +423,7 @@
     # setgid` step (F-CANON, #119), now an idempotent detect-then-apply pair: THE OWNERSHIP PASS of
     # scripts/kontroll-canonical.py (`--normalise`), which under `--check` names what it would change and,
     # applied, changes exactly that. owner=<operator> is the F-CANON half: operator-owned objects let the
-    # operator's Mirror push succeed via OWNER perms even before the group membership added above takes effect
+    # operator's landing succeed via OWNER perms even before the group membership added above takes effect
     # (next login). SECURITY.md C10 / docs/install-from-scratch.md §3.
     #
     # The pass walks the repository the way the audit above reads it (one walker, `_walk`): each directory is
@@ -379,8 +493,10 @@
         recurse: true
 
     - name: Ensure the working tree has a 'local' remote  # noqa: command-instead-of-module
+      # As the operator (`as_operator`): git rewrites `.git/config` through a lock file, so root's `remote add` left
+      # a root-owned config in the operator's repository — which the check before the state commit then names.
       ansible.builtin.command:
-        cmd: "git remote add local {{ bare }}"
+        cmd: "{{ as_operator }} git remote add local {{ bare }}"
         chdir: "{{ worktree }}"
       register: _remote
       changed_when: _remote.rc == 0
@@ -448,17 +564,56 @@
           if 'no sops block' in (_plaintext_guard.stderr | default('')) else '' }}
       when: _plaintext_guard.rc != 0
 
+    - name: List what in the worktree's git directory is not the operator's (names only; nothing is changed)
+      # The state commit and the sync below write the operator's repository AS THE OPERATOR (`as_operator`). Before
+      # that, the state commit ran as root inside the installer container and left root's objects, index and ref
+      # files in it — which the operator's git cannot write over, so the commit or the replay would stop half-way.
+      # The directory walked is git's own answer (`--git-common-dir`, asked as the operator): in a linked worktree
+      # `.git` is a file, and the objects and refs are in the common directory. Read-only, so it runs under --check
+      # too and the mandated dry-run names them first. Nothing is re-owned here: a recursive change of owner in a
+      # tree another uid writes is not this play's to make.
+      ansible.builtin.shell: |
+        set -e
+        common=$({{ as_operator }} git -C {{ worktree | quote }} rev-parse --path-format=absolute --git-common-dir)
+        echo "$common"
+        find "$common" ! -user {{ operator_uid | quote }} -print
+      args:
+        executable: /bin/bash
+      register: _wt_not_operator
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to commit or land while the operator's git cannot write its own repository, and say what
+      ansible.builtin.fail:
+        msg: >-
+          local-canonical: REFUSING to commit or land —
+
+          {% if _wt_not_operator.stdout_lines | default([]) | length > 1 %}{{ _wt_not_operator.stdout_lines | first }}
+          holds what is not the operator's (uid {{ operator_uid }}), among it:
+          {{ _wt_not_operator.stdout_lines[1:21] | join(', ') }}. An earlier deploy ran inside the installer
+          container as root (its `remote add`, or its state commit) and left those; the state commit and the sync
+          now run as the operator, whose git cannot write over them. Once, by hand: `sudo chown -R
+          {{ operator_uid }}:{{ operator_gid }} {{ _wt_not_operator.stdout_lines | first | quote }}`, then run
+          again.{% else %}git could not name the git directory of {{ worktree }}, or it could not be listed
+          ({{ _wt_not_operator.stderr_lines | default([]) | last | default('nothing was printed', true) }}).{% endif %}
+          Nothing in the worktree was changed.
+      when: _wt_not_operator.rc != 0 or (_wt_not_operator.stdout_lines | default([]) | length > 1)
+
     - name: Commit uncommitted instance state into the canonical  # noqa: command-instead-of-module
       # kontroll-init --fresh scaffolds instance/ AFTER install.sh's initial commit, so on a fresh node the
       # overlay (inventory, fleet, .sops.yaml, ENCRYPTED secrets) is untracked — the landing below takes HEAD,
       # which would omit it, leaving Semaphore's canonical clone without any instance config. Commit it here (the
       # operator needs no git knowledge — local-source-of-truth goal). "Everything committed is ciphertext or
-      # public" is CHECKED by the two tasks above, not asserted. Idempotent: a no-op when the tree is already clean.
+      # public" is CHECKED by the plaintext guard above, not asserted. Idempotent: a no-op when the tree is already
+      # clean.
+      # As the operator (`as_operator`): the commit is the operator's repository's, and so are its objects.
       ansible.builtin.shell: |
+        set -e
         cd {{ worktree }}
-        if [ -n "$(git status --porcelain)" ]; then
-          git add -A
-          git -c user.name=kontroll -c user.email=kontroll@localhost \
+        if [ -n "$({{ as_operator }} git status --porcelain)" ]; then
+          {{ as_operator }} git add -A
+          {{ as_operator }} git -c user.name=kontroll -c user.email=kontroll@localhost \
               commit -q -m "kontroll: instance state {{ ansible_date_time.iso8601 }}"
           echo committed
         fi
@@ -467,28 +622,102 @@
       register: _state_commit
       changed_when: "'committed' in _state_commit.stdout"
 
+    # THE SYNC (T25). A promote moves the canonical's `main` to a commit this worktree has never seen, and the
+    # landing below then refuses (not a fast-forward) until the worktree holds that commit and descends from it.
+    # So, first, `kontroll-land.py --sync` brings the worktree forward, AS THE OPERATOR (`as_operator`; it writes
+    # the operator's repository): the canonical packs what the worktree lacks, in the seam (none of its hooks or
+    # config-named programs run, and no serving side — no fetch), the worktree reads the pack, and its own commits
+    # since — this run's instance-state commit among them — are replayed on top (`git rebase`). Under --check the
+    # first task says whether there is anything to bring forward (exit 3) and changes nothing; the second does it,
+    # on a real run only (a command task is skipped under --check), and is "changed" when it brought the worktree
+    # forward. A sync that is refused — a conflict, a merge in the worktree's own history or a commit already on
+    # another remote, files changed and not committed — fails the sync task itself, said as this play's (exit 1).
+    # A sync that brought the worktree forward stops the run IN THE SAME TASK (`--stop-as local-canonical`): the
+    # tree the worktree now holds is what this deploy would go on to run as root (the landing's gate, the ownership
+    # pass, every generator and the stack), and the dry-run before this run previewed the tree before it. The sync
+    # leaves a mark in the worktree's git directory; kontroll-land then says what came in, in plain git as the
+    # operator, removes the mark and exits 4, which fails the task — the run's last step, so the next run goes on.
+    # Not a later task: an Ansible worker forked after the sync can import the filter plugins on disk — the tree that
+    # came in — when it first templates, as root, before any later task could stop the run (read A-f3, B1). The
+    # next run's sync is in step, so its dry-run previews the tree its real run applies — and runs that tree's own
+    # playbooks and scripts, which is why what came in is said first (SECURITY.md C10). A sync by hand leaves the
+    # same mark, and the stop at the top of this play (and of bootstrap.yml and deploy-stack.yml) stops the next
+    # run on it — but that run's playbooks, and its filter plugins, are the tree that came in already.
+    - name: Say whether the canonical's main has moved past the worktree (a promote) — nothing is changed
+      ansible.builtin.command:
+        cmd: >-
+          {{ as_operator }} python3 -B scripts/kontroll-land.py --sync --check
+          --worktree {{ worktree }} --repo {{ bare }}
+        chdir: "{{ worktree }}"
+      register: _sync_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      # A repository to sync from (the landing's own condition below): a dry-run of a canonical directory that is
+      # empty, or holds no HEAD, has nothing to bring forward, and its sync would only say so as a refusal.
+      when: ansible_check_mode and _canonical_repo
+
+    - name: Bring the worktree forward to the canonical's main, as the operator (a promote's commits, then its own)
+      ansible.builtin.command:
+        cmd: >-
+          {{ as_operator }} python3 -B scripts/kontroll-land.py --sync --stop-as local-canonical
+          --worktree {{ worktree }} --repo {{ bare }}
+        chdir: "{{ worktree }}"
+      register: _sync
+      # Exit 4: brought forward, what came in said and the mark removed; exit 1: refused (a mark that could not be
+      # written too — before the replay, HEAD as it was). Either fails THIS task, and the run ends with it.
+      changed_when: _sync.rc == 4
+      failed_when: _sync.rc != 0
+
+    # Under --check only: the real run's sync is skipped there (a command task), and says its own refusal.
+    - name: Refuse to land when the worktree cannot be brought forward — and say why
+      ansible.builtin.fail:
+        msg: >-
+          local-canonical: REFUSING to land — the sync of the worktree to the canonical's main (--check) exited
+          {{ _sync_check.rc | default('none') }}:
+
+          {{ ((_sync_check.stdout_lines | default([])) + (_sync_check.stderr_lines | default([])))
+          | select | map('regex_replace', '(?<![.])$', '.') | join(' ')
+          | default('kontroll-land printed nothing.', true) }}
+          Nothing was changed: the canonical and the worktree are as they were. Do what the sentence says in
+          {{ worktree }}, then run again.
+      # `default(0)`: a skipped task registers no `rc`; under --check exit 3 is "there is something to bring forward"
+      when: (_sync_check.rc | default(0)) not in [0, 3]
+
+    - name: Say that the dry-run judges the landing after the sync, which only the real run makes
+      ansible.builtin.debug:
+        msg: >-
+          local-canonical: the canonical's main has commit(s) the worktree does not (a promote; in a shallow clone,
+          possibly history below where the clone stops, which the real run refuses with `fetch --unshallow`, as the line
+          below says). The real run brings them in, as the operator, replays the worktree's own commits on top, says
+          what came in and STOPS: nothing is landed or deployed from that tree until the run after it, whose dry-run
+          previews it. Under --check none of that has happened, so the landing's judgement below is skipped.
+          {{ _sync_check.stdout_lines | default([]) | select('search', '^kontroll_run_id=') | join(' ') }}
+          {{ _sync_check.stdout_lines | default([]) | last | default('') }}
+      when: (_sync_check.rc | default(0)) == 3
+
     # THE LANDING (SECURITY.md C10, rule 8 of the canonical's doors). The worktree's HEAD goes into the canonical's
     # `main` as a LANDING, never a push: scripts/kontroll-land.py reads the canonical's `main` once, by its full
     # name, in the seam (kontroll.canon — as root in the installer container that git is the service uid, never
     # root); refuses when that commit is not an ancestor of HEAD (rc 1 — a real divergence — and rc 128 — the
-    # canonical's commit was never fetched — alike: a promote advances canonical `main` with a commit this worktree
-    # has never seen, and a landing must not discard it); judges HEAD's tree with the promote gate (this
+    # canonical's commit was never brought across — alike: a promote advances canonical `main` with a commit this
+    # worktree has never seen, and a landing must not discard it); judges HEAD's tree with the promote gate (this
     # checkout's gen-requirements.py --conflict-check over the commit's files, read object by object from the
     # worktree's own repository and re-hashed) BEFORE anything touches the canonical; then brings the commit across
     # as a pack on a pipe (pack-objects --stdout here, index-pack --stdin there) and moves `main` in one
     # compare-and-swap transaction. No hook of the canonical runs, and no program its config names — a push ran
     # both, as the pusher: root in the installer, the operator host-direct. The canonical's hook now refuses a
     # push of `main` from everyone. Nothing here fetches into the worktree (a root fetch leaves a root-owned
-    # `.git/FETCH_HEAD` in the operator's worktree — live-caught 2026-07-28) and nothing runs git's serving side in
-    # the canonical (an `ls-remote` did, as the caller, under the canonical's config).
+    # `.git/FETCH_HEAD` in the operator's worktree — live-caught 2026-07-28; the sync above brings the canonical's
+    # objects across as a pack, as the operator) and nothing runs git's serving side in the canonical (an
+    # `ls-remote` did, as the caller, under the canonical's config).
     #
     # Two tasks. The first runs `--check` — ALWAYS, `check_mode: false`, read-only: it judges and prints what would
     # land, so the mandated `--check --diff` dry-run names a refusal (and its sentence) before the real run does,
     # and so does the real run, before it lands. Exit 0 = would land, or up to date; exit 2 = REFUSED (the gate
-    # refused the tree, or could not run); exit 1 = nothing to land as asked (not a fast-forward: the sentence names
-    # the remedy — `git -C <worktree> fetch local && git -C <worktree> rebase local/main` — never `--force`, which
-    # would delete every promoted proposal; REBASE, not `merge --ff-only`: this play commits an instance-state
-    # commit of its own on each run, so the histories genuinely diverge). The second lands, and is "changed" when
+    # refused the tree, or could not run); exit 1 = nothing to land as asked (not a fast-forward — which the sync
+    # above leaves only when the canonical moved again meanwhile: the sentence names the remedy, `kontroll-land.py
+    # --sync`, never `--force`, which would delete every promoted proposal). The second lands, and is "changed" when
     # it says so. On a box that ran the previous build, a tree the promote gate refuses used to be mirrored and
     # is now refused HERE, with the generator's sentence: correct it in the checkout, or
     # `python3 scripts/kontroll-land.py --skip-conflict-check` as the human's override (docs/troubleshooting.md §10).
@@ -526,15 +755,19 @@
       failed_when: false
       check_mode: false
       # Always on a real run; under --check whenever there is a repository to judge against (the same condition as
-      # the detect of the ownership pass after the landing): the cases left out are the dry-run of a node with no
-      # canonical yet and of one whose HEAD is gone, said above.
-      when: _canonical_repo or not ansible_check_mode
+      # the detect of the ownership pass after the landing) and nothing to bring forward first: the cases left out
+      # are the dry-run of a node with no canonical yet, of one whose HEAD is gone, and the dry-run after a promote,
+      # each said above.
+      when: (_canonical_repo or not ansible_check_mode) and (_sync_check.rc | default(0)) != 3
 
     - name: Refuse to land what the promote gate refuses, or what would discard promoted work — and say which
       ansible.builtin.fail:
         msg: >-
           local-canonical: REFUSING to land (exit {{ _land_check.rc }}) —
-          {{ _land_check.stderr_lines | default([]) | join(' ') | default('kontroll-land printed nothing.', true) }}
+
+          {{ ((_land_check.stdout_lines | default([])) + (_land_check.stderr_lines | default([])))
+          | select | map('regex_replace', '(?<![.])$', '.') | join(' ')
+          | default('kontroll-land printed nothing.', true) }}
           Nothing was landed: the canonical is untouched and this checkout keeps its commit.
           {{ 'Correct the tree in ' + worktree + ' (the sentence names what), or land with --skip-conflict-check as the
           human override, then run again.'
@@ -592,5 +825,9 @@
       changed_when: true
 
     - name: Report
+      # The landing's own lines first — `kontroll_run_id=… land …` and what it landed — so that the deploy's output
+      # holds the record (a command task's registered output is not printed).
       ansible.builtin.debug:
-        msg: "local canonical ready at {{ bare }} (Semaphore reads file:///srv/kontroll.git)."
+        msg: >-
+          {{ (_land.stdout_lines | default([]))
+          + ['local canonical ready at ' ~ bare ~ ' (Semaphore reads file:///srv/kontroll.git).'] }}

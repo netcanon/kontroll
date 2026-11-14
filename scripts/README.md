@@ -63,7 +63,31 @@ fleet selection, dashboards) — the instance is the source of truth, so we neve
 conflict-free; a conflict means a *code* file was edited locally (surfaced, never lost).
 Then re-seeds the local canonical the running instance reads. See
 [docs/local-source-of-truth.md](../docs/local-source-of-truth.md) (Phase B). The git-free
-operator update (code via the image / a bundle) is Phase C.
+operator update (code via the image / a bundle) is Phase C. When a promote has moved the
+local canonical's `main` past the checkout, it refuses before it fetches anything (exit 3,
+or 1 when the check cannot say; `REFUSING to update`): bring the checkout forward with
+`kontroll-land.py --sync` (below), read what it says came in (the next deploy runs
+that tree, as root), then run it again. Run as another uid than the
+checkout's owner (under sudo), it refuses first (exit 1): root's files in the checkout's
+git directory are what the owner's git cannot write over.
+
+## `kontroll-land.py` — the one way a commit reaches the local canonical's `main`
+
+`python3 -B scripts/kontroll-land.py [--check]` lands the checkout's HEAD on the local
+canonical: judged by the promote gate first, brought across as a pack on a pipe, one
+compare-and-swap — never a `git push` (SECURITY.md C10). `update.sh`, the bundle update,
+the CLI's `--commit` and the deploy run it. `--sync [--check]` goes the other way: after a
+promote moved `main` past the checkout, it brings the checkout forward — the promote's
+commits come across as a pack (no fetch), and the checkout's own commits are replayed on
+top; a conflict is undone and named. A sync that brought the checkout forward prints what
+came in — read it: the next deploy runs that tree as root — and leaves the mark the next
+deploy stops on, written before the replay so a sync killed in it leaves one too (a mark
+that cannot be written refuses the sync, HEAD as it was). Run it as the checkout's owner,
+from the checkout's top or naming it with `--worktree` (it refuses anyone else, and a
+directory below the top); the deploy runs it itself, with `--stop-as local-canonical`:
+brought forward, it says what came in as the play's stop, removes the mark and exits 4,
+which ends the run in that task. Exits and sentences: [docs/troubleshooting.md
+§10](../docs/troubleshooting.md#10-a-landing-was-refused-or-did-not-happen).
 
 ## `update-from-bundle.sh` — non-destructive update for a REMOTELESS box
 
@@ -73,7 +97,8 @@ local-as-truth posture): it can't `fetch origin`, so the developer ships a `git 
 the new product code built on a connected machine (`git bundle create kontroll.bundle
 <box-HEAD>..main`), `scp`s it over, and runs this. Everything past the fetch is **identical**
 to `update.sh` — the same state-preserving `git merge` (conflicts surface a locally-edited
-*code* file, never instance state) + the same local-canonical re-seed. Codifies the #145
+*code* file, never instance state) + the same local-canonical re-seed, and the same refusal
+before it when a promote is ahead of the checkout. Codifies the #145
 bundle-merge sync (previously hand-run). See
 [docs/local-source-of-truth.md](../docs/local-source-of-truth.md) (Phase B / remoteless).
 

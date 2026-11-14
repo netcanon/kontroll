@@ -23,7 +23,7 @@ import app as gui          # gui/ is on sys.path (conftest); app.py is the GUI
 from kontroll import catalog, gitio, paths, probe
 from kontroll.service.onboard import OnboardRefusal
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("isolated_git")]
 
 
 def _auth(user="admin", pw="test-password"):

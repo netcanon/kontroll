@@ -129,6 +129,25 @@ when git cannot list them and stay a whole check on an archive (as the doc-link 
 that builds its own repository in `tmp_path` does not need it. `unit/test_requires_checkout.py` pins the answer, and
 runs the marked files in tests/unit and tests/integration (the two it scans) in a copy that is not a checkout.
 
+## A test's git sees the test (`isolated_git`)
+
+A row that runs the real git takes `isolated_git` (tests/conftest.py), and a test file whose source starts git takes
+it in its module `pytestmark`: every `GIT_*` of the runner's goes, and git reads an empty configuration. A suite
+started from a git hook inherits the developer's `GIT_DIR` and `GIT_INDEX_FILE`, and without the fixture the scratch
+repositories' `init`, `add` and `commit` land in the developer's repository. Such a file builds a git's environment
+from `os.environ` at each call, never once at import: a copy made at import keeps the hook's `GIT_DIR` whatever the
+fixture does (a read of one variable at import is no copy, but a read of a `GIT_*` is). A fixture wider than a row is
+set up before the fixture holds, so it starts no git. The fixture keeps its environment in a MonkeyPatch of its own,
+so a row's `monkeypatch.undo()` puts back the row's patches alone; a row whose own `monkeypatch` was set up first (an
+autouse fixture asked for it) sets no `GIT_*` through it, and the root conftest's
+`_every_row_gives_the_git_environment_back` fails a row that leaves a `GIT_*` or `XDG_CONFIG_HOME` changed after its
+teardown. [unit/test_suite_git_isolation.py](unit/test_suite_git_isolation.py) reads every test file for these — git
+started by `"git"`, `shutil.which("git")` or a name bound to either, the fixture read from the last `pytestmark`'s
+`usefixtures`, everything that runs at import — in by default: a file that starts git only on the suite's own
+checkout, with every repository variable taken out, or makes repositories only in rows that take the fixture by their
+own mark, is named in its `EXEMPT` with why. It cannot see a row that starts git only through the code under test; a
+run of the suite with `GIT_DIR` and `GIT_INDEX_FILE` naming a stand-in repository is the check for those.
+
 ## Adding tests
 
 1. **L1**: nothing to add — new YAML is linted automatically. Keep it valid.
@@ -587,6 +606,19 @@ shapes it knows it cannot read; the module's docstring gives the rules, and `tes
 ("What the checks still cannot see") lists the shapes it cannot see and the sound shapes it refuses.
 A new check on a build's shell text calls `gate_faults()` rather than reading the operators itself,
 so the two tests cannot drift apart.
+
+## Ansible's own display of a message (`tests/_ansible_display.py`)
+
+A message that prints a command the operator pastes is held to what the operator sees, not to its rendered text
+alone. `shown(tmp_path, messages)` runs `ansible-playbook` on one failed task per message, its display set as the
+tree's ansible.cfg sets it (the `default` callback, `callback_result_format = yaml` — checked there first), and
+returns each task's result block (not ansible-core 2.19's `[ERROR]: Task failed:` line before it, which prints the
+message raw, every command as written whatever the block does); `PLAYBOOK` is None where there is no
+`ansible-playbook`, and a row skips. A message of one line is shown as a YAML quoted scalar, each `'` doubled and
+the line wrapped mid-command; one that holds a line break is shown as a block, every command as written. The stop
+after a sync's rows and the deploy's refusals' rows (`tests/unit/test_stop_after_sync.py`,
+`tests/unit/test_local_canonical.py`) take each command from between its backquotes and find it on one line of the
+display.
 
 ## Playbook and role hygiene sweeps
 

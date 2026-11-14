@@ -21,7 +21,7 @@ import subprocess
 import pytest
 import yaml
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("isolated_git")]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PLAYBOOK = os.path.join(ROOT, "ansible", "playbooks", "backup-configs.yml")

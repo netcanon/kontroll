@@ -283,13 +283,13 @@ def test_a_string_that_is_not_a_run_id_never_reaches_the_transaction(tmp_path, m
     (`promote_ref`, the permissive edition's automaton) — formatted in unchecked, the string is a second command."""
     r = R.build(tmp_path)
     started, real = [], subprocess.run
-    monkeypatch.setattr(gitio.subprocess, "run", lambda argv, *a, **kw: started.append(argv) or real(argv, *a, **kw))
-    planted = "%s %s\ncreate refs/heads/elsewhere" % (R.FF, r.ff)
-    for bad in (planted, "../main", "", R.FF + "\n"):
-        assert gitio.promote_commit(bad, r.ff, r.main, r.bare) is False, bad
-        assert "not a run id" in capsys.readouterr().out
-    assert started == [], "git was started for a string that is not a run id"
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(gitio.subprocess, "run", lambda argv, *a, **kw: started.append(argv) or real(argv, *a, **kw))
+        planted = "%s %s\ncreate refs/heads/elsewhere" % (R.FF, r.ff)
+        for bad in (planted, "../main", "", R.FF + "\n"):
+            assert gitio.promote_commit(bad, r.ff, r.main, r.bare) is False, bad
+            assert "not a run id" in capsys.readouterr().out
+        assert started == [], "git was started for a string that is not a run id"
     assert _at(r.bare, canon.MAIN) == r.main and _at(r.bare, canon.PROPOSED + R.FF) == r.ff
     assert _at(r.bare, "refs/heads/elsewhere") is None
 
@@ -338,12 +338,12 @@ def test_a_canonical_refused_or_a_git_that_cannot_start_at_each_write_is_a_sente
     moved, which a caller reads as a failed promote."""
     # the seam refuses at the transaction
     r, other = R.build(tmp_path / "a"), R.build(tmp_path / "a-planted")
-    monkeypatch.setattr(canon, "is_ancestor", lambda *a, **k: True)
-    R.plant_commondir(r, other.bare)
-    assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
-    assert "git could not run the promote" in capsys.readouterr().out
-    assert _at(other.bare, canon.MAIN) == other.main
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(canon, "is_ancestor", lambda *a, **k: True)
+        R.plant_commondir(r, other.bare)
+        assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
+        assert "git could not run the promote" in capsys.readouterr().out
+        assert _at(other.bare, canon.MAIN) == other.main
 
     # git cannot be started for the transaction
     r, real = R.build(tmp_path / "b"), subprocess.run
@@ -353,10 +353,10 @@ def test_a_canonical_refused_or_a_git_that_cannot_start_at_each_write_is_a_sente
             raise FileNotFoundError("git")
         return real(argv, *a, **kw)
 
-    monkeypatch.setattr(gitio.subprocess, "run", no_git)
-    assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
-    assert "git could not run the promote" in capsys.readouterr().out
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(gitio.subprocess, "run", no_git)
+        assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
+        assert "git could not run the promote" in capsys.readouterr().out
     assert _at(r.bare, canon.MAIN) == r.main
 
     # the transaction is refused (a lock), and then the canonical cannot be read to say why
@@ -366,10 +366,10 @@ def test_a_canonical_refused_or_a_git_that_cannot_start_at_each_write_is_a_sente
     def unreadable(*a, **k):
         raise canon.Unreadable("planted")
 
-    monkeypatch.setattr(canon, "read_ref", unreadable)
-    assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
-    assert "could not be read after the promote was refused" in capsys.readouterr().out
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(canon, "read_ref", unreadable)
+        assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
+        assert "could not be read after the promote was refused" in capsys.readouterr().out
 
     # the seam refuses at the retire: main HAS moved, so this is a success with a note
     r, other, real = R.build(tmp_path / "d"), R.build(tmp_path / "d-planted"), subprocess.run
@@ -380,10 +380,10 @@ def test_a_canonical_refused_or_a_git_that_cannot_start_at_each_write_is_a_sente
             R.plant_commondir(r, other.bare)
         return done
 
-    monkeypatch.setattr(gitio.subprocess, "run", plant_after_the_move)
-    assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is True
-    assert "could not delete proposed/%s" % R.FF in capsys.readouterr().out
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(gitio.subprocess, "run", plant_after_the_move)
+        assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is True
+        assert "could not delete proposed/%s" % R.FF in capsys.readouterr().out
     os.remove(os.path.join(r.bare, "commondir"))
     assert _at(r.bare, canon.MAIN) == r.ff and _at(other.bare, canon.MAIN) == other.main
 
@@ -401,10 +401,10 @@ def test_a_git_stopped_at_its_time_limit_is_reported_by_what_main_is(tmp_path, m
             raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
         return real(argv, *a, **kw)
 
-    monkeypatch.setattr(gitio.subprocess, "run", stopped_before)
-    assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
-    assert "main is not this commit" in capsys.readouterr().out
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(gitio.subprocess, "run", stopped_before)
+        assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is False
+        assert "main is not this commit" in capsys.readouterr().out
     assert _at(r.bare, canon.MAIN) == r.main
 
     r = R.build(tmp_path / "after")
@@ -415,9 +415,9 @@ def test_a_git_stopped_at_its_time_limit_is_reported_by_what_main_is(tmp_path, m
             raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
         return real(argv, *a, **kw)
 
-    monkeypatch.setattr(gitio.subprocess, "run", stopped_after)
-    assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is True
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(gitio.subprocess, "run", stopped_after)
+        assert gitio.promote_commit(R.FF, r.ff, r.main, r.bare) is True
     assert _at(r.bare, canon.MAIN) == r.ff and _at(r.bare, canon.PROPOSED + R.FF) is None
     assert "promoted proposed/%s" % R.FF in capsys.readouterr().out
 

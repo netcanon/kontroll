@@ -25,7 +25,7 @@ import yaml
 from _crash_filter import compile_re2, stages
 from _deploy_walk import Walk, args, load, module_words, strings
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("isolated_git")]
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _ALERTING = os.path.join(_ROOT, "dashboards", "grafana", "provisioning", "alerting")

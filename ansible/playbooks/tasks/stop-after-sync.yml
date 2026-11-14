@@ -1,0 +1,250 @@
+---
+# THE STOP AFTER A SYNC (T25; SECURITY.md C10). A sync of the worktree to the canonical's `main` (`kontroll-land.py
+# --sync`, by hand or in local-canonical.yml) leaves a mark in the worktree's own git directory (`gitio.SYNC_MARK`; its
+# first line is HEAD before the first sync since a run last stopped on it). A play that imports this file STOPS while
+# the mark is there: it says what came in since that HEAD — in plain git, as the operator, never a script of the
+# worktree: the commits the canonical's `main` gained, every path that changed, and each mode change, symlink and
+# gitlink — removes the mark (the real run only, and not beside a rebase in progress: a replay cut short keeps it until
+# the abort; under --check it is left) and fails. The run after it goes on.
+#
+# local-canonical.yml imports it once — after its uid check, before anything of the worktree runs — and bootstrap.yml
+# and deploy-stack.yml through _stop-after-sync.yml's play (deploy-stack's a copy in place), right after the run-id
+# stamp (I-41) and before anything else, so the stop names the run's id (the stamp's `_kontroll_run_id`; else a caller's
+# `kontroll_run_id`). local-canonical's own sync stops its run itself, in the sync task (`kontroll-land.py --sync
+# --stop-as`: it says what came in, removes the mark and fails the
+# task), so that no Ansible worker starts after the tree changed: a worker can import the filter plugins on disk when
+# it first templates (read A-f3, B1). What this file can stop is a run of the playbooks that import it. After a sync by
+# hand, or a run killed between its sync and its stop, the playbooks — their filter plugins, and the installer image,
+# built from the worktree — are already the tree that came in, and whether that run stops is that tree's to say: the
+# stops that hold are the stopping run's own sync and the hand sync's own listing.
+#
+# It reads, from the play that imports it:
+#   worktree          the operator's checkout
+#   as_operator       the prefix that runs a command as the operator ('' host-direct)
+#   operator_uid, operator_gid   the operator's ids, which the owner remedy names
+#   stop_play         the play's name, which opens the message (default: kontroll)
+
+- name: Read the mark a sync leaves in the worktree's git directory, as the operator (nothing is changed)
+  ansible.builtin.shell: |
+    set -e
+    cd {{ worktree | quote }}
+    [ -e .git ] || exit 0
+    mark="$({{ as_operator }} git rev-parse --path-format=absolute --git-dir)/KONTROLL_SYNCED"
+    case $mark in *[$'\n\r\v\f\x1c\x1d\x1e']*|*$'\xc2\x85'*|*$'\xe2\x80\xa8'*|*$'\xe2\x80\xa9'*)
+      echo "the mark's directory has a line break in its path, which this stop cannot name line by line" >&2
+      exit 4;;
+    esac
+    if [ -L "$mark" ] || { [ -e "$mark" ] && [ ! -f "$mark" ]; }; then
+      echo "$mark"
+      echo "$mark is not a file a sync writes (a link, or not a regular file): read what came in, then remove it" >&2
+      exit 3
+    fi
+    if [ -e "$mark" ]; then
+      echo "$mark"
+      first=$({{ as_operator }} head -c 100 -- "$mark")
+      first="${first%%$'\n'*}"
+      first="${first%$'\r'}"
+      case $first in *[!0-9a-f]*) first=;; esac
+      printf '%s\n' "$first"
+      for n in rebase-merge rebase-apply; do
+        if [ -e "${mark%/*}/$n" ] || [ -L "${mark%/*}/$n" ]; then echo "${mark%/*}/$n"; break; fi
+      done
+    fi
+  args:
+    executable: /bin/bash
+  register: _stop_mark
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# HEAD before: the mark's first line. Only a commit id is taken: anything else is "not known", and nothing is listed;
+# the read prints a first line only when it is hex (a CR in it would be a line of its own to Ansible, which splits on
+# CR too, and could fake a rebase beside the mark: read A-f8, N4).
+# A rebase in progress beside the mark (a line after the first naming `rebase-merge` or `rebase-apply`): a replay was
+# cut short — a run killed in it — and the stop says how to put HEAD back, never "in step" (read A-f5, N1).
+- name: Name HEAD before the sync, from the mark
+  ansible.builtin.set_fact:
+    _stop_marked: "{{ _stop_mark.rc == 0 and (_stop_mark.stdout_lines | length) > 0 }}"
+    _stop_before: >-
+      {{ [(_stop_mark.stdout_lines[1] | default('')) if (_stop_mark.rc == 0 and (_stop_mark.stdout_lines | length) > 0)
+          else ''] | select('match', '^[0-9a-f]{40}([0-9a-f]{24})?$') | first | default('') }}
+    _stop_cut: >-
+      {{ _stop_mark.rc == 0 and (_stop_mark.stdout_lines[2:] | select('search', '/rebase-(merge|apply)$') | list
+         | length) > 0 }}
+
+# The same reads, in the same order, as `gitio.came_in` (what `kontroll-land.py --sync` prints): the newest 20 of
+# the commits `main` gained and a count of the older ones, every path HEAD's tree changed since (rename detection
+# off, so a path is named where it now is), and each mode change, symlink and gitlink. Colour, signatures and
+# external diff programs are off whatever the operator's config says. All of it, or that git could not list it.
+- name: Say what came in since HEAD before the sync, in plain git as the operator (nothing is changed)
+  ansible.builtin.shell: |
+    cd {{ worktree | quote }} || { echo "git could not list it"; exit 0; }
+    before={{ _stop_before | quote }}
+    since="$before..refs/remotes/local/main"
+    g() { {{ as_operator }} git "$@"; }
+    listing() {
+      n=$(g rev-list --count "$since") &&
+      g log --no-color --no-decorate --no-show-signature --format='%h %an: %s' -n 20 "$since" &&
+      { [ "$n" -le 20 ] || echo "and $((n - 20)) older commit(s) not shown"; } &&
+      g diff --no-color --no-renames --no-ext-diff --name-status "$before" HEAD &&
+      s=$(g diff --no-color --no-renames --no-ext-diff --summary "$before" HEAD) &&
+      { printf '%s\n' "$s" | grep -E '^ (mode change|(create|delete) mode 1[26]0000) ' | sed 's/^ //'; true; }
+    }
+    if out=$(listing); then printf '%s\n' "$out"; else echo "git could not list it"; fi
+  args:
+    executable: /bin/bash
+  register: _stop_listing
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: _stop_before | length > 0
+
+# Whether HEAD holds what came in: a sync that finished leaves HEAD descending from the canonical's main
+# (`refs/remotes/local/main`); one undone, or cut short and then aborted or quit, leaves HEAD where it was before it
+# — and the files of main's that git had written, untracked (read A-f6, N1; read B-f6, N5; read B-f9, N1). Exit 0:
+# HEAD holds it; 3: HEAD is the commit before the sync; any other: neither, or git could not say. Not asked beside
+# a rebase in progress.
+- name: Say whether HEAD holds the canonical's main, as the operator (nothing is changed)
+  ansible.builtin.shell: |
+    cd {{ worktree | quote }} || exit 1
+    {{ as_operator }} git merge-base --is-ancestor refs/remotes/local/main HEAD && exit 0
+    head=$({{ as_operator }} git rev-parse --verify --quiet 'HEAD^{commit}') || exit 1
+    before={{ _stop_before | quote }}
+    if [ -n "$before" ] && [ "$head" = "$before" ]; then exit 3; fi
+    exit 1
+  args:
+    executable: /bin/bash
+  register: _stop_head
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: (_stop_marked | bool) and not (_stop_cut | bool)
+
+# As the operator, by the path the operator's git named: root removes nothing at a path the worktree chooses. Not
+# beside a rebase in progress (a replay cut short): the mark stays until the abort, so every run stops here —
+# bootstrap's and deploy-stack's too, which refuse no operation in progress — and the run after the abort says
+# where HEAD is (read A-f7, N2).
+- name: Remove the mark, so the run after this one goes on (the real run only)
+  ansible.builtin.command:  # noqa: command-instead-of-module
+    cmd: "{{ as_operator }} rm -f -- {{ _stop_mark.stdout_lines[0] | quote }}"
+  register: _stop_rm
+  changed_when: _stop_rm.rc == 0
+  failed_when: false
+  when: (_stop_marked | bool) and not (_stop_cut | bool)
+
+# Fails closed when the mark could not be read — or is a link, or not a regular file, which no sync writes, or is in a
+# directory whose path holds a line break: whether a sync brought the worktree forward is then not known. The remedy is
+# by the read's exit: 3 is a path no sync writes, and 1 with a path is a mark `head` could not open as the operator
+# (root's, mode 0600): every run stops on either until the operator removes it; 4 is a path this stop cannot name line
+# by line; any other is git's own (the owner check, a `.git` git cannot read), which no removal of the mark mends (read
+# A-f4, N5; read B-f5, N4; read A-f6, N3 and N4; read B-f6, S1 and N1). Read it was, the remedy is by where HEAD is: "in
+# step" only when HEAD holds the canonical's main. Where the replay may have left main's bytes, the remedy names the
+# tracked files git's status does not compare too (read A-f7, S1); beside a rebase in progress the mark stays (read
+# A-f7, N2). Each status it prints is case for case (`-c core.ignoreCase=false`: with it true, git's status hides a file
+# main brought whose name differs from a tracked one's only in case, read A-f8, S1), each compare reads main's file as
+# git's checkout writes it (`cat-file --filters`, read A-f8, N2) and a link by its text, the listing quotes a name as
+# git does by default and says how to give it back (read A-f9, N2, N4) — under `-c core.quotePath=true` whatever the
+# operator's own config says, each `'` of a quoted name written `\'`, a link's text read by `readlink -nv` (read A-f10,
+# N2 to N4) — and says its commands are bash's (read A-f11, N4); this sentence is gitio's own, its constants copied
+# (`_LIST_FLAGGED`, `_BASHS`, `_QUOTED_NAME`, `_PUT_HEADS_BACK`) and the words between them too, and the rows hold it to
+# `_CUT_SHORT`'s own text, word for word (read B-f11, N1; read B-f12, N1). And the message holds a line break, so
+# Ansible's YAML display prints it as a block, every command as written: as one line it is a quoted scalar, each `'`
+# doubled and the line wrapped mid-command (read A-f8, S2).
+- name: Stop — a sync brought the worktree forward, and no run has stopped on it since
+  ansible.builtin.fail:
+    msg: >-
+      {{ stop_play | default('kontroll') }}: STOPPED
+      {%- if _stop_mark.rc != 0 %} — the mark a sync of the worktree leaves could not be read (exit
+      {{ _stop_mark.rc }}: {{ _stop_mark.stderr_lines | default([]) | join(' ')
+      | regex_replace('[\x00-\x08\x0a-\x1f\x7f-\x9f]', '?') | default('it said nothing', true) }}), so whether a
+      sync brought the worktree forward is not known.
+      {%- else %} before landing, deploying or running the worktree's scripts — a sync brought it forward, or began
+      to (by hand, or in a run killed before it stopped), and no run has stopped on that since.
+      {%- endif %}
+      What came in{{ (' since ' ~ _stop_before) if _stop_before else '' }}:
+      {{ (_stop_listing.stdout_lines | default([]) | map('regex_replace', '[\x00-\x08\x0a-\x1f\x7f-\x9f]', '?')
+      | join('; ')) or 'git could not list it' }}.
+      {% if _stop_marked | bool -%}
+      {%- if _stop_cut | bool -%}
+      The mark ({{ _stop_mark.stdout_lines[0] }}) stays while the rebase is in progress: every run stops here until
+      it is aborted, and the run after the abort stops once more and says where HEAD is.
+      {%- elif ansible_check_mode -%}
+      Under --check the mark ({{ _stop_mark.stdout_lines[0] }}) is left: the real run says this again, removes the
+      mark and stops.
+      {%- elif (_stop_rm.rc | default(1)) == 0 -%}
+      The mark is removed, so the next run goes on.
+      {%- else -%}
+      The mark ({{ _stop_mark.stdout_lines[0] }}) was NOT removed ({{ _stop_rm.stderr | default('', true) | trim
+      | regex_replace('[\x00-\x08\x0a-\x1f\x7f-\x9f]', '?') }}): remove it by hand, as yourself, or the next run
+      stops here again.
+      {%- endif %}
+      {% endif -%}
+      Nothing was landed or deployed from the tree the worktree now holds.
+
+      Read what came in now: the next run, its
+      dry-run too, runs that tree's own playbooks and scripts as root (the installer image is built from it), and
+      whether that run stops first is that tree's own play's to say (SECURITY.md C10).
+      {%- if _stop_mark.rc == 3 %} Then remove it by hand, as yourself (`rm -r --
+      {{ _stop_mark.stdout_lines[0] | default('the path git named') | quote }}`: it may be a directory), and run the
+      dry-run (`--check --diff`) again: while it is there, every run stops here.
+      {%- elif _stop_mark.rc == 4 %} Then move the worktree, or its git directory, to a path with no line break, and
+      run the dry-run (`--check --diff`) again: until then every run stops here.
+      {%- elif _stop_mark.rc == 1 and (_stop_mark.stdout_lines | length) > 0 %} The mark could not be read as you
+      (`head`'s sentence above). Read what came in (`git -C {{ worktree | quote }} reflog` names the HEAD before
+      each sync), then remove it as yourself (`rm -f -- {{ _stop_mark.stdout_lines[0] | quote }}`; if git's
+      directory is another uid's, the owner check in docs/troubleshooting.md §10 says how to make it yours), and run
+      the dry-run (`--check --diff`) again: while it is there, every run stops here.
+      {%- elif _stop_mark.rc != 0 %} Then do what git's sentence says, and run the dry-run (`--check --diff`) again:
+      until git can read the mark, every run stops here. When git refuses the repository as another user's
+      (`dubious ownership`), the worktree's top and its git directory must be the operator's — `sudo chown
+      {{ operator_uid }}:{{ operator_gid }} {{ worktree | quote }}`, and `chown -R` on the git directory
+      (docs/troubleshooting.md §10); git's own `safe.directory` suggestion does not reach the installer's git, which
+      reads no global config.
+      {%- elif _stop_cut | bool %} A rebase is in progress in the worktree. If it is a sync's replay cut short (a run
+      killed in it), `git -C {{ worktree | quote }} rebase --abort` puts HEAD back where it was before the replay (if
+      git says {{ ((_stop_mark.stdout_lines[0] | dirname) ~ '/index.lock') | quote }} exists and no git is running,
+      remove that file first; move aside any untracked file the abort names); then `git -C {{ worktree | quote }}
+      -c core.ignoreCase=false status --untracked-files=all --ignored` names, among your own, any file of main's
+      the replay left: remove those.
+      `git -C {{ worktree | quote }} -c core.quotePath=true ls-files -v | grep -v '^H '` (this and the commands after
+      it are bash's: `$'…'` and `<(…)`) names any tracked file git's status does not compare (skip-worktree,
+      assume-unchanged; under `core.ignoreStat`, every file; a name the listing
+      prints in double quotes is quoted the C way: give it to the shell as `$'…'`, with what is between the quotes, each
+      `'` in it written `\'`): the replay may have left main's bytes in one, and that status does not see them. Compare
+      each with main's (`git -C {{ worktree | quote }} cat-file --filters refs/remotes/local/main:<path> | cmp - {{
+      worktree | quote }}/<path>`; for a link, whose target `cmp` would read, its text: `git -C {{ worktree | quote }}
+      cat-file -p refs/remotes/local/main:<path> | cmp - <(readlink -nv -- {{ worktree | quote }}/<path>)`); where one
+      holds main's bytes or is missing, put HEAD's back (`git -C {{ worktree | quote }} checkout
+      --ignore-skip-worktree-bits HEAD -- <path>`).
+      `git rebase --continue` can drop the commit it was replaying. Then run the dry-run (`--check --diff`)
+      again.
+      {%- elif (_stop_head.rc | default(1)) == 0 %} Then run the dry-run (`--check --diff`) and deploy — in step,
+      unless another promote lands first (it then stops again, naming what that brought).
+      {%- elif (_stop_head.rc | default(1)) == 3 %} The sync did not finish: HEAD is where it was before it (the
+      replay was undone, or cut short and then aborted or quit), so the commits listed are the canonical's main's,
+      not the worktree's. `git -C {{ worktree | quote }} -c core.ignoreCase=false status --untracked-files=all
+      --ignored` names, among your own, any file of main's the replay left: remove those — the next run, its dry-run
+      too, would load a filter plugin among them as root, and the deploy commits untracked files as instance state.
+      A tracked file it shows modified or deleted that you did not change holds main's bytes or lacks HEAD's (a
+      replay quit, `git rebase --quit`, rather than aborted): `git -C {{ worktree | quote }} checkout HEAD --
+      <path>` puts HEAD's back.
+      `git -C {{ worktree | quote }} -c core.quotePath=true ls-files -v | grep -v '^H '` (this and the commands after
+      it are bash's: `$'…'` and `<(…)`) names any tracked file git's status does not compare (skip-worktree,
+      assume-unchanged; under `core.ignoreStat`, every file; a name the listing
+      prints in double quotes is quoted the C way: give it to the shell as `$'…'`, with what is between the quotes, each
+      `'` in it written `\'`): the replay may have left main's bytes in one, and that status does not see them. Compare
+      each with main's (`git -C {{ worktree | quote }} cat-file --filters refs/remotes/local/main:<path> | cmp - {{
+      worktree | quote }}/<path>`; for a link, whose target `cmp` would read, its text: `git -C {{ worktree | quote }}
+      cat-file -p refs/remotes/local/main:<path> | cmp - <(readlink -nv -- {{ worktree | quote }}/<path>)`); where one
+      holds main's bytes or is missing, put HEAD's back (`git -C {{ worktree | quote }} checkout
+      --ignore-skip-worktree-bits HEAD -- <path>`).
+      Then run the dry-run (`--check --diff`) again.
+      {%- else %} HEAD does not hold the canonical's main, nor is it the commit before the sync (or git could not say
+      which: `git -C {{ worktree | quote }} merge-base --is-ancestor refs/remotes/local/main HEAD`): look at
+      `git -C {{ worktree | quote }} -c core.ignoreCase=false status` and the reflog before you run the dry-run
+      (`--check --diff`) again.
+      {%- endif %} HEAD before the sync: {{ _stop_before or 'not known' }}; and in `git -C {{ worktree | quote }}
+      reflog`.
+      {%- set _stop_id = (_kontroll_run_id | default('', true)) or (kontroll_run_id | default('', true)) %}
+      {%- if _stop_id %} kontroll_run_id={{ _stop_id }}{% endif %}
+  when: _stop_mark.rc != 0 or (_stop_marked | bool)

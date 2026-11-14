@@ -11,9 +11,10 @@ tree that is not one, a checkout's top, one reached through a link, a copy insid
 refuses, a repository variable handed down, no git at all) and, in a copy of this tree that is not a checkout, that
 the marked rows skip, an unmarked row runs, and the variable turns the skip into an error.
 
-The rows that build scratch repositories use `isolated_git`; rows 7 and 8 read THIS tree and keep the account's git
-configuration (a `safe.directory` an image sets is git's own remedy for a tree another uid owns), dropping only the
-variables that would point git at another repository (the I-51 reads' S2).
+The rows that build scratch repositories use `isolated_git`, but the end-to-end row, whose `git init` of a scratch
+directory takes an environment built at the call with every repository variable out (read B-r21, N3); rows 7 and 8 read
+THIS tree and keep the account's git configuration (a `safe.directory` an image sets is git's own remedy for a tree
+another uid owns), dropping only the variables that would point git at another repository (the I-51 reads' S2).
 """
 import os
 import re

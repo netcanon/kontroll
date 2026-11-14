@@ -17,6 +17,8 @@ import subprocess
 
 import pytest
 
+import _checkout
+
 pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -409,8 +411,10 @@ def _listed():
     its repository, a checkout owned by another user) fails the test, as tests/check-doc-links.py does: a walk there
     would read the operator's untracked notes and skip nothing they hold."""
     if os.path.exists(os.path.join(ROOT, ".git")):
+        # Every repository variable out: a hook's GIT_DIR would list its repository, not this tree (read B-r21, N3).
+        env = {k: v for k, v in os.environ.items() if k not in _checkout._GIT_REPO_VARS}
         try:
-            listing = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"], capture_output=True)
+            listing = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"], capture_output=True, env=env)
         except OSError as exc:
             pytest.fail("git could not be started to list this tree (%s)" % exc.__class__.__name__)
         said = listing.stderr.decode("utf-8", "replace").strip().splitlines()

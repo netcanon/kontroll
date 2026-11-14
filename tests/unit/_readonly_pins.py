@@ -106,6 +106,14 @@ WRITE_VERBS = frozenset({
     # shallow worktree's pack in the view it is made in, and writes that view's shallow list to a temporary file
     # (I-20); it is reached from `land_commit` only.
     "land_commit", "_land_in_canonical", "_pack", "_pack_view", "land_main",
+    # The sync (T25): `sync_worktree` brings the operator's worktree forward to the canonical's `main` — the landing
+    # turned round. `_bring_main` takes the canonical's objects into the worktree's store, `_receive_in_worktree` is
+    # its `index-pack`, `_pack_in_canonical` starts the canonical's `pack-objects`, `_undo_replay` aborts a replay
+    # that stopped (a `rebase --abort`), `_clear_what_main_left` removes the files that replay's checkout wrote from
+    # `main` (each holding main's bytes), `clear_mark` removes the mark a sync left — what a play's own sync does
+    # last (`kontroll-land.py --sync --stop-as`). Each registered in the same commit as the verb (P0b/#134).
+    "sync_worktree", "_bring_main", "_receive_in_worktree", "_pack_in_canonical", "_undo_replay",
+    "_clear_what_main_left", "clear_mark",
 })
 
 

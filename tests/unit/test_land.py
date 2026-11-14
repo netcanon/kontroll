@@ -18,6 +18,7 @@ import ast
 import importlib.util
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -72,13 +73,22 @@ def _commit(worktree, files, subject):
     return _git(worktree, "rev-parse", "HEAD")
 
 
+# The box's paths as they are, and with a space and a quote in each (`box` parametrised indirectly): the remedy a
+# refusal prints must quote every path in it for the shell (fold 8's own mutants, G8-nff-wt/repo-unquoted).
+NAMES = [pytest.param(("canonical.git", "worktree"), id="plain"),
+         pytest.param(("canon ical'x.git", "work tree'x"), id="spaced", marks=pytest.mark.skipif(
+             os.name != "posix", reason="a directory whose name holds a space and a quote"))]
+
+
 @pytest.fixture
-def box(tmp_path):
+def box(tmp_path, request):
     """A node in miniature: a bare canonical (`bare`) whose `main` holds the clean tree, and the operator's
     worktree (`wt`) — a clone of it with a `local` remote, as `local-canonical.yml` leaves one — at that same
-    commit (`seed`). `core.autocrlf` is off in the worktree so a tree hashes the same on every host."""
-    bare = str(tmp_path / "canonical.git")
-    wt = str(tmp_path / "worktree")
+    commit (`seed`). `core.autocrlf` is off in the worktree so a tree hashes the same on every host. A test
+    parametrised over `NAMES` (indirectly) runs it also with a space and a quote in both paths."""
+    names = getattr(request, "param", ("canonical.git", "worktree"))
+    bare = str(tmp_path / names[0])
+    wt = str(tmp_path / names[1])
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", bare], check=True, capture_output=True)
     subprocess.run(["git", "init", "-q", "-b", "main", wt], check=True, capture_output=True)
     _git(wt, "config", "core.autocrlf", "false")
@@ -88,6 +98,18 @@ def box(tmp_path):
     _git(wt, "remote", "add", "local", bare)
     _git(wt, "push", "-q", "local", "HEAD:refs/heads/main")       # the fixture's seed: the bare carries no hook yet
     return type("Box", (), {"bare": bare, "wt": wt, "seed": seed})()
+
+
+@pytest.mark.parametrize("box", NAMES, indirect=True)
+def test_the_box_takes_the_names_it_is_given(box, request):
+    """`box`, parametrised over NAMES: the worktree and the canonical are named as the param says (`work tree'x` and
+    `canon ical'x.git` in the spaced case, which `shlex.quote` then changes). Guards the parametrisation the quote rows
+    stand on: a box that ignored its param ran every spaced row on plain names, which quoting leaves as they are, so
+    each landing row's quote passed whether the code quotes or not (read B-f8, N3:
+    B9-land-box-ignores-param+nff-unquoted)."""
+    names = request.node.callspec.params["box"]
+    assert os.path.basename(box.wt) == names[1] and os.path.basename(box.bare) == names[0], (box.wt, box.bare)
+    assert (shlex.quote(box.wt) != box.wt) == (" " in names[1]), box.wt
 
 
 def _main(bare):
@@ -200,19 +222,24 @@ def test_the_commit_landed_is_the_commit_judged(box):
         "the unjudged commit's objects were packed"
 
 
+@pytest.mark.parametrize("box", NAMES, indirect=True)
 def test_a_canonical_that_has_commits_the_worktree_does_not_is_refused_with_the_plays_sentence(box):
     """A promote moved the canonical's `main` to a commit this worktree has never fetched (rc 128 from
     `merge-base`: not a valid object here), and — a second case — the worktree holds a commit that is not a
     descendant of `main` (rc 1): both are refused (rc 1) with the sentence the play printed, which names the
-    remedy (`fetch local && rebase local/main`) and never `--force`; `main` is untouched and nothing was packed.
-    Guards the never-discard rule: a landing that forced, or that took rc 128 for "no main", would delete every
-    promoted proposal."""
+    remedy (`kontroll-land.py --sync`, which brings the worktree forward with no fetch) and never `--force`;
+    `main` is untouched and nothing was packed; the remedy's worktree and canonical are quoted for the shell (with
+    a space and a quote in the paths, `shlex.quote` differs). Guards the never-discard rule: a landing that forced,
+    or that took rc 128 for "no main", would delete every promoted proposal; and the remedy pasted as printed
+    (fold 8's own mutants G8-nff-wt-unquoted, G8-nff-repo-unquoted)."""
     promoted = R.commit(box.bare, _git(box.bare, "rev-parse", box.seed + "^{tree}"), [box.seed], subject=b"a promote")
     R.set_ref(box.bare, canon.MAIN, promoted)
     _commit(box.wt, {"c.txt": "c\n"}, "the operator's own change")
     rc, said = gitio.land_commit(box.wt, box.bare)
     assert rc == 1 and _main(box.bare) == promoted, said
-    assert "has commit(s) your worktree" in said and "rebase local/main" in said and "--force" not in said
+    assert "has commit(s) your worktree" in said and "kontroll-land.py --sync" in said and "--force" not in said
+    assert "`python3 -B scripts/kontroll-land.py --sync --worktree %s --repo %s`" % (
+        shlex.quote(box.wt), shlex.quote(box.bare)) in said, said
     _git(box.wt, "fetch", "-q", "local")
     _git(box.wt, "reset", "-q", "--hard", box.seed)          # now the worktree HOLDS the promoted commit, but is not on it
     rc, said = gitio.land_commit(box.wt, box.bare)
@@ -436,7 +463,9 @@ def test_a_main_below_the_cut_is_refused_with_the_shallow_sentence_by_the_dry_ru
     clone stops before the history that would tell"), never the not-a-fast-forward one, and the gate is never
     asked. And into an empty canonical, the same: refused, the gate never asked. Guards the shallow refusals'
     place: in the dry-run (`--check` returning before them gave the rebase advice again, the I-20 bug) and before
-    the gate (which would judge, and run its generator over, a tree that will be refused)."""
+    the gate (which would judge, and run its generator over, a tree that will be refused). Each sentence also names
+    the sync for a `main` a promote moved — `python3 -B scripts/kontroll-land.py --sync --worktree … --repo …`, each
+    path quoted — which the second one lacked (read A-r21)."""
     bare = _bare(tmp_path)
     src, made = _history(tmp_path)
     wt = str(tmp_path / "worktree")
@@ -454,6 +483,8 @@ def test_a_main_below_the_cut_is_refused_with_the_shallow_sentence_by_the_dry_ru
             rc, said = gitio.land_commit(wt, bare, check=check, gate=_no_gate(calls))
             assert rc == 1 and "under HEAD cannot be told: " + clause in said, said
             assert "has commit(s) your worktree" not in said, said
+            assert ("`python3 -B scripts/kontroll-land.py --sync --worktree %s --repo %s`"
+                    % (shlex.quote(wt), shlex.quote(bare))) in said, said
     assert calls == [] and _main(bare) == made[1] and _received(bare) == []
 
 
@@ -725,7 +756,9 @@ def test_the_landing_is_a_registered_write_and_its_canonical_side_runs_in_the_se
     """`land_commit`, `_land_in_canonical`, `_pack` and `land_main` are in `WRITE_VERBS` (a read view that reached
     one would fail its pin); every process `_land_in_canonical` starts is `git index-pack | rev-list | update-ref`
     passing `**canon.git_kwargs(…)` with a timeout — and in the whole of gitio.py the verbs `index-pack` and
-    `update-ref`, and a `pack-objects`, appear in no other function than those three and the promote's. Guards the
+    `update-ref`, and a `pack-objects`, appear in no other function than those three, the promote's and the sync's
+    two (`_receive_in_worktree` takes the canonical's pack into the worktree; `_pack_in_canonical` makes it, in the
+    seam — tests/unit/test_sync.py pins that one). Guards the
     canonical's side of the landing against a git that inherited the caller's environment (it would run the
     canonical's config-named programs, as whoever lands — root in the installer), and against a second, unpinned
     copy of the write appearing elsewhere in the module."""
@@ -734,8 +767,8 @@ def test_the_landing_is_a_registered_write_and_its_canonical_side_runs_in_the_se
     assert_git_runs_in_the_seam("scripts/kontroll/gitio.py", verbs={"index-pack", "rev-list", "update-ref"},
                                 functions=("_land_in_canonical",))
     tree = ast.parse(open(os.path.join(ROOT, "scripts", "kontroll", "gitio.py"), encoding="utf-8").read())
-    allowed = {"index-pack": {"_land_in_canonical"}, "update-ref": {"_land_in_canonical", "promote_commit"},
-               "pack-objects": {"_pack"}}
+    allowed = {"index-pack": {"_land_in_canonical", "_receive_in_worktree"},
+               "update-ref": {"_land_in_canonical", "promote_commit"}, "pack-objects": {"_pack", "_pack_in_canonical"}}
     for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
         for node in ast.walk(fn):
             if isinstance(node, ast.List):
@@ -749,7 +782,8 @@ def test_no_door_pushes_main_and_no_pack_is_thin():
     """No file of the four doors nor gitio.py carries a `push` to `refs/heads/main` (or `local main`), the
     landing's pack-objects carries no `--thin`, and each door names `kontroll-land.py` or `land_main`:
     `scripts/update.sh`, `scripts/update-from-bundle.sh`, `scripts/galaxy.py` (both commit sites),
-    `ansible/playbooks/local-canonical.yml` (which also has no `git push`, no `ls-remote` and no `fetch` task), and
+    `ansible/playbooks/local-canonical.yml` (which also has no `git push`, no `ls-remote` and no `fetch` task, and
+    runs the landing twice and the sync twice — `--check`, then for real), and
     `gitio.commit_and_push`'s non-staging branch. The staging push of a PROPOSAL stays. Guards the reversions
     "one door pushes again" and "--thin added" (a thin pack is made of deltas against objects assumed present —
     the landing reads nothing of the canonical's store to know)."""
@@ -791,7 +825,9 @@ def test_no_door_pushes_main_and_no_pack_is_thin():
         return ""
     assert not any("git push" in cmd(t) or "ls-remote" in cmd(t) or "git fetch" in cmd(t) for t in tasks), \
         [t["name"] for t in tasks if "git push" in cmd(t) or "ls-remote" in cmd(t) or "git fetch" in cmd(t)]
-    assert sum("kontroll-land.py" in cmd(t) for t in tasks) == 2, "the play runs the landing twice: --check, then for real"
+    landing = [t["name"] for t in tasks if "kontroll-land.py" in cmd(t) and "--sync" not in cmd(t)]
+    syncing = [t["name"] for t in tasks if "kontroll-land.py" in cmd(t) and "--sync" in cmd(t)]
+    assert (len(landing), len(syncing)) == (2, 2), "the play lands twice and syncs twice: %r %r" % (landing, syncing)
 
 
 # ---- the doors: the command, the operator CLI's seam, commit_and_push outside staging, the shell scripts ---------- #
@@ -975,3 +1011,30 @@ def test_the_transaction_text_is_one_compare_and_swap_under_no_deref(box, monkey
         ("start\noption no-deref\nupdate %s %s %s\nprepare\ncommit\n" % (canon.PROPOSED + RID, newer, zero)).encode(),
         ("start\noption no-deref\nupdate refs/heads/main %s %s\nprepare\ncommit\n" % (newer, zero)).encode(),
     ], fed
+
+
+@pytest.mark.skipif(os.name == "nt" or not shutil.which("bash") or not shutil.which("python3"),
+                    reason="runs the printed command by bash, from a path holding a quote")
+def test_the_shallow_refusals_sync_clause_brings_the_worktree_forward_run_as_printed(tmp_path):
+    """A `--depth 1` clone of the canonical, at a path that needs quoting, then a promote moves the canonical's main:
+    the landing's shallow sentence ("it is not in the clone") names `python3 -B scripts/kontroll-land.py --sync
+    --worktree … --repo …`, and that command, run by bash as printed from the checkout, brings the worktree forward;
+    the landing is then up to date. Guards the remedy's words (rebase read A, decision c): `--sync`, the worktree and
+    the canonical in that order, each quoted for the shell — a command that only reads right sends the operator to a
+    second refusal."""
+    src, made = _history(tmp_path)
+    bare = _bare(tmp_path)
+    _git(src, "push", "-q", bare, made[3] + ":refs/heads/main")
+    wt = str(tmp_path / "it's a work tree")
+    _shallow_clone(bare, wt, bare, 1)
+    _git(src, "commit", "-q", "--allow-empty", "-m", "a promote")
+    _git(src, "push", "-q", bare, "HEAD:refs/heads/main")
+    rc, said = gitio.land_commit(wt, bare, gate=_no_gate())
+    assert rc == 1 and "it is not in the clone" in said, said
+    start = said.find("`python3 -B scripts/kontroll-land.py --sync ")
+    assert start >= 0, said
+    cmd = said[start + 1:said.index("`", start + 1)]
+    p = subprocess.run(["bash", "-c", cmd], cwd=ROOT, capture_output=True, text=True, env=dict(os.environ, **_WHO))
+    assert p.returncode == 0 and "brought forward" in p.stdout, (cmd, p.stdout, p.stderr)
+    rc, said = gitio.land_commit(wt, bare, gate=_no_gate())
+    assert rc == 0 and said.startswith("up to date"), said

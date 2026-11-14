@@ -20,6 +20,12 @@
 - name: Stamp the run correlation id
   ansible.builtin.import_playbook: _log-run-id.yml
 
+# Then, before anything else of this run: a run after a sync that brought the worktree forward stops, saying what
+# came in, under the run's id (T25; SECURITY.md C10 — and what this stop can and cannot hold: its playbooks are the
+# tree's already, the stamp before it among them).
+- name: Stop after a sync that brought the worktree forward
+  ansible.builtin.import_playbook: _stop-after-sync.yml
+
 - name: Bootstrap the kontroll control node
   hosts: localhost
   connection: local

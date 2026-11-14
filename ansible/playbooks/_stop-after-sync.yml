@@ -1,0 +1,37 @@
+---
+# The stop after a sync (T25; SECURITY.md C10), as a play of its own: bootstrap.yml imports it right after the run-id
+# stamp (I-41), so a run after a sync of the worktree stops before bootstrap runs anything else — its fleet check, its
+# generator, the collections its lockfile names. deploy-stack.yml holds the same play in place, after its stamp and
+# before its root Docker play, with its own `stop_play` (an import's `vars:` would set it, and the deploy's walk
+# refuses them). It reads the mark the sync leaves in the worktree's git directory and, while the mark is there, says
+# what came in, removes the mark (the real run only, and not beside a rebase in progress, where it stays until the
+# abort) and fails; the installer's entrypoint runs under `set -e`, so init stops with it. local-canonical.yml
+# imports the same tasks file itself. The vars below are local-canonical.yml's, the same text, and the play is
+# deploy-stack.yml's but its `stop_play` (unit tests hold both).
+#
+# Access chain used:   localhost (the control node itself)
+# May break:           nothing — it reads the operator's git directory and removes one file of it, as the operator
+# Fallback required:   no
+# Blast radius:        this VM only
+# Idempotence:         a run with no mark changes nothing; a run that finds one removes it and fails by
+#                      design — not beside a rebase in progress, where it keeps the mark until the abort
+
+- name: Stop when a sync brought the worktree forward and no run has stopped on it since
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    worktree: "{{ playbook_dir }}/../.."
+    operator_uid: "{{ lookup('env', 'KONTROLL_OPERATOR_UID') or ansible_user_uid }}"
+    in_container: "{{ (lookup('env', 'KONTROLL_IN_CONTAINER') | default('', true)) | length > 0 }}"
+    operator_gid: >-
+      {{ lookup('env', 'KONTROLL_OPERATOR_GID') or (operator_uid if (in_container | bool) else ansible_user_gid) }}
+    as_operator: >-
+      {{ ('setpriv --reuid=' ~ operator_uid ~ ' --regid=' ~ operator_gid ~ ' --clear-groups --no-new-privs -- env -i'
+          ~ ' PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LC_ALL=C'
+          ~ ' GIT_TERMINAL_PROMPT=0') if (in_container | bool) else '' }}
+    stop_play: bootstrap
+
+  tasks:
+    - name: Stop after a sync, before landing, deploying or running the worktree's scripts
+      ansible.builtin.import_tasks: tasks/stop-after-sync.yml
