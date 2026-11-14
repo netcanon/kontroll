@@ -2160,6 +2160,91 @@ def test_publish_workflow_never_runs_on_a_branch_push():
     assert "branches" not in push and push.get("tags") == ["v*"], push
 
 
+# --- the compose-up smoke (T34 / S35) -------------------------------------------------------------------------
+
+def _smoke_job():
+    jobs = yaml.safe_load(_read(os.path.join(".github", "workflows", "smoke.yml")))["jobs"]
+    assert list(jobs) == ["smoke"], "smoke.yml carries one job; a second must be held by these rows too"
+    return jobs["smoke"]
+
+
+def test_the_smoke_never_runs_on_a_self_hosted_runner():
+    """smoke.yml's job names `ubuntu-latest` itself (not the KONTROLL_RUNS_ON variable every other job reads), and is
+    skipped where that variable is set, on every event, and where the event's payload says the repository is
+    private (a schedule's payload may name no repository, so there the variable is the private repository's lock).
+    The smoke runs the installer with sudo and a root-equivalent Docker socket and leaves keys, a canonical and a
+    gid-1001 group behind: on the private repository's persistent, shared self-hosted runners that is a deploy onto
+    the box (the one outcome the plan ruled out), and a public repository must never reach a self-hosted runner at
+    all. The private repository inherits this file through
+    its sync, so the condition, not the file's absence, is what keeps it off there. Guards the job being tidied into
+    the shared `runs-on` expression, or the condition dropped."""
+    job = _smoke_job()
+    assert job["runs-on"] == "ubuntu-latest", job["runs-on"]
+    assert job["if"] == "${{ !vars.KONTROLL_RUNS_ON && github.event.repository.private != true }}", job["if"]
+
+
+def test_the_smoke_is_not_a_push_gate():
+    """smoke.yml runs on a schedule, by hand, and on a pull request that changes the smoke itself or the install
+    guide whose quickstart it runs — never on a push, on a pull request that touches neither, or as a gating
+    workflow. Registry rate limits and dropped schedules give red nights that are not the tree's fault, so the smoke
+    must not become a check every change waits on; the paths-filtered pull request is there so a change to the
+    smoke, or to the quickstart it runs, proves itself before it lands (a schedule runs only the default branch's
+    copy). Guards a broadened trigger turning a slow, flaky job into a de facto gate."""
+    trig = _triggers("smoke.yml")
+    assert set(trig) == {"schedule", "workflow_dispatch", "pull_request"}, trig
+    assert trig["pull_request"] == {"paths": [".github/workflows/smoke.yml", "tests/smoke/**",
+                                              "docs/install-from-scratch.md"]}, trig["pull_request"]
+    assert [entry["cron"] for entry in trig["schedule"]] == ["23 4 * * *"]
+    assert "smoke.yml" not in GATING_WORKFLOWS
+
+
+def test_the_smoke_holds_no_secret_and_read_only_permissions():
+    """smoke.yml reads no secret, grants the token only `contents: read` (at the workflow, with no job widening it),
+    and checks out without persisting the token. The job runs a pull request's own scripts with sudo on the runner —
+    a fork's too — so the token and anything else in reach must be worth nothing: the smoke mints its keys and
+    passwords on the runner and needs nothing from the repository. Guards a secret, a write grant or a persisted
+    credential creeping into a public job that executes the changed tree."""
+    text = _read(os.path.join(".github", "workflows", "smoke.yml"))
+    assert "secrets." not in text and "GITHUB_TOKEN" not in text and "github.token" not in text
+    assert yaml.safe_load(text)["permissions"] == {"contents": "read"}
+    job = _smoke_job()
+    assert "permissions" not in job
+    checkouts = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert len(checkouts) == 1 and checkouts[0]["with"]["persist-credentials"] is False, checkouts
+    assert job["steps"][-1]["run"] == SMOKE_RUN
+
+
+SMOKE_RUN = "sudo -u kontroll-op -H bash -c 'cd ~/kontroll && python3 -B tests/smoke/stack_smoke.py --throwaway'"
+
+
+def test_the_smoke_checks_out_the_whole_history():
+    """smoke.yml's checkout fetches the whole history (`fetch-depth: 0`), as the guide's `git clone` does. The
+    checkout's default is one commit, a shallow repository: its commit names a parent that was never fetched, and
+    the install's first landing packs the worktree's HEAD into the canonical and refuses it there as not whole ("an
+    object it names is missing there"), so the quickstart's fourth line fails on every run for a reason that is the
+    smoke's own (the third run on the pull request found it). Guards the depth being dropped back to the default."""
+    checkouts = [s for s in _smoke_job()["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert len(checkouts) == 1 and checkouts[0]["with"].get("fetch-depth") == 0, checkouts
+
+
+def test_the_smoke_runs_as_an_operator_whose_uid_is_not_the_services():
+    """smoke.yml makes an operator account (sudo, the docker group, its own copy of the checkout) and runs the smoke as
+    it. The runner's own account has uid 1001, the network service's, and the install refuses such an operator (the
+    quickstart's first line, install-prereqs.sh, since I-18; the first run of this workflow, before it, failed at the
+    dry run), so the smoke as the runner's account is red every night.
+    useradd must pick the uid (it never takes one in use, so never 1001 here); one named explicitly could be 1001.
+    Guards the account step being dropped or its uid pinned."""
+    steps = _smoke_job()["steps"]
+    setup = [s for s in steps if "useradd" in str(s.get("run", ""))]
+    assert len(setup) == 1, setup
+    run = setup[0]["run"]
+    assert "useradd --create-home --groups docker --shell /bin/bash kontroll-op" in run and "--uid" not in run
+    assert "usermod" not in run
+    assert "echo 'kontroll-op ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/kontroll-op" in run
+    assert "cp -a . /home/kontroll-op/kontroll" in run and "chown -R kontroll-op: /home/kontroll-op/kontroll" in run
+    assert steps.index(setup[0]) == len(steps) - 2 and steps[-1]["run"] == SMOKE_RUN
+
+
 def test_validate_ps1_is_a_shim_over_validate_sh():
     """tests/validate.ps1 must delegate to tests/validate.sh (through Git for Windows' bash) and define no gate step
     of its own. The hand-maintained Windows runner had drifted to 12 of the gate's 30+ steps — none of the

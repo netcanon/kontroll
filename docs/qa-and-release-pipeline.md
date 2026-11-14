@@ -146,13 +146,15 @@ Mirror netcanon's dev loop, enforced locally + in CI:
 
 ---
 
-## 5. CI platform — GitHub Actions (🟡 — as built; the compose-up smoke still ⬜)
+## 5. CI platform — GitHub Actions (🟡 — as built; the compose-up smoke's first version runs nightly)
 
-Five workflows (`.github/workflows/`), the same files in the public repository and the private
+The workflows (`.github/workflows/`) are the same files in the public repository and the private
 instance repository (docs/public-split.md). Every job's `runs-on` is
 `${{ fromJSON(vars.KONTROLL_RUNS_ON || '"ubuntu-latest"') }}`: GitHub-hosted by default (the
 public repo — a public repository must never run on a self-hosted runner, a fork PR would execute
-on it), the org's self-hosted runners where the private instance repo sets the variable. A step
+on it), the org's self-hosted runners where the private instance repo sets the variable. The PII
+guard (a secret-bearing step) and the compose-up smoke (an install with sudo) name `ubuntu-latest`
+themselves instead, so they never reach a self-hosted runner. A step
 that runs apt goes through `.github/scripts/apt-install.sh` — a package install as
 `apt-install.sh <package>...`, a tool that runs apt itself (Playwright's `--with-deps`) as
 `apt-install.sh --run <command>...`. The self-hosted runners on one host share apt's locks:
@@ -202,9 +204,6 @@ protection is one mis-click from a merge). A public repository has no such branc
 - **snmp-modules**: rebuild `modules.generated.yml` with the pinned CGO snmp_exporter generator
   and byte-compare (the no-bespoke gate for the SNMP module).
 - **e2e**: the Playwright suite against the in-process Flask app, headless chromium.
-- ⬜ still planned: a **compose-up smoke** (boot
-  the minimal stack, curl the API/GUI health, one onboard dry-run) — the layer the fault ledger
-  says would have caught most live faults.
 
 ### `pii-guard.yml` — on `[pull_request, push:{branches:[main, homelab*]}]`
 - `tests/_leak_guard.py --tree` (structural + instance-token layers; the private list arrives as the
@@ -215,6 +214,40 @@ protection is one mis-click from a merge). A public repository has no such branc
 - gitleaks (full history, 8.30.x: the release `ci.yml` pins, sha256-verified) · pip-audit (the gui · api ·
   tests floors, and the image pins with `--no-deps`).
   ⬜ bandit · trivy (images).
+
+### `smoke.yml` — on `[schedule: nightly, workflow_dispatch, pull_request: {paths: [the smoke's own files, the install guide]}]`; NOT a gate
+- **The compose-up smoke, first version** (`tests/smoke/stack_smoke.py`): a fresh GitHub-hosted runner
+  installs the stack by the quickstart in [install-from-scratch.md](install-from-scratch.md), run as
+  written (only its placeholders replaced: `127.0.0.1`, `example.test`, a break-glass recipient minted for
+  the run; the `$EDITOR` line dropped), with the default services (Semaphore and Homepage), as an operator
+  account the job makes (the runner's own account has uid 1001, the network service's, which the install
+  refuses), from a checkout of the whole history as the guide's clone has (a shallow one's commit cannot be
+  landed whole on the canonical). Then every
+  container of the stack's compose project must be running, never restarted and healthy where it has a
+  healthcheck (a no-restart one-shot that exited 0 passes; an empty project fails), and every TCP port a
+  running container publishes must answer HTTP with 2xx, 3xx or 401; the containers are judged again
+  after the port probes. The layer the fault ledger says would have
+  caught most live faults: a container that will not start or crash-loops, a missing bind source, a
+  broken `.env` render, and a guide edit that breaks the install (a block the script cannot read, with
+  an unknown command or placeholder, or a known command carrying another, is refused before anything
+  runs).
+- **Not a gate**: no push runs it and no required check names it (registry rate limits and dropped
+  schedules give red nights that are not the tree's fault). The paths-filtered pull request trigger is
+  there so a change to the smoke, or to the guide's quickstart it runs, proves itself before it lands. A red night, or no run for two days,
+  is a leading indicator in [STATUS.md](../STATUS.md); GitHub disables a public repository's schedule
+  after 60 days without activity, and the remedy is the Actions tab's *Enable workflow*.
+- **Public only, no secret**: `runs-on: ubuntu-latest` hard-coded, and the job skipped where
+  `KONTROLL_RUNS_ON` is set, on every event, and where the event's payload says the repository is
+  private (a schedule's payload may name no repository, so there the variable is the private
+  repository's lock; it inherits this file through its sync and sets the variable); `contents: read`;
+  the keys and passwords are minted on the runner and die with it; a failure's diagnostics (each
+  container's log tail, `df -h`) and its `SMOKE FAILED` line are printed with the rendered `.env`'s
+  values and any age secret key redacted; the install's own output is printed as it comes (compose
+  names a `.env` line it cannot parse) (SECURITY.md R-SMOKE-1).
+- ⬜ the later increments, one pull request each once the previous is green for a stretch of nights: a
+  second apply that must replace no container, the full service list (the API and the onboarding GUI),
+  one propose → promote through the API, and the published launch kit as a second configuration. The
+  tine (the private `homelab` branch) has no smoke: that needs an operator decision about a runner.
 
 ### `zizmor.yml` — on `[pull_request, push:{branches:[main, homelab*]}]` for `.github/` paths + weekly; workflow-security lint, advisory (log-only; plus a SARIF upload to code scanning where the repository variable `KONTROLL_CODE_SCANNING=true`).
 

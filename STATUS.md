@@ -69,6 +69,7 @@ Ids such as T16 or S22 are items of the maintainer's plan, which is not publishe
 | Work on no remote | `git rev-list --count --branches --not --remotes`, in each working clone | anything, for longer than a day |
 | Fixes not released | `git log --oneline "$(git describe --tags --abbrev=0)"..origin/main` | a fix unreleased for longer than a month |
 | Last proven live | the date at the top of this page | older than two weeks while "Next" is not empty |
+| The nightly compose-up smoke | the public repository's Actions tab, workflow *smoke* (`gh run list -R netcanon/kontroll -w smoke.yml`) | a red run on `main`, or no run for two days (GitHub disables a quiet schedule after 60 days) |
 
 ## Where the rest is
 

@@ -15,6 +15,10 @@
 > --with-host-ansible`. **The block below is the one written install sequence:** every script's closing message
 > and every other document points here instead of repeating it. From a launch kit, write `./kontroll` wherever it
 > writes `scripts/kontroll-installer.sh`.
+> <!-- This block is RUN, as written, every night: tests/smoke/stack_smoke.py (.github/workflows/smoke.yml) executes
+> its command lines on a fresh host, with only <ip>, <domain> and <age1…> replaced and the $EDITOR line dropped.
+> Keep it one fenced block in this blockquote, under this heading, with every command a line the smoke knows
+> (tests/unit/test_smoke_script.py holds the sequence); a new placeholder or command is a change to the smoke too. -->
 > ```
 > # Run every line as the account that will operate the node, and not one with uid 1001: that is the network
 > #   service's uid, and install-prereqs.sh, the installer and kontroll-init.py --fresh refuse it

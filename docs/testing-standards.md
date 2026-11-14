@@ -26,6 +26,7 @@ kontroll is a *composed* control plane, so it has two test halves. Both are firs
 | Code | **L2 pytest (unit)** | pure `dict→dict` logic + service layer in `scripts/kontroll/` | `pytest tests/unit` | on change, CI |
 | Code | **L2 pytest (integration)** | `galaxy.py` + `gui/app.py` as black boxes, shell-outs mocked; a few rows run git or ansible-playbook (no lab) | `pytest tests/integration` | on change, CI |
 | Code | **L3 GUI e2e** | the real booted Flask GUI in a headless browser | Playwright (`tests/e2e/`, `e2e` marker) | a dedicated CI job |
+| IaC | **L3 compose-up smoke** | the install guide's quickstart run as written on a throwaway host, then every container up and never restarted, every published port answering | `tests/smoke/stack_smoke.py` (`smoke.yml`) | nightly + by hand; not a gate |
 | IaC | **L3 live smoke** | real fleet reachable; services respond | `playbooks/ping.yml` (the `run-smoke-gate.sh` wrapper) | manual / post-deploy |
 | IaC | **L4 idempotence** | second apply = `0 changed` | re-run the play against a scratch host (by hand — no automated harness) | per role |
 
