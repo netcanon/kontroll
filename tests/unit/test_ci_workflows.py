@@ -2225,8 +2225,9 @@ def test_the_smoke_checks_out_the_whole_history():
 
 def test_the_smoke_runs_as_an_operator_whose_uid_is_not_the_services():
     """smoke.yml makes an operator account (sudo, the docker group, its own copy of the checkout) and runs the smoke as
-    it. The runner's own account has uid 1001, the network service's, and the install refuses such an operator at its
-    dry run (the first run of this workflow failed there), so the smoke as the runner's account is red every night.
+    it. The runner's own account has uid 1001, the network service's, and the install refuses such an operator (the
+    quickstart's first line, install-prereqs.sh, since I-18; the first run of this workflow, before it, failed at the
+    dry run), so the smoke as the runner's account is red every night.
     useradd must pick the uid (it never takes one in use, so never 1001 here); one named explicitly could be 1001.
     Guards the account step being dropped or its uid pinned."""
     steps = _smoke_job()["steps"]

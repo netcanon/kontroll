@@ -25,8 +25,9 @@ passed every check until an operator met it.
   run, whose private half is deleted first) are replaced, and the `$EDITOR` line is dropped. A block it cannot read
   (a placeholder or a command it does not know, or a known command carrying another through a shell operator, an
   expansion or a redirection) is refused before anything runs. The job runs it as an operator account it makes (sudo,
-  the docker group): the runner's own account has uid 1001, the network service's, which the install refuses at its
-  dry run (the first run found it; the smoke now refuses uid 1001 itself, before anything runs). It checks out the
+  the docker group): the runner's own account has uid 1001, the network service's, which the install refuses (the
+  first run found it at the dry run; since I-18 the quickstart's first line refuses it; the smoke refuses uid 1001
+  itself, before it mints a key or runs a line). It checks out the
   whole history, as the guide's clone has: a shallow checkout's commit cannot be landed whole on the canonical (the
   third run found it). Then, after a settle
   window, every

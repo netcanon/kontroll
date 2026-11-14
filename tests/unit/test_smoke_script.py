@@ -277,8 +277,9 @@ def test_a_tree_that_already_has_an_instance_is_refused_before_anything_runs(tmp
 
 def test_an_account_with_the_services_uid_is_refused_before_anything_runs(tmp_path, monkeypatch):
     """Run as uid 1001, the network service's uid, the smoke refuses with exit 2 before a key is minted or a line
-    runs: the install refuses such an operator at its dry run (local-canonical cannot tell the two apart), after the
-    scaffold and the mint, so every night would be red for a reason that is not the tree's. A GitHub-hosted runner's
+    runs: the install refuses such an operator (the canonical cannot tell the two apart; the quickstart's first line,
+    install-prereqs.sh, says so since I-18, where the dry run said it after the scaffold and the mint), so every night
+    would be red for a reason that is not the tree's. A GitHub-hosted runner's
     own account has that uid, which is how the first run found it. Guards the workflow's operator account being
     dropped, which would make the smoke fail late on every run."""
     root = _tree(tmp_path, _guide())
